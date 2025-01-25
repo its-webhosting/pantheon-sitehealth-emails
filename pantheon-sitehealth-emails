@@ -49,8 +49,9 @@ from rich.console import Console
 from rich.padding import Padding
 from rich.pretty import pprint
 
+from cloudflare import Cloudflare
+
 from umich.getsecrets import get_secret
-import umcloudflare.Cloudflare as Cloudflare
 
 
 # Pantheon rate plan information.
@@ -572,22 +573,21 @@ def main() -> None:
         config_out.close()
         pprint(terminus('self:info'))
 
-    # cloudflare = Cloudflare.Cloudflare(profile='its-webhosting-inventory')  # not implemented yet
-    cloudflare = Cloudflare.Cloudflare(
-        email=config['Cloudflare']['member_email'],
-        key=config['Cloudflare']['member_api_key']
+    cloudflare = Cloudflare(
+        api_email=config['Cloudflare']['member_email'],
+        api_key=config['Cloudflare']['member_api_key']
     )
 
     with console.status('[bold green]Getting Cloudflare IP ranges ...'):
         try:
-            cloudflare_ips = cloudflare.get('/ips')
+            cloudflare_ips = cloudflare.ips.list()
         except Exception as e:
             sys.exit(f'ERROR: Unable to get lists of Cloudflare IPs: {e}')
         if options.verbose > 2:
             console.print('Cloudfare IPs:')
             pprint(cloudflare_ips)
-        cloudflare_ipv4_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips['ipv4_cidrs']]
-        cloudflare_ipv6_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips['ipv6_cidrs']]
+        cloudflare_ipv4_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv4_cidrs]
+        cloudflare_ipv6_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv6_cidrs]
 
     if options.verbose:
         console.print('[bold magenta]=== Getting WWS portal AWS secret:')

@@ -11,9 +11,7 @@ dependencies = [
     "botocore",
     "Jinja2",
     "dnspython",
-    "umcloudflare @ git+ssh://git@github.com/its-cloudflare/umcloudflare.git",
-    # "umcloudflare",  # uncomment for local development of umcloudflare within pantheon-sitehealth-emails
-
+    "cloudflare",
 ]
 
 [build-system]
@@ -22,6 +20,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = []
-# uncomment for local development of umcloudflare within pantheon-sitehealth-emails
-#packages = ["umcloudflare"]
 
