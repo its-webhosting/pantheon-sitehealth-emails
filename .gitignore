@@ -1,0 +1,32 @@
+# pantheon-sitehealth-emails script stuff
+pantheon-sitehealth-emails.ini
+/build/
+/tmp/
+
+# Editor backup and temporary files
+.*.swp
+*~
+
+# macOS stuff
+.DS_Store
+/.idea/
+
+# Logs
+logs/
+*.log
+
+# Python stuff
+/venv/
+/pantheon_sitehealth_emails.egg-info/
+**/__pycache__/
+*.pyc
+
+# PHP stuff
+/vendor/
+# don't commit composer.lock since different people may be using
+# different versions of PHP, which in turn cause differences in
+# composer package dependencies
+composer.lock
+
+# dotenv environment variables files
+.env*

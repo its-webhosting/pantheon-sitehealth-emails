@@ -1,0 +1,143 @@
+-----------------------------------------------
+    U-M Information and Technology Services
+            https://its.umich.edu/
+-----------------------------------------------
+
+{% if dry_run_recipient != '' %}
+[ This is a test report that will actually go to
+    {{dry_run_recipient}}
+when it is sent for real. ]{% endif %}
+
+You are receiving this email because you own a U-M Pantheon
+<https://its.umich.edu/computing/web-mobile/pantheon> website,
+{{site_name}}, at {{site_url}}
+
+{%if end_of_contract_year %}ATTENTION: The deadline for moving this website to a lower Pantheon
+rate plan to save money, or for deleting the website, is June 30.
+On July 1, you will be charged the annual fee for the Pantheon plan
+your site is using.
+{% endif %}
+You will {%if end_of_contract_year %}also {% endif %}receive this report at the start of each month
+to help you keep track of what is happening with your website.
+
+You can manage this website through the ITS Web Hosting Services Portal
+<https://admin.webservices.umich.edu/sites/{{portal_site_id}}/detail/>
+and obtain support through either Pantheon or ITS
+<https://its.umich.edu/computing/web-mobile/pantheon/support>
+
+{% if notices|length > 0 %}
+=== Notice{% if notices|length > 1 %}s{% endif %}
+{% for notice in notices %}
+- {{notice.type|upper}} -
+{{notice.text}}
+
+{% endfor %}
+{% endif %}
+{% if news|length > 0 %}
+=== News
+{% for item in news %}
+{{item.text}}
+
+{% endfor %}
+{% endif %}
+=== PANTHEON PLAN RECOMMENDATION
+
+Pantheon website name:     {{site_name}}
+Main URL:                  {{site_url}}
+{% if months_until_recommendations == 0 %}
+Current plan:              {% if current_plan == recommended_plan %}✅{% elif current_plan_index > recommended_plan_index %}↘{% else %}↗{% endif %} {{current_plan}}
+Recommended plan:          {% if current_plan == recommended_plan %}✅{% else %}🎯{% endif %} {{recommended_plan}}
+
+Median Pantheon visitors:  {{median_monthly_visitors}} per month
+{% else %}
+Current plan:              {{current_plan}}
+Recommended plan:          ({% if months_until_recommendations == 1 %}available next month{% else %}needs {{months_until_recommendations}} months more data{% endif %})
+
+Median Pantheon visitors:  ({% if months_until_recommendations == 1 %}available next month{% else %}needs {{months_until_recommendations}} months more data{% endif %})
+{% endif %}
+Please look at your website's "Pantheon visitors" below -- and
+also U-M Pantheon pricing
+<https://its.umich.edu/computing/web-mobile/pantheon/pricing> --
+to decide if you want to make any changes to your website's hosting
+plan to save money:
+
+  * Upgrade to a higher plan
+    <https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/>
+    when you think "Pantheon visitors" will be greater than "Upgrade at"
+    in more than 50% of future months.
+  {% if current_plan == 'Basic' %}
+  * {{site_name}} is already on Basic, the lowest plan.  There is
+    no cheaper plan to downgrade to.
+  {% elif current_plan == 'Performance Small' %}
+  * Downgrade to Basic
+  <https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/>
+  ONLY BETWEEN JUNE 16 - 30 EACH YEAR if you decide you no longer need
+  Performance plan features.
+  <https://its.umich.edu/computing/web-mobile/pantheon/features>
+  {% else %}
+  * Downgrade to a lower plan
+    <https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/>
+    ONLY BETWEEN JUNE 16 - 30 EACH YEAR if you think
+    "Pantheon visitors" will be less than "Downgrade at" in more than
+    50% of future months.
+  {% endif %}
+  * NOTE: This report analyzes Pantheon visitors
+    <https://docs.pantheon.io/guides/account-mgmt/traffic#how-do-you-know-if-a-visit-counts>
+    which are much lower than daily website visitors.
+
+  * These numbers are best estimates. The actual numbers on Pantheon bills
+    will be different.
+
+
+=== SITE TRAFFIC
+
+A chart showing Pantheon website traffic over time is available in the
+HTML version of this email.  The data is presented in list form, below.
+
+{{site_name}} Pantheon Traffic
+{{site_url}}
+
+{% for row in traffic_table_rows %}
+{{traffic_table_rows[row]['month'] | upper}}{% for column in traffic_table_columns[1:] %}
+  {{"{:>20}".format(column['label'])}}: {{"{:>25}".format(traffic_table_rows[row][column['name']]|striptags)}}{% endfor %}
+{% endfor %}
+{% if current_month_estimate != '' %}{{current_month_estimate}}{% endif %}
+Traffic is as of {{traffic_date}}.
+
+{% if months_until_recommendations == 0 %}
+{{site_name}} Estimated Plan Costs
+{{estimate_start_date}} -- {{estimate_end_date}}
+
+{% for row in cost_table_rows %}
+{{cost_table_rows[row]['plan'] | upper}}{% for column in cost_table_columns[1:] %}
+  {{"{:>20}".format(column['label'])}}: {{"{:>20}".format(cost_table_rows[row][column['name']]|striptags)}}{% endfor %}
+{% endfor %}
+as of {{traffic_date}}
+
+Same Traffic Cost
+      Estimated cost of the website if it gets the same number of
+      "Pantheon visitors" in each of the next 12 months that it did in
+      the same month of the previous year.
+
+Median Traffic Cost
+     Estimated cost of the website if it gets {{median_monthly_visitors}}
+     "Pantheon visitors" every month for the next 12 months.  In the
+     past 12 months, half the months had more than {{median_monthly_visitors}}
+     "Pantheon visitors" and half had fewer.
+     
+ITS will generally use the higher of the two estimates. To determine
+what plan a site should be on for a given level of traffic, use the
+Estimated Pantheon Website Cost graph
+<https://documentation.its.umich.edu/node/4705>
+{% else %}
+{{site_name}} Estimated Plan Costs
+{{estimate_start_date}} -- {{estimate_end_date}}
+
+Cost estimates will be available once the site has five months of
+Pantheon traffic data.
+{% endif %}
+
+--
+University of Michigan ITS Web Hosting Team
+webmaster@umich.edu
+

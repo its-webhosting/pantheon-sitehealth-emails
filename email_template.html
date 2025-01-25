@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><META http-equiv="Content-Type" content="text/html;"><meta content="width=device-width, initial-scale=1" name="viewport"/><meta content="IE=edge" http-equiv="X-UA-Compatible"/><meta name="x-apple-disable-message-reformatting"/>
+	<title>{{ subject }}</title>
+	<style type="text/css">
+  h1, h2, h3, h4 {
+    font-family: Roboto, Arial, Helvetica, sans-serif;
+    line-height: 1.15;
+    padding-top: 1em;
+    }
+a:hover, a:focus {
+    color: #c30;
+    text-decoration: underline;
+    }
+body { margin: 0; }
+#bodyTable { width: 100%; }
+#templateContainer { width: 100%; }
+#templateHeader { width: 100%; }
+img.banner_image, img.inline_image {
+  width: 100%;
+  height: auto;
+}
+img.banner_image {
+  width: 100%;
+  max-width: 610px;
+}
+img.chart_image {
+  width: 100%;
+	height: auto;
+	display: block;
+}
+#templateBody { width: 100%; }
+#templateFooter { width: 100%; }
+td { font-size: 11pt; }
+h1 { font-size: 21pt; }
+h2 { font-size: 17pt; }
+h3 { font-size: 15pt; }
+/* The following table styles are adapted from code by Charlie Cathcart https://codepen.io/pixelchar/pen/rNaKLM */
+.container {
+  margin: 5% 3%;
+  color: #000;
+  box-sizing: border-box;
+}
+.responsive-table {
+  width: 100%;
+  margin-bottom: 1.5em;
+  font-size: 11pt;
+  text-align: right;
+  border-spacing: 0;
+  box-sizing: inherit;
+}
+.responsive-table thead {
+  position: relative;
+  height: auto;
+  width: auto;
+  overflow: auto;
+  margin: 0 3%;
+  border: 0;
+  padding: 0;
+}
+.responsive-table thead th {
+  display: table-cell;
+  vertical-align: center;
+}
+.responsive-table tbody, .responsive-table tr {
+  font-size: 11pt;
+  padding: 0;
+}
+.responsive-table tbody { display: table-row-group; }
+.responsive-table tr { display: table-row; }
+.responsive-table th {
+  display: table-cell;
+  padding: 0.5em;
+  background-color: #00274C;
+  color: #fff;
+  font-weight: bold;
+  text-align: right;
+}
+.responsive-table th, .responsive-table td {
+  font-size: 11pt;
+  display: block;
+  padding: 0.75em 0.5em;
+  vertical-align: middle;
+}
+.responsive-table tbody td {
+  display: table-cell;
+  padding: 0.5em;
+  vertical-align: top;
+}
+.responsive-table caption {
+  font-size: 1.5em;
+  font-weight: bold;
+  text-align: center;
+  margin-bottom: 1em;
+}
+.responsive-table tfoot {
+  font-size: 0.8em;
+  font-style: italic;
+  text-align: left;
+  margin: 0.5em 0;
+}
+.responsive-table tbody tr { margin: 2em 1em; }
+.responsive-table tfoot td { display: table-cell; }
+/* Workaround for clients that don't support nth-of-type, particularly GMail and Outlook.  The following is OK because the table will usually have 12 months. */
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr,
+.responsive-table tbody tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr th,
+.responsive-table tbody tr th
+{
+  color: #000;
+  background-color: #fff;
+}
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr,
+.responsive-table tbody tr + tr + tr + tr,
+.responsive-table tbody tr + tr,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr + tr + tr th,
+.responsive-table tbody tr + tr + tr + tr th,
+.responsive-table tbody tr + tr th
+{
+  color: #000;
+  background-color: #CCCFCA;
+}
+/* end workaround */
+.responsive-table .rt-data-header { display: none; }
+.responsive-table .rt-data { float: none; display: block; }
+
+.responsive-table .rt-plan { text-align: left; }
+.responsive-table .rt-next-plan { text-align: left; }
+.responsive-table .rt-previous-plan { text-align: left; }
+.responsive-table .rt-overage-protection { text-align: left; }
+.responsive-table .rt-cost-plan { text-align: left; }
+.responsive-table .rt-cost-notes { text-align: left; }
+
+/* NOTE: Thunderbird strips out media queries staring in Thunderbird 78. As of Thunderbird 115 (June 2024), this has not been fixed.
+ * See https://bugzilla.mozilla.org/show_bug.cgi?id=1659362#c2
+ * A workaround is to set the Thunderbird advanced config setting mail.html_sanitize.drop_conditional_css to false. */
+@media (max-width: 75em) {
+  .container { margin: 2em auto; }
+}
+@media (max-width: 62em) {
+  .responsive-table { font-size: 0.9em; }
+  .responsive-table thead {
+    position: absolute;
+    height: 1px;
+    width: 1px;
+    overflow: hidden;
+  }
+  .responsive-table thead th { display: none; }
+  .responsive-table th { display: block; text-align: left; color: #fff !important; background-color: #00274C !important; }
+  .responsive-table tbody { display: block; padding: 0; white-space: normal; }
+  .responsive-table tbody th { color: #fff !important; background-color: #00274C !important; }
+  .responsive-table tbody td { display: block; padding: 0.75em 0.5em; }
+  .responsive-table tr { display: block; padding: 0; color: #000 !important; background-color: #fff !important; }
+  .responsive-table td { display: block; }
+  /* GMail doesn't support the "content" property, so we can't insert a node before the table cell containing the contents of the data-header attribute. */
+  .responsive-table .rt-data-header { float: left; display: block; }
+  .responsive-table .rt-data { float: right; display: block; }
+  .responsive-table tfoot { font-size: 0.5em; }
+}
+@media (max-width: 48em) {
+  .container { margin: 2%; }
+}
+@media (max-width: 30em) {
+  .responsive-table th, .responsive-table td { padding: 0.5em; }
+}
+
+.pill {
+  /* from https://github.com/shoelace-style/shoelace/blob/next/src/components/badge/badge.styles.ts */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  line-height: 1;
+  border-radius: 9999px;
+  border: solid 1px #000;
+  white-space: nowrap;
+  padding: 0.35em 0.6em;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: inherit;
+}
+.pill-primary { background-color: #00274C; color: #FFCB05; }
+.pill-warning { background-color: #FFCB05; color: #000; }
+/* notice based on https://codepen.io/hmps/pen/gOPeBN by Hampus Persson */
+.notice {
+  box-sizing: border-box;
+  display: table;
+  position: relative;
+  color: #000;
+}
+.notice-icon-area {
+  display: table-cell;
+  vertical-align: top;
+  padding: 1em;
+  text-align: center;
+  background-color: #fff7;
+}
+.notice-icon-area .notice-icon {
+  font-size: 40px;
+  font-family:
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Noto Color Emoji",
+    "Android Emoji",
+    "EmojiSymbols",
+    "Twemoji",
+    "emojione",
+    "Symbola",
+    "Noto Sans Emoji",
+    sans-serif;
+}
+.notice-text {
+  display: table-cell;
+  vertical-align: middle;
+  padding: 1em;
+  font-weight: bold;
+}
+.notice-text p {
+  line-height: 1.2;
+  margin-top: 0.6em;
+}
+@media (max-width: 48em) {
+  .notice { margin: 1em auto 0; }
+  .notice-icon-area { padding: 0.5em; }
+  .notice-icon-area .notice-icon { font-size: 21px; }
+}
+	</style>
+</head>
+<body bgcolor="#ffffff">
+<center>
+<table align="center" border="0" cellpadding="0" cellspacing="0" height="100%" id="bodyTable" width="100%">
+	<tbody>
+		<tr>
+			<td align="center" id="bodyCell" valign="top">
+			<table border="0" cellpadding="0" cellspacing="0" id="templateContainer" width="100%">
+				<tbody>
+					<tr>
+						<td align="center" valign="top">
+						<table bgcolor="#00274c" border="0" cellpadding="0" cellspacing="0" id="templateHeader" width="100%">
+							<tbody>
+								<tr>
+									<td class="headerContainer" valign="top">
+									<table border="0" cellpadding="0" cellspacing="0" width="100%">
+										<tbody>
+											<tr>
+												<td valign="top"><!-- banner image -->
+												<table align="left" border="0" cellpadding="0" cellspacing="30" width="100%">
+													<tbody>
+														<tr>
+															<td valign="top"><a href="https://its.umich.edu/" target="_blank"><img alt="U-M Information and Technology Services" class="banner_image" src="cid:{{banner_cid}}" style="display:block;" width="610px" /></a></td>
+														</tr>
+													</tbody>
+												</table>
+												</td>
+											</tr>
+										</tbody>
+									</table>
+									</td>
+								</tr>
+							</tbody>
+						</table>
+						</td>
+					</tr>
+					<tr>
+						<td align="center" valign="top">
+						<table bgcolor="#ffffff" border="0" cellpadding="0" cellspacing="0" id="templateBody" width="100%">
+							<tbody>
+								<tr>
+									<td valign="top">
+									<table border="0" cellpadding="0" cellspacing="30" width="100%">
+										<tbody>
+											<tr>
+												<td valign="top">
+												<table border="0" cellpadding="0" cellspacing="0" width="100%">
+													<tbody>
+														<tr>
+															<td style="font-size:11pt; font-family:Roboto,Arial,Helvetica,sans-serif; color:#333333; line-height:1.45;" valign="top">
+<!-- Start email content -->
+
+{% if dry_run_recipient != '' %}
+<p><span style="font-weight: 700; background-color: palegreen;">[ This is a test report that will actually go to {{dry_run_recipient}} when it is sent for real. ]</span></p>
+{% endif %}
+
+<p>You are receiving this email because you own a <a href="https://its.umich.edu/computing/web-mobile/pantheon">U-M Pantheon website</a>, <strong>{{site_name}}</strong>, at <a href="{{site_url}}">{{site_url}}</a>.  {%if end_of_contract_year %}<span style="font-weight: bold; background-color: #FFE684;">The deadline for moving this website to a lower Pantheon rate plan to save money, or for deleting the website, is June 30.</span>  On July 1, you will be charged the annual fee for the Pantheon plan your site is using.{% endif %} You will {%if end_of_contract_year %}also{% endif %} receive this report at the start of each month to help you keep track of what is happening with your website.</p>
+<p>You can manage this website through the <a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/detail/">ITS Web Hosting Services Portal</a>, and <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">obtain support through either Pantheon or ITS</a>.</p>
+
+{% if notices|length > 0 %}
+<h1>Notice{% if notices|length > 1 %}s{% endif %}</h1>
+{% for notice in notices %}
+<div class="notice notice-type-{{notice.type}}">
+  <div class="notice-icon-area"><span class="notice-icon">{{notice.icon}}</span></div>
+  <div class="notice-text">{{notice.message}}</div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if news|length > 0 %}
+<h1>News</h1>
+<div style="padding: 0 2em;">
+{% for item in news %}
+{{item.message}}
+{% endfor %}
+</div>
+{% endif %}
+
+<h1>Pantheon plan recommendation</h1>
+  <table style="border: 0; width: max-content; font-weight: bold;">
+    <tr><td>Pantheon website name:</td><td></td><td>{{site_name}}</td></tr>
+    <tr><td>Main URL:</td><td></td><td>{{site_url}}</td></tr>
+    <tr><td colspan=3>&nbsp;</td></tr>
+{% if months_until_recommendations == 0 %}
+    <tr><td>Current plan:</td><td style="font-size: larger; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';">{% if current_plan == recommended_plan %}&#x2705;{% elif current_plan_index > recommended_plan_index %}&#x2198;{% else %}&#x2197;{% endif %}</td><td>{{current_plan}}</td></tr>
+    <tr><td>Recommended plan:</td><td style="font-size: larger; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';">{% if current_plan == recommended_plan %}&#x2705;{% else %}&#x1F3AF;{% endif %}</td><td>{{recommended_plan}}</td></tr>
+    <tr><td colspan=3>&nbsp;</td></tr>
+    <tr><td>Median Pantheon visitors:</td><td></td><td>{{median_monthly_visitors}} per month</td></tr>
+{% else %}
+    <tr><td>Current plan:</td><td></td><td>{{current_plan}}</td></tr>
+    <tr><td>Recommended plan:</td><td></td><td>({% if months_until_recommendations == 1 %}available next month{% else %}needs {{months_until_recommendations}} months more data{% endif %})</td></tr>
+    <tr><td colspan=3>&nbsp;</td></tr>
+    <tr><td>Median Pantheon visitors:</td><td></td><td>({% if months_until_recommendations == 1 %}available next month{% else %}needs {{months_until_recommendations}} months more data{% endif %})</td></tr>
+{% endif %}
+  </table>
+
+<p>Please look at your website's <i>Pantheon visitors</i> below &mdash; and also <a href="https://its.umich.edu/computing/web-mobile/pantheon/pricing">U-M Pantheon pricing</a> &mdash; to decide if you want to make any changes to your website's hosting plan to save money:</p>
+<ul>
+  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Upgrade to a higher plan</a> when you think <i>Pantheon visitors</i> will be above the red dashed line (more than "Upgrade at") in more than 50% of future months.</li>
+  {% if current_plan == 'Basic' %}
+  <li><strong>{{site_name}}</strong> is already on Basic, the lowest plan.  There is no cheaper plan to downgrade to.</li>
+  {% elif current_plan == 'Performance Small' %}
+  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Downgrade to Basic</a> <strong><i>only between June 16 - 30 each year</i></strong> if you decide you no longer need <a href="https://its.umich.edu/computing/web-mobile/pantheon/features">Performance plan features</a>.</li>
+  {% else %}
+  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Downgrade to a lower plan</a> <strong><i>only between June 16 - 30 each year</i></strong> if you think <i>Pantheon visitors</i> will be below the green dashdotted line (less than "Downgrade at") in more than 50% of future months.</li>
+  {% endif %}
+  <li><i>This report analyzes <a href="https://docs.pantheon.io/guides/account-mgmt/traffic#how-do-you-know-if-a-visit-counts">Pantheon visitors, which are much lower than daily website visitors</a>.</i></li>
+  <li><i>These numbers are best estimates. The actual numbers on Pantheon bills will be different.</i></li>
+</ul>
+
+
+<h1>Site traffic</h1>
+<div>
+  <img alt="Chart showing Pantheon website traffic over time.  The same data is presented in table form, below." class="chart_image" src="cid:{{chart_cid}}" />
+</div>
+
+<div class="container">
+  <table class="responsive-table">
+    <caption>{{site_name}} Pantheon Traffic<br /><span style="font-size: smaller;"><a href="{{site_url}}">{{site_url}}</a></span></caption>
+    <thead>
+      <tr>
+        {% for column in traffic_table_columns %}
+        <th class="rt-{{column['name']}}">{{column['label']}}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tfoot>
+      {% if current_month_estimate != '' %}
+      <tr><td colspan="12">{{current_month_estimate}}</td></tr>
+      {% endif %}
+      <tr><td colspan="12">Traffic is as of {{traffic_date}}.</td></tr>
+    </tfoot>
+    <tbody>
+      {% for row in traffic_table_rows %}
+      <tr>
+        <th class="rt-month">{{traffic_table_rows[row]['month']}}</th>
+        {% for column in traffic_table_columns[1:] %}
+        <td class="rt-{{column['name']}}">
+          <div class="rt-data-header rt-{{column['name']}}">{{column['label']}}</div>
+          <div class="rt-data rt-{{column['name']}}">{{traffic_table_rows[row][column['name']]}}</div>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if months_until_recommendations == 0 %}
+  <div class="container">
+    <table class="responsive-table">
+      <caption>{{site_name}} Estimated Plan Costs<br /><span style="font-size: smaller;">{{estimate_start_date}} &mdash; {{estimate_end_date}}</span></caption>
+      <thead>
+        <tr>
+          {% for column in cost_table_columns %}
+          <th class="rt-cost-{{column['name']}}">{{column['label']}}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tfoot>
+        <tr>
+          <td colspan="12">as of {{traffic_date}}</td>
+        </tr>
+      </tfoot>
+      <tbody>
+        {% for row in cost_table_rows %}
+        <tr>
+          <th class="rt-cost-plan">{{cost_table_rows[row]['plan']}}</th>
+          {% for column in cost_table_columns[1:] %}
+          <td class="rt-cost-{{column['name']}}">
+            <div class="rt-data-header rt-cost-{{column['name']}}">{{column['label']}}</div>
+            <div class="rt-data rt-cost-{{column['name']}}">{{cost_table_rows[row][column['name']]}}</div>
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <dl>
+      <dt>Same Traffic Cost</dt>
+      <dd>Estimated cost of the website if it gets the same number of <i>Pantheon visitors</i> in each of the next 12 months that it did in the same month of the previous year.</dd>
+      <dt>Median Traffic Cost</dt>
+      <dd>Estimated cost of the website if it gets {{median_monthly_visitors}} <i>Pantheon visitors</i> every month for the next 12 months.  In the past 12 months, half the months had more than {{median_monthly_visitors}} <i>Pantheon visitors</i> and half had fewer.</dd>
+    </dl>
+    <p>ITS will generally use the higher of the two estimates. To determine what plan a site should be on for a given level of traffic, use the <a href="https://documentation.its.umich.edu/node/4705">Estimated Pantheon Website Cost graph</a>.</p>
+</div>
+{% else %}
+  <div class="container">
+    <table class="responsive-table">
+      <caption>{{site_name}} Estimated Plan Costs<br /><span style="font-size: smaller;">{{estimate_start_date}} &mdash; {{estimate_end_date}}</span></caption>
+      <tr><td><center>Cost estimates will be available once the site has five months of Pantheon traffic data.</center></td></tr>
+    </table>
+  </div>
+{% endif %}
+
+--<br />
+University of Michigan ITS Web Hosting Team<br />
+<a href="mailto:webmaster@umich.edu">webmaster@umich.edu</a>
+
+<!-- End email content -->
+																		</td>
+																	</tr>
+																</tbody>
+															</table>
+															</td>
+														</tr>
+													</tbody>
+												</table>
+												</td>
+											</tr>
+										</tbody>
+									</table>
+									</td>
+								</tr>
+							</tbody>
+						</table>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+			</td>
+		</tr>
+	</tbody>
+</table>
+</center>
+</body>
+</html>
+

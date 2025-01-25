@@ -1,0 +1,2063 @@
+#!/usr/bin/env python
+#
+# pantheon-sitehealth-emails
+#
+# Send emails to website owners letting them know what their Pantheon traffic has been and make recommendations about
+# whether/how they should change their current plan or the configuration of their site.
+#
+# Usage:
+#   pantheon-sitehealth-emails [-h|--help] 
+#
+
+import argparse
+import configparser
+import os
+import sys
+import json
+import subprocess
+import datetime
+import calendar
+import ipaddress
+import html
+import io
+import re
+import copy
+from smtplib import SMTP_SSL
+from typing import Any
+
+from email.message import EmailMessage
+from email.utils import make_msgid
+from email.policy import SMTP
+
+import dns.resolver
+import sqlalchemy as db
+from sqlalchemy import create_engine, insert
+from sqlalchemy import Integer, String, Date, Boolean
+from sqlalchemy import PrimaryKeyConstraint, UniqueConstraint
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.dialects.mysql import CHAR
+
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import matplotlib.patheffects as path_effects
+import numpy as np
+
+from jinja2 import Template
+
+from rich.console import Console
+from rich.padding import Padding
+from rich.pretty import pprint
+
+from umich.getsecrets import get_secret
+import umcloudflare.Cloudflare as Cloudflare
+
+
+# Pantheon rate plan information.
+# Note: the plan names must match what `terminus plan:list ${some_site_name}` returns.
+plan_info = {}
+plan_names = []
+
+traffic_table_columns = [
+    {'name': 'month', 'label': 'Month'},
+    {'name': 'visitors', 'label': 'Pantheon Visitors'},
+    {'name': 'plan', 'label': 'Plan'},
+    {'name': 'plan-limit', 'label': 'Plan Limit'},
+    {'name': 'overage', 'label': 'Overage'},
+    {'name': 'overage-blocks', 'label': 'Overage Blocks'},
+    {'name': 'overage-cost', 'label': 'Overage Cost'},
+    {'name': 'overage-protection', 'label': 'Overage Protection'},
+    {'name': 'upgrade-at', 'label': 'Upgrade At'},
+    {'name': 'next-plan', 'label': 'Upgrade To'},
+    {'name': 'downgrade-at', 'label': 'Downgrade At'},
+    {'name': 'previous-plan', 'label': 'Downgrade To'},
+]
+
+cost_table_columns = [
+    {'name': 'plan', 'label': 'Plan'},
+    {'name': 'cost-same', 'label': 'Same Traffic Cost'},
+    {'name': 'cost-median', 'label': 'Median Traffic Cost'},
+    {'name': 'notes', 'label': ''},
+]
+
+fqdn_re = re.compile(r'^_?[a-z0-9-]+\.[a-z0-9.-]+$', re.IGNORECASE)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class PantheonTraffic(Base):
+    __tablename__ = 'pantheon_traffic'
+
+    # id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_id: Mapped[str] = mapped_column(CHAR(36))
+    traffic_date: Mapped[datetime.date] = mapped_column(Date)
+    site_plan: Mapped[str] = mapped_column(String(64))
+    visits: Mapped[int] = mapped_column(Integer)
+    pages_served: Mapped[int] = mapped_column(Integer)
+    cache_hits: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        PrimaryKeyConstraint('site_id', 'traffic_date', name='pk_site_id_traffic_date'),
+        UniqueConstraint('site_id', 'traffic_date', name='uix_site_id_traffic_date'),
+    )
+
+    def __repr__(self):
+        return (f'<{self.site_id} {self.traffic_date} : {self.site_plan} visits={self.visits} '
+                f'pages={self.pages_served} cache_hits={self.cache_hits}>')
+
+
+class PantheonOverageProtection(Base):
+    __tablename__ = 'pantheon_overage_protection'
+
+    site_id: Mapped[str] = mapped_column(CHAR(36))
+    month: Mapped[datetime.date] = mapped_column(Date)
+    months_remaining: Mapped[int] = mapped_column(Integer)
+    used_this_month: Mapped[bool] = mapped_column(Boolean)
+
+    __table_args__ = (
+        PrimaryKeyConstraint('site_id', 'month', name='pk_op_site_id_traffic_date'),
+        UniqueConstraint('site_id', 'month', name='uix_op_site_id_traffic_date'),
+    )
+
+    def __repr__(self):
+        return f'<{self.site_id} {self.month} : {self.months_remaining}>'
+
+
+#
+# Global initialization:
+#
+
+console = Console()
+config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation(), strict=True)
+
+# Parse command line arguments.  This is outside main() so the arguments are available to all functions.
+args_parser = argparse.ArgumentParser(
+    description='Send emails to website owners letting them know what their Pantheon traffic has been'
+                'and make recommendations about whether/how they should change their current plan or'
+                'the configuration of their site.'
+)
+args_parser.add_argument(
+    'sites',
+    metavar='SITE',
+    nargs='*',
+    help='a list of site names to process; if not specified, all sites in the Pantheon organization will be processed'
+)
+args_parser.add_argument(
+    '--all', '-a',
+    action='store_true',
+    default=False,
+    help='process all sites in the Pantheon organization'
+)
+args_parser.add_argument(
+    '--date', '-d',
+    type=datetime.date.fromisoformat,
+    default=datetime.date.today(),
+    help='generate the report as if it were this date (YYYYMMDD or YYYY-MM-DD); defaults to today'
+)
+args_parser.add_argument(
+    '--update',
+    action='store_true',
+    default=False,
+    help='just update the site visitors in the database, skipping the reports'
+)
+args_parser.add_argument(
+    '--for-real',
+    action='store_true',
+    default=False,
+    help='send email to the site owners; without this option, the emails will go to the logged-in user instead'
+)
+args_parser.add_argument(
+    '--only-warn',
+    action='store_true',
+    default=False,
+    help='only check sites for warnings, do not generate reports or send emails'
+)
+args_parser.add_argument(
+    '--smtp-username', '-u',
+    action='store',
+    default=os.environ.get('USER', ''),
+    help='username for logging into the SMTP server to send mail'
+)
+args_parser.add_argument(
+    '--create-tables',
+    action='store_true',
+    default=False,
+    help='create the database tables and then stop, ignoring all other command line options'
+)
+args_parser.add_argument(
+    '--import-older-metrics',
+    action='store_true',
+    default=False,
+    help='load weekly and monthly Pantheon metrics into the database and then stop, '
+         'ignoring all other command line options'
+)
+args_parser.add_argument(
+    '--verbose', '-v',
+    action='count',
+    default=0,
+    help='include extra information in the output'
+)
+options = args_parser.parse_args()
+
+
+def run_terminus(command: list) -> (str, str, bool):
+
+    command = ['terminus', '--no-ansi', '--no-interaction', *command]
+    commandline = ' '.join([(("'" + arg.replace("'", "\\'") + "'") if len(arg.split()) > 1 else arg) for arg in command])
+
+    if options.verbose:
+        console.print('Running Terminus command:')
+        console.print(commandline)
+
+    with console.status(f'[bold green]Running: [bright_magenta]{commandline}'):
+        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        try:
+            stdout, stderr = p.communicate(timeout=300)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            stdout, stderr = p.communicate()
+            output = stdout.decode('utf-8').strip()
+            errors = stderr.decode('utf-8').strip()
+            console.print('[bold red]Terminus command timed out.')
+            console.print('===== stdout:\n' + output)
+            console.print('===== stderr:\n' + errors)
+            errors += '\n[ERROR] Terminus command timed out.\n'
+            return output, errors, True
+
+    output = stdout.decode('utf-8').strip()
+    errors = stderr.decode('utf-8').strip()
+
+    if command[3] == 'wp' and len(output) > 0 and p.returncode == 0:
+            lines = output.split('\n')
+            filtered_lines = []
+            for line in lines:
+                if not re.match(r'^\s*Warning:\s+', line):
+                    filtered_lines.append(line)
+                else:
+                    errors = line + '\n' + errors
+            output = '\n'.join(filtered_lines)
+    if options.verbose > 2:
+        console.print('Terminus output:')
+        console.print(output)
+
+    if len(errors) > 0 and p.returncode == 0:
+            lines = errors.split('\n')
+            filtered_lines = []
+            for line in lines:
+                line = line.strip()
+                if line != '' \
+                    and not line.endswith('[Exit: 0] (Attempt 1/1)') \
+                    and not line.startswith('[warning] There are no available updates') \
+                    and not (line.startswith("Warning: Permanently added") and line.endswith('to the list of known hosts.')):
+                        filtered_lines.append(line)
+            errors = '\n'.join(filtered_lines)
+    if len(errors) > 0:
+        console.print('Terminus errors:')
+        console.print(errors)
+
+    if p.returncode != 0:
+        line = f"Terminus command failed with exit code {p.returncode}: {stderr}\n"
+        console.print(f'[bold red][ERROR] {line}')
+        errors += "\n" + line
+        return output, errors, True
+
+    return output, errors, False
+
+
+def terminus(*args) -> Any:
+    """
+    Run Terminus with the given arguments and return the result as a JSON object.
+    """
+    command = [*args, '--format=json']
+    output, errors, fatal = run_terminus(command)
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as e:
+        result = ''  # TODO: set to None
+        errors += "\n" + output + "\n" + str(e)
+    if errors != '':
+        console.print(f'[bold red]Terminus error: {errors}')
+    #return result, errors.strip(), fatal  # TODO
+    return result
+
+
+def wp(siteenv: str, *args) -> (Any, str):
+    """
+    Run a "wp eval" command through Terminus and return the result as JSON.
+    """
+    command = ['wp', siteenv, '--', *args, '--format=json']
+    output, errors, fatal = run_terminus(command)
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as e:
+        result = None
+        errors += "\n" + output + "\n" + str(e)
+    return result, errors.strip(), fatal
+
+
+def wp_eval(siteenv: str, *args) -> (str, str):
+    """
+    Run a "wp eval" command through Terminus and return the result as a string.
+    """
+    command = ['wp', siteenv, '--', 'eval', *args]
+    output, errors, fatal = run_terminus(command)
+    return output.strip(), errors.strip(), fatal
+
+
+def wp_error(site: str, code: str, message: str, errors: str) -> list[dict]:
+    html_message = message.replace(site, f'<strong>{site}</strong>')
+    return [{
+        'type': 'alert',
+        'icon': '&#x1F6A8;',  # police car light
+        'csv': f'{site},wp-error,{code},{json.dumps(errors).replace(',', '\\,')}',
+        'message': f'''
+<p>{html_message}
+<code>wp</code> (WP CLI) returned the following error:</p>
+<pre>{html.escape(errors)}</pre>
+''',
+        'text': f'''
+{message}
+"wp" (WP CLI) returned the following error:
+
+----- START WP CLI ERROR -----
+{errors}
+----- END WP CLI ERROR -----
+
+''',
+    }]
+
+
+def fix_drush_output(output: str, errors: str) -> (str, str):
+    """
+    Move any error messages at the start of the output from a Drush command to the errors string.
+    """
+    if not isinstance(output, str) or output == '':
+        return output, errors
+
+    if output[0] != '{':
+        lines = output.split('\n')
+        linenum = 0
+        while linenum < len(lines):
+            if lines[linenum][0] == '{':
+                break
+            linenum += 1
+        errors = '\n'.join(lines[:linenum]) + errors
+        output = '\n'.join(lines[linenum:])
+
+    if options.verbose > 1:
+        console.print('Drush output:')
+        console.print(output)
+        console.print('Drush errors:')
+        console.print(errors)
+
+    return output, errors
+
+
+def drush(siteenv: str, *args) -> (Any, str):
+    """
+    Run a "drush" command through Terminus and return the result as a JSON object.
+    """
+    command = ['drush', siteenv, '--', *args, '--format=json']
+    output, errors, fatal = run_terminus(command)
+    output, errors = fix_drush_output(output, errors)
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as e:
+        result = None
+        errors += "\n" + output + "\n" + str(e)
+    return result, errors.strip(), fatal
+
+
+def drush_php_eval(siteenv: str, *args) -> (Any, str):
+    """
+    Run a "drush php:eval" command through Terminus and return the result as a string.
+    """
+    command = ['drush', siteenv, '--', 'php:eval', *args, '--format=json']
+    output, errors, fatal = run_terminus(command)
+    output, errors = fix_drush_output(output, errors)
+    try:
+        result = json.loads(output)
+    except json.JSONDecodeError as e:
+        result = None
+        errors += "\n" + output + "\n" + str(e)
+    return result, errors.strip(), fatal
+
+
+def drush_error(site: str, code: str, message: str, errors: str) -> list[dict]:
+    html_message = message.replace(site, f'<strong>{site}</strong>')
+    return [{
+        'type': 'alert',
+        'icon': '&#x1F6A8;',  # police car light
+        'csv': f'{site},drush-error,{code},{json.dumps(errors).replace(',', '\\,')}',
+        'message': f'''
+<p>{html_message}
+<code>drush</code> returned the following error:</p>
+<pre>{html.escape(errors)}</pre>
+''',
+        'text': f'''
+{message}
+drush returned the following error:
+
+----- START DRUSH ERROR -----
+{errors}
+----- END ERROR -----
+
+''',
+    }]
+
+
+def get_old_metrics(site_env: str, site: dict, period: str, end_date: datetime.date) -> list:
+    console.print(f'[bold magenta]=== Processing old data by {period}:')
+    metrics = terminus('env:metrics', site_env, f'--period={period}')
+    new_rows = []
+
+    for e in metrics['timeseries']:
+
+        entry = metrics['timeseries'][e]
+        if entry['visits'] == 0 and entry['pages_served'] == 0:
+            if options.verbose:
+                console.print(f'No traffic for {period} {entry["datetime"]}')
+            continue
+
+        traffic_date = datetime.datetime.strptime(entry['datetime'], '%Y-%m-%dT%H:%M:%S').date()
+        if period == 'week':
+            days_in_period = 7
+        else:
+            _, days_in_period = calendar.monthrange(traffic_date.year, traffic_date.month)
+
+        visits_per_day = entry['visits'] // days_in_period
+        visits_last_day = visits_per_day + entry['visits'] % days_in_period
+        pages_served_per_day = entry['pages_served'] // days_in_period
+        pages_served_last_day = pages_served_per_day + entry['pages_served'] % days_in_period
+        cache_hits_per_day = entry['cache_hits'] // days_in_period
+        cache_hits_last_day = cache_hits_per_day + entry['cache_hits'] % days_in_period
+
+        if options.verbose > 1:
+            console.print(f'traffic/day for {period} starting {traffic_date}: visits={visits_per_day} '
+                          f'pages={pages_served_per_day} cache_hits={cache_hits_per_day}')
+
+        for i in range(days_in_period):
+            if traffic_date < end_date:
+                if i < days_in_period - 1:
+                    daily_traffic = {'site_id': site['id'], 'traffic_date': traffic_date,
+                                     'site_plan': site['plan_name'],
+                                     'visits': visits_per_day, 'pages_served': pages_served_per_day,
+                                     'cache_hits': cache_hits_per_day}
+                else:
+                    daily_traffic = {'site_id': site['id'], 'traffic_date': traffic_date,
+                                     'site_plan': site['plan_name'],
+                                     'visits': visits_last_day, 'pages_served': pages_served_last_day,
+                                     'cache_hits': cache_hits_last_day}
+                new_rows.append(daily_traffic)
+            traffic_date += datetime.timedelta(days=1)
+
+    return new_rows
+
+
+def check_wordpress_plugin(site: str, installed_plugins: list, name: str, display_name: str, url: str, reason: str) -> list:
+    notices = []
+    if not isinstance(installed_plugins, dict):
+        return notices  # this error should already have been handled by our caller, so skip additional work
+
+    installed = [p for p in installed_plugins if p['name'] == name]
+
+    if len(installed) == 0:
+        console.print(f':exclamation: [bold red] ATTENTION: {site} does not have the {display_name} plugin installed.')
+        notices.append({
+            'type': 'warning',
+            'icon': '&#x26A0;',  # warning sign
+            'csv': f'{site},not-installed,{name}',
+            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be installed:</p><p>{reason}</p>',
+            'text': f"The {display_name} WordPress plugin\n<{url}>\nneeds to be installed: {reason}",
+        })
+        return notices
+
+    if len(installed) > 1:
+        console.print(f':exclamation: [bold red] ATTENTION: {site} has more than one {display_name} plugin installed.')
+        notices.append({
+            'type': 'info',
+            'icon': '&#x1F50E;',  # magnifying glass
+            'csv': f'{site},multiple-installed,{name}',
+            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin is installed multiple times.</p>',
+            'text': f"The {display_name} WordPress plugin\n<{url}>\nis installed multiple times.",
+        })
+
+    plugin = installed[0]
+    if not 'status' in plugin or plugin['status'] != 'active':
+        console.print(f':exclamation: [bold red] ATTENTION: {site} has the {display_name} plugin installed but it is not active.')
+        notices.append({
+            'type': 'warning',
+            'icon': '&#x26A0;',  # warning sign
+            'csv': f'{site},turned-off,{name}',
+            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be activated:</p><p>{reason}</p>',
+            'text': f"The {display_name} WordPress plugin\n<{url}>\nneeds to be activated: {reason}",
+        })
+
+    return notices
+
+
+def check_drupal_module(site: str, installed_mods: dict, name: str, display_name: str, url: str, reason: str) -> list:
+    notices = []
+    if not isinstance(installed_mods, dict):
+        return notices  # this error should already have been handled by our caller, so skip additional work
+
+    if not name in installed_mods:
+        console.print(f':exclamation: [bold red] ATTENTION: {site} does not have the {display_name} module installed.')
+        notices.append({
+            'type': 'warning',
+            'icon': '&#x26A0;',  # warning sign
+            'csv': f'{site},not-installed,{name}',
+            'message': f'<p>The <a href="{url}">{display_name}</a> Drupal module needs to be installed:</p><p>{reason}</p>',
+            'text': f"The {display_name} Drupal module\n<{url}>\nneeds to be installed: {reason}",
+        })
+        return notices
+
+    mod = installed_mods[name]
+    if not 'status' in mod or mod['status'] != 'Enabled':
+        console.print(f':exclamation: [bold red] ATTENTION: {site} has the {display_name} module installed but it is not enabled.')
+        notices.append({
+            'type': 'warning',
+            'icon': '&#x26A0;',  # warning sign
+            'csv': f'{site},turned-off,{name}',
+            'message': f'<p>The <a href="{url}">{display_name}</a> Drupal module needs to be enabled:</p><p>{reason}</p>',
+            'text': f"The {display_name} Drupal module\n<{url}>\nneeds to be enabled: {reason}",
+        })
+
+    return notices
+
+
+def main() -> None:
+
+    config.read(['pantheon-sitehealth-emails.ini'])
+    env_overrides = {
+        'CLOUDFLARE_EMAIL': { 'section': 'Cloudflare', 'key': 'member_email' },
+        'CLOUDFLARE_API_KEY': { 'section': 'Cloudflare', 'key': 'member_api_key' },
+    }
+    for env in env_overrides:
+        if os.getenv(env) is not None:
+            config[env_overrides[env]['section']][env_overrides[env]['key']] = os.getenv(env)
+    if os.getenv('AWS_PROFILE') is None:
+        os.environ['AWS_PROFILE'] = config['AWS']['profile']
+    if os.getenv('AWS_DEFAULT_REGION') is None:
+        os.environ['AWS_DEFAULT_REGION'] = config['AWS']['default_region']
+    overage_block_size = config.getint('Pantheon', 'overage_block_size', fallback=10000)
+    overage_block_cost = config.getfloat('Pantheon', 'overage_block_cost', fallback=40.00)
+
+    global plan_info, plan_names
+    for section in config.sections():
+        if section.startswith('Pantheon.plan.'):
+            plan_name = section[14:]
+            plan_info[plan_name] = dict()
+            plan_info[plan_name]['upgrade_at'] = config.getint(section, 'upgrade_at')
+            plan_info[plan_name]['upgrade_to'] = config[section]['upgrade_to'] if config[section]['upgrade_to'] != 'None' else None
+            plan_info[plan_name]['downgrade_to'] = config[section]['downgrade_to'] if config[section]['downgrade_to'] != 'None' else None
+    plan_names = list(plan_info.keys())
+
+    # Validate and process arguments
+    if options.create_tables:
+        options.verbose = 3  # force verbose output
+    if options.import_older_metrics and options.create_tables:
+        sys.exit('The --import-older-metrics and --create-tables options are mutually exclusive.')
+    if (options.all and len(options.sites) != 0) or (not options.all and len(options.sites) == 0):
+        sys.exit('You must specify either one or more sites or the --all option.')
+    if options.verbose:
+        console.print('Arguments:')
+        pprint(options)
+        console.print('Configuration:')
+        config_out = io.StringIO()
+        config.write(config_out)
+        console.print(config_out.getvalue(), style='yellow')
+        config_out.close()
+        pprint(terminus('self:info'))
+
+    # cloudflare = Cloudflare.Cloudflare(profile='its-webhosting-inventory')  # not implemented yet
+    cloudflare = Cloudflare.Cloudflare(
+        email=config['Cloudflare']['member_email'],
+        key=config['Cloudflare']['member_api_key']
+    )
+
+    with console.status('[bold green]Getting Cloudflare IP ranges ...'):
+        try:
+            cloudflare_ips = cloudflare.get('/ips')
+        except Exception as e:
+            sys.exit(f'ERROR: Unable to get lists of Cloudflare IPs: {e}')
+        if options.verbose > 2:
+            console.print('Cloudfare IPs:')
+            pprint(cloudflare_ips)
+        cloudflare_ipv4_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips['ipv4_cidrs']]
+        cloudflare_ipv6_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips['ipv6_cidrs']]
+
+    if options.verbose:
+        console.print('[bold magenta]=== Getting WWS portal AWS secret:')
+    portal_secrets = json.loads(get_secret(config['AWS']['wws_portal_secrets']))
+
+    # Create a directory named "build" if it doesn't exist:
+    if not os.path.exists('build'):
+        os.makedirs('build')
+
+    # Get the information we need from the portal's database:
+    if options.verbose:
+        console.print('[bold magenta]=== Getting website information from the WWS portal:')
+    portal_sites = {}
+    plan_sku_to_name = {}
+    portal_db_engine = db.create_engine(f'mysql+mysqldb://{portal_secrets["db_user"]}:{portal_secrets["db_pass"]}@'
+                                        f'{portal_secrets["db_host"]}/{portal_secrets["db_name"]}',
+                                        echo=True if options.verbose > 1 else False)
+    with portal_db_engine.connect() as connection:
+        metadata = db.MetaData()
+        sites_site = db.Table('sites_site', metadata, autoload_with=portal_db_engine)
+        query = db.select(sites_site.c['id', 'site_slug', 'owner_group'])
+        for row in connection.execute(query).all():
+            # https://github.com/sqlalchemy/sqlalchemy/discussions/10091
+            # noinspection PyProtectedMember
+            site = row._asdict()
+            portal_sites[site['site_slug']] = {'id': site['id'], 'owner_group': site['owner_group']}
+        sites_pantheonplan = db.Table('sites_pantheonplan', metadata, autoload_with=portal_db_engine)
+        query = db.select(sites_pantheonplan.c[
+                              'portal_plan_name',
+                              'pantheon_plan_sku',
+                              'traffic_limits',
+                              'annual_plan_charge',
+                              'is_active'])
+        for row in connection.execute(query).all():
+            # noinspection PyProtectedMember
+            plan = row._asdict()
+            if plan['is_active'] and plan['portal_plan_name'] in plan_info:
+                plan_info[plan['portal_plan_name']]['traffic_limit'] = int(plan['traffic_limits'])
+                plan_info[plan['portal_plan_name']]['cost'] = float(plan['annual_plan_charge'])
+                plan_sku_to_name[plan['pantheon_plan_sku']] = plan['portal_plan_name']
+    portal_db_engine.dispose()
+    if options.verbose:
+        pprint(portal_sites)
+        pprint(plan_info)
+
+    if options.verbose:
+        console.print('[bold magenta]=== Connecting to the [green]pantheon-sitehealth-emails[/green] traffic database:')
+    db_engine = create_engine(f'mysql+mysqldb://{portal_secrets["db_user"]}:{portal_secrets["db_pass"]}@'
+                              f'{portal_secrets["db_host"]}/traffic',
+                              echo=True if options.verbose > 1 else False,
+                              pool_size=10,
+                              max_overflow=20)
+    db_session_factory = sessionmaker(bind=db_engine)
+    db_session = db_session_factory()
+
+    if options.create_tables:
+        Base.metadata.create_all(db_engine)
+        sys.exit('Tables created.')
+
+    with open("header-image.png", 'rb') as img:
+        wordmark_image = img.read()
+
+    if options.smtp_username == '':
+        sys.exit("--smtp-username not specified and USER environment variable not set.")
+    smtp_connection = SMTP_SSL('smtp.mail.umich.edu', port=465)
+    # TODO: get password from config file, from secret or prompt for it
+    smtp_connection.login(options.smtp_username, os.environ['SMTP_PASSWORD'])
+
+    news = [
+        {
+            'type': 'news',
+            'icon': '&#x1F4EC;',  # memorandum
+            'message': f'''
+<h3 style="padding-top: 0;">Overage charges still temporarily waived</h3>
+<p>Overage charge information is included below so you can manage your website plan and move to a different
+plan at the appropriate time, but <a href="https://docs.pantheon.io/release-notes/2024/08/overage-charges-updates">these
+overage charges will not be billed to your shortcode</a>.</p>
+<p><strong>Pantheon is likely to announce website traffic billing changes and traffic overage policies in the first
+half of 2025.</strong> To save money, ITS recommends that you optimize your website traffic as much as possible before
+then, even if your site is on a Basic or Performance Small plan.</p>
+<ul>
+<li>Make sure your site is fully behind Cloudflare and that Cloudflare caches all public pages and assets for one year.
+(Pantheon <i>does</i> meter and charge for traffic that Pantheon serves from its CDN and caches.)</li>
+<li>Cloudflare will also block malicious activity, including login attempts, XML-RPC traffic, DoS and DDoS traffic,
+and break-in attempts that Pantheon would otherwise charge for.</li>
+<li>If your site has multiple domains and is not a multisite, make sure one domain is
+<a href="https://docs.pantheon.io/guides/redirect/primary-domain">set as Primary</a>.
+This will increase your site's Cloudflare cache hit ratio.</li>
+<li>If you have a Drupal website,
+<a href="https://acquia.my.site.com/s/article/4408794498199-Block-excessive-crawling-of-Drupal-Views-or-search-results">
+block excessive crawling of Drupal Views search result pages</a>. (Additional information
+<a href="https://docs.pantheon.io/bots-and-indexing#robotstxt-with-composer-and-drupal">for Composer-managed
+Drupal sites</a>)</li>
+</ul>
+''',
+            'text': f'''
+=== Overage charges still temporarily waived ===
+
+<Overage charge information is included below so you can manage your
+website plan and move to a different plan at the appropriate time,
+but these overage charges will not be billed to your shortcode.
+
+<https://docs.pantheon.io/release-notes/2024/08/overage-charges-updates>
+
+Pantheon is likely to announce website traffic billing changes and
+traffic overage policies in the first half of 2025. To save money,
+ITS recommends that you optimize your website traffic as much as
+possible before then, even if your site is on a Basic or Performance
+Small plan.
+
+* Make sure your site is fully behind Cloudflare and that Cloudflare
+caches all public pages and assets for one year. (Pantheon DOES meter
+and charge for traffic that Pantheon serves from its CDN and caches.)
+
+* Cloudflare will also block malicious activity, including login
+attempts, XML-RPC traffic, DoS and DDoS traffic, and break-in attempts
+that Pantheon would otherwise charge for.
+
+* If your site has multiple domains and is not a multisite, make sure
+one domain is set as Primary. This will improve your site's
+Cloudflare cache hit ratio.
+<https://docs.pantheon.io/guides/redirect/primary-domain>
+
+* For Drupal websites, block excessive crawling of Drupal Views
+search result pages
+<https://acquia.my.site.com/s/article/4408794498199-Block-excessive-crawling-of-Drupal-Views-or-search-results>
+Additional information for Composer-managed Drupal sites:
+<https://docs.pantheon.io/bots-and-indexing#robotstxt-with-composer-and-drupal>
+''',
+        }
+    ]
+
+    end_date = options.date
+    end_date_yyyy_mm = end_date.strftime('%Y-%m')
+    start_date = end_date.replace(day=1, year=end_date.year - 1)  # fist day of the same month last year
+    end_of_contract_year = True if end_date.month == 6 and 16 < end_date.day < 30 else False
+    if options.verbose:
+        console.print(f'Generating report for {start_date} through {end_date}')
+
+    sites = terminus('org:site:list', config['Pantheon']['org_id'])
+    site_count = len(sites)
+    current_site_number = 1
+    emails_sent = 0
+    site_savings = []
+    all_warnings = []
+
+    for site_id in sites:
+        site = sites[site_id]
+        its_downgrade_site = False
+        site_notices = []
+        wp_smell = ''
+        drush_smell = ''
+        if site['name'] not in portal_sites:
+            console.print(f':exclamation: [bold red] ATTENTION: {site["name"]} is not in the WWS portal!')
+            continue
+
+        portal_site_id = portal_sites[site['name']]['id']
+
+        if not options.all and site['name'] not in options.sites:
+            if options.verbose > 1:
+                console.print(f'[bold magenta]=== Skipping site {site["name"]} (not in list of sites to process)')
+            continue
+        console.print('\n',
+                      Padding(f'Pantheon site {current_site_number} of {site_count}: [bold]{site["name"]}[/bold]',
+                              1, style='white on blue'),
+                      '\n'
+                      )
+        current_site_number += 1
+
+        if site['plan_name'] == 'Elite':
+            # Pantheon uses the same display name (but a different SKU) for each Elite plan.
+            site_plan_info = terminus('plan:info', site['name'])
+            if 'sku' not in site_plan_info:
+                console.print(f':exclamation: [bold red] ERROR: {site["name"]} doesn\'t have a plan SKU')
+                sys.exit('Bailing out.')
+            plan_sku = site_plan_info['sku']
+            if plan_sku not in plan_sku_to_name:
+                console.print(f':exclamation: [bold red] ERROR: {site["name"]} has an unknown plan SKU: {plan_sku}')
+                sys.exit('Bailing out.')
+            site['plan_name'] = plan_sku_to_name[plan_sku]
+        site_current_plan = site['plan_name']
+        site_recommended_plan = site['plan_name']
+        site_current_plan_index = 0
+        site_recommended_plan_index = 0
+
+        if site['plan_name'] == 'Sandbox':
+            console.print(f'{site["name"]} is on the Sandbox plan, skipping it.')
+            continue
+
+        if site['frozen'] is not False:
+            console.print(f':exclamation: [bold red] ATTENTION: {site["name"]} is frozen!')
+            site_notices.append({
+                'type': 'alert',
+                'icon': '&#x1F6A8;',  # police car light
+                'csv': f'{site["name"]},frozen',
+                'message': f'''
+<p>Website <strong>{site["name"]}</strong> is frozen!</p>
+<p><a href="https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing">
+This should not happen</a> to a website on a paid Pantheon plan.</p>
+<p><a href="https://its.umich.edu/computing/web-mobile/pantheon/support#support">Contact Pantheon</a> to get
+<strong>{site["name"]}</strong> unfrozen and to find out what went wrong.</p>
+''',
+                'text': f'''
+Website {site["name"]} is frozen!
+<https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing>
+
+This should not happen</a> to a website on a paid Pantheon plan.
+Contact Pantheon to get {site["name"]} unfrozen
+and to find out what went wrong:
+<https://its.umich.edu/computing/web-mobile/pantheon/support#support>
+'''
+            })
+
+        if site['plan_name'] not in plan_names:
+            console.print(f':exclamation: [bold red] ATTENTION: {site["name"]} '
+                          f'is on an unknown plan: {site["plan_name"]}')
+            sys.exit('Bailing out.')
+
+        # From https://docs.pantheon.io/guides/account-mgmt/traffic/overages
+        # FAQ 1 as of April 25, 2024:
+        # "Only traffic for the Live environment is counted towards a site plan's traffic limit."
+
+        # The live environment will always exist, but may not be initialized -- see `terminus env:list ${siteName}`
+        # All sites that are not on the Sandbox plan should have their live environment initialized, but we don't
+        # need to check for that because those environments will also not have non-platform domains connected,
+        # and we'll generate a warning about that.
+        #
+        # Metrics for an uninitialized live environment will be all zeroes; this is OK.
+
+        live_site = site['id'] + '.live'
+        metrics = terminus('env:metrics', live_site, '--period=day')
+
+        if options.verbose:
+            console.print(f'[bold magenta]=== Updating metrics for {site["name"]}:')
+        # Preload the session with the data we're going to be updating.  This makes the call to `db_session.merge()`
+        # in the loop below much faster.
+        _ = db_session.query(PantheonTraffic).filter(PantheonTraffic.site_id == site['id'],
+                                                  PantheonTraffic.traffic_date.between(start_date, end_date)
+                                                  ).all()
+
+        for e in metrics['timeseries']:
+            entry = metrics['timeseries'][e]
+            traffic_date = datetime.datetime.strptime(entry['datetime'], '%Y-%m-%dT%H:%M:%S').date()
+            if traffic_date == end_date:
+                continue  # skip today's partial data
+            traffic = PantheonTraffic(site_id=site['id'],
+                                      traffic_date=traffic_date,
+                                      site_plan=site['plan_name'],
+                                      visits=entry['visits'],
+                                      pages_served=entry['pages_served'],
+                                      cache_hits=entry['cache_hits'])
+            db_session.merge(traffic)
+
+        db_session.commit()
+
+        if options.import_older_metrics:
+            console.print(f'[bold magenta]=== Importing older metrics for {site["name"]}:')
+            # Process old data by week:
+            new_rows = get_old_metrics(live_site, site, 'week', end_date)
+            db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
+            db_session.commit()
+            # Process old data by month:
+            new_rows = get_old_metrics(live_site, site, 'month', end_date)
+            db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
+            db_session.commit()
+            continue  # skip the rest of the processing for the sites
+
+        if options.update:
+            console.print('site visitors updated, skipping report')
+            continue
+
+        # Get all the data we will use:
+        results = db_session.query(PantheonTraffic).filter(PantheonTraffic.site_id == site['id'],
+                                                        PantheonTraffic.traffic_date.between(start_date, end_date)
+                                                        ).all()
+
+        if options.verbose > 1:
+            console.print(f'{len(results)} records found in the database for {site["name"]} '
+                          f'between {start_date} and {end_date}:')
+            # for row in results:
+            #    console.print(row)
+
+        # Query Pantheon for the site's domains
+        # TODO: check domains for site
+        #   - In Cloudflare, do they all point at the correct Pantheon IPs?
+        #   - If not in Cloudflare and are not DNS zone apexes, are they CNAMES (not A / AAAA) to live-${site_name}.pantheonsite.io?
+        #   - Take into account CNAME chaining for these checks
+        domains = terminus('domain:list', live_site)
+        if options.verbose:
+            console.print(f'=== Domains for {site["name"]}:')
+            pprint(domains)
+        site_url = ''
+        main_fqdn = ''
+        not_behind_cloudflare = []
+        not_in_dns = []
+        if isinstance(domains, dict):
+            for d in domains.keys():
+                domain = domains[d]
+                if domain['type'] == 'platform':
+                    continue
+                hostname = domain['id']
+                dns_points_at_cloudflare = 0
+                dns_points_elsewhere = 0
+                if not fqdn_re.match(hostname):
+                    console.log(f'[bold red]ERROR: Invalid domain for {site["name"]}: {hostname}')
+                    continue
+                if domain['primary'] or main_fqdn == '':
+                    main_fqdn = hostname
+                try:
+                    a = dns.resolver.resolve(hostname, 'A')
+                    for rdata in a:
+                        address = ipaddress.ip_address(rdata.address)
+                        if any([address in net for net in cloudflare_ipv4_nets]):
+                            dns_points_at_cloudflare += 1
+                            console.print(
+                                f'{hostname} has [green]Cloudflare IP address {rdata.address}[/green]')
+                        else:
+                            dns_points_elsewhere += 1
+                            console.print(f'{hostname} has IP address [red]{rdata.address}[/red]')
+                except dns.resolver.NoAnswer:
+                    if options.verbose:
+                        console.print(f'No A record for {hostname}', style='red')
+                except dns.resolver.NXDOMAIN:
+                    console.print(f'NXDOMAIN for {hostname} (A)', style='red')
+                except dns.resolver.NoNameservers:
+                    console.print(f'No nameservers for {hostname}', style='red')
+                except dns.resolver.Timeout:
+                    console.print(f'Timeout resolving {hostname}', style='red')
+
+                try:
+                    aaaa = dns.resolver.resolve(hostname, 'AAAA')
+                    for rdata in aaaa:
+                        address = ipaddress.ip_address(rdata.address)
+                        if any([address in net for net in cloudflare_ipv6_nets]):
+                            dns_points_at_cloudflare += 1
+                            console.print(
+                                f'{hostname} has [green]Cloudflare IP address {rdata.address}[/green]')
+                        else:
+                            dns_points_elsewhere += 1
+                            console.print(f'{hostname} has IP address [red]{rdata.address}[/red]')
+                except dns.resolver.NoAnswer:
+                    if options.verbose:
+                        console.print(f'No AAAA record for {hostname}')
+                except dns.resolver.NXDOMAIN:
+                    console.print(f'NXDOMAIN for {hostname} (AAAA)', style='red')
+                except dns.resolver.NoNameservers:
+                    console.print(f'No nameservers for {hostname}', style='red')
+                except dns.resolver.Timeout:
+                    console.print(f'Timeout resolving {hostname}', style='red')
+
+                if dns_points_at_cloudflare == 0 and dns_points_elsewhere == 0:
+                    console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not in DNS')
+                    not_in_dns.append(hostname)
+                if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
+                    console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare')
+                    not_behind_cloudflare.append(hostname)
+
+            custom_domains = [d for d in domains.keys() if domains[d]['type'] == 'custom']
+            primary_domain = [d for d in custom_domains if domains[d]['primary']]
+            if len(custom_domains) > 1 and len(primary_domain) == 0 and site['framework'] != 'wordpress_network':
+                is_multisite = False
+                if site['framework'].startswith('drupal'):
+                    sites_file, errors, fatal = drush_php_eval(
+                        live_site,
+                        'echo json_encode( ["result" => (is_file("/code/web/sites/sites.php") || is_file("/code/sites/sites.php") ? true : false) ] );'
+                    )
+                    if fatal or sites_file is None:
+                        site_notices += drush_error( site['name'], 'multisite-check',
+                             f'The check for whether {site["name"]} is a Drupal multisite failed.', errors)
+                    elif errors != '':
+                        drush_smell = errors
+                    if isinstance(sites_file, dict) and 'result' in sites_file and sites_file['result'] == True:
+                        is_multisite = True
+                    console.print(f'{site["name"]} is a Drupal multisite: {sites_file}')
+                if not is_multisite:
+                    site_notices.append({
+                        'type': 'info',
+                        'icon': '&#x1F50E;',  # magnifying glass
+                        'csv': f'{site["name"]},no-primary-domain,',
+                        'message': f'''
+                    <p><strong>{site['name']}</strong>
+                    <a href="https://dashboard.pantheon.io/sites/{site['id']}#live/DomainsHTTPS/list">
+                    does not have a primary domain set</a> in the Pantheon dashboard. Setting a
+                    <a href="https://docs.pantheon.io/guides/redirect/primary-domain">primary domain</a> will improve SEO.
+                    It will also increase the Cloudflare cache hit ratio, lowering Pantheon visitor numbers.</p>
+                    <p><i>Do not set a primary domain if </i><strong>{site['name']}</strong><i> is a multisite.</i></p>
+                    ''',
+                        'text': f'''
+                    {site['name']} does not have a primary domain set
+                    in the Pantheon dashboard.
+                    <https://dashboard.pantheon.io/sites/{site['id']}#live/DomainsHTTPS/list>
+                    Setting a primary domain
+                    <https://docs.pantheon.io/guides/redirect/primary-domain>
+                    will improve SEO. It will also increase the Cloudflare
+                    cache hit ratio, lowering Pantheon visitor numbers.
+
+                    DO NOT set a primary domain if {site['name']} is a
+                    multisite.
+                    '''
+                    })
+
+        if main_fqdn != '':
+            site_url = f'https://{main_fqdn}/'
+        if options.verbose:
+            console.print(f'Main domain for {site["name"]}: {main_fqdn}')
+
+        if len(not_behind_cloudflare) > 0:
+            site_notices.append({
+                'type': 'warning',
+                'icon': '&#x26A0;',  # warning sign
+                'csv': f'{site["name"]},not-behind-cloudflare,' + ','.join(not_behind_cloudflare),
+                'message': f'''
+<p>ITS strongly recommends you put the following domains behind Cloudflare to reduce Pantheon traffic and improve
+security.  Please refer to the <a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">
+Cloudflare at U-M documentation</a>.</p>
+<ul style="list-style-type: none;">
+{"\n".join([f'<li><a href="https://{n}/">{n}</a></li>' for n in not_behind_cloudflare])}
+</ul>
+''',
+                'text': f'''
+ITS strongly recommends you put the following domains behind
+Cloudflare to reduce Pantheon traffic and improve security.
+Please refer to the Cloudflare at U-M documentation
+<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>
+
+{"\n".join([f'  * {n}' for n in not_behind_cloudflare])}
+
+'''
+            })
+
+        if len(not_in_dns) > 0:
+            site_notices.append({
+                'type': 'alert',
+                'icon': '&#x1F6A8;',  # police car light
+                'csv': f'{site["name"]},not-in-dns,' + ','.join(not_in_dns),
+                'message': f'''
+<p><strong>{site["name"]}</strong> has domains that are not in DNS.  Please either remove these domains from
+the Pantheon live environment for <strong>{site["name"]}</strong>, or add them to DNS.</p>
+<ul style="list-style-type: none;">
+{"\n".join([f'<li><a href="https://{n}/">{n}</a></li>' for n in not_in_dns])}
+</ul>
+''',
+                'text': f'''
+{site["name"]} has domains that are not in DNS.  Please either
+remove these domains from the Pantheon live environment for
+{site["name"]}, or add them to DNS.
+
+{"\n".join([f'  * {n}' for n in not_in_dns])}
+
+'''
+            })
+
+        # Check the site's plugins/modules
+
+        if site['framework'].startswith('wordpress'):
+            console.print(f'[bold magenta]=== Checking WordPress plugins for {site["name"]}:')
+            plugins, errors, fatal = wp(live_site, 'plugin', 'list')
+            if fatal or plugins is None:
+                site_notices += wp_error(site['name'],
+                    'plugin-list', f'Unable to run <code>wp plugin list</code> for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                wp_smell = errors
+            if options.verbose:
+                pprint(plugins)
+            site_notices += check_wordpress_plugin(
+                site['name'],
+                plugins,
+                'pantheon-advanced-page-cache',
+                'Pantheon Advanced Page Cache',
+                'https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin',
+                'Needed for automatically clearing Pantheon\'s caches (not Cloudflare\'s) when content is updated.'
+            )
+            site_notices += check_wordpress_plugin(
+                site['name'],
+                plugins,
+                'wp-native-php-sessions',
+                'Native PHP Sessions for WordPress',
+                'https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin',
+                'Strongly recommended to ensure PHP sessions work correctly on Pantheon.'
+            )
+            if len(not_behind_cloudflare) == 0:
+                site_notices += check_wordpress_plugin(
+                    site['name'],
+                    plugins,
+                    'umich-cloudflare',
+                    'University of Michigan: Cloudflare Cache',
+                    'https://documentation.its.umich.edu/node/5114',
+                    'Needed for automatically clearing Cloudflare\'s caches when content is updated.'
+                )
+            # Special check for our fork of Hummingbird (version number contains 'umich')
+            if isinstance(plugins, dict):
+                name = 'hummingbird-performance'
+                display_name = 'UMich Hummingbird'
+                url = 'https://documentation.its.umich.edu/node/4243'
+                url2 = 'https://documentation.its.umich.edu/node/5114'
+                reason = 'UMich Hummingbird is unsupported and has been replaced by University of Michigan: Cloudflare Cache'
+                installed = [p for p in plugins if p['name'] == name and 'umich' in p['version']]
+                if len(installed) != 0:
+                    plugin = installed[0]
+                    console.print(f':exclamation: [bold red] ATTENTION: {site} has {display_name} installed.')
+                    if 'status' in plugin and plugin['status'] == 'inactive':
+                        site_notices.append({
+                            'type': 'info',
+                            'icon': '&#x1F50E;',  # magnifying glass
+                            'csv': f'{site["name"]},unsupported-turned-off,{name}',
+                            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin is inactive but should be deleted:</p><p>{reason}</p>',
+                            'text': f"The {display_name} WordPress plugin\n<{url}>\nis inactive but should be deleted: {reason}",
+                        })
+                    else:
+                        site_notices.append({
+                            'type': 'alert',
+                            'icon': '&#x1F6A8;',  # police car light
+                            'csv': f'{site["name"]},unsupported,{name}',
+                            'message': f'''
+<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be replaced! It is unsupported and out of date.</p>
+<p>Please install the <a href="{url2}">University of Michigan: Cloudflare Cache</a> plugin and remove {display_name}.</p>
+''',
+                        'text': f"""
+The {display_name} WordPress plugin\n<{url}>\nneeds to be replaced!
+It is unsupported and out of date.
+
+Please install the University of Michigan: Cloudflare Cache
+<{url2}>
+plugin and remove {display_name}.
+""",
+                        })
+            # This isn't a plugin, but here is a good place to check for it.
+            favicon, errors, fatal = wp_eval(live_site, 'echo is_file("favicon.ico") ? "true": "false";')
+            if fatal or favicon is None:
+                site_notices += wp_error(site['name'],
+                    'favicon-check', f'Unable to check for <code>/favicon.ico</code> file for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                wp_smell = errors
+            if options.verbose:
+                console.print(f'{site["name"]} has a favicon.ico file: {favicon}')
+            if isinstance(favicon, str) and favicon.startswith('false') and len(not_behind_cloudflare) > 0:
+                site_notices.append({
+                    'type': 'warning',
+                    'icon': '&#x26A0;',  # warning sign
+                    'csv': f'{site["name"]},no-favicon',
+                    'message': f'<p><a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Put this site behind Cloudflare</a> or add a <a href="https://en.wikipedia.org/wiki/Favicon"><code>/code/favicon.ico</code> file</a> to lower Pantheon visitor numbers and increase the site\'s traffic capacity.</p>',
+                    'text': f"Put this site behind Cloudflare\n<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>\nor add a /code/favicon.ico file\n<https://en.wikipedia.org/wiki/Favicon>\nto lower Pantheon visitor numbers and increase the amount of traffic the site can handle at any time.",
+                })
+
+        elif site['framework'].startswith('drupal'):
+            console.print(f'[bold magenta]=== Checking Drupal modules for {site["name"]}:')
+            drupal_status, errors, fatal = drush(live_site, 'core-status')
+            if fatal or drupal_status is None:
+                site_notices += drush_error(site['name'],
+                    'core-status', f'Unable to run <code>drush core-status</code> for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                drush_smell = errors
+            if options.verbose:
+                pprint(drupal_status)
+            mods, errors, fatal = drush(live_site, 'pm:list')
+            if fatal or mods is None:
+                site_notices += drush_error(site['name'],
+                    'pm-list', f'Unable to run <code>drush pm:list</code> for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                drush_smell = errors
+            if options.verbose:
+                pprint(mods)
+            site_notices += check_drupal_module(
+                site['name'],
+                mods,
+                'pantheon_advanced_page_cache',
+                'Pantheon Advanced Page Cache',
+                'https://www.drupal.org/project/pantheon_advanced_page_cache',
+                'Necessary for automatically clearing Pantheon\'s caches (not Cloudflare\'s) when content is updated.'
+            )
+            if isinstance(drupal_status, dict) and 'drupal-version' in drupal_status:
+                if drupal_status['drupal-version'].startswith('7.'):
+                    site_notices += check_drupal_module(
+                        site['name'],
+                        mods,
+                        'tag1_d7es',
+                        'Tag1 D7ES',
+                        'https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support',
+                        'Necessary for receiving extended support for Drupal 7.'
+                    )
+                else:
+                    if len(not_behind_cloudflare) == 0:
+                        site_notices += check_drupal_module(
+                            site['name'],
+                            mods,
+                            'cloudflare',
+                            'CloudFlare',
+                            'https://documentation.its.umich.edu/node/4242',
+                            'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
+                        )
+                        site_notices += check_drupal_module(
+                            site['name'],
+                            mods,
+                            'cloudflarepurger',
+                            'CloudFlare Purger',
+                            'https://documentation.its.umich.edu/node/4242',
+                            'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
+                        )
+            else:
+                console.print(f':exclamation: [bold red] ATTENTION: unable to determine Drupal version for {site["name"]}')
+
+        else:
+            console.print(f':exclamation: [bold red] ATTENTION: unknown framework for {site["name"]}: {site["framework"]}')
+
+        # Check for un-applied site updates:
+
+        console.print(f'[bold magenta]=== Checking for unapplied updates for {site["name"]}:')
+        updates = terminus('upstream:updates:list', live_site)
+        if isinstance(updates, list):
+            num_updates = len(updates)
+            if num_updates > 0:
+                update_times = [datetime.datetime.fromisoformat(update['datetime']).replace(tzinfo=datetime.UTC) for update in updates]
+                oldest_update = min(update_times)
+                oldest_update_days = (datetime.datetime.now(datetime.UTC) - oldest_update).days
+                console.print(f'{site["name"]} has {num_updates} unapplied updates, the oldest from {oldest_update_days} days ago ( {oldest_update} )')
+                update_table_rows = ''
+                update_bullet_list = ''
+                for update in updates:
+                    update_release_date = datetime.datetime.fromisoformat(update['datetime']).strftime('%B %e, %Y')
+                    update_table_rows += f'''
+<tr>
+<td><div class="rt-data-header rt-plan">Date</div><div class="rt-data rt-plan">{update_release_date}</div></td>
+<td><div class="rt-data-header rt-plan">Description</div><div class="rt-data rt-plan">{update['message']}</div></td>
+<td><div class="rt-data-header rt-plan">Author</div><div class="rt-data rt-plan">{update['author']}</div></td>
+</tr>
+'''
+                    update_bullet_list += f'''
+* {update_release_date}
+    - {update['message']}
+    - Author: {update['author']}
+
+'''
+                if oldest_update_days <= 7:
+                    site_notices.append({
+                        'type': 'info',
+                        'icon': '&#x1F50E;',  # magnifying glass
+                        'csv': f'{site["name"]},updates-info,{num_updates},{oldest_update_days}',
+                        'message': f'''
+<p><strong>{site['name']}</strong> has
+<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending recent updates</a>.</p>
+<div class="container">
+<table class="responsive-table site-updates">
+<thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
+<tbody>{update_table_rows}</tbody>
+</table>
+</div>
+<p>How to: <a href="https://docs.pantheon.io/core-updates">apply updates</a>,
+<a href="https://docs.pantheon.io/pantheon-workflow">deploy updates</a>,
+<a href="https://its.umich.edu/computing/web-mobile/pantheon/support">get support</a>.</p>
+''',
+                        'text': f'''
+{site['name']} has {num_updates} pending recent updates
+<https://dashboard.pantheon.io/sites/{site['id']}#dev/code>.
+
+{update_bullet_list}
+How to:
+  * apply updates <https://docs.pantheon.io/core-updates>
+  * deploy updates <https://docs.pantheon.io/pantheon-workflow>,
+  * get support <https://its.umich.edu/computing/web-mobile/pantheon/support>
+''',
+                    })
+                elif oldest_update_days <= 30:
+                    site_notices.append({
+                        'type': 'warning',
+                        'icon': '&#x26A0;',  # warning sign
+                        'csv': f'{site["name"]},updates-warning,{num_updates},{oldest_update_days}',
+                        'message': f'''
+<p><strong>{site['name']}</strong> has
+<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
+from {oldest_update_days} days ago.</p>
+<p>Please <a href="https://docs.pantheon.io/core-updates">apply these updates</a> and
+<a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+<a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+<div class="container">
+<table class="responsive-table site-updates">
+<thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
+<tbody>{update_table_rows}</tbody>
+</table>
+</div>
+''',
+                        'text': f'''
+{site['name']} has {num_updates} pending updates
+<https://dashboard.pantheon.io/sites/{site['id']}#dev/code>, the
+oldest from {oldest_update_days} days ago. Please apply these updates
+<https://docs.pantheon.io/core-updates> and deploy them to the
+Live environment. <https://docs.pantheon.io/pantheon-workflow>
+A variety of support options are available.
+<a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+
+{update_bullet_list}
+''',
+                    })
+                else:
+                    site_notices.append({
+                        'type': 'alert',
+                        'icon': '&#x1F6A8;',  # police car light
+                        'csv': f'{site["name"]},updates-alert,{num_updates},{oldest_update_days}',
+                        'message': f'''
+<p><strong>{site['name']}</strong> has
+<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
+from {oldest_update_days} days ago.</p>
+<p><i>Please <a href="https://docs.pantheon.io/core-updates">apply these updates</a> immediately</i> and then
+<a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>. Websites that are
+unmaintained or insecure may be shut down to protect the university.</p>
+<p>U-M Procurement has a <a href="https://procurement.umich.edu/u-m-employees/purchasing/ordering/quote-to-order/">list
+of web agencies</a> that will maintain a website for you and bill a university shortcode. If you would like help
+applying the updates yourself, you can <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">obtain
+support through either Pantheon or ITS</a>.</p>
+<div class="container">
+<table class="responsive-table site-updates">
+<thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
+<tbody>{update_table_rows}</tbody>
+</table>
+</div>
+''',
+                        'text': f'''
+{site['name']} has {num_updates} pending updates
+<https://dashboard.pantheon.io/sites/{site['id']}#dev/code>, the
+oldest from {oldest_update_days} days ago.
+
+PLEASE APPLY THESE UPDATES IMMEDIATELY
+<https://docs.pantheon.io/core-updates> and then deploy them to the
+Live environment. <https://docs.pantheon.io/pantheon-workflow>
+
+Websites that are unmaintained or insecure may be shut down to protect
+the university.
+
+U-M Procurement has a list of web agencies
+<https://procurement.umich.edu/u-m-employees/purchasing/ordering/quote-to-order/>
+that will maintain a website for you and bill a university shortcode.
+If you would like help applying the updates yourself, you can obtain
+support through either Pantheon or ITS.
+<a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+
+{update_bullet_list}
+''',
+                    })
+
+        else:
+            console.print(f':exclamation: [bold red] ERROR: unable to check updates for {site["name"]}')
+            pprint(updates)
+
+        # TODO: Warn if no Autopilot
+        # TODO: check DNS and warn if the site is using Cloudflare IPs but is not a zone apex
+
+        # TODO: instead of continuing here, proceed below to calculate plan recommendations, skipping the graph and email
+        if options.only_warn:
+            for n in site_notices:
+                all_warnings.append(n['csv'])
+            continue
+
+        # Create an array containing the sum of visits by month:
+        visits_by_month = {}
+        plan_on_day = {}
+        d = start_date
+        while d <= end_date:
+            month = d.strftime('%Y-%m')
+            visits_by_month[month] = 0
+            d = d.replace(day=1) + datetime.timedelta(days=32)
+            d = d.replace(day=1)
+        for row in results:
+            month = row.traffic_date.strftime('%Y-%m')
+            visits_by_month[month] += row.visits
+            plan_on_day[row.traffic_date] = row.site_plan
+        if options.verbose:
+            pprint(visits_by_month)
+            if options.verbose > 1:
+                pprint(plan_on_day)
+
+        # Adjust the visits by month for traffic anomalies, such as bots, that throw the metrics way off.
+        # Remove each site below 1 year after the last date for which the site was adjusted.
+        if site['name'] == 'umihpi':
+            console.print('Capping anomalous traffic for umihpi, May 2024')
+            for month in visits_by_month.keys():
+                if month == '2024-05':
+                    visits_by_month[month] = 499999
+        if site['name'] == 'umlsi':
+            console.print('Capping anomalous traffic for umlsi, May - August 2024')
+            for month in visits_by_month.keys():
+                if '2024-06' <= month <= '2024-08':
+                    visits_by_month[month] = 99999
+        if site['name'] == 'kinesiology':
+            console.print('Capping anomalous traffic for kinesiology, August & September 2024')
+            for month in visits_by_month.keys():
+                if '2024-08' <= month <= '2024-09':
+                    visits_by_month[month] = 199999
+        if site['name'] == 'nerrs-science-collaborative':
+            console.print('Capping anomalous traffic for nerrs-science-collaborative, November 2024')
+            for month in visits_by_month.keys():
+                if month == '2024-11':
+                    visits_by_month[month] = 199999
+
+        # Create a list of time ranges when the site was on each plan
+        last_day = calendar.monthrange(end_date.year, end_date.month)[1]
+        plot_right_date = end_date.replace(day=last_day)
+        plan_over_time = []
+        # noinspection PyTypeChecker
+        days = sorted(plan_on_day.keys())
+        plan = plan_on_day[days[0]]
+        plan_start = days[0]
+        for i in range(1, len(days)):
+            today = days[i]
+            if plan_on_day[today] != plan:
+                plan_over_time.append({'start': plan_start, 'end': days[i - 1], 'plan': plan})
+                plan_start = today
+                plan = plan_on_day[plan_start]
+        plan_over_time.append({'start': plan_start, 'end': plot_right_date, 'plan': plan})
+        if options.verbose:
+            console.print(plan_over_time)
+
+        # Convert the keys of the visits_by_month dictionary to datetime objects
+        dates = [datetime.date.fromisoformat(d + '-15') for d in visits_by_month.keys()]
+        visits = list(visits_by_month.values())
+        visits_covered_by_month = {}
+        first_plan_day = days[0]
+        last_plan_day = days[-1]
+        for month in visits_by_month.keys():
+            ymd = datetime.date.fromisoformat(month + '-15')
+            if ymd < first_plan_day:
+                ymd = first_plan_day
+            if ymd > last_plan_day:
+                ymd = last_plan_day
+            visits_covered_by_month[month] = min(visits_by_month[month], plan_info[plan_on_day[ymd]]['traffic_limit'])
+        visits_covered = list(visits_covered_by_month.values())
+
+        xbins = [datetime.datetime.strptime(d, '%Y-%m').replace(day=1) for d in visits_by_month.keys()]
+        xbins.append(datetime.datetime.combine(plot_right_date, datetime.datetime.min.time())
+                     + datetime.timedelta(days=1))
+
+        # Convert dates to numerical format
+        dates_num = mdates.date2num(np.array(dates))
+
+        # Create the chart
+        if options.verbose:
+            console.print(f'[bold magenta]=== Creating chart for {site["name"]}:')
+        fig, ax = plt.subplots()
+        fig.set_size_inches(12, 8)
+
+        # Estimate the visits for the last month if it isn't over yet:
+        estimate = -1
+        if last_day > end_date.day > 1:
+            extrapolate = visits_by_month[dates[-1].strftime('%Y-%m')] * last_day / (end_date.day - 1)
+            if len(visits_by_month) > 1:
+                previous_month = visits_by_month[dates[-2].strftime('%Y-%m')]
+                if last_day >= 25:
+                    estimate = round(extrapolate)
+                elif last_day >= 15:
+                    estimate = round((2 * extrapolate + previous_month) / 3)
+                else:
+                    estimate = round((extrapolate + previous_month) / 2)
+            else:
+                estimate = round(extrapolate)
+            estimates_by_month = visits_covered_by_month.copy()
+            for month in estimates_by_month.keys():
+                estimates_by_month[month] = 0
+            estimates_by_month[end_date_yyyy_mm] = estimate
+            estimates = list(estimates_by_month.values())
+            n, histbin, bars = ax.hist(dates_num, bins=xbins, weights=estimates, histtype='barstacked',
+                                       color='lemonchiffon', edgecolor='black')
+            annotations = ax.bar_label(bars, fmt='{:,.0f}', backgroundcolor=(1.0, 1.0, 1.0, 0.0), fontstyle='italic',
+                                       fontsize='small', padding=5, zorder=3.5,
+                                       path_effects=[path_effects.Stroke(linewidth=3, foreground='white'),
+                                                     path_effects.Normal()])
+            for i in range(len(annotations) - 1):
+                annotations[i].set(visible=False)  # only show the label for the last month's estimate
+            annotations[-1].set_text(f'{estimate:,}\n(estimate)')
+
+        n, histbin, bars = ax.hist(dates_num, bins=xbins, weights=visits, histtype='barstacked', color='tab:cyan',
+                                   edgecolor='black')
+        ax.hist(dates_num, bins=xbins, weights=visits_covered, histtype='barstacked', color='tab:blue',
+                edgecolor='black')
+        annotations = ax.bar_label(bars, fmt='{:,.0f}', backgroundcolor=(1.0, 1.0, 1.0, 0.0), fontweight='bold',
+                                   padding=5, path_effects=[path_effects.Stroke(linewidth=3, foreground='white'),
+                                                            path_effects.Normal()])
+        if estimate >= 0:
+            annotations[-1].set_text(f'{annotations[-1].get_text()}\n'
+                                     f'{last_plan_day.strftime("%b ") + str(last_plan_day.day)}')
+            annotations[-1].set_fontsize('small')
+            annotations[-1].set_path_effects([path_effects.Stroke(linewidth=3, foreground='white'),
+                                              path_effects.Normal()])
+
+        # Format the x-axis ticks to be in the middle of each month
+        left_num = mdates.date2num(start_date)
+        right_num = mdates.date2num(plot_right_date)
+        ax.set_xlim(left=left_num, right=right_num)
+        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=15))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+        fig.autofmt_xdate()
+
+        # set the plot height
+        upgrade_at_max = 0
+        for plan in plan_over_time:
+            upgrade_at = plan_info[plan['plan']]['upgrade_at']
+            if upgrade_at > upgrade_at_max:
+                upgrade_at_max = upgrade_at
+        upgrade_at_max *= 1.15  # normal headroom that matplotlib would ordinarily add
+        b, ax_ymax = ax.get_ylim()
+        ax_ymax = max(ax_ymax, upgrade_at_max)
+        ax.set_ylim(b, ax_ymax * 1.15)  # give a little extra room at the top for the bar labels
+        ax.yaxis.set_major_formatter('{x:,.0f}')
+
+        # Add horizontal lines for plan limit and upgrade/downgrade
+        created_upgrade_labels = False
+        created_downgrade_labels = False
+        i = 1
+        for plan in plan_over_time:
+            plan_xmin = mdates.date2num(plan['start'])
+            plan_xmax = mdates.date2num(plan['end'])
+            traffic_limit = plan_info[plan['plan']]['traffic_limit']
+            upgrade_at = plan_info[plan['plan']]['upgrade_at']
+            if traffic_limit is not None and upgrade_at is not None:
+                # Limit and upgrade lines
+                limit_text = {}
+                upgrade_text = {}
+                if not created_upgrade_labels:
+                    limit_text['label'] = 'plan traffic limit (overages start)'
+                    upgrade_text['label'] = 'upgrade to higher plan at ' + \
+                                            f'{plan_info[plan_over_time[-1]["plan"]]['upgrade_at']:,}'
+                    created_upgrade_labels = True
+                ax.hlines(y=traffic_limit, xmin=plan_xmin, xmax=plan_xmax, color='darkorange', gapcolor='w',
+                          linestyle='dotted', linewidth=3, **limit_text)
+                ax.hlines(y=upgrade_at, xmin=plan_xmin, xmax=plan_xmax, color='r', gapcolor='w',
+                          linestyle='dashed', linewidth=3, **upgrade_text)
+            # Downgrade line
+            downgrade_to = plan_info[plan['plan']]['downgrade_to']
+            if downgrade_to is not None:
+                downgrade_text = {}
+                if not created_downgrade_labels:
+                    ending_downgrade_to = plan_info[plan_over_time[-1]['plan']]['downgrade_to']
+                    ending_downgrade_at = plan_info[ending_downgrade_to]['upgrade_at']
+                    downgrade_text['label'] = 'downgrade to lower plan at ' + f'{ending_downgrade_at:,}'
+                    created_downgrade_labels = True
+                downgrade_at = plan_info[downgrade_to]['upgrade_at']
+                ax.hlines(y=downgrade_at, xmin=plan_xmin, xmax=plan_xmax, color='g', gapcolor='w',
+                          path_effects=[path_effects.Stroke(linewidth=4, foreground='white'), path_effects.Normal()],
+                          linestyle='dashdot', linewidth=3, **downgrade_text)
+            # Plan label
+            level = matplotlib.rcParams['font.size'] + matplotlib.rcParams['font.size'] * i
+            ax.annotate(plan['plan'], xy=(plan_xmin, ax_ymax), xycoords='data', xytext=(0, 2 + level),
+                        textcoords="offset points", weight="bold")
+            # Plan label line calculations
+            data_point = (plan_xmin, ax_ymax)
+            offset_points = (0, 2 + level * 2)
+            display_point = ax.transData.transform_point(data_point)  # Transform data coord to display (pixel) coord
+            # Apply offset in pixels
+            dpi = fig.dpi
+            offset_in_inches = (offset_points[0] / dpi, offset_points[1] / dpi)
+            offset_in_pixels = fig.dpi_scale_trans.transform_point(offset_in_inches)
+            text_display_point = (display_point[0] + offset_in_pixels[0],
+                                  display_point[1] + offset_in_pixels[1])  # Final display coordinate for the text
+            text_data_point = ax.transData.inverted().transform_point(text_display_point)  # Transform to data coord
+            text_data_y = text_data_point[1]
+            # Draw the plan label line
+            ax.vlines(x=plan_xmin, ymin=traffic_limit, ymax=text_data_y, color='r', linestyle='dotted', gapcolor='w')
+
+            i = 1 - i  # alternate plan label levels
+
+        fig.legend(handlelength=3.0)
+
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Pantheon Visitors')
+        chart_title = f'{site["name"]} Pantheon Traffic'
+        if main_fqdn:
+            chart_title += f"\n{site_url}"
+        ax.set_title(chart_title, loc='left')
+        fig.text(0.90, 0.10, 'as of ' + end_date.strftime('%B %e, %Y'), ha='right', fontsize='small')
+
+        # plt.show()
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png')
+        buf.seek(0)
+        chart_image = buf.read()
+        buf.close()
+
+        # TODO: Create SVG chart
+
+        if options.verbose:
+            console.print(f'[bold magenta]=== Creating the traffic table:')
+
+        # TODO: for upgrade/downgrade and new plan columns, add an icon and a colored background so people can
+        #   see at a glance if it's more or less than 50% of the time.
+
+        # TODO: If Performance small and below Basic upgrade + no New Relic + No Solr + No Redis + mem usage low --> Switch to Basic
+
+        # Load the overage protection data we need for this site and date range:
+        # if options.verbose > 1:
+        #     results = db_session.query(PantheonOverageProtection).filter(
+        #         PantheonOverageProtection.site_id == site['id'],
+        #         PantheonOverageProtection.month.between(start_date, end_date)
+        #     ).all()
+        #     console.print('=== Overage protection data:')
+        #     for r in results:
+        #         console.print(r)
+        #     console.print('-----')
+
+        traffic_table_rows = {}
+        d = (start_date.replace(day=1) - datetime.timedelta(days=15)).replace(day=1)
+        op = db_session.get(PantheonOverageProtection, {"site_id": site['id'], "month": d})
+        op_remaining = 0 if op is None else op.months_remaining
+        site_plan_start = plan_over_time[0]['start'].replace(day=1)
+        old_plan = None
+        for month in visits_by_month.keys():
+            ymd = datetime.date.fromisoformat(month + '-15')
+            ymd1 = ymd.replace(day=1)
+            if ymd < first_plan_day:
+                ymd = first_plan_day
+            if ymd > last_plan_day:
+                ymd = last_plan_day
+            if ymd1 < start_date:
+                ymd1 = start_date
+            if ymd1 > end_date:
+                ymd1 = end_date.replace(day=1)
+            if ymd1 < site_plan_start:
+                continue
+            d = ymd if ymd >= first_plan_day else first_plan_day
+            plan = plan_on_day[d]
+            if ymd1 == site_plan_start and plan != 'Basic':
+                op_remaining = 4
+            if old_plan in ('Sandbox', 'Basic') and plan not in ('Sandbox', 'Basic'):
+                op_remaining = 4
+            old_plan = plan
+            traffic_table_rows[month] = {}
+            traffic_table_rows[month]['month'] = datetime.datetime.strptime(month, '%Y-%m').strftime('%B %Y')
+            traffic_table_rows[month]['visitors'] = f'{visits_by_month[month]:,.0f}'
+            traffic_table_rows[month]['plan'] = plan
+            traffic_limit = plan_info[plan]['traffic_limit']
+            traffic_table_rows[month]['plan-limit'] = f'{traffic_limit:,.0f}'
+            traffic_table_rows[month]['upgrade-at'] = f'{plan_info[plan]['upgrade_at']:,.0f}'
+            traffic_table_rows[month]['next-plan'] = plan_info[plan]['upgrade_to']
+            downgrade_to = plan_info[plan]['downgrade_to']
+            if downgrade_to is not None:
+                downgrade_at = plan_info[downgrade_to]['upgrade_at']
+                traffic_table_rows[month]['downgrade-at'] = f'{downgrade_at:,.0f}'
+                traffic_table_rows[month]['previous-plan'] = downgrade_to
+            else:
+                traffic_table_rows[month]['downgrade-at'] = '-'
+                traffic_table_rows[month]['previous-plan'] = '-'
+            overage = max(visits_by_month[month] - traffic_limit, 0)
+            overage_blocks = round((overage + overage_block_size / 2.0) / overage_block_size)
+            overage_cost = overage_blocks * overage_block_cost
+            overage_text = f'{overage:,.0f}'
+            overage_blocks_text = f'{overage_blocks:,.0f}'
+            overage_cost_text = f'${overage_cost:,.0f}'
+            overage_protection_status = '-'
+            # Overage protection started retroactively on 2024-01-01
+            if month >= '2024-01' and plan != "Basic":
+                overage_protection_status = ''
+                if ymd.month == 1:
+                    op_remaining = 4
+                    overage_protection_status = 'Set to 4 months, '
+                op_used = False
+                if overage > 0 and op_remaining > 0:
+                    op_remaining -= 1
+                    op_used = True
+                op = db_session.get(PantheonOverageProtection, {"site_id": site['id'], "month": ymd1})
+                if op is None:
+                    op = PantheonOverageProtection(
+                        site_id=site['id'],
+                        month=ymd1,
+                        months_remaining=op_remaining,
+                        used_this_month=op_used
+                    )
+                    db_session.add(op)
+                else:
+                    op.months_remaining = op_remaining
+                    op.used_this_month = op_used
+                if op_used:
+                    overage_protection_status += f'used 1 month, '
+                    overage_cost_text = '$0 (<span style="font-size:smaller;">waived ' + overage_cost_text + ')</span>'
+                overage_protection_status += f'1 month remaining' if op_remaining == 1 \
+                    else f'{op_remaining} months remaining'
+            else:
+                op_remaining = 0
+                if plan != "Basic":
+                    overage_text = '-'
+                    overage_blocks_text = '-'
+                    overage_cost_text = '-'
+            traffic_table_rows[month]['overage'] = overage_text
+            traffic_table_rows[month]['overage-blocks'] = overage_blocks_text
+            traffic_table_rows[month]['overage-cost'] = overage_cost_text
+            traffic_table_rows[month]['overage-protection'] = overage_protection_status
+
+        db_session.commit()  # save the changes we made to the pantheon_overage_protection table
+
+        if options.verbose:
+            console.print(traffic_table_rows)
+
+        # Compare current plan cost to other plan costs
+
+        median_visitors = 0
+        cost_same = {}
+        costs_median = {}
+        cost_table_rows = {}
+        estimate_start_date = end_date  # default both estimate start/end dates to the report end date
+        estimate_end_date = end_date
+        k = [d for d in visits_by_month.keys() if d >= site_plan_start.strftime('%Y-%m')]
+        v = [visits_by_month[d] for d in k]
+        months_until_recommendations = 0 if len(v) > 4 else 5 - len(v)
+        if len(v) > 4:
+            if options.verbose:
+                console.print('[bold magenta]=== Generating plan recommendations:')
+                console.print('===== future costs for same traffic')
+            for plan in plan_names:
+                cost = plan_info[plan]['cost']
+                cost_by_month = []
+                cost_for_plan_months = []
+                op_remaining = 0
+                for month in visits_by_month.keys():
+                    visits = visits_by_month[month]
+                    if month == end_date_yyyy_mm and estimate > 0:
+                        visits = estimate
+                    overage = max(visits - plan_info[plan]['traffic_limit'], 0)
+                    overage_blocks = round((overage + overage_block_size / 2.0) / overage_block_size)
+                    overage_cost = overage_blocks * overage_block_cost
+                    if plan != 'Basic':
+                        op = db_session.get(PantheonOverageProtection, {"site_id": site['id'],
+                                                                     "month": datetime.date.fromisoformat(
+                                                                         month + '-01')})
+                        if op is not None:
+                            if op.used_this_month:
+                                overage_cost = 0
+                        else:
+                            if month.endswith('-01'):
+                                op_remaining = 4
+                            if overage > 0 and op_remaining > 0:
+                                overage_cost = 0
+                                op_remaining -= 1
+                    cost += overage_cost
+                    cost_by_month.append(overage_cost)
+                    if month >= site_plan_start.strftime('%Y-%m'):
+                        cost_for_plan_months.append(overage_cost)
+                if len(cost_by_month) < 12:
+                    cost += (12 - len(cost_by_month)) * np.median(cost_for_plan_months)
+                cost_same[plan] = cost
+                if options.verbose:
+                    console.print(f'{plan}: ${cost:,.2f}')
+
+            if estimate > 0:
+                v[-1] = estimate
+            median_visitors = np.median(v)
+            if options.verbose:
+                console.print(f'Median Pantheon visitors per month: {median_visitors:,.0f}')
+                console.print('===== future costs for median traffic')
+            for plan in plan_names:
+                overage = median_visitors - plan_info[plan]['traffic_limit']
+                if overage < 0:
+                    overage = 0
+                months_without_op = 12 if plan == 'Basic' else 8
+                costs_median[plan] = plan_info[plan]['cost'] + \
+                    round((overage + overage_block_size / 2.0) / overage_block_size) * \
+                    overage_block_cost * months_without_op
+                console.print(f'{plan}: ${costs_median[plan]:,.2f}')
+
+            # find best costs
+            # For each plan, we want to be conservative by picking the highest cost metric:
+            costs_best = {p: max(cost_same[p], costs_median[p]) for p in plan_names}
+            # find the key in costs_best with the lowest value:
+            site_recommended_plan = min(costs_best, key=costs_best.get)
+
+            if site['plan_name'] != site_recommended_plan:
+                site_current_plan_index = plan_names.index(site['plan_name'])
+                site_recommended_plan_index = plan_names.index(site_recommended_plan)
+                savings = abs(cost_same[site['plan_name']] - costs_best[site_recommended_plan])
+                extra_message = ''
+                extra_text = ''
+                if site_current_plan_index > site_recommended_plan_index:
+                    if site_recommended_plan == 'Basic':
+                        # Basic is a better deal, but only if the site owner isn't using Performance features
+                        # other than Overage Protection.
+                        # TODO: check to see if performance features are in use
+                        #    New Relic, Solr, Redis, WP/Drupal Multisite
+                        if site_current_plan == 'Performance Small':
+                            site_recommended_plan = 'Performance Small'
+                            savings = 0
+                        # check to see if there is a plan between the current plan and Basic that also saves money
+                        if site_current_plan_index > 1:  # not already Performance Small
+                            console.print(f'Checking for a better plan between {site_current_plan} and Basic')
+                            bc = copy.copy(costs_best)
+                            del bc['Basic']
+                            alt = min(bc, key=bc.get)
+                            console.print(f'cheapest plan excluding Basic: {alt}')
+                            if alt != site_current_plan:
+                                console.log(f'Found a better plan: {alt}')
+                                extra_message = f'''
+<p>Alternatively, you could switch the site to Pantheon's <strong>Basic</strong> plan for a savings of up to
+<strong>${savings:,.2f}</strong>, if you do not need any of the Performance plan features.
+If you want to switch to the <strong>Basic</strong> plan, please do so via the
+<a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">ITS Web Services Portal</a>
+before June 30.</p>
+'''
+                                extra_text = f'''
+Alternatively, you could switch the site to Pantheon's Basic plan for
+a savings of up to ${savings:,.2f}, if you do not need any of the
+Performance plan features. If you want to switch to the Basic plan,
+please do so via the ITS Web Services Portal
+<https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
+before June 30.
+'''
+                                savings = abs(cost_same[site['plan_name']] - costs_best[alt])
+                                site_recommended_plan = alt
+                            else:
+                                site_recommended_plan = site_current_plan
+                                savings = 0
+                        # TODO: if Basic still looks best, give a special message recommending switching to Basic.
+                    if site_recommended_plan != site_current_plan and end_of_contract_year:
+                        its_downgrade_site = True
+                        site_notices.append({
+                            'type': 'alert',
+                            'icon': '&#x1F6A8;',  # police car light
+                            'csv': f'{site["name"]},its-will-change-plan,{site["plan_name"]},{site_recommended_plan},{savings:,.2f}',
+                            'message': f'''
+<p>At 8 A.M. this Friday, June 28, ITS will move the <strong>{site["name"]}</strong> website from
+Pantheon's <strong>{site["plan_name"]}</strong> plan to <strong>{site_recommended_plan}</strong>.</p>
+<p>Based on the site's last 12 months of traffic, this may save you up to <strong>${savings:,.2f}</strong> over the
+coming year.</p>
+<p>You can move the site to a higher plan at any point in the year without penalty.  But if you prefer to have
+<strong>{site["name"]}</strong> remain on <strong>{site["plan_name"]}</strong> &mdash; for
+example, if you anticipate traffic will increase significantly over the next year &mdash; reply to this email
+before 8 A.M. this Friday.</p>
+{extra_message}
+<p><i>You can only move a site to a lower plan between June 16 - 30 each year without incurring a substantial
+financial penalty.</i></p>
+    ''',
+                            'text': f'''
+At 8 A.M. this Friday, June 28, ITS will move the {site["name"]}
+website from Pantheon's {site["plan_name"]} plan to
+{site_recommended_plan}.
+
+Based on the site's last 12 months of traffic, this may save you up to
+${savings:,.2f} over the coming year.
+
+You can move the site to a higher plan at any point in the year without
+penalty.  But if you prefer to have {site["name"]} remain
+on {site["plan_name"]} -- for example, if you anticipate
+traffic will increase significantly over the next year -- reply to
+this email before 8 A.M. this Friday.
+{extra_text}
+You can only move a site to a lower plan between June 16 - 30 each
+year without incurring a substantial financial penalty.
+'''
+                        })
+                        site_savings.append({'site': site['name'], 'savings': savings,
+                                             'current_plan': site['plan_name'],
+                                             'recommended_plan': site_recommended_plan})
+                else:
+                    site_notices.append({
+                        'type': 'info',
+                        'icon': '&#x1F50E;',  # magnifying glass
+                        'csv': f'{site["name"]},its-recommends-plan,{site["plan_name"]},{site_recommended_plan},{savings:,.2f}',
+                        'message': f'''
+<p><a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">Moving <strong>{site["name"]}</strong>
+to Pantheon's <strong>{site_recommended_plan}</strong> plan</a> may save you up to <strong>${savings:,.2f}</strong>
+over the coming year if the site's traffic for the next 12 months is similar to the previous 12.</p>
+<p>You may want to stay on the <strong>{site["plan_name"]}</strong> plan if the site has had one-time traffic spikes
+or you think site traffic will be decreasing soon. Sites can move to higher plans any time, but can only be moved to
+a lower plan between June 16 - 30 each year.</p>
+''',
+                        'text': f'''
+Moving {site["name"]} to Pantheon's {site_recommended_plan} plan
+<https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
+may save you up to ${savings:,.2f} over the coming year if the site's
+traffic for the next 12 months is similar to the previous 12.
+
+You may want to stay on the {site["plan_name"]} plan if the site
+has had one-time traffic spikes or you think site traffic will be
+decreasing soon. Sites can move to higher plans any time, but can only
+be moved to a lower plan between June 16 - 30 each year.
+'''
+                    })
+                    site_savings.append({'site': site['name'], 'savings': savings,
+                                         'current_plan': site['plan_name'], 'recommended_plan': site_recommended_plan})
+
+            if options.verbose:
+                console.print(f'Best plan for {site["name"]} is {site_recommended_plan} '
+                              f'at ${costs_best[site_recommended_plan]:,.2f}')
+            for plan in plan_names:
+                cost_table_rows[plan] = {}
+                cost_table_rows[plan]['plan'] = plan
+                cost_table_rows[plan]['cost-same'] = f'${cost_same[plan]:,.2f}'
+                cost_table_rows[plan]['cost-median'] = f'${costs_median[plan]:,.2f}'
+                cost_table_rows[plan]['notes'] = ''
+                if plan == site_recommended_plan:
+                    cost_table_rows[plan]['notes'] = '<span class="pill pill-warning">Recommended Plan</span>'
+                if plan == site['plan_name']:
+                    if cost_table_rows[plan]['notes'] != '':
+                        cost_table_rows[plan]['notes'] += ' &nbsp; '
+                    cost_table_rows[plan]['notes'] += '<span class="pill pill-primary">Current Plan</span>'
+                cost_table_rows[plan]['recommend'] = 'Yes' if plan == site_recommended_plan else 'No'
+
+            estimate_start_date = (end_date.replace(day=1) + datetime.timedelta(days=32)).replace(day=1)
+            estimate_end_date = estimate_start_date.replace(year=estimate_start_date.year + 1) - \
+                datetime.timedelta(days=1)
+
+        if wp_smell != '':
+            site_notices.append({
+                'type': 'info',
+                'icon': '&#x1F50E;',  # magnifying glass
+                'csv': f'{site["name"]},wp-smell,{json.dumps(wp_smell).replace(',', '\\,')}',
+                'message': f'''
+<p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site["name"]}</strong>.
+Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+<pre>{html.escape(wp_smell)}</pre>
+''',
+            'text': f'''
+The "wp" (WP CLI) command is reporting PHP code problems with
+{site["name"]}. Even if this is not breaking anything at
+the moment, it should be fixed to avoid possible future problems:
+
+----- START WP CLI REPORTED PROBLEMS -----
+{wp_smell}
+----- END OF WP CLI REPORTED PROBLEMS -----
+
+    ''',
+            })
+
+        if drush_smell != '':
+            site_notices.append({
+                'type': 'info',
+                'icon': '&#x1F50E;',  # magnifying glass
+                'csv': f'{site["name"]},drush-smell,{json.dumps(drush_smell).replace(',', '\\,')}',
+                'message': f'''
+<p>The <code>drush</code> command is reporting PHP code problems with <strong>{site["name"]}</strong>. Even
+if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+<pre>{html.escape(drush_smell)}</pre>
+''',
+                'text': f'''
+The "drush" command is reporting PHP code problems with
+{site["name"]}. Even if this is not breaking anything
+at the moment, it should be fixed to avoid possible future problems:
+
+----- START DRUSH REPORTED PROBLEMS -----
+{drush_smell}
+----- END OF DRUSH REPORTED PROBLEMS -----
+
+''',
+            })
+
+        if options.verbose:
+            console.print('===== Notices:')
+            console.print(site_notices)
+            console.print('===== News:')
+            console.print(news)
+
+        r = portal_sites[site['name']]['owner_group']
+        r = r.replace(' ', '.')
+        recipients = f'{r}@umich.edu, {r}-owners@umich.edu'
+
+        # Create email from template
+        subject = f'{site["name"]} Pantheon Traffic Report - {end_date.strftime('%b %e, %Y')}'
+        if its_downgrade_site:
+            subject = 'TIME SENSITIVE: ' + subject
+        elif any([n['type'] == 'alert' for n in site_notices]):
+            subject = 'ALERT: ' + subject
+        elif any([n['type'] == 'warning' for n in site_notices]):
+            subject = 'WARNING: ' + subject
+
+        sorted_notices = [n for n in site_notices if n['type'] == 'alert'] + \
+                         [n for n in site_notices if n['type'] == 'warning'] + \
+                         [n for n in site_notices if n['type'] == 'info']
+
+        banner_cid = make_msgid(domain='webservices.umich.edu')
+        chart_cid = make_msgid(domain='webservices.umich.edu')
+
+        template_dict = dict(
+            dry_run_recipient='' if options.for_real else recipients,
+            subject=subject,
+            site_name=site["name"],
+            site_url=site_url,
+            portal_site_id=portal_site_id,
+            current_plan=site_current_plan,
+            recommended_plan=site_recommended_plan,
+            current_plan_index=site_current_plan_index,
+            recommended_plan_index=site_recommended_plan_index,
+            traffic_table_columns=traffic_table_columns,
+            traffic_table_rows=traffic_table_rows,
+            cost_table_columns=cost_table_columns,
+            cost_table_rows=cost_table_rows,
+            traffic_date=end_date.strftime('%B %e, %Y'),
+            current_month_estimate=f'Estimate for Pantheon visitors at the end of {end_date.strftime("%B %Y")}: '
+                                   f'{estimate:,.0f}' if estimate >= 0 else '',
+            median_monthly_visitors=f'{median_visitors:,.0f}',
+            months_until_recommendations=months_until_recommendations,
+            estimate_start_date=estimate_start_date.strftime('%B %e, %Y'),
+            estimate_end_date=estimate_end_date.strftime('%B %e, %Y'),
+            notices=sorted_notices,
+            news=news,
+            end_of_contract_year=end_of_contract_year,
+            banner_cid=banner_cid[1:-1],
+            chart_cid=chart_cid[1:-1]
+        )
+
+        with open('email_template.html', 'r', encoding='utf-8') as f:
+            html_template = Template(f.read())
+        html_body = html_template.render(**template_dict)
+        # Write the results to a file for debugging.  Later, we'll use this file as input to the PHP script that
+        # inlines the CSS. We're not piping the data to/from the script directly because the files are useful
+        # for inspecting/debugging.
+        with open(f'build/{site["name"]}.html', 'w', encoding='utf-8') as f:
+            f.write(html_body)
+
+        with open('email_template.txt', 'r', encoding='utf-8') as f:
+            text_template = Template(f.read())
+        text_body = text_template.render(**template_dict)
+        with open(f'build/{site["name"]}.txt', 'w', encoding='utf-8') as f:
+            f.write(text_body)
+
+        subprocess.run(['php', 'inline-styles.php', f'build/{site["name"]}.html', f'build/{site["name"]}-inline.html'],
+                       stdout=sys.stdout, stderr=sys.stderr, check=True)
+        with open(f'build/{site["name"]}-inline.html', 'r', encoding='utf-8') as f:
+            html_body = f.read()
+
+        style_elements = re.findall(r'(<style.*?</style>)', html_body, re.DOTALL)
+        for style in style_elements:
+            # Add !important to the end of each CSS attribute that doesn't already end with !important
+            modified_style = re.sub(r'(?<!important);', ' !important;', style, flags=re.DOTALL)
+            html_body = html_body.replace(style, modified_style)
+
+        with open(f'build/{site["name"]}-inline2.html', 'w', encoding='utf-8') as f:
+            f.write(html_body)
+
+        msg = EmailMessage()
+        msg['From'] = 'University of Michigan Webmaster Team <webmaster@umich.edu>'
+        if options.for_real:
+            msg['To'] = recipients
+            msg['Bcc'] = 'januside@go.mail.umich.edu, its-webmaster@go.mail.umich.edu'
+        else:
+            msg['To'] = f'januside@go.mail.umich.edu, {options.smtp_username}@umich.edu'
+        msg['Reply-to'] = 'webmaster@umich.edu'
+        msg['Date'] = datetime.datetime.now(datetime.UTC).strftime("%a, %d %b %Y %T %z")
+        msg['Subject'] = subject
+
+        msg.set_content(text_body, subtype='plain', charset='utf-8')
+        msg.add_alternative(html_body, subtype='html', charset='utf-8')
+        msg.get_payload()[1].add_related(wordmark_image, 'image', 'png', cid=banner_cid, filename='its-banner.png')
+        msg.get_payload()[1].add_related(chart_image, 'image', 'png', cid=chart_cid, disposition='inline',
+                                         filename=f'pantheon-traffic_{site["name"]}_{end_date.strftime("%Y%m%d")}.png')
+
+        with open(f'build/{site["name"]}.eml', 'wb') as f:
+            f.write(msg.as_bytes(policy=SMTP))
+
+        smtp_connection.send_message(msg)
+
+        emails_sent += 1
+        all_warnings += [n['csv'] for n in site_notices]
+
+        plt.close(fig)  # needed to free up memory when options.all_sites is True
+
+        # TODO: % Pages Cached -- should be Cloudflare
+        # TODO: CSV attachment
+
+    db_session.close()
+    db_engine.dispose()
+    smtp_connection.quit()
+
+    console.print(f'\n[bold green]Email sent for {emails_sent} of {site_count} sites.\nSite notices:\n')
+    for n in all_warnings:
+        print(n)
+
+    console.print(f'\n[bold green]Site savings:\n')
+    pprint(site_savings)
+    console.print(f'Sites with savings: {len(site_savings)}')
+    console.print(f'Total savings: ${sum([s["savings"] for s in site_savings]):,.2f}')
+
+    if options.verbose:
+        console.print('Done!')
+
+
+if __name__ == '__main__':
+    main()

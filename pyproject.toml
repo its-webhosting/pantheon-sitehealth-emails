@@ -1,0 +1,27 @@
+[project]
+name = "pantheon-sitehealth-emails"
+version = "0.2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "rich",
+    "mysqlclient",
+    "SQLAlchemy",
+    "matplotlib",
+    "boto3",
+    "botocore",
+    "Jinja2",
+    "dnspython",
+    "umcloudflare @ git+ssh://git@github.com/its-cloudflare/umcloudflare.git",
+    # "umcloudflare",  # uncomment for local development of umcloudflare within pantheon-sitehealth-emails
+
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = []
+# uncomment for local development of umcloudflare within pantheon-sitehealth-emails
+#packages = ["umcloudflare"]
+
