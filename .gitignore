@@ -1,5 +1,5 @@
 # pantheon-sitehealth-emails script stuff
-pantheon-sitehealth-emails.ini
+pantheon-sitehealth-emails.toml
 /build/
 /tmp/
 

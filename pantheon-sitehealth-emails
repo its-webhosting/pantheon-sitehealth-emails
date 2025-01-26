@@ -10,7 +10,7 @@
 #
 
 import argparse
-import configparser
+import tomllib
 import os
 import sys
 import json
@@ -131,7 +131,7 @@ class PantheonOverageProtection(Base):
 #
 
 console = Console()
-config = configparser.ConfigParser(interpolation=configparser.ExtendedInterpolation(), strict=True)
+config = None
 
 # Parse command line arguments.  This is outside main() so the arguments are available to all functions.
 args_parser = argparse.ArgumentParser(
@@ -531,29 +531,27 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
 
 def main() -> None:
 
-    config.read(['pantheon-sitehealth-emails.ini'])
+    with open("pantheon-sitehealth-emails.toml", "rb") as f:
+        config = tomllib.load(f)
     env_overrides = {
-        'CLOUDFLARE_EMAIL': { 'section': 'Cloudflare', 'key': 'member_email' },
-        'CLOUDFLARE_API_KEY': { 'section': 'Cloudflare', 'key': 'member_api_key' },
+        'CLOUDFLARE_EMAIL': { 'table': 'Cloudflare', 'key': 'member_email' },
+        'CLOUDFLARE_API_KEY': { 'table': 'Cloudflare', 'key': 'member_api_key' },
     }
     for env in env_overrides:
         if os.getenv(env) is not None:
-            config[env_overrides[env]['section']][env_overrides[env]['key']] = os.getenv(env)
+            config[env_overrides[env]['table']][env_overrides[env]['key']] = os.getenv(env)
     if os.getenv('AWS_PROFILE') is None:
         os.environ['AWS_PROFILE'] = config['AWS']['profile']
     if os.getenv('AWS_DEFAULT_REGION') is None:
         os.environ['AWS_DEFAULT_REGION'] = config['AWS']['default_region']
-    overage_block_size = config.getint('Pantheon', 'overage_block_size', fallback=10000)
-    overage_block_cost = config.getfloat('Pantheon', 'overage_block_cost', fallback=40.00)
+    overage_block_size = config['Pantheon']['overage_block_size']
+    overage_block_cost = config['Pantheon']['overage_block_cost']
 
     global plan_info, plan_names
-    for section in config.sections():
-        if section.startswith('Pantheon.plan.'):
-            plan_name = section[14:]
-            plan_info[plan_name] = dict()
-            plan_info[plan_name]['upgrade_at'] = config.getint(section, 'upgrade_at')
-            plan_info[plan_name]['upgrade_to'] = config[section]['upgrade_to'] if config[section]['upgrade_to'] != 'None' else None
-            plan_info[plan_name]['downgrade_to'] = config[section]['downgrade_to'] if config[section]['downgrade_to'] != 'None' else None
+    plan_info = config['Pantheon']['plan_info']
+    for plan in plan_info:
+        plan_info[plan]['upgrade_to'] = plan_info[plan]['upgrade_to'] if plan_info[plan]['upgrade_to'] != '-' else None
+        plan_info[plan]['downgrade_to'] = plan_info[plan]['downgrade_to'] if plan_info[plan]['downgrade_to'] != '-' else None
     plan_names = list(plan_info.keys())
 
     # Validate and process arguments
@@ -567,10 +565,7 @@ def main() -> None:
         console.print('Arguments:')
         pprint(options)
         console.print('Configuration:')
-        config_out = io.StringIO()
-        config.write(config_out)
-        console.print(config_out.getvalue(), style='yellow')
-        config_out.close()
+        pprint(config, expand_all=True)
         pprint(terminus('self:info'))
 
     cloudflare = Cloudflare(
