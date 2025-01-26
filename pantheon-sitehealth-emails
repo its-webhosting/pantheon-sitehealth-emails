@@ -170,6 +170,12 @@ args_parser.add_argument(
     help='send email to the site owners; without this option, the emails will go to the logged-in user instead'
 )
 args_parser.add_argument(
+    '--config', '-c',
+    action='store',
+    default='pantheon-sitehealth-emails.toml',
+    help='TOML configuration file, see pantheon-sitehealth-emails.toml.sample'
+)
+args_parser.add_argument(
     '--only-warn',
     action='store_true',
     default=False,
@@ -531,7 +537,9 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
 
 def main() -> None:
 
-    with open("pantheon-sitehealth-emails.toml", "rb") as f:
+    if options.verbose:
+        console.print(f'Loading configuration from {options.config}')
+    with open(options.config, "rb") as f:
         config = tomllib.load(f)
     env_overrides = {
         'CLOUDFLARE_EMAIL': { 'table': 'Cloudflare', 'key': 'member_email' },
