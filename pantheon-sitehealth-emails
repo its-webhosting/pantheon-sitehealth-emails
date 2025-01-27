@@ -861,19 +861,21 @@ and to find out what went wrong:
 
             # Process old data by week:
             new_rows = get_old_metrics(live_site, site, 'week', end_date)
-            if config['Database']['type'] == 'sqlite':
-                db_session.execute(sqlite_insert(PantheonTraffic).on_conflict_do_nothing(index_elements=['site_id', 'traffic_date']), new_rows)
-            else: # mysql:
-                db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
-            db_session.commit()
+            if len(new_rows) > 0:
+                if config['Database']['type'] == 'sqlite':
+                    db_session.execute(sqlite_insert(PantheonTraffic).on_conflict_do_nothing(index_elements=['site_id', 'traffic_date']), new_rows)
+                else: # mysql:
+                    db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
+                db_session.commit()
 
             # Process old data by month:
             new_rows = get_old_metrics(live_site, site, 'month', end_date)
-            if config['Database']['type'] == 'sqlite':
-                db_session.execute(sqlite_insert(PantheonTraffic).on_conflict_do_nothing(index_elements=['site_id', 'traffic_date']), new_rows)
-            else: # mysql:
-                db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
-            db_session.commit()
+            if len(new_rows) > 0:
+                if config['Database']['type'] == 'sqlite':
+                    db_session.execute(sqlite_insert(PantheonTraffic).on_conflict_do_nothing(index_elements=['site_id', 'traffic_date']), new_rows)
+                else: # mysql:
+                    db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
+                db_session.commit()
 
             continue  # skip the rest of the processing for the sites
 
