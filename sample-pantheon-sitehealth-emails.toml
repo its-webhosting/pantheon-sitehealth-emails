@@ -1,0 +1,54 @@
+
+[Pantheon]
+org_id = "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9"
+
+# $40 for each block of 10,000 Pantheon visitors
+overage_block_size = 10000
+overage_block_cost = 40.00
+
+[Pantheon.plan_info]
+
+# Use the spreadsheet at
+# https://websites.umich.edu/~markmont/public/pantheon-cost-analysis
+# to get the information to fill in below for your specific Pantheon
+# subscription type and pricing.
+
+"Basic"                   = { "upgrade_at" =  155000, "upgrade_to" = "Performance Large",       "downgrade_to" = "-"                       }
+"Performance Small"       = { "upgrade_at" =   65000, "upgrade_to" = "Performance Medium",      "downgrade_to" = "-"                       }
+"Performance Medium"      = { "upgrade_at" =  140000, "upgrade_to" = "Performance Large",       "downgrade_to" = "Performance Small"       }
+"Performance Large"       = { "upgrade_at" =  300000, "upgrade_to" = "Performance Extra Large", "downgrade_to" = "Performance Medium"      }
+"Performance Extra Large" = { "upgrade_at" =  540000, "upgrade_to" = "Performance 2X Large",    "downgrade_to" = "Performance Large"       }
+"Performance 2X Large"    = { "upgrade_at" =  840000, "upgrade_to" = "Elite 1M",                "downgrade_to" = "Performance Extra Large" }
+"Elite 1M"                = { "upgrade_at" = 1000000, "upgrade_to" = "Elite 2M",                "downgrade_to" = "Performance 2X Large"    }
+"Elite 2M"                = { "upgrade_at" = 2000000, "upgrade_to" = "-",                       "downgrade_to" = "Elite 1M"                }
+
+
+[Database]
+# currently supported database types: sqlite, mysql
+
+type = "sqlite"
+name = "database.db"
+
+#type = "mysql"
+#host = "db-server.example.com"
+#port = 3306
+#user = "admin"
+#password = "s3cr3t-p@sSW0rd!!"
+#name = "sitehealth"
+
+
+[Cloudflare]
+# Values to use if the environnment variables CLOUDFLARE_EMAIL
+# or CLOUDFLARE_API_KEY are not set.
+member_email = "user@example.com"
+member_api_key = "xxxxxxxx"
+
+
+[AWS]
+# Values to use if the environment variables AWS_PROFILE or
+# AWS_DEFAULT_REGION are not set.
+profile = "webhosting"
+default_region = "us-east-1"
+
+wws_portal_secrets = "webinfo"
+

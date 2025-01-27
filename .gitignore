@@ -1,5 +1,7 @@
 # pantheon-sitehealth-emails script stuff
-pantheon-sitehealth-emails.toml
+/pantheon-sitehealth-emails.toml
+/local.toml
+/database.db
 /build/
 /tmp/
 

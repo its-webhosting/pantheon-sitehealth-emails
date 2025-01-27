@@ -2,31 +2,44 @@
 
 Send emails to website owners letting them know what their Pantheon traffic has been and make recommendations about whether/how they should change their current plan or the configuration of their site.
 
-This is a standalone script that is intended to be a temporary first implementation to get reports to website owners earlier.  It should be rewritten and added to the `mgmt` app.
+This script is a temporary, standalone way to send reports to website owners via email.  The University of Michigan intends to eventually integrate this script into the ITS Web Hosting Services portal; this will make the reports available to website owners via the web on a daily basis, in addition to scheduled email reports.
 
-`pantheon-sitehealth-emails` currently works only in the prod portal and Pantheon environments.
+Code contributions are gratefully accepted!
 
 
 ## Installation
 
 Works with Python 3.12.  It should work with Python 3.11 but that has not been tested.  It will not work with Python 3.10 or earlier versions.
-* `brew install python@3.12` will hopefully work.
+
+Running `brew install python@3.12` should work for macOS users.
 
 Other requirements:
-* PHP and Composer for the [Emogrifier CSS processor](https://packagist.org/packages/pelago/emogrifier). Any recent versions of PHP and Composer should work.
-    * `brew unlink php ; brew install php@8.3 ; brew link php@8.3`
-* MySQL 8 client.  Versions 5.x and 9.x are not compatible with the portal database.
-    * `brew install pkgconf`
-    * `brew install mysql-client@8.4`
-    * `brew link mysql-client@8.4`  # makes `mysql_config` and `pkg-config` available, which are needed by `pip`
-* AWS CLI (`brew install awscli` should work)
+* PHP and Composer for the [Emogrifier CSS processor](https://packagist.org/packages/pelago/emogrifier). Any recent versions of PHP and Composer should work, but note that as of January, 2025, Pantheon's Terminus command does not work with PHP 8.4, so you should use PHP 8.3 or earlier with the sitehealth script since the sitehealth script also runs Terminus.
+    ```
+    brew unlink php
+    brew install php@8.3
+    brew link php@8.3
+    ```
+* MySQL client if you will use this script with a MySQL database instead of the default SQLite3 database. `pkg-config` is needed by `pip` to install the Python package `mysqlclient`.
+    ```
+    brew install pkgconf
+    brew install mysql-client
+    ```
+    *  University of Michigan users: our web hosting services portal database requires MySQL 8 (versions 5.x and 9.x will not work):
+        ```
+        brew unlink mysql-client
+        brew install mysql-client@8.4
+        brew link mysql-client@8.4
+        ```
+* AWS CLI if you are using AWS resources with the script (for example, RDS databases or secrets)
+    * `brew install awscli` should work for macOS users
     * Either run `aws configure --profile webhosting` or set the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables.
 
 ```bash
 git clone git@github.com:its-webhosting/pantheon-sitehealth-emails.git
 cd pantheon-sitehealth-emails
 
-python3.12 -m venv venv   # change version number if you're not using 3.12
+python3.12 -m venv venv   # change the version number if you're not using 3.12
 source venv/bin/activate
 which python  # make sure it's under venv/
 python -V     # make sure it's the version you expect
@@ -35,12 +48,9 @@ ssh-add ~/.ssh/your-github-key-file  # required for installing umcloudflare pack
 pip install .
 
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
-
-cp pantheon-sitehealth-emails.ini.sample pantheon-sitehealth-emails.ini
-
 ```
 
-Edit `pantheon-sitehealth-emails.ini` and configure it correctly for your Pantheon account.  University of Michigan staff should get a copy of this file configured for the U-M environment from Dropbox.
+Get a copy of your institution's `pantheon-sitehealth-emails.toml` file and put it in the same directory as the script.  If your institution does not have one, then follow the steps in the section [One-time per-institution setup](#one-time-per-institution-setup) below.
 
 
 ## Usage
@@ -48,9 +58,6 @@ Edit `pantheon-sitehealth-emails.ini` and configure it correctly for your Panthe
 ```bash
 git pull  # make sure you have the latest version
 source venv/bin/activate  # if you haven't already
-
-export AWS_PROFILE=webhosting  # set to whatever profile name you chose for the account aws-webhosting-admin
-export AWS_DEFAULT_REGION=us-east-1
 
 export CLOUDFLARE_EMAIL="bjensen@umich.edu"  # set to your email address
 read -s -p "Paste your Cloudflare API Key here: " CLOUDFLARE_API_KEY \
@@ -87,9 +94,25 @@ On the first of every month, send the reports:
 ```
 
 
-## One-time setup
+## One-time per-institution setup
 
-### Database
+```bash
+cp sample-pantheon-sitehealth-emails.toml pantheon-sitehealth-emails.toml
+```
+
+Edit `pantheon-sitehealth-emails.toml` and configure it correctly for your Pantheon account and your local environment.
+
+### Create database tables
+
+#### SQLite3
+
+```bash
+./pantheon-sitehealth-emails --create-tables
+```
+
+#### MySQL
+
+For MySQL, first create the database,
 
 ```bash
 mysql -h "${db_host}" -p -u "${db_user}" "${db_name}"
@@ -98,12 +121,27 @@ mysql -h "${db_host}" -p -u "${db_user}" "${db_name}"
 ```sql
 CREATE DATABASE traffic;
 use traffic;
-GRANT ALL ON traffic.* TO 'webinfoprod'@'%';
+GRANT ALL ON traffic.* TO "${db_user}"@'%';
 FLUSH PRIVILEGES;
+quit
 ```
+
+Then create the tables,
 
 ```bash
 ./pantheon-sitehealth-emails --create-tables
+```
+
+### Import data from Pantheon
+
+Pantheon keeps daily traffic data for only 28 days; any new daily traffic data will be added to the sitehealth database each time the script runs.
+
+But Pantheon also keeps weekly data for 12 weeks, and monthly data for 12 months.  Running the script with the `--import-older-metrics` option will add the average daily traffic for the weekly and monthly periods to the database.
+
+Import the older (weekly and monthly) metrics for `--all` sites:
+
+```bash
+./pantheon-sitehealth-emails --import-older-metrics --all
 ```
 
 ## TO DO

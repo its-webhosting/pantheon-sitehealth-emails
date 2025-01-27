@@ -35,7 +35,8 @@ from sqlalchemy import create_engine, insert
 from sqlalchemy import Integer, String, Date, Boolean
 from sqlalchemy import PrimaryKeyConstraint, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
-from sqlalchemy.dialects.mysql import CHAR
+from sqlalchemy.types import CHAR
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -564,11 +565,11 @@ def main() -> None:
 
     # Validate and process arguments
     if options.create_tables:
+        if options.import_older_metrics:
+            sys.exit('The --import-older-metrics and --create-tables options are mutually exclusive.')
         options.verbose = 3  # force verbose output
-    if options.import_older_metrics and options.create_tables:
-        sys.exit('The --import-older-metrics and --create-tables options are mutually exclusive.')
-    if (options.all and len(options.sites) != 0) or (not options.all and len(options.sites) == 0):
-        sys.exit('You must specify either one or more sites or the --all option.')
+    elif (options.all and len(options.sites) != 0) or (not options.all and len(options.sites) == 0):
+        sys.exit('You must specify either at least one site or the --all option.')
     if options.verbose:
         console.print('Arguments:')
         pprint(options)
@@ -638,11 +639,20 @@ def main() -> None:
 
     if options.verbose:
         console.print('[bold magenta]=== Connecting to the [green]pantheon-sitehealth-emails[/green] traffic database:')
-    db_engine = create_engine(f'mysql+mysqldb://{portal_secrets["db_user"]}:{portal_secrets["db_pass"]}@'
-                              f'{portal_secrets["db_host"]}/traffic',
+
+    if config['Database']['type'] == 'sqlite':
+        traffic_db_conn_str = f'sqlite:///{config["Database"]["name"]}'
+        traffic_db_conn_kwargs = {}
+    elif config['Database']['type'] == 'mysql':
+        traffic_db_conn_str = f'mysql+mysqldb://{portal_secrets["db_user"]}:{portal_secrets["db_pass"]}@' \
+                             f'{portal_secrets["db_host"]}/traffic'
+        traffic_db_conn_kwargs = { 'pool_size': 10, 'max_overflow': 20 }
+    else:
+        sys.exit(f'Unsupported database type: {config["Database"]["type"]}')
+
+    db_engine = create_engine(traffic_db_conn_str,
                               echo=True if options.verbose > 1 else False,
-                              pool_size=10,
-                              max_overflow=20)
+                              **traffic_db_conn_kwargs)
     db_session_factory = sessionmaker(bind=db_engine)
     db_session = db_session_factory()
 
@@ -848,14 +858,23 @@ and to find out what went wrong:
 
         if options.import_older_metrics:
             console.print(f'[bold magenta]=== Importing older metrics for {site["name"]}:')
+
             # Process old data by week:
             new_rows = get_old_metrics(live_site, site, 'week', end_date)
-            db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
+            if config['Database']['type'] == 'sqlite':
+                db_session.execute(sqlite_insert(PantheonTraffic).on_conflict_do_nothing(index_elements=['site_id', 'traffic_date']), new_rows)
+            else: # mysql:
+                db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
             db_session.commit()
+
             # Process old data by month:
             new_rows = get_old_metrics(live_site, site, 'month', end_date)
-            db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
+            if config['Database']['type'] == 'sqlite':
+                db_session.execute(sqlite_insert(PantheonTraffic).on_conflict_do_nothing(index_elements=['site_id', 'traffic_date']), new_rows)
+            else: # mysql:
+                db_session.execute(insert(PantheonTraffic).prefix_with('IGNORE'), new_rows)
             db_session.commit()
+
             continue  # skip the rest of the processing for the sites
 
         if options.update:
