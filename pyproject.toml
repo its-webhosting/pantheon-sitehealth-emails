@@ -4,13 +4,21 @@ version = "0.2.0"
 requires-python = ">=3.11"
 dependencies = [
     "rich",
-    "mysqlclient",
     "SQLAlchemy",
     "matplotlib",
-    "boto3",
-    "botocore",
     "Jinja2",
     "dnspython",
+]
+
+[project.optional-dependencies]
+mysql = [
+    "mysqlclient",
+]
+aws = [
+    "boto3",
+    "botocore",
+]
+cloudflare = [
     "cloudflare",
 ]
 

@@ -14,7 +14,7 @@ Works with Python 3.12.  It should work with Python 3.11 but that has not been t
 Running `brew install python@3.12` should work for macOS users.
 
 Other requirements:
-* PHP and Composer for the [Emogrifier CSS processor](https://packagist.org/packages/pelago/emogrifier). Any recent versions of PHP and Composer should work, but note that as of January, 2025, Pantheon's Terminus command does not work with PHP 8.4, so you should use PHP 8.3 or earlier with the sitehealth script since the sitehealth script also runs Terminus.
+* PHP and Composer for the [Emogrifier CSS processor](https://packagist.org/packages/pelago/emogrifier). Any recent versions of PHP and Composer should work, but note that as of January 2025, Pantheon's Terminus command does not work with PHP 8.4, so you should use PHP 8.3 or earlier with the sitehealth script since the sitehealth script also runs Terminus.
     ```
     brew unlink php
     brew install php@8.3
@@ -45,7 +45,7 @@ which python  # make sure it's under venv/
 python -V     # make sure it's the version you expect
 
 ssh-add ~/.ssh/your-github-key-file  # required for installing umcloudflare package from private repo
-pip install .
+pip install .[mysql,aws,cloudflare]  # remove from the list the features you won't use
 
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
 ```

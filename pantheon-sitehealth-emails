@@ -30,6 +30,7 @@ from email.utils import make_msgid
 from email.policy import SMTP
 
 import dns.resolver
+
 import sqlalchemy as db
 from sqlalchemy import create_engine, insert
 from sqlalchemy import Integer, String, Date, Boolean
@@ -49,10 +50,6 @@ from jinja2 import Template
 from rich.console import Console
 from rich.padding import Padding
 from rich.pretty import pprint
-
-from cloudflare import Cloudflare
-
-from umich.getsecrets import get_secret
 
 
 # Pantheon rate plan information.
@@ -133,6 +130,7 @@ class PantheonOverageProtection(Base):
 
 console = Console()
 config = None
+aws_secrets = {}
 
 # Parse command line arguments.  This is outside main() so the arguments are available to all functions.
 args_parser = argparse.ArgumentParser(
@@ -536,12 +534,65 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
     return notices
 
 
+def config_substitution(expr: str, path) -> str:
+    expr = expr.replace('\\}', '}')
+    argv = expr.split()
+    argc = len(argv)
+    if argc == 0:
+        return ''
+    if argv[0] == 'secret':
+        if argc != 4:
+            console.print(f'[bold red]ERROR: configuration file value for {path} has the wrong number of arguments: secret aws SECRET_NAME KEY')
+            sys.exit(1)
+        if argv[1] != 'aws':
+            console.print(f'[bold red]ERROR: configuration file value for {path} has an unsupported secret provider: {expr}')
+            sys.exit(1)
+        if argv[2] not in aws_secrets:
+            if options.verbose:
+                console.print(f'[bold magenta]=== Getting WWS portal AWS secret {argv[2]}:')
+            aws_secrets[argv[2]] = json.loads(get_secret(argv[2]))
+        if argv[3] in aws_secrets[argv[2]]:
+            return aws_secrets[argv[2]][argv[3]]
+        console.print(f'[bold red]ERROR: configuration file value for {path}: key not found in secret: {expr}')
+        sys.exit(1)
+    console.print(f'[bold red]ERROR: configuration file value for {path} contains an unknown substitution: {expr}')
+    sys.exit(1)
+
+
+config_substitution_re = re.compile(r'<\{(.*?)(?<!\\)}')
+
+def process_config(data: Any, path="") -> Any:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            new_path = f"{path}.{key}" if path else f"{key}"
+            data[key] = process_config(value, new_path)
+    elif isinstance(data, list):
+        for index, item in enumerate(data):
+            new_path = f"{path}[{index}]"
+            data[index] = process_config(item, new_path)
+    elif isinstance(data, str):
+        data = re.sub(config_substitution_re, lambda m: config_substitution(m.group(1), path), data)
+    return data
+
+
 def main() -> None:
 
     if options.verbose:
         console.print(f'Loading configuration from {options.config}')
-    with open(options.config, "rb") as f:
+    with open(options.config, 'rb') as f:
         config = tomllib.load(f)
+
+    if 'AWS' in config and 'enabled' in config['AWS'] and config['AWS']['enabled']:
+        # set for boto to use
+        if os.getenv('AWS_PROFILE') is None and 'profile' in config['AWS']:
+            os.environ['AWS_PROFILE'] = config['AWS']['profile']
+        if os.getenv('AWS_DEFAULT_REGION') is None and 'default_region' in config['AWS']:
+            os.environ['AWS_DEFAULT_REGION'] = config['AWS']['default_region']
+        global get_secret
+        from umich.getsecrets import get_secret
+
+    config = process_config(config)
+
     env_overrides = {
         'CLOUDFLARE_EMAIL': { 'table': 'Cloudflare', 'key': 'member_email' },
         'CLOUDFLARE_API_KEY': { 'table': 'Cloudflare', 'key': 'member_api_key' },
@@ -549,10 +600,6 @@ def main() -> None:
     for env in env_overrides:
         if os.getenv(env) is not None:
             config[env_overrides[env]['table']][env_overrides[env]['key']] = os.getenv(env)
-    if os.getenv('AWS_PROFILE') is None:
-        os.environ['AWS_PROFILE'] = config['AWS']['profile']
-    if os.getenv('AWS_DEFAULT_REGION') is None:
-        os.environ['AWS_DEFAULT_REGION'] = config['AWS']['default_region']
     overage_block_size = config['Pantheon']['overage_block_size']
     overage_block_cost = config['Pantheon']['overage_block_cost']
 
@@ -577,25 +624,25 @@ def main() -> None:
         pprint(config, expand_all=True)
         pprint(terminus('self:info'))
 
-    cloudflare = Cloudflare(
-        api_email=config['Cloudflare']['member_email'],
-        api_key=config['Cloudflare']['member_api_key']
-    )
+    if 'Cloudflare' in config and 'enabled' in config['Cloudflare'] and config['Cloudflare']['enabled']:
+        global Cloudflare
+        from cloudflare import Cloudflare
 
-    with console.status('[bold green]Getting Cloudflare IP ranges ...'):
-        try:
-            cloudflare_ips = cloudflare.ips.list()
-        except Exception as e:
-            sys.exit(f'ERROR: Unable to get lists of Cloudflare IPs: {e}')
-        if options.verbose > 2:
-            console.print('Cloudfare IPs:')
-            pprint(cloudflare_ips)
-        cloudflare_ipv4_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv4_cidrs]
-        cloudflare_ipv6_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv6_cidrs]
+        cloudflare = Cloudflare(
+            api_email=config['Cloudflare']['member_email'],
+            api_key=config['Cloudflare']['member_api_key']
+        )
 
-    if options.verbose:
-        console.print('[bold magenta]=== Getting WWS portal AWS secret:')
-    portal_secrets = json.loads(get_secret(config['AWS']['wws_portal_secrets']))
+        with console.status('[bold green]Getting Cloudflare IP ranges ...'):
+            try:
+                cloudflare_ips = cloudflare.ips.list()
+            except Exception as e:
+                sys.exit(f'ERROR: Unable to get lists of Cloudflare IPs: {e}')
+            if options.verbose > 2:
+                console.print('Cloudfare IPs:')
+                pprint(cloudflare_ips)
+            cloudflare_ipv4_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv4_cidrs]
+            cloudflare_ipv6_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv6_cidrs]
 
     # Create a directory named "build" if it doesn't exist:
     if not os.path.exists('build'):
@@ -606,8 +653,8 @@ def main() -> None:
         console.print('[bold magenta]=== Getting website information from the WWS portal:')
     portal_sites = {}
     plan_sku_to_name = {}
-    portal_db_engine = db.create_engine(f'mysql+mysqldb://{portal_secrets["db_user"]}:{portal_secrets["db_pass"]}@'
-                                        f'{portal_secrets["db_host"]}/{portal_secrets["db_name"]}',
+    portal_db_engine = db.create_engine(f'mysql+mysqldb://{config["Database"]["user"]}:{config["Database"]["password"]}@'
+                                        f'{config["Database"]["host"]}/{aws_secrets["webinfo"]["db_name"]}',
                                         echo=True if options.verbose > 1 else False)
     with portal_db_engine.connect() as connection:
         metadata = db.MetaData()
@@ -644,8 +691,8 @@ def main() -> None:
         traffic_db_conn_str = f'sqlite:///{config["Database"]["name"]}'
         traffic_db_conn_kwargs = {}
     elif config['Database']['type'] == 'mysql':
-        traffic_db_conn_str = f'mysql+mysqldb://{portal_secrets["db_user"]}:{portal_secrets["db_pass"]}@' \
-                             f'{portal_secrets["db_host"]}/traffic'
+        traffic_db_conn_str = f'mysql+mysqldb://{config["Database"]["user"]}:{config["Database"]["password"]}@' \
+                             f'{config["Database"]["host"]}/{config["Database"]["name"]}'
         traffic_db_conn_kwargs = { 'pool_size': 10, 'max_overflow': 20 }
     else:
         sys.exit(f'Unsupported database type: {config["Database"]["type"]}')

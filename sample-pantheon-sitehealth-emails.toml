@@ -38,6 +38,7 @@ name = "database.db"
 
 
 [Cloudflare]
+enabled = false
 # Values to use if the environnment variables CLOUDFLARE_EMAIL
 # or CLOUDFLARE_API_KEY are not set.
 member_email = "user@example.com"
@@ -45,10 +46,8 @@ member_api_key = "xxxxxxxx"
 
 
 [AWS]
+enabled = false
 # Values to use if the environment variables AWS_PROFILE or
 # AWS_DEFAULT_REGION are not set.
 profile = "webhosting"
 default_region = "us-east-1"
-
-wws_portal_secrets = "webinfo"
-
