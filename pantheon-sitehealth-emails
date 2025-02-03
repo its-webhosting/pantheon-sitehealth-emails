@@ -10,8 +10,10 @@
 #
 
 import argparse
+import importlib
 import tomllib
 import os
+import stat
 import sys
 import json
 import subprocess
@@ -33,10 +35,10 @@ from email.policy import SMTP
 import dns.resolver
 
 import sqlalchemy as db
-from sqlalchemy import create_engine, insert
+from sqlalchemy import insert
 from sqlalchemy import Integer, String, Date, Boolean
 from sqlalchemy import PrimaryKeyConstraint, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import CHAR
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -53,11 +55,6 @@ from rich.pretty import pprint
 
 import script_context as sc
 
-
-# Pantheon rate plan information.
-# Note: the plan names must match what `terminus plan:list ${some_site_name}` returns.
-plan_info = {}
-plan_names = []
 
 traffic_table_columns = [
     {'name': 'month', 'label': 'Month'},
@@ -530,21 +527,55 @@ def config_substitution(expr: str, path) -> str:
         pprint(argv)
     if argc == 0:
         return ''
-    if argv[0] == 'secret':
-        if argc != 4:
-            sc.console.print(f'[bold red]ERROR: configuration file value for {path} has the wrong number of arguments: secret aws SECRET_NAME KEY')
+
+    # Figure out which substitution matches the expression most closely:
+    best_match = None
+    best_match_score = 0
+    best_match_args_map = {}
+    for match in sc.substitutions:
+        match_args = match['args']
+        match_args_len = len(match_args)
+        match_score = 0
+        args_map = {}
+        for i in range(argc):
+            if i >= match_args_len:
+                break
+            if match_args[i] == argv[i]:
+                match_score += 1
+            elif match_args[i].startswith('$'):
+                match_score += 1
+                args_map[match_args[i]] = argv[i]
+            else:
+                break
+        if match_score > best_match_score:
+            best_match = match
+            best_match_score = match_score
+            best_match_args_map = args_map
+            if match_score == argc and match_score == match_args_len:
+                break
+
+    if sc.options.verbose >= 2:
+        sc.debug(f'best_match: {best_match_score}')
+        pprint(best_match_args_map)
+        pprint(best_match)
+
+    if best_match_score == argc:
+        func_args = [best_match_args_map[arg] for arg in best_match['func_args']]
+        sc.debug('args:')
+        pprint(func_args)
+        result = best_match['func'](*func_args)
+        if result is None:
             sys.exit(1)
-        if argv[1] != 'aws':
-            sc.console.print(f'[bold red]ERROR: configuration file value for {path} has an unsupported secret provider: {expr}')
-            sys.exit(1)
-        secret = plugin.secret.aws.get_secret(argv[2], argv[3])
-        if secret is None:
-            sc.console.print(f'[bold red]ERROR: configuration file value for {path}: key not found in secret: {expr}')
-            sys.exit(1)
-        return secret
-    elif argv[0] == 'umich_portal':
-        return expr
-    sc.console.print(f'[bold red]ERROR: configuration file value for {path} contains an unknown substitution: {expr}')
+        return str(result)
+
+    if best_match_score == 0:
+        sc.console.print(f'[bold red]ERROR: configuration file value for {path} contains an unknown substitution: {expr}')
+        sys.exit(1)
+
+    sc.console.print(f'[bold red]ERROR: no match found for configuration file value of {path}')
+    sc.console.print(f'[bold red]value: {argv}')
+    sc.console.print(f'[bold red]best match: {best_match["args"]}')
+    sc.console.print(f'[bold red]{best_match_score} out of {argc} arguments matched')
     sys.exit(1)
 
 
@@ -570,11 +601,25 @@ def main() -> None:
     with open(sc.options.config, 'rb') as f:
         sc.config = tomllib.load(f)
 
-    sc.debug(f'Loading plugins')
-    global plugin
-    import plugin.secret.aws
+    sc.debug(f'[bold magenta]=== Loading plugins:')
+    plugin_list = []
+    # find all non-empty regular files in/under the directory "./plugin" that are named "__init__.py" and import them:
+    for dirpath, dirs, files in os.walk('plugin'):
+        for file in files:
+            if file == '__init__.py':
+                plugin_file = os.path.join(dirpath, file)
+                file_st = os.stat(plugin_file)
+                if stat.S_ISREG(file_st.st_mode) and file_st.st_size != 0:
+                    parts = plugin_file.split('/')[:-1]
+                    plugin_name = '.'.join(parts)
+                    plugin_list.append(plugin_name)
+    plugin_list.sort()  # ensure a consistent order for the plugins to simplify troubleshooting
+    for plugin_name in plugin_list:
+        sc.debug(f'Loading plugin: {plugin_name}')
+        module = importlib.import_module(plugin_name)
+        sc.plugin[plugin_name] = module
 
-    sc.debug(f'Performing configuration substitutions')
+    sc.debug(f'Doing pre-setup configuration substitutions')
     sc.config = process_config(sc.config)
 
     env_overrides = {
@@ -587,13 +632,6 @@ def main() -> None:
     overage_block_size = sc.config['Pantheon']['overage_block_size']
     overage_block_cost = sc.config['Pantheon']['overage_block_cost']
 
-    global plan_info, plan_names
-    plan_info = sc.config['Pantheon']['plan_info']
-    for plan in plan_info:
-        plan_info[plan]['upgrade_to'] = plan_info[plan]['upgrade_to'] if plan_info[plan]['upgrade_to'] != '-' else None
-        plan_info[plan]['downgrade_to'] = plan_info[plan]['downgrade_to'] if plan_info[plan]['downgrade_to'] != '-' else None
-    plan_names = list(plan_info.keys())
-
     # Validate and process arguments
     if sc.options.create_tables:
         if sc.options.import_older_metrics:
@@ -604,10 +642,10 @@ def main() -> None:
     if sc.options.verbose:
         sc.debug('Arguments:')
         pprint(sc.options)
-        sc.debug('Configuration:')
-        pprint(sc.config, expand_all=True)
         pprint(terminus('self:info'))
 
+    cloudflare_ipv4_nets = []
+    cloudflare_ipv6_nets = []
     if 'Cloudflare' in sc.config and 'enabled' in sc.config['Cloudflare'] and sc.config['Cloudflare']['enabled']:
         global Cloudflare
         from cloudflare import Cloudflare
@@ -632,43 +670,17 @@ def main() -> None:
     if not os.path.exists('build'):
         os.makedirs('build')
 
-    # Get the information we need from the portal's database:
-    sc.debug('[bold magenta]=== Getting website information from the WWS portal:')
-    portal_sites = {}
-    plan_sku_to_name = {}
-    portal_db_engine = db.create_engine(f'mysql+mysqldb://{sc.config["Database"]["user"]}:{sc.config["Database"]["password"]}@'
-                                        f'{sc.config["Database"]["host"]}/{plugin.secret.aws.get_secret("webinfo", "db_name")}',
-                                        echo=True if sc.options.verbose > 1 else False)
+    sc.debug('[bold magenta]=== Running hook "setup":')
+    for h in sc.hooks['setup']:
+        sc.debug (f'setup hook: {h['name']}')
+        h['func']()
 
-    with portal_db_engine.connect() as connection:
-        metadata = db.MetaData()
-        sites_site = db.Table('sites_site', metadata, autoload_with=portal_db_engine)
-        query = db.select(sites_site.c['id', 'site_slug', 'owner_group'])
-        for row in connection.execute(query).all():
-            # https://github.com/sqlalchemy/sqlalchemy/discussions/10091
-            # noinspection PyProtectedMember
-            site = row._asdict()
-            portal_sites[site['site_slug']] = {'id': site['id'], 'owner_group': site['owner_group']}
-        sites_pantheonplan = db.Table('sites_pantheonplan', metadata, autoload_with=portal_db_engine)
-        query = db.select(sites_pantheonplan.c[
-                              'portal_plan_name',
-                              'pantheon_plan_sku',
-                              'traffic_limits',
-                              'annual_plan_charge',
-                              'is_active'])
-        for row in connection.execute(query).all():
-            # noinspection PyProtectedMember
-            plan = row._asdict()
-            if plan['is_active'] and plan['portal_plan_name'] in plan_info:
-                plan_info[plan['portal_plan_name']]['traffic_limit'] = int(plan['traffic_limits'])
-                plan_info[plan['portal_plan_name']]['cost'] = float(plan['annual_plan_charge'])
-                plan_sku_to_name[plan['pantheon_plan_sku']] = plan['portal_plan_name']
-    portal_db_engine.dispose()
+    sc.debug(f'Doing post-setup configuration substitutions')
+    sc.config = process_config(sc.config)
     if sc.options.verbose:
-        pprint(portal_sites)
-        pprint(plan_info)
-        pprint(plan_sku_to_name)
-    sys.exit('=== done ===')
+        sc.debug('Configuration after substitutions:')
+        pprint(sc.config)
+    sys.exit('=== Done with setup ===')
 
     sc.debug('[bold magenta]=== Connecting to the [green]pantheon-sitehealth-emails[/green] traffic database:')
 
@@ -677,15 +689,15 @@ def main() -> None:
         traffic_db_conn_kwargs = {}
     elif sc.config['Database']['type'] == 'mysql':
         traffic_db_conn_str = f'mysql+mysqldb://{sc.config["Database"]["user"]}:{sc.config["Database"]["password"]}@' \
-                             f'{sc.config["Database"]["host"]}/{sc.config["Database"]["name"]}'
+                             f'{sc.config["Database"]["host"]}:{sc.config["Database"]["port"]}/{sc.config["Database"]["name"]}'
         traffic_db_conn_kwargs = { 'pool_size': 10, 'max_overflow': 20 }
     else:
         sys.exit(f'Unsupported database type: {sc.config["Database"]["type"]}')
 
-    db_engine = create_engine(traffic_db_conn_str,
-                              echo=True if sc.options.verbose > 1 else False,
-                              **traffic_db_conn_kwargs)
-    db_session_factory = sessionmaker(bind=db_engine)
+    db_engine = db.create_engine(traffic_db_conn_str,
+                                 echo=True if sc.options.verbose >= 2 else False,
+                                 **traffic_db_conn_kwargs)
+    db_session_factory = db.orm.sessionmaker(bind=db_engine)
     db_session = db_session_factory()
 
     if sc.options.create_tables:
@@ -765,6 +777,14 @@ Additional information for Composer-managed Drupal sites:
         }
     ]
 
+    for plan in sc.config['Pantheon']['plan_info']:
+        upgrade_to = sc.config['Pantheon']['plan_info'][plan]['upgrade_to']
+        downgrade_to = sc.config['Pantheon']['plan_info'][plan]['downgrade_to']
+        sc.config['Pantheon']['plan_info'][plan]['upgrade_to'] = upgrade_to if upgrade_to != '-' else None
+        sc.config['Pantheon']['plan_info'][plan]['downgrade_to'] = downgrade_to if downgrade_to != '-' else None
+    plan_info = sc.config['Pantheon']['plan_info']  # create an alias for convenience and readability
+    plan_names = list(plan_info.keys())
+
     end_date = sc.options.date
     end_date_yyyy_mm = end_date.strftime('%Y-%m')
     start_date = end_date.replace(day=1, year=end_date.year - 1)  # fist day of the same month last year
@@ -784,11 +804,12 @@ Additional information for Composer-managed Drupal sites:
         site_notices = []
         wp_smell = ''
         drush_smell = ''
-        if site['name'] not in portal_sites:
-            sc.console.print(f':exclamation: [bold red] ATTENTION: {site["name"]} is not in the WWS portal!')
-            continue
-
-        portal_site_id = portal_sites[site['name']]['id']
+        portal_site_id = 0
+        if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
+            if site['name'] not in sc.config['UMich']['portal']['sites']:
+                sc.console.print(f':exclamation: [bold red] ATTENTION: {site["name"]} is not in the WWS portal!')
+                continue
+            portal_site_id = sc.config['UMich']['portal']['sites'][site['name']]['id']
 
         if not sc.options.all and site['name'] not in sc.options.sites:
             sc.debug(f'[bold magenta]=== Skipping site {site["name"]} (not in list of sites to process)', level=2)
@@ -807,10 +828,10 @@ Additional information for Composer-managed Drupal sites:
                 sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} doesn\'t have a plan SKU')
                 sys.exit('Bailing out.')
             plan_sku = site_plan_info['sku']
-            if plan_sku not in plan_sku_to_name:
+            if plan_sku not in sc.config['Pantheon']['plan_sku_to_name']:
                 sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} has an unknown plan SKU: {plan_sku}')
                 sys.exit('Bailing out.')
-            site['plan_name'] = plan_sku_to_name[plan_sku]
+            site['plan_name'] = sc.config['Pantheon']['plan_sku_to_name'][plan_sku]
         site_current_plan = site['plan_name']
         site_recommended_plan = site['plan_name']
         site_current_plan_index = 0
@@ -1461,7 +1482,7 @@ support through either Pantheon or ITS.
                 ymd = first_plan_day
             if ymd > last_plan_day:
                 ymd = last_plan_day
-            visits_covered_by_month[month] = min(visits_by_month[month], plan_info[plan_on_day[ymd]]['traffic_limit'])
+            visits_covered_by_month[month] = min(visits_by_month[month], int(plan_info[plan_on_day[ymd]]['traffic_limit']))
         visits_covered = list(visits_covered_by_month.values())
 
         xbins = [datetime.datetime.strptime(d, '%Y-%m').replace(day=1) for d in visits_by_month.keys()]
@@ -1546,7 +1567,7 @@ support through either Pantheon or ITS.
         for plan in plan_over_time:
             plan_xmin = mdates.date2num(plan['start'])
             plan_xmax = mdates.date2num(plan['end'])
-            traffic_limit = plan_info[plan['plan']]['traffic_limit']
+            traffic_limit = int(plan_info[plan['plan']]['traffic_limit'])
             upgrade_at = plan_info[plan['plan']]['upgrade_at']
             if traffic_limit is not None and upgrade_at is not None:
                 # Limit and upgrade lines
@@ -1662,7 +1683,7 @@ support through either Pantheon or ITS.
             traffic_table_rows[month]['month'] = datetime.datetime.strptime(month, '%Y-%m').strftime('%B %Y')
             traffic_table_rows[month]['visitors'] = f'{visits_by_month[month]:,.0f}'
             traffic_table_rows[month]['plan'] = plan
-            traffic_limit = plan_info[plan]['traffic_limit']
+            traffic_limit = int(plan_info[plan]['traffic_limit'])
             traffic_table_rows[month]['plan-limit'] = f'{traffic_limit:,.0f}'
             traffic_table_rows[month]['upgrade-at'] = f'{plan_info[plan]['upgrade_at']:,.0f}'
             traffic_table_rows[month]['next-plan'] = plan_info[plan]['upgrade_to']
@@ -1738,7 +1759,7 @@ support through either Pantheon or ITS.
             sc.debug('[bold magenta]=== Generating plan recommendations:')
             sc.debug('===== future costs for same traffic')
             for plan in plan_names:
-                cost = plan_info[plan]['cost']
+                cost = float(plan_info[plan]['cost'])
                 cost_by_month = []
                 cost_for_plan_months = []
                 op_remaining = 0
@@ -1746,7 +1767,7 @@ support through either Pantheon or ITS.
                     visits = visits_by_month[month]
                     if month == end_date_yyyy_mm and estimate > 0:
                         visits = estimate
-                    overage = max(visits - plan_info[plan]['traffic_limit'], 0)
+                    overage = max(visits - int(plan_info[plan]['traffic_limit']), 0)
                     overage_blocks = round((overage + overage_block_size / 2.0) / overage_block_size)
                     overage_cost = overage_blocks * overage_block_cost
                     if plan != 'Basic':
@@ -1777,11 +1798,11 @@ support through either Pantheon or ITS.
             sc.debug(f'Median Pantheon visitors per month: {median_visitors:,.0f}')
             sc.debug('===== future costs for median traffic')
             for plan in plan_names:
-                overage = median_visitors - plan_info[plan]['traffic_limit']
+                overage = median_visitors - int(plan_info[plan]['traffic_limit'])
                 if overage < 0:
                     overage = 0
                 months_without_op = 12 if plan == 'Basic' else 8
-                costs_median[plan] = plan_info[plan]['cost'] + \
+                costs_median[plan] = float(plan_info[plan]['cost']) + \
                     round((overage + overage_block_size / 2.0) / overage_block_size) * \
                     overage_block_cost * months_without_op
                 sc.console.print(f'{plan}: ${costs_median[plan]:,.2f}')
@@ -1972,9 +1993,13 @@ at the moment, it should be fixed to avoid possible future problems:
         sc.debug('===== Notices:\n', site_notices)
         sc.debug('===== News:', news)
 
-        r = portal_sites[site['name']]['owner_group']
-        r = r.replace(' ', '.')
-        recipients = f'{r}@umich.edu, {r}-owners@umich.edu'
+        if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
+            r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
+            r = r.replace(' ', '.')
+            recipients = f'{r}@umich.edu, {r}-owners@umich.edu'
+        else:
+            site_team = terminus('site:team:list', site_id)
+            recipients = ', '.join([site_team[team_member]['email'] for team_member in site_team])
 
         # Create email from template
         subject = f'{site["name"]} Pantheon Traffic Report - {end_date.strftime('%b %e, %Y')}'

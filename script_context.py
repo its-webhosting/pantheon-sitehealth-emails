@@ -2,10 +2,17 @@
 from rich.console import Console
 
 
-options = None  # the parsed command line options
-config  = None  # the parsed pantheon-sitehealth-emails.toml file
+options = {}  # the parsed command line options
+config  = {}  # the parsed pantheon-sitehealth-emails.toml file
+plugin  = {}  # imported plugins (Python modules)
 
 console = Console()
+
+substitutions = []
+
+hooks = {
+    'setup': [],
+}
 
 def debug(*args, level: int = 1):
     if options.verbose >= level:

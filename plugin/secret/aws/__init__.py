@@ -13,4 +13,9 @@ if 'AWS' in sc.config and 'enabled' in sc.config['AWS'] and sc.config['AWS']['en
         os.environ['AWS_DEFAULT_REGION'] = sc.config['AWS']['default_region']
 
     from .get_secret import get_secret
+    sc.substitutions.append({
+        'args': ['secret', 'aws', '$name', '$key'],
+        'func': get_secret,
+        'func_args': ['$name', '$key']
+    })
 

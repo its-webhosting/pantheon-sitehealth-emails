@@ -5,11 +5,13 @@ import json
 import boto3
 import botocore.exceptions
 
+import script_context as sc
+
+
 secrets = {}
 session = None
 client = None
 
-import script_context as sc
 
 def get_secret(secret_name, key_name = None, region_name='', profile_name=''):
 
