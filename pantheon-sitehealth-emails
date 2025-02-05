@@ -771,6 +771,7 @@ Additional information for Composer-managed Drupal sites:
     emails_sent = 0
     site_savings = []
     all_warnings = []
+    cloudflare_enabled = 'plugins.cloudflare' in sc.plugin
 
     for site_id in sites:
         site = sites[site_id]
@@ -947,7 +948,7 @@ and to find out what went wrong:
                     a = dns.resolver.resolve(hostname, 'A')
                     for rdata in a:
                         address = ipaddress.ip_address(rdata.address)
-                        if any([address in net for net in sc.plugin_context['plugin.cloudflare']['cloudflare_ipv4_nets']]):
+                        if cloudflare_enabled and any([address in net for net in sc.plugin_context['plugin.cloudflare']['cloudflare_ipv4_nets']]):
                             dns_points_at_cloudflare += 1
                             sc.console.print(
                                 f'{hostname} has [green]Cloudflare IP address {rdata.address}[/green]')
@@ -967,7 +968,7 @@ and to find out what went wrong:
                     aaaa = dns.resolver.resolve(hostname, 'AAAA')
                     for rdata in aaaa:
                         address = ipaddress.ip_address(rdata.address)
-                        if any([address in net for net in sc.plugin_context['plugin.cloudflare']['cloudflare_ipv6_nets']]):
+                        if cloudflare_enabled and any([address in net for net in sc.plugin_context['plugin.cloudflare']['cloudflare_ipv6_nets']]):
                             dns_points_at_cloudflare += 1
                             sc.console.print(
                                 f'{hostname} has [green]Cloudflare IP address {rdata.address}[/green]')
@@ -986,7 +987,7 @@ and to find out what went wrong:
                 if dns_points_at_cloudflare == 0 and dns_points_elsewhere == 0:
                     sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not in DNS')
                     not_in_dns.append(hostname)
-                if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
+                if cloudflare_enabled and (dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0):
                     sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare')
                     not_behind_cloudflare.append(hostname)
 
