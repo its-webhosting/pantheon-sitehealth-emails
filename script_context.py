@@ -14,6 +14,9 @@ hooks = {
     'setup': [],
 }
 
+plugin_context = {}
+
+
 def debug(*args, level: int = 1):
     if options.verbose >= level:
         console.log(*args, _stack_offset=2)

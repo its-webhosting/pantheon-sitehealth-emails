@@ -595,6 +595,22 @@ def process_config(data: Any, path="") -> Any:
     return data
 
 
+def find_modules(type: str) -> list[str]:
+    modules = []
+    # find all non-empty regular files in/under the directory f"{type}" that are named "__init__.py":
+    for dirpath, dirs, files in os.walk(type, followlinks=True):
+        for file in files:
+            if file == '__init__.py':
+                target = os.path.join(dirpath, file)
+                st = os.stat(target)
+                if stat.S_ISREG(st.st_mode) and st.st_size != 0:
+                    parts = target.split('/')[:-1]
+                    target_name = '.'.join(parts)
+                    modules.append(target_name)
+    modules.sort()  # ensure a consistent order when importing to simplify troubleshooting
+    return modules
+
+
 def main() -> None:
 
     sc.debug(f'Loading configuration from {sc.options.config}')
@@ -602,35 +618,13 @@ def main() -> None:
         sc.config = tomllib.load(f)
 
     sc.debug(f'[bold magenta]=== Loading plugins:')
-    plugin_list = []
-    # find all non-empty regular files in/under the directory "./plugin" that are named "__init__.py" and import them:
-    for dirpath, dirs, files in os.walk('plugin'):
-        for file in files:
-            if file == '__init__.py':
-                plugin_file = os.path.join(dirpath, file)
-                file_st = os.stat(plugin_file)
-                if stat.S_ISREG(file_st.st_mode) and file_st.st_size != 0:
-                    parts = plugin_file.split('/')[:-1]
-                    plugin_name = '.'.join(parts)
-                    plugin_list.append(plugin_name)
-    plugin_list.sort()  # ensure a consistent order for the plugins to simplify troubleshooting
-    for plugin_name in plugin_list:
+    for plugin_name in find_modules('plugin'):
         sc.debug(f'Loading plugin: {plugin_name}')
         module = importlib.import_module(plugin_name)
         sc.plugin[plugin_name] = module
 
     sc.debug(f'Doing pre-setup configuration substitutions')
     sc.config = process_config(sc.config)
-
-    env_overrides = {
-        'CLOUDFLARE_EMAIL': { 'table': 'Cloudflare', 'key': 'member_email' },
-        'CLOUDFLARE_API_KEY': { 'table': 'Cloudflare', 'key': 'member_api_key' },
-    }
-    for env in env_overrides:
-        if os.getenv(env) is not None:
-            sc.config[env_overrides[env]['table']][env_overrides[env]['key']] = os.getenv(env)
-    overage_block_size = sc.config['Pantheon']['overage_block_size']
-    overage_block_cost = sc.config['Pantheon']['overage_block_cost']
 
     # Validate and process arguments
     if sc.options.create_tables:
@@ -643,28 +637,6 @@ def main() -> None:
         sc.debug('Arguments:')
         pprint(sc.options)
         pprint(terminus('self:info'))
-
-    cloudflare_ipv4_nets = []
-    cloudflare_ipv6_nets = []
-    if 'Cloudflare' in sc.config and 'enabled' in sc.config['Cloudflare'] and sc.config['Cloudflare']['enabled']:
-        global Cloudflare
-        from cloudflare import Cloudflare
-
-        cloudflare = Cloudflare(
-            api_email=sc.config['Cloudflare']['member_email'],
-            api_key=sc.config['Cloudflare']['member_api_key']
-        )
-
-        with sc.console.status('[bold green]Getting Cloudflare IP ranges ...'):
-            try:
-                cloudflare_ips = cloudflare.ips.list()
-            except Exception as e:
-                sys.exit(f'ERROR: Unable to get lists of Cloudflare IPs: {e}')
-            if sc.options.verbose > 2:
-                sc.debug('Cloudfare IPs:')
-                pprint(cloudflare_ips)
-            cloudflare_ipv4_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv4_cidrs]
-            cloudflare_ipv6_nets = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv6_cidrs]
 
     # Create a directory named "build" if it doesn't exist:
     if not os.path.exists('build'):
@@ -680,7 +652,9 @@ def main() -> None:
     if sc.options.verbose:
         sc.debug('Configuration after substitutions:')
         pprint(sc.config)
-    sys.exit('=== Done with setup ===')
+
+    overage_block_size = sc.config['Pantheon']['overage_block_size']
+    overage_block_cost = sc.config['Pantheon']['overage_block_cost']
 
     sc.debug('[bold magenta]=== Connecting to the [green]pantheon-sitehealth-emails[/green] traffic database:')
 
@@ -973,7 +947,7 @@ and to find out what went wrong:
                     a = dns.resolver.resolve(hostname, 'A')
                     for rdata in a:
                         address = ipaddress.ip_address(rdata.address)
-                        if any([address in net for net in cloudflare_ipv4_nets]):
+                        if any([address in net for net in sc.plugin_context['plugin.cloudflare']['cloudflare_ipv4_nets']]):
                             dns_points_at_cloudflare += 1
                             sc.console.print(
                                 f'{hostname} has [green]Cloudflare IP address {rdata.address}[/green]')
@@ -993,7 +967,7 @@ and to find out what went wrong:
                     aaaa = dns.resolver.resolve(hostname, 'AAAA')
                     for rdata in aaaa:
                         address = ipaddress.ip_address(rdata.address)
-                        if any([address in net for net in cloudflare_ipv6_nets]):
+                        if any([address in net for net in sc.plugin_context['plugin.cloudflare']['cloudflare_ipv6_nets']]):
                             dns_points_at_cloudflare += 1
                             sc.console.print(
                                 f'{hostname} has [green]Cloudflare IP address {rdata.address}[/green]')
