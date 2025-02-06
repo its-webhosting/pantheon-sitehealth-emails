@@ -1,0 +1,26 @@
+[News.overages-suspended]
+order = "append"
+icon =  '&#x1F4EC;'  # memorandum
+message = '''
+<h3 style="padding-top: 0;">Overage charges still temporarily waived</h3>
+<p>Overage charge information is included below so you can manage your website plan and move to a different
+plan at the appropriate time, but <a href="https://docs.pantheon.io/release-notes/2024/08/overage-charges-updates">these
+overage charges will not be billed to your shortcode</a>.</p>
+<p><strong>Pantheon is likely to announce website traffic billing changes and traffic overage policies in the first
+half of 2025.</strong> To save money, ITS recommends that you optimize your website traffic as much as possible before
+then, even if your site is on a Basic or Performance Small plan.</p>
+<ul>
+<li>Make sure your site is fully behind Cloudflare and that Cloudflare caches all public pages and assets for one year.
+(Pantheon <i>does</i> meter and charge for traffic that Pantheon serves from its CDN and caches.)</li>
+<li>Cloudflare will also block malicious activity, including login attempts, XML-RPC traffic, DoS and DDoS traffic,
+and break-in attempts that Pantheon would otherwise charge for.</li>
+<li>If your site has multiple domains and is not a multisite, make sure one domain is
+<a href="https://docs.pantheon.io/guides/redirect/primary-domain">set as Primary</a>.
+This will increase your site's Cloudflare cache hit ratio.</li>
+<li>If you have a Drupal website,
+<a href="https://acquia.my.site.com/s/article/4408794498199-Block-excessive-crawling-of-Drupal-Views-or-search-results">
+block excessive crawling of Drupal Views search result pages</a>. (Additional information
+<a href="https://docs.pantheon.io/bots-and-indexing#robotstxt-with-composer-and-drupal">for Composer-managed
+Drupal sites</a>)</li>
+</ul>
+'''

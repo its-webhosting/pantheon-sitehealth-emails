@@ -8,6 +8,7 @@ dependencies = [
     "matplotlib",
     "Jinja2",
     "dnspython",
+    "html2text",
 ]
 
 [project.optional-dependencies]

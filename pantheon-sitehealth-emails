@@ -25,6 +25,7 @@ import io
 import re
 import copy
 import shlex
+import glob
 from smtplib import SMTP_SSL
 from typing import Any
 
@@ -33,6 +34,7 @@ from email.utils import make_msgid
 from email.policy import SMTP
 
 import dns.resolver
+import html2text
 
 import sqlalchemy as db
 from sqlalchemy import insert
@@ -611,6 +613,29 @@ def find_modules(type: str) -> list[str]:
     return modules
 
 
+text_maker = html2text.HTML2Text()
+# html2text --protect-links --images-to-alt --unicode-snob --reference-links --no-wrap-links --links-after-para --wrap-list-items --pad-tables file.html
+text_maker.protect_links = True
+text_maker.images_to_alt = True
+text_maker.unicode_snob = True
+text_maker.reference_links = True
+text_maker.wrap_links = False
+text_maker.links_after_para = True
+text_maker.wrap_list_items = True
+text_maker.pad_tables = True
+
+def add_news_item(news_item: dict, from_where: str) -> None:
+    if 'message' not in news_item:
+        sys.exit(f'News item in {from_where} is missing the "message" key.')
+    if 'text' not in news_item:
+        news_item['text'] = text_maker.handle(news_item['message'])
+    order = news_item['order'] if 'order' in news_item else 'append'
+    if order == 'prepend' or order == 'first':
+        sc.news.insert(0, news_item)
+    else:
+        sc.news.append(news_item)
+
+
 def main() -> None:
 
     sc.debug(f'Loading configuration from {sc.options.config}')
@@ -687,69 +712,22 @@ def main() -> None:
     # TODO: get password from config file, from secret or prompt for it
     smtp_connection.login(sc.options.smtp_username, os.environ['SMTP_PASSWORD'])
 
-    news = [
-        {
-            'type': 'news',
-            'icon': '&#x1F4EC;',  # memorandum
-            'message': f'''
-<h3 style="padding-top: 0;">Overage charges still temporarily waived</h3>
-<p>Overage charge information is included below so you can manage your website plan and move to a different
-plan at the appropriate time, but <a href="https://docs.pantheon.io/release-notes/2024/08/overage-charges-updates">these
-overage charges will not be billed to your shortcode</a>.</p>
-<p><strong>Pantheon is likely to announce website traffic billing changes and traffic overage policies in the first
-half of 2025.</strong> To save money, ITS recommends that you optimize your website traffic as much as possible before
-then, even if your site is on a Basic or Performance Small plan.</p>
-<ul>
-<li>Make sure your site is fully behind Cloudflare and that Cloudflare caches all public pages and assets for one year.
-(Pantheon <i>does</i> meter and charge for traffic that Pantheon serves from its CDN and caches.)</li>
-<li>Cloudflare will also block malicious activity, including login attempts, XML-RPC traffic, DoS and DDoS traffic,
-and break-in attempts that Pantheon would otherwise charge for.</li>
-<li>If your site has multiple domains and is not a multisite, make sure one domain is
-<a href="https://docs.pantheon.io/guides/redirect/primary-domain">set as Primary</a>.
-This will increase your site's Cloudflare cache hit ratio.</li>
-<li>If you have a Drupal website,
-<a href="https://acquia.my.site.com/s/article/4408794498199-Block-excessive-crawling-of-Drupal-Views-or-search-results">
-block excessive crawling of Drupal Views search result pages</a>. (Additional information
-<a href="https://docs.pantheon.io/bots-and-indexing#robotstxt-with-composer-and-drupal">for Composer-managed
-Drupal sites</a>)</li>
-</ul>
-''',
-            'text': f'''
-=== Overage charges still temporarily waived ===
-
-<Overage charge information is included below so you can manage your
-website plan and move to a different plan at the appropriate time,
-but these overage charges will not be billed to your shortcode.
-
-<https://docs.pantheon.io/release-notes/2024/08/overage-charges-updates>
-
-Pantheon is likely to announce website traffic billing changes and
-traffic overage policies in the first half of 2025. To save money,
-ITS recommends that you optimize your website traffic as much as
-possible before then, even if your site is on a Basic or Performance
-Small plan.
-
-* Make sure your site is fully behind Cloudflare and that Cloudflare
-caches all public pages and assets for one year. (Pantheon DOES meter
-and charge for traffic that Pantheon serves from its CDN and caches.)
-
-* Cloudflare will also block malicious activity, including login
-attempts, XML-RPC traffic, DoS and DDoS traffic, and break-in attempts
-that Pantheon would otherwise charge for.
-
-* If your site has multiple domains and is not a multisite, make sure
-one domain is set as Primary. This will improve your site's
-Cloudflare cache hit ratio.
-<https://docs.pantheon.io/guides/redirect/primary-domain>
-
-* For Drupal websites, block excessive crawling of Drupal Views
-search result pages
-<https://acquia.my.site.com/s/article/4408794498199-Block-excessive-crawling-of-Drupal-Views-or-search-results>
-Additional information for Composer-managed Drupal sites:
-<https://docs.pantheon.io/bots-and-indexing#robotstxt-with-composer-and-drupal>
-''',
-        }
-    ]
+    if 'News' in sc.config:
+        for news_item_name in sc.config['News'].keys():
+            add_news_item(
+                sc.config['News'][news_item_name],
+                f'{news_item_name} in configuration file {sc.options.config}'
+            )
+    for filename in sorted(glob.glob('news/*.toml')):
+        with open(filename, 'rb') as f:
+            n = tomllib.load(f)
+            if 'News' not in n:
+                sys.exit(f'News item in {filename} is missing the "News" key.')
+            for news_item_name in n['News'].keys():
+                add_news_item(n['News'][news_item_name], f'filename {filename}')
+    if sc.options.verbose:
+        sc.debug('[bold magenta]=== News:')
+        pprint(sc.news)
 
     for plan in sc.config['Pantheon']['plan_info']:
         upgrade_to = sc.config['Pantheon']['plan_info'][plan]['upgrade_to']
@@ -1966,7 +1944,6 @@ at the moment, it should be fixed to avoid possible future problems:
             })
 
         sc.debug('===== Notices:\n', site_notices)
-        sc.debug('===== News:', news)
 
         if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
             r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
@@ -2014,7 +1991,7 @@ at the moment, it should be fixed to avoid possible future problems:
             estimate_start_date=estimate_start_date.strftime('%B %e, %Y'),
             estimate_end_date=estimate_end_date.strftime('%B %e, %Y'),
             notices=sorted_notices,
-            news=news,
+            news=sc.news,
             end_of_contract_year=end_of_contract_year,
             banner_cid=banner_cid[1:-1],
             chart_cid=chart_cid[1:-1]

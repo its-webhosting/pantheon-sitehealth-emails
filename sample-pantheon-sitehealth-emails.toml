@@ -110,3 +110,15 @@ enabled = false
 # AWS_DEFAULT_REGION are not set.
 profile = "webhosting"
 default_region = "us-east-1"
+
+
+[News]
+# News items can go here and/or in *.toml file(s) in the news directory.
+#
+#[News.support-page-improvements]
+#order = "prepend"
+#icon =  '&#x1F4EC;'  # memorandum
+#message = '''
+#<h3 style="padding-top: 0;">U-M Pantheon support page improvements</h3>
+#<p>The page describing <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">how to get support for U-M Pantheon</a> has been improved and expanded.  Check it out!</p>
+#'''
