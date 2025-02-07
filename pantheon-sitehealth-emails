@@ -34,7 +34,6 @@ from email.utils import make_msgid
 from email.policy import SMTP
 
 import dns.resolver
-import html2text
 
 import sqlalchemy as db
 from sqlalchemy import insert
@@ -613,29 +612,6 @@ def find_modules(type: str) -> list[str]:
     return modules
 
 
-text_maker = html2text.HTML2Text()
-# html2text --protect-links --images-to-alt --unicode-snob --reference-links --no-wrap-links --links-after-para --wrap-list-items --pad-tables file.html
-text_maker.protect_links = True
-text_maker.images_to_alt = True
-text_maker.unicode_snob = True
-text_maker.reference_links = True
-text_maker.wrap_links = False
-text_maker.links_after_para = True
-text_maker.wrap_list_items = True
-text_maker.pad_tables = True
-
-def add_news_item(news_item: dict, from_where: str) -> None:
-    if 'message' not in news_item:
-        sys.exit(f'News item in {from_where} is missing the "message" key.')
-    if 'text' not in news_item:
-        news_item['text'] = text_maker.handle(news_item['message'])
-    order = news_item['order'] if 'order' in news_item else 'append'
-    if order == 'prepend' or order == 'first':
-        sc.news.insert(0, news_item)
-    else:
-        sc.news.append(news_item)
-
-
 def main() -> None:
 
     sc.debug(f'Loading configuration from {sc.options.config}')
@@ -650,6 +626,12 @@ def main() -> None:
 
     sc.debug(f'Doing pre-setup configuration substitutions')
     sc.config = process_config(sc.config)
+
+    sc.debug(f'[bold magenta]=== Loading checks:')
+    for check_name in find_modules('check'):
+        sc.debug(f'Loading check: {check_name}')
+        module = importlib.import_module(check_name)
+        sc.check[check_name] = module
 
     # Validate and process arguments
     if sc.options.create_tables:
@@ -667,10 +649,7 @@ def main() -> None:
     if not os.path.exists('build'):
         os.makedirs('build')
 
-    sc.debug('[bold magenta]=== Running hook "setup":')
-    for h in sc.hooks['setup']:
-        sc.debug (f'setup hook: {h['name']}')
-        h['func']()
+    sc.invoke_hooks('setup')
 
     sc.debug(f'Doing post-setup configuration substitutions')
     sc.config = process_config(sc.config)
@@ -714,7 +693,7 @@ def main() -> None:
 
     if 'News' in sc.config:
         for news_item_name in sc.config['News'].keys():
-            add_news_item(
+            sc.add_news_item(
                 sc.config['News'][news_item_name],
                 f'{news_item_name} in configuration file {sc.options.config}'
             )
@@ -724,7 +703,7 @@ def main() -> None:
             if 'News' not in n:
                 sys.exit(f'News item in {filename} is missing the "News" key.')
             for news_item_name in n['News'].keys():
-                add_news_item(n['News'][news_item_name], f'filename {filename}')
+                sc.add_news_item(n['News'][news_item_name], f'filename {filename}')
     if sc.options.verbose:
         sc.debug('[bold magenta]=== News:')
         pprint(sc.news)
@@ -895,6 +874,12 @@ and to find out what went wrong:
                       f'between {start_date} and {end_date}:', level=2)
         # for row in results:
         #    sc.debug(row, level=2)
+
+        site_context = {
+            'site': site,
+            'notices': site_notices,
+        }
+        sc.invoke_hooks('check', site_context)
 
         # Query Pantheon for the site's domains
         # TODO: check domains for site

@@ -48,6 +48,8 @@ def setup_portal_db():
                 portal_plan_info[plan['portal_plan_name']]['cost'] = str(plan['annual_plan_charge'])
             sc.config['Pantheon']['plan_sku_to_name'][plan['pantheon_plan_sku']] = plan['portal_plan_name']
 
+        sc.invoke_hooks('setup.umich.portal', connection)
+
     portal_db_engine.dispose()
 
     sc.config['UMich']['portal']['sites'] = portal_sites
