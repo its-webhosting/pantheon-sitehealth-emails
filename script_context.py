@@ -63,7 +63,7 @@ text_maker.pad_tables       = True
 
 def add_news_item(news_item: dict, from_where: str = 'check') -> None:
     if 'message' not in news_item:
-        sys.exit(f'News item in {from_where} is missing the "message" key.') \
+        sys.exit(f'News item in {from_where} is missing the "message" key.')
     if 'icon' not in news_item:
         news_item['icon'] = icon[news_item['type']]
     if 'text' not in news_item:

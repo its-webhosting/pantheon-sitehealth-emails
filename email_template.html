@@ -2,7 +2,7 @@
 <html lang="en">
 <head><META http-equiv="Content-Type" content="text/html;"><meta content="width=device-width, initial-scale=1" name="viewport"/><meta content="IE=edge" http-equiv="X-UA-Compatible"/><meta name="x-apple-disable-message-reformatting"/>
 	<title>{{ subject }}</title>
-	<style type="text/css">
+	<style>
   h1, h2, h3, h4 {
     font-family: Roboto, Arial, Helvetica, sans-serif;
     line-height: 1.15;
@@ -30,7 +30,6 @@ img.chart_image {
 	display: block;
 }
 #templateBody { width: 100%; }
-#templateFooter { width: 100%; }
 td { font-size: 11pt; }
 h1 { font-size: 21pt; }
 h2 { font-size: 17pt; }
@@ -244,8 +243,7 @@ h3 { font-size: 15pt; }
 	</style>
 </head>
 <body bgcolor="#ffffff">
-<center>
-<table align="center" border="0" cellpadding="0" cellspacing="0" height="100%" id="bodyTable" width="100%">
+<table align="center" border="0" cellpadding="0" cellspacing="0" id="bodyTable" width="100%">
 	<tbody>
 		<tr>
 			<td align="center" id="bodyCell" valign="top">
@@ -257,18 +255,12 @@ h3 { font-size: 15pt; }
 							<tbody>
 								<tr>
 									<td class="headerContainer" valign="top">
-									<table border="0" cellpadding="0" cellspacing="0" width="100%">
+									<table border="0" cellpadding="0" cellspacing="30" width="100%">
 										<tbody>
 											<tr>
-												<td valign="top"><!-- banner image -->
-												<table align="left" border="0" cellpadding="0" cellspacing="30" width="100%">
-													<tbody>
-														<tr>
-															<td valign="top"><a href="https://its.umich.edu/" target="_blank"><img alt="U-M Information and Technology Services" class="banner_image" src="cid:{{banner_cid}}" style="display:block;" width="610px" /></a></td>
-														</tr>
-													</tbody>
-												</table>
-												</td>
+                                                <td valign="top">
+                                                    <a href="https://its.umich.edu/" target="_blank"><img alt="U-M Information and Technology Services" class="banner_image" src="cid:{{banner_cid}}" style="display:block;" width="610px" /></a>
+                                                </td>
 											</tr>
 										</tbody>
 									</table>
@@ -280,22 +272,18 @@ h3 { font-size: 15pt; }
 					</tr>
 					<tr>
 						<td align="center" valign="top">
-						<table bgcolor="#ffffff" border="0" cellpadding="0" cellspacing="0" id="templateBody" width="100%">
+						<table bgcolor="#ffffff" border="0" cellpadding="0" cellspacing="30" id="templateBody" width="100%">
 							<tbody>
 								<tr>
 									<td valign="top">
-									<table border="0" cellpadding="0" cellspacing="30" width="100%">
+									<table border="0" cellpadding="0" cellspacing="0" width="100%">
 										<tbody>
 											<tr>
-												<td valign="top">
-												<table border="0" cellpadding="0" cellspacing="0" width="100%">
-													<tbody>
-														<tr>
-															<td style="font-size:11pt; font-family:Roboto,Arial,Helvetica,sans-serif; color:#333333; line-height:1.45;" valign="top">
+												<td valign="top" style="font-size:11pt; font-family:Roboto,Arial,Helvetica,sans-serif; color:#333333; line-height:1.45;">
 <!-- Start email content -->
 
 {% if dry_run_recipient != '' %}
-<p><span style="font-weight: 700; background-color: palegreen;">[ This is a test report that will actually go to {{dry_run_recipient}} when it is sent for real. ]</span></p>
+<p><span style="font-weight: 700; background-color: palegreen;"> [ This is a test report that will actually go to {{dry_run_recipient}} when it is sent for real. ] </span></p>
 {% endif %}
 
 <p>You are receiving this email because you own a <a href="https://its.umich.edu/computing/web-mobile/pantheon">U-M Pantheon website</a>, <strong>{{site_name}}</strong>, at <a href="{{site_url}}">{{site_url}}</a>.  {%if end_of_contract_year %}<span style="font-weight: bold; background-color: #FFE684;">The deadline for moving this website to a lower Pantheon rate plan to save money, or for deleting the website, is June 30.</span>  On July 1, you will be charged the annual fee for the Pantheon plan your site is using.{% endif %} You will {%if end_of_contract_year %}also{% endif %} receive this report at the start of each month to help you keep track of what is happening with your website.</p>
@@ -442,14 +430,6 @@ University of Michigan ITS Web Hosting Team<br />
 <a href="mailto:webmaster@umich.edu">webmaster@umich.edu</a>
 
 <!-- End email content -->
-																		</td>
-																	</tr>
-																</tbody>
-															</table>
-															</td>
-														</tr>
-													</tbody>
-												</table>
 												</td>
 											</tr>
 										</tbody>
@@ -466,7 +446,6 @@ University of Michigan ITS Web Hosting Team<br />
 		</tr>
 	</tbody>
 </table>
-</center>
 </body>
 </html>
 
