@@ -11,8 +11,7 @@ config      = {}  # the parsed pantheon-sitehealth-emails.toml file
 plugin      = {}  # imported plugins (Python modules)
 check       = {}  # imported site checks (Python modules)
 news        = []  # list of news items to be displayed
-sections    = []  # list of sections in the email
-attachments = []  # list of attachments to be included in the email
+
 
 console = Console()
 

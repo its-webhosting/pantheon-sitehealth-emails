@@ -562,8 +562,9 @@ def config_substitution(expr: str, path) -> str:
 
     if best_match_score == argc:
         func_args = [best_match_args_map[arg] for arg in best_match['func_args']]
-        sc.debug('args:')
-        pprint(func_args)
+        if sc.options.verbose >=2:
+            sc.debug('args:')
+            pprint(func_args)
         result = best_match['func'](*func_args)
         if result is None:
             sys.exit(1)
@@ -876,8 +877,10 @@ and to find out what went wrong:
         #    sc.debug(row, level=2)
 
         site_context = {
-            'site': site,
-            'notices': site_notices,
+            'site':         site,
+            'notices':      site_notices,
+            'sections':     [],  # list of sections in the email
+            'attachments':  [],  # list of attachments to be included in the email
         }
         sc.invoke_hooks('check', site_context)
 
@@ -1929,7 +1932,7 @@ at the moment, it should be fixed to avoid possible future problems:
             })
 
         sc.debug('===== Notices:\n', site_notices)
-        sc.debug('===== Sections:\n', sc.sections)
+        sc.debug('===== Sections:\n', site_context['sections'])
 
         if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
             r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
@@ -1978,7 +1981,7 @@ at the moment, it should be fixed to avoid possible future problems:
             estimate_end_date=estimate_end_date.strftime('%B %e, %Y'),
             notices=sorted_notices,
             news=sc.news,
-            sections=sc.sections,
+            sections=site_context['sections'],
             end_of_contract_year=end_of_contract_year,
             banner_cid=banner_cid[1:-1],
             chart_cid=chart_cid[1:-1],
@@ -2045,7 +2048,7 @@ at the moment, it should be fixed to avoid possible future problems:
             disposition='inline',
         )
 
-        for attachment in sc.attachments:
+        for attachment in site_context['attachments']:
             msg.get_payload()[1].add_related(
                 attachment['data'],
                 maintype=attachment['maintype'],

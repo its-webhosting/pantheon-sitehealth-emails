@@ -203,7 +203,7 @@ def check_sitelens_scores(site_context) -> None:
 
         image = create_gauge_image(score[key]['value'], color, score[key]['label'])
         image_cid = make_msgid(domain='webservices.umich.edu')
-        sc.attachments.append({
+        site_context['attachments'].append({
             'data': image,
             'maintype': 'image',
             'subtype': 'png',
@@ -231,7 +231,7 @@ def check_sitelens_scores(site_context) -> None:
     last_run = timestamp.strftime('%B %e, %Y, %I:%M %p')
     text += f'as of {last_run}.\n\n'
 
-    sc.sections.append({
+    site_context['sections'].append({
         'heading': 'SiteLens',
         'content': f'''
 <table role="presentation" border="0" cellpadding="0" cellspacing="30">
