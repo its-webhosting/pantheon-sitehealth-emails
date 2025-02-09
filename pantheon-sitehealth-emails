@@ -1527,8 +1527,8 @@ support through either Pantheon or ITS.
             downgrade_to = plan_info[plan['plan']]['downgrade_to']
             if downgrade_to is not None:
                 downgrade_text = {}
-                if not created_downgrade_labels:
-                    ending_downgrade_to = plan_info[plan_over_time[-1]['plan']]['downgrade_to']
+                ending_downgrade_to = plan_info[plan_over_time[-1]['plan']]['downgrade_to']
+                if not created_downgrade_labels and ending_downgrade_to is not None:
                     ending_downgrade_at = plan_info[ending_downgrade_to]['upgrade_at']
                     downgrade_text['label'] = 'downgrade to lower plan at ' + f'{ending_downgrade_at:,}'
                     created_downgrade_labels = True
