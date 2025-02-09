@@ -6,11 +6,13 @@ from rich.console import Console
 import html2text
 
 
-options = {}  # the parsed command line options
-config  = {}  # the parsed pantheon-sitehealth-emails.toml file
-plugin  = {}  # imported plugins (Python modules)
-check   = {}  # imported site checks (Python modules)
-news    = []  # list of news items to be displayed
+options     = {}  # the parsed command line options
+config      = {}  # the parsed pantheon-sitehealth-emails.toml file
+plugin      = {}  # imported plugins (Python modules)
+check       = {}  # imported site checks (Python modules)
+news        = []  # list of news items to be displayed
+sections    = []  # list of sections in the email
+attachments = []  # list of attachments to be included in the email
 
 console = Console()
 
@@ -61,9 +63,25 @@ text_maker.links_after_para = True
 text_maker.wrap_list_items  = True
 text_maker.pad_tables       = True
 
+def add_notice(notice: dict, site_context: dict) -> None:
+    if 'message' not in notice:
+        console.print(f'[bold red]ERROR: Notice is missing the "message" key: {notice}')
+        sys.exit(1)
+    if 'icon' not in notice:
+        notice['icon'] = icon[notice['type']]
+    if 'text' not in notice:
+        notice['text'] = text_maker.handle(notice['message'])
+    order = notice['order'] if 'order' in notice else 'append'
+    if order == 'prepend' or order == 'first':
+        site_context['notices'].insert(0, notice)
+    else:
+        site_context['notices'].append(notice)
+
+
 def add_news_item(news_item: dict, from_where: str = 'check') -> None:
     if 'message' not in news_item:
-        sys.exit(f'News item in {from_where} is missing the "message" key.')
+        console.print(f'ERROR: News item in {from_where} is missing the "message" key: {news_item}')
+        sys.exit(1)
     if 'icon' not in news_item:
         news_item['icon'] = icon[news_item['type']]
     if 'text' not in news_item:

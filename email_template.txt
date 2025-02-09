@@ -40,6 +40,12 @@ and obtain support through either Pantheon or ITS
 
 {% endfor %}
 {% endif %}
+{% for section in sections %}
+=== {{section.heading}}
+
+{{section.content}}
+
+{% endfor %}
 === PANTHEON PLAN RECOMMENDATION
 
 Pantheon website name:     {{site_name}}

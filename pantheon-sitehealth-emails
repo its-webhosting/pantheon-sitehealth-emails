@@ -1929,6 +1929,7 @@ at the moment, it should be fixed to avoid possible future problems:
             })
 
         sc.debug('===== Notices:\n', site_notices)
+        sc.debug('===== Sections:\n', sc.sections)
 
         if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
             r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
@@ -1977,9 +1978,10 @@ at the moment, it should be fixed to avoid possible future problems:
             estimate_end_date=estimate_end_date.strftime('%B %e, %Y'),
             notices=sorted_notices,
             news=sc.news,
+            sections=sc.sections,
             end_of_contract_year=end_of_contract_year,
             banner_cid=banner_cid[1:-1],
-            chart_cid=chart_cid[1:-1]
+            chart_cid=chart_cid[1:-1],
         )
 
         with open('email_template.html', 'r', encoding='utf-8') as f:
@@ -2024,9 +2026,34 @@ at the moment, it should be fixed to avoid possible future problems:
 
         msg.set_content(text_body, subtype='plain', charset='utf-8')
         msg.add_alternative(html_body, subtype='html', charset='utf-8')
-        msg.get_payload()[1].add_related(wordmark_image, 'image', 'png', cid=banner_cid, filename='its-banner.png')
-        msg.get_payload()[1].add_related(chart_image, 'image', 'png', cid=chart_cid, disposition='inline',
-                                         filename=f'pantheon-traffic_{site["name"]}_{end_date.strftime("%Y%m%d")}.png')
+
+        msg.get_payload()[1].add_related(
+            wordmark_image,
+            maintype='image',
+            subtype='png',
+            filename='pantheon-traffic-email-banner.png',
+            cid=banner_cid,
+            disposition='inline',
+        )
+
+        msg.get_payload()[1].add_related(
+            chart_image,
+            maintype='image',
+            subtype='png',
+            filename=f'pantheon-traffic_{site["name"]}_{end_date.strftime("%Y%m%d")}.png',
+            cid=chart_cid,
+            disposition='inline',
+        )
+
+        for attachment in sc.attachments:
+            msg.get_payload()[1].add_related(
+                attachment['data'],
+                maintype=attachment['maintype'],
+                subtype=attachment['subtype'],
+                filename=attachment['filename'],
+                cid=attachment['cid'],
+                disposition=attachment['disposition'],
+            )
 
         with open(f'build/{site["name"]}.eml', 'wb') as f:
             f.write(msg.as_bytes(policy=SMTP))

@@ -308,6 +308,11 @@ h3 { font-size: 15pt; }
 </div>
 {% endif %}
 
+{% for section in sections %}
+  <h1>{{section.heading}}</h1>
+  {{section.content}}
+{% endfor %}
+
 <h1>Pantheon plan recommendation</h1>
   <table style="border: 0; width: max-content; font-weight: bold;">
     <tr><td>Pantheon website name:</td><td></td><td>{{site_name}}</td></tr>
