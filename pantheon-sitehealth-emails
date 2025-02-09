@@ -15,6 +15,7 @@ import tomllib
 import os
 import stat
 import sys
+import time
 import json
 import subprocess
 import datetime
@@ -613,6 +614,13 @@ def find_modules(type: str) -> list[str]:
     return modules
 
 
+def smtp_login() -> SMTP_SSL:
+    # TODO: get password from config file, from secret or prompt for it
+    smtp_connection = SMTP_SSL('smtp.mail.umich.edu', port=465)
+    smtp_connection.login(sc.options.smtp_username, os.environ['SMTP_PASSWORD'])
+    return smtp_connection
+
+
 def main() -> None:
 
     sc.debug(f'Loading configuration from {sc.options.config}')
@@ -688,9 +696,7 @@ def main() -> None:
 
     if sc.options.smtp_username == '':
         sys.exit("--smtp-username not specified and USER environment variable not set.")
-    smtp_connection = SMTP_SSL('smtp.mail.umich.edu', port=465)
-    # TODO: get password from config file, from secret or prompt for it
-    smtp_connection.login(sc.options.smtp_username, os.environ['SMTP_PASSWORD'])
+    smtp_connection = smtp_login()
 
     if 'News' in sc.config:
         for news_item_name in sc.config['News'].keys():
@@ -729,7 +735,8 @@ def main() -> None:
     emails_sent = 0
     site_savings = []
     all_warnings = []
-    cloudflare_enabled = 'plugins.cloudflare' in sc.plugin
+    cloudflare_enabled = 'plugin.cloudflare' in sc.plugin
+    sc.debug('Cloudflare is ' + ('[bold green]enabled' if cloudflare_enabled else '[bold red]DISABLED'))
 
     for site_id in sites:
         site = sites[site_id]
@@ -1188,7 +1195,7 @@ plugin and remove {display_name}.
                             site['name'],
                             mods,
                             'cloudflare',
-                            'CloudFlare',
+                            'CloudFlare', # note: capital F here
                             'https://documentation.its.umich.edu/node/4242',
                             'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
                         )
@@ -2062,8 +2069,16 @@ at the moment, it should be fixed to avoid possible future problems:
             f.write(msg.as_bytes(policy=SMTP))
 
         smtp_connection.send_message(msg)
-
         emails_sent += 1
+        # TODO: add feature to send mails using SendGrid.
+        # This script can run longer than some SMTP servers will allow a connection to be open.
+        if (emails_sent % 20) == 0:
+            if sc.options.verbose:
+                sc.debug(f'[bold yellow]{emails_sent} emails sent, closing and reopening the SMTP connection.')
+            smtp_connection.quit()
+            time.sleep(3)
+            smtp_connection = smtp_login()
+
         all_warnings += [n['csv'] for n in site_notices]
 
         plt.close(fig)  # needed to free up memory when sc.options.all_sites is True

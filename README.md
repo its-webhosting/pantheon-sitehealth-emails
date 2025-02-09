@@ -148,6 +148,8 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
 
+* Check for out-of-date WordPress Plugins, Drupal modules, and themes.
+
 * Send daily traffic alerts
   * A comparison of the site's month-to-date visits count compared to a prorated version of that site's monthly limit. If they are at or below zero at any point in the month, flag for extra visibility.
   * A comparison of the previous day's visits to the visits from the day before that. If the percentage increase is high AND the visits count is high enough, flag for extra visibility. This number is a bit less useful, as a very low-traffic site can see a 200-300% increase from day-to-day that is effectively meaningless (e.g. 60 visits instead of 20).
@@ -161,6 +163,10 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 * Measure PHP memory usage and factor that into plan recommendations
 
 * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
+
+* Add security score to SiteLens.  Include SSL Labs, securityheaders.com / Mozilla Observatory API, pending updates, best practices, check internals of site (filesystem config, ...)
+
+* Add a Cloudflare score to SiteLens: DNS, cache headers for pages/assets/api, check internals (SSL Full/Strict, WAF not disabled, ...)
 
 * Attach data as CSV
 

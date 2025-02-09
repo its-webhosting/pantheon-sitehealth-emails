@@ -98,8 +98,8 @@ def check_sitelens_urls(site_context) -> None:
 
     portal_site_id = portal_sites[site_name]['id']
     if portal_site_id not in sitelens_configured_scans_by_site:
-        sc.console.print(f'[bold red]ERROR: Site {site_name} has no SiteLens configurations, this should not happen')
-        sys.exit(1)
+        sc.console.print(f'[bold red]Site {site_name} has no SiteLens configurations, skipping SiteLens checks')
+        return
 
     num_paths_configured = len(sitelens_configured_scans_by_site[portal_site_id])
     if num_paths_configured >= 4:
@@ -155,8 +155,8 @@ def check_sitelens_scores(site_context) -> None:
 
     portal_site_id = portal_sites[site_name]['id']
     if portal_site_id not in sitelens_configured_scans_by_site:
-        sc.console.print(f'[bold red]ERROR: Site {site_name} has no SiteLens configurations, this should not happen')
-        sys.exit(1)
+        sc.console.print(f'[bold red]Site {site_name} has no SiteLens configurations, skipping SiteLens checks')
+        return
 
     paths = sitelens_configured_scans_by_site[portal_site_id]
     sc.debug(f'Checking SiteLens scores for {site_name} and paths configuration {paths}')
@@ -193,7 +193,7 @@ def check_sitelens_scores(site_context) -> None:
 
     for key in score_ordering:
 
-        score[key]['value'] = int(100 * score[key]['value'] / scan_count)
+        score[key]['value'] = int(round(100 * score[key]['value'] / scan_count))
         if score[key]['value'] >= GOOD_SCORE_MIN:
             color = GOOD_SCORE_COLOR
         elif score[key]['value'] >= OK_SCORE_MIN:
