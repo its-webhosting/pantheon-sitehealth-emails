@@ -50,13 +50,19 @@ pip install .[mysql,aws,cloudflare]  # remove from the list the features you won
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
 ```
 
-Get a copy of your institution's `pantheon-sitehealth-emails.toml` file and put it in the same directory as the script.  If your institution does not have one, then follow the steps in the section [One-time per-institution setup](#one-time-per-institution-setup) below.
+Get a copy of your institution's `pantheon-sitehealth-emails.toml` file and put it in the same directory as the script.  If your institution does not have one, then follow the steps in the section [One-time per-institution setup](#one-time-per-institution-setup) below.  For University of Michigan users,
+```bash
+git clone git@github.com:its-webhosting/pantheon-sitehealth-emails-config.git  # private repo
+ln -s pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml .
+```
 
 
 ## Usage
 
 ```bash
-git pull  # make sure you have the latest version
+git pull && \
+    [ -d pantheon-sitehealth-emails-config ] && \
+    ( cd pantheon-sitehealth-emails-config ; git pull ) # make sure you have the latest version
 source venv/bin/activate  # if you haven't already
 
 export CLOUDFLARE_EMAIL="bjensen@umich.edu"  # set to your email address
@@ -149,6 +155,7 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
 
 * Check for out-of-date WordPress Plugins, Drupal modules, and themes.
+  * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
 
 * Send daily traffic alerts
   * A comparison of the site's month-to-date visits count compared to a prorated version of that site's monthly limit. If they are at or below zero at any point in the month, flag for extra visibility.

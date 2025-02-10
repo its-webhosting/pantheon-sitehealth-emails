@@ -1,10 +1,12 @@
 # pantheon-sitehealth-emails script stuff
 /pantheon-sitehealth-emails.toml
+/pantheon-sitehealth-emails-config
 /local.toml
 /database.db
 /news/*.toml
 /build/
 /tmp/
+*.csv
 
 # Editor backup and temporary files
 .*.swp

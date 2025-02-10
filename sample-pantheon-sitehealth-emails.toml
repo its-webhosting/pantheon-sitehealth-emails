@@ -113,7 +113,8 @@ default_region = "us-east-1"
 
 
 [News]
-# News items can go here and/or in *.toml file(s) in the news directory.
+# News items can go in this section here and/or in *.toml files in the directory below.
+folder = "./news"
 #
 #[News.support-page-improvements]
 #order = "prepend"

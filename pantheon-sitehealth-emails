@@ -700,17 +700,22 @@ def main() -> None:
 
     if 'News' in sc.config:
         for news_item_name in sc.config['News'].keys():
+            if not isinstance(news_item_name, dict):
+                continue  # skip News configuration directives
             sc.add_news_item(
                 sc.config['News'][news_item_name],
                 f'{news_item_name} in configuration file {sc.options.config}'
             )
-    for filename in sorted(glob.glob('news/*.toml')):
+    for filename in sorted(glob.glob(f'{sc.config["News"]["folder"]}/*.toml')):
         with open(filename, 'rb') as f:
             n = tomllib.load(f)
             if 'News' not in n:
                 sys.exit(f'News item in {filename} is missing the "News" key.')
             for news_item_name in n['News'].keys():
-                sc.add_news_item(n['News'][news_item_name], f'filename {filename}')
+                sc.add_news_item(
+                    n['News'][news_item_name],
+                    f'{news_item_name} in file {filename}'
+                )
     if sc.options.verbose:
         sc.debug('[bold magenta]=== News:')
         pprint(sc.news)
