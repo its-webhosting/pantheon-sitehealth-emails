@@ -311,6 +311,7 @@ def wp_error(site: str, code: str, message: str, errors: str) -> list[dict]:
         'type': 'alert',
         'icon': '&#x1F6A8;',  # police car light
         'csv': f'{site},wp-error,{code},{json.dumps(errors).replace(',', '\\,')}',
+        'short': f'fix WP CLI error',
         'message': f'''
 <p>{html_message}
 <code>wp</code> (WP CLI) returned the following error:</p>
@@ -386,6 +387,7 @@ def drush_error(site: str, code: str, message: str, errors: str) -> list[dict]:
         'type': 'alert',
         'icon': '&#x1F6A8;',  # police car light
         'csv': f'{site},drush-error,{code},{json.dumps(errors).replace(',', '\\,')}',
+        'short': f'fix drush error',
         'message': f'''
 <p>{html_message}
 <code>drush</code> returned the following error:</p>
@@ -462,6 +464,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
             'type': 'warning',
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},not-installed,{name}',
+            'short': f'install the {name} plugin',
             'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be installed:</p><p>{reason}</p>',
             'text': f"The {display_name} WordPress plugin\n<{url}>\nneeds to be installed: {reason}",
         })
@@ -473,6 +476,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
             'type': 'info',
             'icon': '&#x1F50E;',  # magnifying glass
             'csv': f'{site},multiple-installed,{name}',
+            'short': f'plugin {name} installed multiple times',
             'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin is installed multiple times.</p>',
             'text': f"The {display_name} WordPress plugin\n<{url}>\nis installed multiple times.",
         })
@@ -484,6 +488,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
             'type': 'warning',
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},turned-off,{name}',
+            'short': f'activate plugin {name}',
             'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be activated:</p><p>{reason}</p>',
             'text': f"The {display_name} WordPress plugin\n<{url}>\nneeds to be activated: {reason}",
         })
@@ -502,6 +507,7 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
             'type': 'warning',
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},not-installed,{name}',
+            'short': f'install module {name}',
             'message': f'<p>The <a href="{url}">{display_name}</a> Drupal module needs to be installed:</p><p>{reason}</p>',
             'text': f"The {display_name} Drupal module\n<{url}>\nneeds to be installed: {reason}",
         })
@@ -514,6 +520,7 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
             'type': 'warning',
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},turned-off,{name}',
+            'short': f'enable module {name}',
             'message': f'<p>The <a href="{url}">{display_name}</a> Drupal module needs to be enabled:</p><p>{reason}</p>',
             'text': f"The {display_name} Drupal module\n<{url}>\nneeds to be enabled: {reason}",
         })
@@ -598,10 +605,10 @@ def process_config(data: Any, path="") -> Any:
     return data
 
 
-def find_modules(type: str) -> list[str]:
+def find_modules(module_type: str) -> list[str]:
     modules = []
     # find all non-empty regular files in/under the directory f"{type}" that are named "__init__.py":
-    for dirpath, dirs, files in os.walk(type, followlinks=True):
+    for dirpath, dirs, files in os.walk(module_type, followlinks=True):
         for file in files:
             if file == '__init__.py':
                 target = os.path.join(dirpath, file)
@@ -792,6 +799,7 @@ def main() -> None:
                 'type': 'alert',
                 'icon': '&#x1F6A8;',  # police car light
                 'csv': f'{site["name"]},frozen',
+                'short': 'unfreeze site',
                 'message': f'''
 <p>Website <strong>{site["name"]}</strong> is frozen!</p>
 <p><a href="https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing">
@@ -991,6 +999,7 @@ and to find out what went wrong:
                         'type': 'info',
                         'icon': '&#x1F50E;',  # magnifying glass
                         'csv': f'{site["name"]},no-primary-domain,',
+                        'short': f'set a primary domain',
                         'message': f'''
                     <p><strong>{site['name']}</strong>
                     <a href="https://dashboard.pantheon.io/sites/{site['id']}#live/DomainsHTTPS/list">
@@ -1022,6 +1031,7 @@ and to find out what went wrong:
                 'type': 'warning',
                 'icon': '&#x26A0;',  # warning sign
                 'csv': f'{site["name"]},not-behind-cloudflare,' + ','.join(not_behind_cloudflare),
+                'short': 'put domains behind Cloudflare',
                 'message': f'''
 <p>ITS strongly recommends you put the following domains behind Cloudflare to reduce Pantheon traffic and improve
 security.  Please refer to the <a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">
@@ -1046,6 +1056,7 @@ Please refer to the Cloudflare at U-M documentation
                 'type': 'alert',
                 'icon': '&#x1F6A8;',  # police car light
                 'csv': f'{site["name"]},not-in-dns,' + ','.join(not_in_dns),
+                'short': 'add domains to DNS',
                 'message': f'''
 <p><strong>{site["name"]}</strong> has domains that are not in DNS.  Please either remove these domains from
 the Pantheon live environment for <strong>{site["name"]}</strong>, or add them to DNS.</p>
@@ -1117,6 +1128,7 @@ remove these domains from the Pantheon live environment for
                             'type': 'info',
                             'icon': '&#x1F50E;',  # magnifying glass
                             'csv': f'{site["name"]},unsupported-turned-off,{name}',
+                            'short': f'delete inactive plugin {name}',
                             'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin is inactive but should be deleted:</p><p>{reason}</p>',
                             'text': f"The {display_name} WordPress plugin\n<{url}>\nis inactive but should be deleted: {reason}",
                         })
@@ -1125,6 +1137,7 @@ remove these domains from the Pantheon live environment for
                             'type': 'alert',
                             'icon': '&#x1F6A8;',  # police car light
                             'csv': f'{site["name"]},unsupported,{name}',
+                            'short': f'replace plugin {name} with umich-cloudflare',
                             'message': f'''
 <p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be replaced! It is unsupported and out of date.</p>
 <p>Please install the <a href="{url2}">University of Michigan: Cloudflare Cache</a> plugin and remove {display_name}.</p>
@@ -1152,6 +1165,7 @@ plugin and remove {display_name}.
                     'type': 'warning',
                     'icon': '&#x26A0;',  # warning sign
                     'csv': f'{site["name"]},no-favicon',
+                    'short': 'add favicon.ico file',
                     'message': f'<p><a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Put this site behind Cloudflare</a> or add a <a href="https://en.wikipedia.org/wiki/Favicon"><code>/code/favicon.ico</code> file</a> to lower Pantheon visitor numbers and increase the site\'s traffic capacity.</p>',
                     'text': f"Put this site behind Cloudflare\n<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>\nor add a /code/favicon.ico file\n<https://en.wikipedia.org/wiki/Favicon>\nto lower Pantheon visitor numbers and increase the amount of traffic the site can handle at any time.",
                 })
@@ -1251,6 +1265,7 @@ plugin and remove {display_name}.
                         'type': 'info',
                         'icon': '&#x1F50E;',  # magnifying glass
                         'csv': f'{site["name"]},updates-info,{num_updates},{oldest_update_days}',
+                        'short': f'{num_updates} pending updates',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending recent updates</a>.</p>
@@ -1280,6 +1295,7 @@ How to:
                         'type': 'warning',
                         'icon': '&#x26A0;',  # warning sign
                         'csv': f'{site["name"]},updates-warning,{num_updates},{oldest_update_days}',
+                        'short': f'{num_updates} pending updates',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
@@ -1311,6 +1327,7 @@ A variety of support options are available.
                         'type': 'alert',
                         'icon': '&#x1F6A8;',  # police car light
                         'csv': f'{site["name"]},updates-alert,{num_updates},{oldest_update_days}',
+                        'short': f'site out of date: {num_updates} pending updates',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
@@ -1817,6 +1834,7 @@ before June 30.
                             'type': 'alert',
                             'icon': '&#x1F6A8;',  # police car light
                             'csv': f'{site["name"]},its-will-change-plan,{site["plan_name"]},{site_recommended_plan},{savings:,.2f}',
+                            'short': f'plan change to {site_recommended_plan} scheduled',
                             'message': f'''
 <p>At 8 A.M. this Friday, June 28, ITS will move the <strong>{site["name"]}</strong> website from
 Pantheon's <strong>{site["plan_name"]}</strong> plan to <strong>{site_recommended_plan}</strong>.</p>
@@ -1856,6 +1874,7 @@ year without incurring a substantial financial penalty.
                         'type': 'info',
                         'icon': '&#x1F50E;',  # magnifying glass
                         'csv': f'{site["name"]},its-recommends-plan,{site["plan_name"]},{site_recommended_plan},{savings:,.2f}',
+                        'short': 'plan change recommended',
                         'message': f'''
 <p><a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">Moving <strong>{site["name"]}</strong>
 to Pantheon's <strong>{site_recommended_plan}</strong> plan</a> may save you up to <strong>${savings:,.2f}</strong>
@@ -1904,6 +1923,7 @@ be moved to a lower plan between June 16 - 30 each year.
                 'type': 'info',
                 'icon': '&#x1F50E;',  # magnifying glass
                 'csv': f'{site["name"]},wp-smell,{json.dumps(wp_smell).replace(',', '\\,')}',
+                'short': 'PHP code problems',
                 'message': f'''
 <p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site["name"]}</strong>.
 Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
@@ -1926,6 +1946,7 @@ the moment, it should be fixed to avoid possible future problems:
                 'type': 'info',
                 'icon': '&#x1F50E;',  # magnifying glass
                 'csv': f'{site["name"]},drush-smell,{json.dumps(drush_smell).replace(',', '\\,')}',
+                'short': 'PHP code problems',
                 'message': f'''
 <p>The <code>drush</code> command is reporting PHP code problems with <strong>{site["name"]}</strong>. Even
 if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
@@ -1955,17 +1976,19 @@ at the moment, it should be fixed to avoid possible future problems:
             recipients = ', '.join([site_team[team_member]['email'] for team_member in site_team])
 
         # Create email from template
-        subject = f'{site["name"]} Pantheon Traffic Report - {end_date.strftime('%b %e, %Y')}'
-        if its_downgrade_site:
-            subject = 'TIME SENSITIVE: ' + subject
-        elif any([n['type'] == 'alert' for n in site_notices]):
-            subject = 'ALERT: ' + subject
-        elif any([n['type'] == 'warning' for n in site_notices]):
-            subject = 'WARNING: ' + subject
-
         sorted_notices = [n for n in site_notices if n['type'] == 'alert'] + \
                          [n for n in site_notices if n['type'] == 'warning'] + \
                          [n for n in site_notices if n['type'] == 'info']
+        report = f'Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}'
+        subject = f'{site["name"]}: {report}'
+        if its_downgrade_site:
+            subject = f'Time Sensitive: {site["name"]}: plan change - {report}'
+        elif len(sorted_notices) > 0:
+            if sorted_notices[0]['type'] == 'alert':
+                subject = f'Action Required: {site["name"]}: {sorted_notices[0]['short']} - {report}'
+            elif sorted_notices[0]['type'] == 'warning':
+                subject = f'Action Recommended: {site["name"]}: {sorted_notices[0]['short']} - {report}'
+            # no subject prefix for info notices
 
         banner_cid = make_msgid(domain='webservices.umich.edu')
         chart_cid = make_msgid(domain='webservices.umich.edu')

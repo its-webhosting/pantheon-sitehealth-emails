@@ -110,6 +110,7 @@ def check_sitelens_urls(site_context) -> None:
     sc.add_notice({
         'type': 'info',
         'csv': f'{site_name},sitelens-url-paths,{num_paths_configured}',
+        'short': f'add paths to SiteLens',
         'message': f'''
 <p>To ensure accurate SiteLens reports, please
 <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/scan-configurations/">configure at least two

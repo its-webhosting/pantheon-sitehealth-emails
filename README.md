@@ -157,6 +157,8 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 * Check for out-of-date WordPress Plugins, Drupal modules, and themes.
   * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
 
+* Report on environment lock (no notice, just a report section)
+
 * Send daily traffic alerts
   * A comparison of the site's month-to-date visits count compared to a prorated version of that site's monthly limit. If they are at or below zero at any point in the month, flag for extra visibility.
   * A comparison of the previous day's visits to the visits from the day before that. If the percentage increase is high AND the visits count is high enough, flag for extra visibility. This number is a bit less useful, as a very low-traffic site can see a 200-300% increase from day-to-day that is effectively meaningless (e.g. 60 visits instead of 20).
@@ -171,7 +173,7 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 
-* Add security score to SiteLens.  Include SSL Labs, securityheaders.com / Mozilla Observatory API, pending updates, best practices, check internals of site (filesystem config, ...)
+* Add security score to SiteLens.  Include Cloudflare Radar, SSL Labs, securityheaders.com / Mozilla Observatory API, pending updates, best practices, check internals of site (filesystem config, ...)
 
 * Add a Cloudflare score to SiteLens: DNS, cache headers for pages/assets/api, check internals (SSL Full/Strict, WAF not disabled, ...)
 
