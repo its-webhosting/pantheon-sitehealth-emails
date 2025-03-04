@@ -979,6 +979,10 @@ and to find out what went wrong:
 
             custom_domains = [d for d in domains.keys() if domains[d]['type'] == 'custom']
             primary_domain = [d for d in custom_domains if domains[d]['primary']]
+            if len(custom_domains) == 0:
+                sc.console.print(f'[bold red]ERROR: {site["name"]} has no custom domains connected, skipping.')
+                all_warnings.append(f'{site["name"]},,no-domains-connected')
+                continue
             if len(custom_domains) > 1 and len(primary_domain) == 0 and site['framework'] != 'wordpress_network':
                 is_multisite = False
                 if site['framework'].startswith('drupal'):
