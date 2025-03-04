@@ -1972,9 +1972,11 @@ at the moment, it should be fixed to avoid possible future problems:
             r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
             r = r.replace(' ', '.')
             recipients = f'{r}@umich.edu, {r}-owners@umich.edu'
+            contacts = f'{r}@umich.edu'
         else:
             site_team = terminus('site:team:list', site_id)
             recipients = ', '.join([site_team[team_member]['email'] for team_member in site_team])
+            contacts = contacts.replace(',', '')
 
         # Create email from template
         sorted_notices = [n for n in site_notices if n['type'] == 'alert'] + \
@@ -2108,7 +2110,10 @@ at the moment, it should be fixed to avoid possible future problems:
             time.sleep(3)
             smtp_connection = smtp_login()
 
-        all_warnings += [n['csv'] for n in site_notices]
+        for n in site_notices:
+            fields = n['csv'].split(',')
+            fields.insert(1, contacts)
+            all_warnings.append(','.join(fields))
 
         plt.close(fig)  # needed to free up memory when sc.options.all_sites is True
 
