@@ -1265,7 +1265,7 @@ plugin and remove {display_name}.
                         'type': 'info',
                         'icon': '&#x1F50E;',  # magnifying glass
                         'csv': f'{site["name"]},updates-info,{num_updates},{oldest_update_days}',
-                        'short': f'{num_updates} pending updates',
+                        'short': f'{num_updates} pending updates' if num_updates > 1 else '1 pending update',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending recent updates</a>.</p>
@@ -1295,7 +1295,7 @@ How to:
                         'type': 'warning',
                         'icon': '&#x26A0;',  # warning sign
                         'csv': f'{site["name"]},updates-warning,{num_updates},{oldest_update_days}',
-                        'short': f'{num_updates} pending updates',
+                        'short': f'{num_updates} pending updates' if num_updates > 1 else '1 pending update',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
@@ -1327,7 +1327,8 @@ A variety of support options are available.
                         'type': 'alert',
                         'icon': '&#x1F6A8;',  # police car light
                         'csv': f'{site["name"]},updates-alert,{num_updates},{oldest_update_days}',
-                        'short': f'site out of date: {num_updates} pending updates',
+                        'short': f'needs maintenance: {num_updates} updates, oldest {oldest_update_days} days old' \
+                            if num_updates > 1 else 'needs maintenance: 1 update, {oldest_update_days} days old',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
@@ -1982,12 +1983,12 @@ at the moment, it should be fixed to avoid possible future problems:
         report = f'Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}'
         subject = f'{site["name"]}: {report}'
         if its_downgrade_site:
-            subject = f'Time Sensitive: {site["name"]}: plan change - {report}'
+            subject = f'Time Sensitive: {site["name"]}: plan change | {report}'
         elif len(sorted_notices) > 0:
             if sorted_notices[0]['type'] == 'alert':
-                subject = f'Action Required: {site["name"]}: {sorted_notices[0]['short']} - {report}'
+                subject = f'Action Required: {site["name"]}: {sorted_notices[0]['short']} | {report}'
             elif sorted_notices[0]['type'] == 'warning':
-                subject = f'Action Recommended: {site["name"]}: {sorted_notices[0]['short']} - {report}'
+                subject = f'Action Recommended: {site["name"]}: {sorted_notices[0]['short']} | {report}'
             # no subject prefix for info notices
 
         banner_cid = make_msgid(domain='webservices.umich.edu')
