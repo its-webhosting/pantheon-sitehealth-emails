@@ -357,7 +357,7 @@ h3 { font-size: 15pt; }
     <thead>
       <tr>
         {% for column in traffic_table_columns %}
-        <th class="rt-{{column['name']}}">{{column['label']}}</th>
+        <th class="rt-{{column['name']}}" scope="col">{{column['label']}}</th>
         {% endfor %}
       </tr>
     </thead>
@@ -370,7 +370,7 @@ h3 { font-size: 15pt; }
     <tbody>
       {% for row in traffic_table_rows %}
       <tr>
-        <th class="rt-month">{{traffic_table_rows[row]['month']}}</th>
+        <th class="rt-month" scope="row">{{traffic_table_rows[row]['month']}}</th>
         {% for column in traffic_table_columns[1:] %}
         <td class="rt-{{column['name']}}">
           <div class="rt-data-header rt-{{column['name']}}">{{column['label']}}</div>
@@ -390,7 +390,7 @@ h3 { font-size: 15pt; }
       <thead>
         <tr>
           {% for column in cost_table_columns %}
-          <th class="rt-cost-{{column['name']}}">{{column['label']}}</th>
+          <th class="rt-cost-{{column['name']}}" scope="col">{{column['label']}}</th>
           {% endfor %}
         </tr>
       </thead>
@@ -402,7 +402,7 @@ h3 { font-size: 15pt; }
       <tbody>
         {% for row in cost_table_rows %}
         <tr>
-          <th class="rt-cost-plan">{{cost_table_rows[row]['plan']}}</th>
+          <th class="rt-cost-plan" scope="row">{{cost_table_rows[row]['plan']}}</th>
           {% for column in cost_table_columns[1:] %}
           <td class="rt-cost-{{column['name']}}">
             <div class="rt-data-header rt-cost-{{column['name']}}">{{column['label']}}</div>
