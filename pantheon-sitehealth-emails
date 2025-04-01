@@ -453,7 +453,7 @@ def get_old_metrics(site_env: str, site: dict, period: str, end_date: datetime.d
 
 def check_wordpress_plugin(site: str, installed_plugins: list, name: str, display_name: str, url: str, reason: str) -> list:
     notices = []
-    if not isinstance(installed_plugins, dict):
+    if not isinstance(installed_plugins, list):
         return notices  # this error should already have been handled by our caller, so skip additional work
 
     installed = [p for p in installed_plugins if p['name'] == name]
