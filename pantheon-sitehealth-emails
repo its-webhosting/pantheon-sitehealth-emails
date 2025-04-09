@@ -1870,7 +1870,7 @@ support through either Pantheon or ITS.
                 costs_median[plan] = float(plan_info[plan]['cost']) + \
                     round((overage + overage_block_size / 2.0) / overage_block_size) * \
                     overage_block_cost * months_without_op
-                sc.console.print(f'{plan}: ${costs_median[plan]:,.2f}')
+                sc.debug(f'{plan}: ${costs_median[plan]:,.2f}')
 
             # find best costs
             # For each plan, we want to be conservative by picking the highest cost metric:
