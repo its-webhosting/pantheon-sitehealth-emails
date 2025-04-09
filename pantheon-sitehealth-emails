@@ -838,11 +838,34 @@ and to find out what went wrong:
         # FAQ 1 as of April 25, 2024:
         # "Only traffic for the Live environment is counted towards a site plan's traffic limit."
 
-        # The live environment will always exist, but may not be initialized -- see `terminus env:list ${siteName}`
-        # All sites that are not on the Sandbox plan should have their live environment initialized, but we don't
-        # need to check for that because those environments will also not have non-platform domains connected,
-        # and we'll generate a warning about that.
-        #
+        # The live environment will always exist, but may not be initialized.
+        envs = terminus('env:list', site['id'])
+        if 'live' not in envs or 'initialized' not in envs['live']:
+            sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} does not have a live environment, '
+                             'this should never happen')
+            sys.exit('Bailing out.')
+        if envs['live']['initialized'] is False:
+            sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} is on a paid plan but its live'
+                             'environment is not initialized')
+            site_notices.append({
+                'type': 'alert',
+                'icon': '&#x1F6A8;',  # police car light
+                'csv': f'{site["name"]},no-live-env-but-paid-plan',
+                'short': f'no live environment',
+                'message': f'''
+            <p>{site["name"]} is on a paid plan but its live environment is not initialized.  Either initialize
+            the live environment and connect a domain through which people will access the site or downgrade the
+            site's plan to Sandbox to save money.</p>
+            ''',
+                'text': f"""
+            {site["name"]} is on a paid plan but its
+            live environment is not initialized.  Either initialize the
+            live environment and connect a domain through which people
+            will access the site or downgrade the site's plan to
+            Sandbox to save money.
+            """,
+            })
+
         # Metrics for an uninitialized live environment will be all zeroes; this is OK.
 
         live_site = site['id'] + '.live'
@@ -991,9 +1014,23 @@ and to find out what went wrong:
             custom_domains = [d for d in domains.keys() if domains[d]['type'] == 'custom']
             primary_domain = [d for d in custom_domains if domains[d]['primary']]
             if len(custom_domains) == 0:
-                sc.console.print(f'[bold red]ERROR: {site["name"]} has no custom domains connected, skipping.')
-                all_warnings.append(f'{site["name"]},,no-domains-connected')
-                continue
+                site_notices.append({
+                    'type': 'alert',
+                    'icon': '&#x1F6A8;',  # police car light
+                    'csv': f'{site["name"]},no-domains',
+                    'short': f'no domains connected',
+                    'message': f'''
+                <p>{site["name"]} is on a paid plan but does not have any custom domains connected.  Either connect
+                a domain through which people will access the site or downgrade the site's plan to Sandbox to save
+                money.</p>
+                ''',
+                    'text': f"""
+                {site["name"]} is on a paid plan but does not have
+                any custom domains connected. Either connect a domain through
+                which people will access the ste or downgrade the site's plan
+                to Sandbox to save money.
+                """,
+                })
             if len(custom_domains) > 1 and len(primary_domain) == 0 and site['framework'] != 'wordpress_network':
                 is_multisite = False
                 if site['framework'].startswith('drupal'):

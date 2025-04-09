@@ -10,7 +10,7 @@ when it is sent for real. ]{% endif %}
 
 You are receiving this email because you own a U-M Pantheon
 <https://its.umich.edu/computing/web-mobile/pantheon> website,
-{{site_name}}, at {{site_url}}
+{{site_name}},{%if site_url%}, at {{site_url}}{%endif%}
 
 {%if end_of_contract_year %}ATTENTION: The deadline for moving this website to a lower Pantheon
 rate plan to save money, or for deleting the website, is June 30.
