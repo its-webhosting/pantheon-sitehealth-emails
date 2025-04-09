@@ -48,6 +48,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.patheffects as path_effects
+from matplotlib.gridspec import GridSpec
+from matplotlib.patches import Polygon
 import numpy as np
 
 from jinja2 import Template
@@ -741,6 +743,14 @@ def main() -> None:
     end_of_contract_year = True if end_date.month == 6 and 16 < end_date.day < 30 else False
     sc.debug(f'Generating report for {start_date} through {end_date}')
 
+    # Generate a cap shape to use at the end of the traffic surge chart bars
+    cap_size = 2 * np.pi
+    x = np.linspace(0, cap_size, 31)
+    y = (np.sin(x - np.pi / 2) + 1) / 2
+    cap_points = np.array(list(zip(x, y)))
+    cap_points_inv = np.concatenate(([[0, 0]], cap_points - [0, 1], [[cap_size, 0]]), axis=0)
+    cap_points = np.concatenate(([[0, 0]], cap_points, [[cap_size, 0]]), axis=0)
+
     sites = terminus('org:site:list', sc.config['Pantheon']['org_id'])
     site_count = len(sites)
     current_site_number = 1
@@ -1405,29 +1415,6 @@ support through either Pantheon or ITS.
             if sc.options.verbose > 1:
                 pprint(plan_on_day)
 
-        # Adjust the visits by month for traffic anomalies, such as bots, that throw the metrics way off.
-        # Remove each site below 1 year after the last date for which the site was adjusted.
-        if site['name'] == 'umihpi':
-            sc.console.print('Capping anomalous traffic for umihpi, May 2024')
-            for month in visits_by_month.keys():
-                if month == '2024-05':
-                    visits_by_month[month] = 499999
-        if site['name'] == 'umlsi':
-            sc.console.print('Capping anomalous traffic for umlsi, May - August 2024')
-            for month in visits_by_month.keys():
-                if '2024-06' <= month <= '2024-08':
-                    visits_by_month[month] = 99999
-        if site['name'] == 'kinesiology':
-            sc.console.print('Capping anomalous traffic for kinesiology, August & September 2024')
-            for month in visits_by_month.keys():
-                if '2024-08' <= month <= '2024-09':
-                    visits_by_month[month] = 199999
-        if site['name'] == 'nerrs-science-collaborative':
-            sc.console.print('Capping anomalous traffic for nerrs-science-collaborative, November 2024')
-            for month in visits_by_month.keys():
-                if month == '2024-11':
-                    visits_by_month[month] = 199999
-
         # Create a list of time ranges when the site was on each plan
         last_day = calendar.monthrange(end_date.year, end_date.month)[1]
         plot_right_date = end_date.replace(day=last_day)
@@ -1467,10 +1454,10 @@ support through either Pantheon or ITS.
         # Convert dates to numerical format
         dates_num = mdates.date2num(np.array(dates))
 
+        #
         # Create the chart
+        #
         sc.debug(f'[bold magenta]=== Creating chart for {site["name"]}:')
-        fig, ax = plt.subplots()
-        fig.set_size_inches(12, 8)
 
         # Estimate the visits for the last month if it isn't over yet:
         estimate = -1
@@ -1491,54 +1478,124 @@ support through either Pantheon or ITS.
                 estimates_by_month[month] = 0
             estimates_by_month[end_date_yyyy_mm] = estimate
             estimates = list(estimates_by_month.values())
-            n, histbin, bars = ax.hist(dates_num, bins=xbins, weights=estimates, histtype='barstacked',
-                                       color='lemonchiffon', edgecolor='black')
-            annotations = ax.bar_label(bars, fmt='{:,.0f}', backgroundcolor=(1.0, 1.0, 1.0, 0.0), fontstyle='italic',
-                                       fontsize='small', padding=5, zorder=3.5,
-                                       path_effects=[path_effects.Stroke(linewidth=3, foreground='white'),
-                                                     path_effects.Normal()])
-            for i in range(len(annotations) - 1):
-                annotations[i].set(visible=False)  # only show the label for the last month's estimate
-            annotations[-1].set_text(f'{estimate:,}\n(estimate)')
 
-        n, histbin, bars = ax.hist(dates_num, bins=xbins, weights=visits, histtype='barstacked', color='tab:cyan',
-                                   edgecolor='black')
-        ax.hist(dates_num, bins=xbins, weights=visits_covered, histtype='barstacked', color='tab:blue',
-                edgecolor='black')
-        annotations = ax.bar_label(bars, fmt='{:,.0f}', backgroundcolor=(1.0, 1.0, 1.0, 0.0), fontweight='bold',
-                                   padding=5, path_effects=[path_effects.Stroke(linewidth=3, foreground='white'),
-                                                            path_effects.Normal()])
-        if estimate >= 0:
-            annotations[-1].set_text(f'{annotations[-1].get_text()}\n'
-                                     f'{last_plan_day.strftime("%b ") + str(last_plan_day.day)}')
-            annotations[-1].set_fontsize('small')
-            annotations[-1].set_path_effects([path_effects.Stroke(linewidth=3, foreground='white'),
-                                              path_effects.Normal()])
-
-        # Format the x-axis ticks to be in the middle of each month
-        left_num = mdates.date2num(start_date)
-        right_num = mdates.date2num(plot_right_date)
-        ax.set_xlim(left=left_num, right=right_num)
-        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=15))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
-        fig.autofmt_xdate()
-
-        # set the plot height
+        # figure out whether to show a traffic surge chart
         upgrade_at_max = 0
         for plan in plan_over_time:
             upgrade_at = plan_info[plan['plan']]['upgrade_at']
             if upgrade_at > upgrade_at_max:
                 upgrade_at_max = upgrade_at
-        upgrade_at_max *= 1.15  # normal headroom that matplotlib would ordinarily add
-        b, ax_ymax = ax.get_ylim()
-        ax_ymax = max(ax_ymax, upgrade_at_max)
-        ax.set_ylim(b, ax_ymax * 1.15)  # give a little extra room at the top for the bar labels
-        ax.yaxis.set_major_formatter('{x:,.0f}')
+        surge_threshold = upgrade_at_max * 1.5
+        visits_max = max(visits)
+        surge = True if visits_max > surge_threshold else False
+
+        visits_plan = [v if v <= surge_threshold else upgrade_at_max for v in visits]
+
+        # set the plot height: top data point plus 15% for annotations and labels
+        ymax = max(visits_max, upgrade_at_max) * 1.15
+
+        if surge:
+            fig = plt.figure()
+            fig.set_size_inches(12, 12)
+            gs = GridSpec(2, 1, height_ratios=[1, 2], hspace=0.1)
+            ax_surge = fig.add_subplot(gs[0])
+            ax_plan = fig.add_subplot(gs[1], sharex=ax_surge)
+            axs = [ax_plan, ax_surge]
+            ax_top = ax_surge
+            ax_surge.set_ylim(surge_threshold, ymax)
+            ax_plan.set_ylim(0, surge_threshold)
+            ax_surge.spines.bottom.set_visible(False)
+            ax_surge.xaxis.set_visible(False)
+            ax_plan.spines.top.set_visible(False)
+        else:
+            fig, ax_plan = plt.subplots()
+            fig.set_size_inches(12, 9)
+            axs = [ax_plan]
+            ax_top = ax_plan
+            ax_plan.set_ylim(0, ymax)
+
+        for ax in axs:
+
+            est_bars = []
+            if estimate >= 0:
+                _, _, est_bars = ax.hist(dates_num, bins=xbins, weights=estimates, histtype='barstacked',
+                                         color='lemonchiffon', edgecolor='black')
+                est_labels = ax.bar_label(est_bars, fmt='{:,.0f}', backgroundcolor=(1.0, 1.0, 1.0, 0.0),
+                                          fontstyle='italic', fontsize='small', padding=5, zorder=3.5,
+                                          path_effects=[
+                                              path_effects.Stroke(linewidth=3, foreground='white'),
+                                              path_effects.Normal()
+                                          ])
+                for i in range(len(est_labels) - 1):
+                    est_labels[i].set(visible=False)  # only show the label for the last month's estimate
+                est_labels[-1].set_text(f'{estimate:,}\n(estimate)\n'
+                                        f'{last_plan_day.strftime("%b ") + str(last_plan_day.day)}')
+                est_labels[-1].set_fontsize('small')
+                est_labels[-1].set_path_effects([path_effects.Stroke(linewidth=3, foreground='white'),
+                                                 path_effects.Normal()])
+
+            _, _, bars = ax.hist(dates_num, bins=xbins, weights=visits, histtype='barstacked', color='tab:pink',
+                                 edgecolor='black')
+            ax.bar_label(bars,
+                         labels=[ f'{v:,.0f}' for v in visits ],
+                         backgroundcolor=(1.0, 1.0, 1.0, 0.0),
+                         fontweight='bold',
+                         padding=5,
+                         path_effects=[
+                             path_effects.Stroke(linewidth=3, foreground='white'),
+                             path_effects.Normal()
+                         ])
+
+        gap_bars = []
+        gap_bars.extend(est_bars)
+        gap_bars.extend(bars)
+
+        # these bars are both below surge_threshold, so we only need to draw them on the plan portion of the chart
+        ax_plan.hist(dates_num, bins=xbins, weights=visits_plan, histtype='barstacked', color='tab:cyan',
+                     edgecolor='black')
+        ax_plan.hist(dates_num, bins=xbins, weights=visits_covered, histtype='barstacked', color='tab:blue',
+                     edgecolor='black')
+
+        # Format the x-axis ticks to be in the middle of each month
+        left_num = mdates.date2num(start_date)
+        right_num = mdates.date2num(plot_right_date)
+        ax_plan.set_xlim(left=left_num, right=right_num)
+        ax_plan.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=15))
+        ax_plan.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+        fig.autofmt_xdate()
+
+        # add bar caps between the two charts
+        if surge:
+            ylim = ax_plan.get_ylim()
+            d = (ylim[1] - ylim[0]) * 0.05
+            ylim = ax_surge.get_ylim()
+            d2 = (ylim[1] - ylim[0]) * 0.10  # surge chart canvas height is 1/2 the plan chart canvas height
+            for rect in gap_bars:
+                x = rect.get_x()
+                w = rect.get_width()
+                h = rect.get_height()
+                fc = rect.get_facecolor()
+                if h >= surge_threshold:
+                    # bottom cap
+                    points = cap_points * [w/(2*np.pi), d] + [x, surge_threshold]
+                    p = Polygon(points, closed=True, facecolor=fc, clip_on=False, aa=True, snap=True)
+                    ax_plan.add_patch(p)
+                    # top cap
+                    points = cap_points_inv * [w/(2*np.pi), d2] + [x, surge_threshold]
+                    p = Polygon(points, closed=True, facecolor=fc, clip_on=False, aa=True, snap=True)
+                    ax_surge.add_patch(p)
+                    ax_surge.vlines(x=[x, x+w-0.00001], ymin=surge_threshold - d2, ymax=surge_threshold, color='black',
+                                    linewidth=0.8, clip_on=False, aa=True, snap=True)
+            # add axes caps
+            kwargs = dict(marker=r'$\sim$', markersize=10, color='black', markerfacecolor='black',
+                          markeredgecolor='none', linestyle="none", clip_on=False)
+            ax_plan.plot([0, 1], [1, 1], transform=ax_plan.transAxes, **kwargs)
+            ax_surge.plot([0, 1], [0, 0], transform=ax_surge.transAxes, **kwargs)
 
         # Add horizontal lines for plan limit and upgrade/downgrade
         created_upgrade_labels = False
         created_downgrade_labels = False
-        i = 1
+        i = 0
         for plan in plan_over_time:
             plan_xmin = mdates.date2num(plan['start'])
             plan_xmax = mdates.date2num(plan['end'])
@@ -1546,67 +1603,74 @@ support through either Pantheon or ITS.
             upgrade_at = plan_info[plan['plan']]['upgrade_at']
             if traffic_limit is not None and upgrade_at is not None:
                 # Limit and upgrade lines
-                limit_text = {}
-                upgrade_text = {}
-                if not created_upgrade_labels:
-                    limit_text['label'] = 'plan traffic limit (overages start)'
-                    upgrade_text['label'] = 'upgrade to higher plan at ' + \
-                                            f'{plan_info[plan_over_time[-1]["plan"]]['upgrade_at']:,}'
-                    created_upgrade_labels = True
-                ax.hlines(y=traffic_limit, xmin=plan_xmin, xmax=plan_xmax, color='darkorange', gapcolor='w',
-                          linestyle='dotted', linewidth=3, **limit_text)
-                ax.hlines(y=upgrade_at, xmin=plan_xmin, xmax=plan_xmax, color='r', gapcolor='w',
-                          linestyle='dashed', linewidth=3, **upgrade_text)
+                for ax in axs:
+                    limit_text = {}
+                    upgrade_text = {}
+                    if not created_upgrade_labels:
+                        limit_text['label'] = 'plan traffic limit (overages start)'
+                        upgrade_text['label'] = 'upgrade to higher plan at ' + \
+                                                f'{plan_info[plan_over_time[-1]["plan"]]['upgrade_at']:,}'
+                        created_upgrade_labels = True
+                    ax.hlines(y=traffic_limit, xmin=plan_xmin, xmax=plan_xmax, color='darkorange', gapcolor='w',
+                              linestyle='dotted', linewidth=3, **limit_text)
+                    ax.hlines(y=upgrade_at, xmin=plan_xmin, xmax=plan_xmax, color='r', gapcolor='w',
+                              linestyle='dashed', linewidth=3, **upgrade_text)
             # Downgrade line
             downgrade_to = plan_info[plan['plan']]['downgrade_to']
             if downgrade_to is not None:
-                downgrade_text = {}
-                ending_downgrade_to = plan_info[plan_over_time[-1]['plan']]['downgrade_to']
-                if not created_downgrade_labels and ending_downgrade_to is not None:
-                    ending_downgrade_at = plan_info[ending_downgrade_to]['upgrade_at']
-                    downgrade_text['label'] = 'downgrade to lower plan at ' + f'{ending_downgrade_at:,}'
-                    created_downgrade_labels = True
-                downgrade_at = plan_info[downgrade_to]['upgrade_at']
-                ax.hlines(y=downgrade_at, xmin=plan_xmin, xmax=plan_xmax, color='g', gapcolor='w',
-                          path_effects=[path_effects.Stroke(linewidth=4, foreground='white'), path_effects.Normal()],
-                          linestyle='dashdot', linewidth=3, **downgrade_text)
+                for ax in axs:
+                    downgrade_text = {}
+                    ending_downgrade_to = plan_info[plan_over_time[-1]['plan']]['downgrade_to']
+                    if not created_downgrade_labels and ending_downgrade_to is not None:
+                        ending_downgrade_at = plan_info[ending_downgrade_to]['upgrade_at']
+                        downgrade_text['label'] = 'downgrade to lower plan at ' + f'{ending_downgrade_at:,}'
+                        created_downgrade_labels = True
+                    downgrade_at = plan_info[downgrade_to]['upgrade_at']
+                    ax.hlines(y=downgrade_at, xmin=plan_xmin, xmax=plan_xmax, color='g', gapcolor='w',
+                              path_effects=[path_effects.Stroke(linewidth=4, foreground='white'), path_effects.Normal()],
+                              linestyle='dashdot', linewidth=3, **downgrade_text)
             # Plan label
-            level = matplotlib.rcParams['font.size'] + matplotlib.rcParams['font.size'] * i
-            ax.annotate(plan['plan'], xy=(plan_xmin, ax_ymax), xycoords='data', xytext=(0, 2 + level),
+            text_height = matplotlib.rcParams['font.size'] * 1.25
+            level = text_height * (i + 2)
+            ax_top.annotate(plan['plan'], xy=(plan_xmin, ymax), xycoords='data', xytext=(2, 0 - level),
                         textcoords="offset points", weight="bold")
             # Plan label line calculations
-            data_point = (plan_xmin, ax_ymax)
-            offset_points = (0, 2 + level * 2)
-            display_point = ax.transData.transform_point(data_point)  # Transform data coord to display (pixel) coord
+            data_point = (plan_xmin, ymax)
+            offset_points = (0, 2 * level + text_height/2)
+            display_point = ax_top.transData.transform_point(data_point)  # Transform data coord to display (pixel) coord
             # Apply offset in pixels
             dpi = fig.dpi
             offset_in_inches = (offset_points[0] / dpi, offset_points[1] / dpi)
             offset_in_pixels = fig.dpi_scale_trans.transform_point(offset_in_inches)
             text_display_point = (display_point[0] + offset_in_pixels[0],
-                                  display_point[1] + offset_in_pixels[1])  # Final display coordinate for the text
-            text_data_point = ax.transData.inverted().transform_point(text_display_point)  # Transform to data coord
+                                  display_point[1] - offset_in_pixels[1])  # Final display coordinate for the text
+            text_data_point = ax_top.transData.inverted().transform_point(text_display_point)  # Transform to data coord
             text_data_y = text_data_point[1]
             # Draw the plan label line
-            ax.vlines(x=plan_xmin, ymin=traffic_limit, ymax=text_data_y, color='r', linestyle='dotted', gapcolor='w')
+            for ax in axs:
+                ax.vlines(x=plan_xmin, ymin=traffic_limit, ymax=text_data_y, color='r', linestyle='dotted', gapcolor='w')
 
             i = 1 - i  # alternate plan label levels
 
         fig.legend(handlelength=3.0)
 
-        ax.set_xlabel('Month')
-        ax.set_ylabel('Pantheon Visitors')
+        ax_plan.set_xlabel('Month', fontsize='large')
+        fig.supylabel('Pantheon Visitors')
+        for ax in axs:
+            ax.yaxis.set_major_formatter('{x:,.0f}')
         chart_title = f'{site["name"]} Pantheon Traffic'
         if main_fqdn:
             chart_title += f"\n{site_url}"
-        ax.set_title(chart_title, loc='left')
+        ax_top.set_title(chart_title, loc='left')
         fig.text(0.90, 0.10, 'as of ' + end_date.strftime('%B %e, %Y'), ha='right', fontsize='small')
 
-        # plt.show()
+        #plt.show()
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
         buf.seek(0)
         chart_image = buf.read()
         buf.close()
+        plt.close(fig)
 
         # TODO: Create SVG chart
 

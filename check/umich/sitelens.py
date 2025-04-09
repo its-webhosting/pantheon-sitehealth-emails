@@ -142,6 +142,7 @@ def create_gauge_image(value: int, color: str, title: str) -> bytes:
     buf.seek(0)
     image = buf.read()
     buf.close()
+    plt.close(fig)
     return image
 
 
