@@ -3,6 +3,7 @@
 /pantheon-sitehealth-emails-config
 /local.toml
 /database.db
+/site_results.json
 /news/*.toml
 /build/
 /tmp/

@@ -757,6 +757,7 @@ def main() -> None:
     emails_sent = 0
     site_savings = []
     all_warnings = []
+    site_results = {}
     cloudflare_enabled = 'plugin.cloudflare' in sc.plugin
     sc.debug('Cloudflare is ' + ('[bold green]enabled' if cloudflare_enabled else '[bold red]DISABLED'))
 
@@ -1091,6 +1092,26 @@ remove these domains from the Pantheon live environment for
         # Check the site's plugins/modules
 
         if site['framework'].startswith('wordpress'):
+            sc.console.print(f'[bold magenta]=== Getting WordPress version for {site["name"]}:')
+            wordpress_version, errors, fatal = wp_eval(
+                live_site,
+                'require ABSPATH . WPINC . "/version.php"; echo $wp_version;'
+            )
+            if fatal or wordpress_version is None:
+                site_notices += wp_error(site['name'],
+                    'version-check', f'Unable to check WordPress version for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                wp_smell = errors
+            sc.debug(f'{site["name"]} WordPress version: {wordpress_version}')
+            if not isinstance(wordpress_version, str):
+                wordpress_version = 'unknown'
+            wordpress_version = wordpress_version.strip()
+            site_results[site['name']] = {
+                'framework': site['framework'],
+                'version': wordpress_version,
+                'plan_name': site['plan_name'],
+            }
             sc.console.print(f'[bold magenta]=== Checking WordPress plugins for {site["name"]}:')
             plugins, errors, fatal = wp(live_site, 'plugin', 'list')
             if fatal or plugins is None:
@@ -1195,6 +1216,14 @@ plugin and remove {display_name}.
                 drush_smell = errors
             if sc.options.verbose:
                 pprint(drupal_status)
+            drupal_version = drupal_status['drupal-version'] \
+                if isinstance(drupal_status, dict) and 'drupal-version' in drupal_status \
+                else 'unknown'
+            site_results[site['name']] = {
+                'framework': site['framework'],
+                'version': drupal_version,
+                'plan_name': site['plan_name'],
+            }
             mods, errors, fatal = drush(live_site, 'pm:list')
             if fatal or mods is None:
                 site_notices += drush_error(site['name'],
@@ -1212,36 +1241,33 @@ plugin and remove {display_name}.
                 'https://www.drupal.org/project/pantheon_advanced_page_cache',
                 'Necessary for automatically clearing Pantheon\'s caches (not Cloudflare\'s) when content is updated.'
             )
-            if isinstance(drupal_status, dict) and 'drupal-version' in drupal_status:
-                if drupal_status['drupal-version'].startswith('7.'):
+            if drupal_version.startswith('7.'):
+                site_notices += check_drupal_module(
+                    site['name'],
+                    mods,
+                    'tag1_d7es',
+                    'Tag1 D7ES',
+                    'https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support',
+                    'Necessary for receiving extended support for Drupal 7.'
+                )
+            else:
+                if len(not_behind_cloudflare) == 0:
                     site_notices += check_drupal_module(
                         site['name'],
                         mods,
-                        'tag1_d7es',
-                        'Tag1 D7ES',
-                        'https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support',
-                        'Necessary for receiving extended support for Drupal 7.'
+                        'cloudflare',
+                        'CloudFlare', # note: capital F here
+                        'https://documentation.its.umich.edu/node/4242',
+                        'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
                     )
-                else:
-                    if len(not_behind_cloudflare) == 0:
-                        site_notices += check_drupal_module(
-                            site['name'],
-                            mods,
-                            'cloudflare',
-                            'CloudFlare', # note: capital F here
-                            'https://documentation.its.umich.edu/node/4242',
-                            'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
-                        )
-                        site_notices += check_drupal_module(
-                            site['name'],
-                            mods,
-                            'cloudflarepurger',
-                            'CloudFlare Purger',
-                            'https://documentation.its.umich.edu/node/4242',
-                            'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
-                        )
-            else:
-                sc.console.print(f':exclamation: [bold red] ATTENTION: unable to determine Drupal version for {site["name"]}')
+                    site_notices += check_drupal_module(
+                        site['name'],
+                        mods,
+                        'cloudflarepurger',
+                        'CloudFlare Purger',
+                        'https://documentation.its.umich.edu/node/4242',
+                        'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
+                    )
 
         else:
             sc.console.print(f':exclamation: [bold red] ATTENTION: unknown framework for {site["name"]}: {site["framework"]}')
@@ -2192,9 +2218,13 @@ at the moment, it should be fixed to avoid possible future problems:
     db_engine.dispose()
     smtp_connection.quit()
 
-    sc.console.print(f'\n[bold green]Email sent for {emails_sent} of {site_count} sites.\nSite notices:\n')
-    for n in all_warnings:
-        print(n)
+    sc.console.print(f'\n[bold green]Email sent for {emails_sent} of {site_count} sites.\n')
+    with open('site_warnings.csv', 'w', encoding='utf-8') as f:
+        for n in all_warnings:
+            f.write(n + '\n')
+
+    with open('site_results.json', 'w', encoding='utf-8') as f:
+        json.dump(site_results, f, indent=4)
 
     sc.console.print(f'\n[bold green]Site savings:\n')
     pprint(site_savings)
