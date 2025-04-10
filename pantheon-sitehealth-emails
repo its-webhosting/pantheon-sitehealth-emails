@@ -484,7 +484,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
         })
 
     plugin = installed[0]
-    if not 'status' in plugin or plugin['status'] != 'active':
+    if not 'status' in plugin or plugin['status'] not in ('active', 'must-use'):
         sc.console.print(f':exclamation: [bold red] ATTENTION: {site} has the {display_name} plugin installed but it is not active.')
         notices.append({
             'type': 'warning',
