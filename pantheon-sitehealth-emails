@@ -30,6 +30,8 @@ import glob
 from smtplib import SMTP_SSL
 from typing import Any
 
+import urllib.parse
+
 from email.message import EmailMessage
 from email.utils import make_msgid
 from email.policy import SMTP
@@ -207,6 +209,10 @@ args_parser.add_argument(
 sc.options = args_parser.parse_args()
 
 
+def escape_url(url):
+    return urllib.parse.quote(url, safe=':/?#&=', encoding='utf-8', errors='strict')
+
+
 def run_terminus(command: list) -> (str, str, bool):
 
     command = ['terminus', '--no-ansi', '--no-interaction', *command]
@@ -232,15 +238,23 @@ def run_terminus(command: list) -> (str, str, bool):
     output = stdout.decode('utf-8').strip()
     errors = stderr.decode('utf-8').strip()
 
-    if command[3] == 'wp' and len(output) > 0 and p.returncode == 0:
-            lines = output.split('\n')
-            filtered_lines = []
-            for line in lines:
-                if not re.match(r'^\s*Warning:\s+', line):
-                    filtered_lines.append(line)
-                else:
-                    errors = line + '\n' + errors
-            output = '\n'.join(filtered_lines)
+    if command[3] in ('wp', 'composer') and len(output) > 0 and (p.returncode == 0 or command[3] == 'composer'):
+        lines = output.split('\n')
+        filtered_lines = []
+        extra_errors = []
+        for line in lines:
+            if re.match(r'^\s*Cannot create cache directory\s+', line):
+                continue
+            if re.match(r'^\s*Warning:\s+', line):
+                extra_errors.append(line)
+            else:
+                filtered_lines.append(line)
+        output = '\n'.join(filtered_lines)
+        if command[3] == 'composer':
+            errors = ''
+            p.returncode = 0
+        else:
+            errors = '\n'.join(extra_errors) + '\n' + errors
     sc.debug('Terminus output:\n', output, level=3)
 
     if len(errors) > 0 and p.returncode == 0:
@@ -467,7 +481,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},not-installed,{name}',
             'short': f'install the {name} plugin',
-            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be installed:</p><p>{reason}</p>',
+            'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be installed:</p><p>{html.escape(reason)}</p>',
             'text': f"The {display_name} WordPress plugin\n<{url}>\nneeds to be installed: {reason}",
         })
         return notices
@@ -479,7 +493,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
             'icon': '&#x1F50E;',  # magnifying glass
             'csv': f'{site},multiple-installed,{name}',
             'short': f'plugin {name} installed multiple times',
-            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin is installed multiple times.</p>',
+            'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin is installed multiple times.</p>',
             'text': f"The {display_name} WordPress plugin\n<{url}>\nis installed multiple times.",
         })
 
@@ -491,7 +505,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},turned-off,{name}',
             'short': f'activate plugin {name}',
-            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be activated:</p><p>{reason}</p>',
+            'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be activated:</p><p>{html.escape(reason)}</p>',
             'text': f"The {display_name} WordPress plugin\n<{url}>\nneeds to be activated: {reason}",
         })
 
@@ -510,7 +524,7 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},not-installed,{name}',
             'short': f'install module {name}',
-            'message': f'<p>The <a href="{url}">{display_name}</a> Drupal module needs to be installed:</p><p>{reason}</p>',
+            'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be installed:</p><p>{html.escape(reason)}</p>',
             'text': f"The {display_name} Drupal module\n<{url}>\nneeds to be installed: {reason}",
         })
         return notices
@@ -523,7 +537,7 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
             'icon': '&#x26A0;',  # warning sign
             'csv': f'{site},turned-off,{name}',
             'short': f'enable module {name}',
-            'message': f'<p>The <a href="{url}">{display_name}</a> Drupal module needs to be enabled:</p><p>{reason}</p>',
+            'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be enabled:</p><p>{html.escape(reason)}</p>',
             'text': f"The {display_name} Drupal module\n<{url}>\nneeds to be enabled: {reason}",
         })
 
@@ -767,6 +781,7 @@ def main() -> None:
         site_notices = []
         wp_smell = ''
         drush_smell = ''
+        composer_smell = ''
         portal_site_id = 0
         if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
             if site['name'] not in sc.config['UMich']['portal']['sites']:
@@ -845,7 +860,7 @@ and to find out what went wrong:
                              'this should never happen')
             sys.exit('Bailing out.')
         if envs['live']['initialized'] is False:
-            sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} is on a paid plan but its live'
+            sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} is on a paid plan but its live '
                              'environment is not initialized')
             site_notices.append({
                 'type': 'alert',
@@ -949,6 +964,8 @@ and to find out what went wrong:
             pprint(domains)
         site_url = ''
         main_fqdn = ''
+        dns_points_at_cloudflare = 0
+        dns_points_elsewhere = 0
         not_behind_cloudflare = []
         not_in_dns = []
         if isinstance(domains, dict):
@@ -957,8 +974,6 @@ and to find out what went wrong:
                 if domain['type'] == 'platform':
                     continue
                 hostname = domain['id']
-                dns_points_at_cloudflare = 0
-                dns_points_elsewhere = 0
                 if not fqdn_re.match(hostname):
                     sc.console.log(f'[bold red]ERROR: Invalid domain for {site["name"]}: {hostname}')
                     continue
@@ -1089,7 +1104,7 @@ and to find out what went wrong:
 security.  Please refer to the <a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">
 Cloudflare at U-M documentation</a>.</p>
 <ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{n}/">{n}</a></li>' for n in not_behind_cloudflare])}
+{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in not_behind_cloudflare])}
 </ul>
 ''',
                 'text': f'''
@@ -1113,7 +1128,7 @@ Please refer to the Cloudflare at U-M documentation
 <p><strong>{site["name"]}</strong> has domains that are not in DNS.  Please either remove these domains from
 the Pantheon live environment for <strong>{site["name"]}</strong>, or add them to DNS.</p>
 <ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{n}/">{n}</a></li>' for n in not_in_dns])}
+{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in not_in_dns])}
 </ul>
 ''',
                 'text': f'''
@@ -1128,6 +1143,7 @@ remove these domains from the Pantheon live environment for
 
         # Check the site's plugins/modules
 
+        add_on_updates = []
         if site['framework'].startswith('wordpress'):
             sc.console.print(f'[bold magenta]=== Getting WordPress version for {site["name"]}:')
             wordpress_version, errors, fatal = wp_eval(
@@ -1150,7 +1166,7 @@ remove these domains from the Pantheon live environment for
                 'plan_name': site['plan_name'],
             }
             sc.console.print(f'[bold magenta]=== Checking WordPress plugins for {site["name"]}:')
-            plugins, errors, fatal = wp(live_site, 'plugin', 'list')
+            plugins, errors, fatal = wp(live_site, 'plugin', 'list', '--fields=name,status,update,version,update_version,title')
             if fatal or plugins is None:
                 site_notices += wp_error(site['name'],
                     'plugin-list', f'Unable to run <code>wp plugin list</code> for {site["name"]}.',
@@ -1175,7 +1191,7 @@ remove these domains from the Pantheon live environment for
                 'https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin',
                 'Strongly recommended to ensure PHP sessions work correctly on Pantheon.'
             )
-            if len(not_behind_cloudflare) == 0:
+            if dns_points_at_cloudflare > 0:
                 site_notices += check_wordpress_plugin(
                     site['name'],
                     plugins,
@@ -1184,8 +1200,20 @@ remove these domains from the Pantheon live environment for
                     'https://documentation.its.umich.edu/node/5114',
                     'Needed for automatically clearing Cloudflare\'s caches when content is updated.'
                 )
-            # Special check for our fork of Hummingbird (version number contains 'umich')
-            if isinstance(plugins, dict):
+            if isinstance(plugins, list):
+                for p in plugins:
+                    if p['update'] == 'available':
+                        add_on_updates.append({
+                            'slug': p['name'],
+                            'name': p['title'],
+                            'type': 'plugin',
+                            'current_version': p['version'],
+                            'new_version': p['update_version'],
+                        })
+                    if p['status'] == 'must-use' and p['name'] != 'loader':
+                        sc.console.print(f'[bold yellow]{site["name"]} has must-use plugin:')
+                        pprint(p)
+                # Special check for our fork of Hummingbird (version number contains 'umich')
                 name = 'hummingbird-performance'
                 display_name = 'UMich Hummingbird'
                 url = 'https://documentation.its.umich.edu/node/4243'
@@ -1201,7 +1229,7 @@ remove these domains from the Pantheon live environment for
                             'icon': '&#x1F50E;',  # magnifying glass
                             'csv': f'{site["name"]},unsupported-turned-off,{name}',
                             'short': f'delete inactive plugin {name}',
-                            'message': f'<p>The <a href="{url}">{display_name}</a> WordPress plugin is inactive but should be deleted:</p><p>{reason}</p>',
+                            'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin is inactive but should be deleted:</p><p>{html.escape(reason)}</p>',
                             'text': f"The {display_name} WordPress plugin\n<{url}>\nis inactive but should be deleted: {reason}",
                         })
                     else:
@@ -1211,8 +1239,8 @@ remove these domains from the Pantheon live environment for
                             'csv': f'{site["name"]},unsupported,{name}',
                             'short': f'replace plugin {name} with umich-cloudflare',
                             'message': f'''
-<p>The <a href="{url}">{display_name}</a> WordPress plugin needs to be replaced! It is unsupported and out of date.</p>
-<p>Please install the <a href="{url2}">University of Michigan: Cloudflare Cache</a> plugin and remove {display_name}.</p>
+<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be replaced! It is unsupported and out of date.</p>
+<p>Please install the <a href="{escape_url(url2)}">University of Michigan: Cloudflare Cache</a> plugin and remove {html.escape(display_name)}.</p>
 ''',
                         'text': f"""
 The {display_name} WordPress plugin\n<{url}>\nneeds to be replaced!
@@ -1222,6 +1250,26 @@ Please install the University of Michigan: Cloudflare Cache
 <{url2}>
 plugin and remove {display_name}.
 """,
+                        })
+            sc.console.print(f'[bold magenta]=== Checking WordPress themes for {site["name"]}:')
+            themes, errors, fatal = wp(live_site, 'theme', 'list', '--fields=name,status,update,version,update_version,title')
+            if fatal or themes is None:
+                site_notices += wp_error(site['name'],
+                    'plugin-list', f'Unable to run <code>wp theme list</code> for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                wp_smell = errors
+            if sc.options.verbose:
+                pprint(themes)
+            if isinstance(themes, list):
+                for t in themes:
+                    if t['update'] == 'available':
+                        add_on_updates.append({
+                            'slug': t['name'],
+                            'name': t['title'],
+                            'type': 'theme',
+                            'current_version': t['version'],
+                            'new_version': t['update_version'],
                         })
             # This isn't a plugin, but here is a good place to check for it.
             favicon, errors, fatal = wp_eval(live_site, 'echo is_file("favicon.ico") ? "true": "false";')
@@ -1288,7 +1336,7 @@ plugin and remove {display_name}.
                     'Necessary for receiving extended support for Drupal 7.'
                 )
             else:
-                if len(not_behind_cloudflare) == 0:
+                if dns_points_at_cloudflare > 0:
                     site_notices += check_drupal_module(
                         site['name'],
                         mods,
@@ -1305,6 +1353,118 @@ plugin and remove {display_name}.
                         'https://documentation.its.umich.edu/node/4242',
                         'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
                     )
+            if drupal_version.startswith('7.'):
+                updates, errors, fatal = drush(live_site, 'pm:updatestatus', '--full')
+                if fatal or updates is None:
+                    site_notices += drush_error(site['name'],
+                                                'pm-updatestatus',
+                                                f'Unable to run <code>drush pm:updatestatus</code> for {site["name"]}.',
+                                                errors)
+                # elif errors != '':
+                #     drush_smell = errors  # there will always be verbose progress output for pm:upstatestatus
+                if sc.options.verbose:
+                    pprint(updates)
+                if isinstance(updates, dict):
+                    for package in updates:
+                        u = updates[package]
+                        current_version = u['existing_version']
+                        new_version = current_version
+                        if 'candidate_version' in u:
+                            new_version = u['candidate_version']
+                        elif 'recommended' in u:
+                            new_version = u['recommended']
+                        elif 'latest_version' in u:
+                            new_version = u['latest_version']
+                        if new_version == current_version:
+                            new_version = f'none: {u["project_status"]}'
+                        add_on_updates.append({
+                            'slug': package,
+                            'name': f'<a href="{escape_url(u["link"])}">{html.escape(u["title"])}</a>',
+                            'type': u['type'] if type in u else 'package',
+                            'current_version': current_version,
+                            'new_version': new_version,
+                        })
+            else:
+                sc.console.print(f'[bold magenta]=== Dry-run update for packages on {site["name"]}:')
+                command = ['composer', live_site, '--', 'update', '--dry-run']
+                updates, errors, fatal = run_terminus(command)
+                if fatal or updates is None:
+                    site_notices.append({
+                        'type': 'alert',
+                        'icon': '&#x1F6A8;',  # police car light
+                        'csv': f'{site["name"]},composer-update',
+                        'short': f'fix composer error',
+                        'message': f'''
+                    <p>Unable to run <code>composer update --dry-run</code> for {site["name"]}.
+                    <code>composer</code> returned the following error:</p>
+                    <pre>{html.escape(errors)}</pre>
+                    ''',
+                        'text': f'''
+                    Unable to run 'composer update --dry-run' for {site["name"]}.
+                    composer returned the following error:
+
+                    ----- START DRUSH ERROR -----
+                    {errors}
+                    ----- END ERROR -----
+
+                    ''',
+                    })
+                elif errors != '':
+                    composer_smell = errors
+                if sc.options.verbose:
+                    pprint(updates)
+                package_updates = {}
+                if isinstance(updates, str):
+                    for line in updates.split('\n'):
+                        # Example line:
+                        # - Upgrading drupal/admin_toolbar (3.4.2 => 3.5.3)
+                        m = re.search(r'^\s*-\s+Upgrading\s+(\S+)\s+\((.+) => (.+)\)\s*$', line)
+                        if m:
+                            package_updates[m.group(1)] = {
+                                'current': m.group(2),
+                                'new': m.group(3),
+                            }
+                sc.console.print(f'[bold magenta]=== Running audit for packages on {site["name"]}:')
+                audit = terminus('composer', live_site, '--', 'audit')
+                if isinstance(audit, dict):
+                    if 'advisories' in audit:
+                        package_list = audit['advisories']
+                        for package in package_list:
+                            vuln = []
+                            advisory_list = package_list[package]
+                            for advisory in advisory_list:
+                                if isinstance(advisory, str):
+                                    advisory = package_list[package][advisory]
+                                if sc.options.verbose:
+                                    sc.console.print(f'[bold yellow]Advisory for {package}:')
+                                    pprint(advisory)
+                                title = advisory['title']
+                                t = title.split(' - ')
+                                if advisory['severity']:
+                                    severity = advisory['severity']
+                                elif len(t) == 4:
+                                    severity = t[1]
+                                    title = ' - '.join([ t[0], t[2], t[3] ])
+                                else:
+                                    severity = 'unknown'
+                                vuln.append({
+                                    'title': f'<a href="{escape_url(advisory["link"])}">{html.escape(title)}</a>',
+                                    'severity': severity,
+                                })
+                            add_on_updates.append({
+                                'slug': package,
+                                'name': vuln,
+                                'type': 'package',
+                                'current_version': package_updates[package]['current'],
+                                'new_version': package_updates[package]['new'],
+                            })
+                    if 'abandoned' in audit and len(audit['abandoned']) > 0:
+                        sc.console.print('[bold yellow]Abandoned packages:')
+                        pprint(audit['abandoned'])
+                else:
+                    sc.console.print(f'[bold red]Unable to run <code>composer audit</code> for {site["name"]}')
+                if sc.options.verbose:
+                    pprint(audit)
 
         else:
             sc.console.print(f':exclamation: [bold red] ATTENTION: unknown framework for {site["name"]}: {site["framework"]}')
@@ -1319,7 +1479,7 @@ plugin and remove {display_name}.
                 update_times = [datetime.datetime.fromisoformat(update['datetime']).replace(tzinfo=datetime.UTC) for update in updates]
                 oldest_update = min(update_times)
                 oldest_update_days = (datetime.datetime.now(datetime.UTC) - oldest_update).days
-                sc.console.print(f'{site["name"]} has {num_updates} unapplied updates, the oldest from {oldest_update_days} days ago ( {oldest_update} )')
+                sc.console.print(f'{site["name"]} has {num_updates} unapplied updates from Pantheon, the oldest from {oldest_update_days} days ago ( {oldest_update} )')
                 update_table_rows = ''
                 update_bullet_list = ''
                 for update in updates:
@@ -1333,8 +1493,8 @@ plugin and remove {display_name}.
 '''
                     update_bullet_list += f'''
 * {update_release_date}
-    - {update['message']}
-    - Author: {update['author']}
+  - {update['message']}
+  - Author: {update['author']}
 
 '''
                 if oldest_update_days <= 7:
@@ -1342,10 +1502,10 @@ plugin and remove {display_name}.
                         'type': 'info',
                         'icon': '&#x1F50E;',  # magnifying glass
                         'csv': f'{site["name"]},updates-info,{num_updates},{oldest_update_days}',
-                        'short': f'{num_updates} pending updates' if num_updates > 1 else '1 pending update',
+                        'short': f'{num_updates} pending Pantheon updates' if num_updates > 1 else '1 pending Pantheon update',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
-<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending recent updates</a>.</p>
+<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending recent updates from Pantheon</a>.</p>
 <div class="container">
 <table class="responsive-table site-updates">
 <thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
@@ -1357,7 +1517,7 @@ plugin and remove {display_name}.
 <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">get support</a>.</p>
 ''',
                         'text': f'''
-{site['name']} has {num_updates} pending recent updates
+{site['name']} has {num_updates} pending recent updates from Pantheon
 <https://dashboard.pantheon.io/sites/{site['id']}#dev/code>.
 
 {update_bullet_list}
@@ -1372,10 +1532,10 @@ How to:
                         'type': 'warning',
                         'icon': '&#x26A0;',  # warning sign
                         'csv': f'{site["name"]},updates-warning,{num_updates},{oldest_update_days}',
-                        'short': f'{num_updates} pending updates' if num_updates > 1 else '1 pending update',
+                        'short': f'{num_updates} pending Pantheon updates' if num_updates > 1 else '1 pending Pantheon update',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
-<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
+<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates from Pantheon</a>, the oldest
 from {oldest_update_days} days ago.</p>
 <p>Please <a href="https://docs.pantheon.io/core-updates">apply these updates</a> and
 <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
@@ -1388,7 +1548,7 @@ from {oldest_update_days} days ago.</p>
 </div>
 ''',
                         'text': f'''
-{site['name']} has {num_updates} pending updates
+{site['name']} has {num_updates} pending updates from Pantheon
 <https://dashboard.pantheon.io/sites/{site['id']}#dev/code>, the
 oldest from {oldest_update_days} days ago. Please apply these updates
 <https://docs.pantheon.io/core-updates> and deploy them to the
@@ -1404,11 +1564,11 @@ A variety of support options are available.
                         'type': 'alert',
                         'icon': '&#x1F6A8;',  # police car light
                         'csv': f'{site["name"]},updates-alert,{num_updates},{oldest_update_days}',
-                        'short': f'needs maintenance: {num_updates} updates, oldest {oldest_update_days} days old' \
-                            if num_updates > 1 else 'needs maintenance: 1 update, {oldest_update_days} days old',
+                        'short': f'needs maintenance: {num_updates} Pantheon updates, oldest {oldest_update_days} days old' \
+                            if num_updates > 1 else 'needs maintenance: 1 Pantheon update, {oldest_update_days} days old',
                         'message': f'''
 <p><strong>{site['name']}</strong> has
-<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates</a>, the oldest
+<a href="https://dashboard.pantheon.io/sites/{site['id']}#dev/code">{num_updates} pending updates from Pantheon</a>, the oldest
 from {oldest_update_days} days ago.</p>
 <p><i>Please <a href="https://docs.pantheon.io/core-updates">apply these updates</a> immediately</i> and then
 <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>. Websites that are
@@ -1425,7 +1585,7 @@ support through either Pantheon or ITS</a>.</p>
 </div>
 ''',
                         'text': f'''
-{site['name']} has {num_updates} pending updates
+{site['name']} has {num_updates} pending updates from Pantheon
 <https://dashboard.pantheon.io/sites/{site['id']}#dev/code>, the
 oldest from {oldest_update_days} days ago.
 
@@ -1450,6 +1610,63 @@ support through either Pantheon or ITS.
         else:
             sc.console.print(f':exclamation: [bold red] ERROR: unable to check updates for {site["name"]}')
             pprint(updates)
+
+        if sc.options.verbose:
+            sc.console.print(f'[bold yellow]=== Add-on updates for {site["name"]}:')
+            pprint(add_on_updates)
+        num_updates = len(add_on_updates)
+        update_table_rows = ''
+        update_bullet_list = ''
+        for update in add_on_updates:
+            name = update['name']
+            if isinstance(name, list):
+                name = '\n'.join([f'{n["title"]}, ({n["severity"].upper()})<br /><br />' for n in name])
+            update_table_rows += f'''
+<tr>
+<td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">{html.escape(update['slug'])}</div></td>
+<td><div class="rt-data-header rt-plan">Name</div><div class="rt-data rt-plan">{name}</div></td>
+<td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">{html.escape(update['type'])}</div></td>
+<td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">{html.escape(update['current_version'])}</div></td>
+<td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">{html.escape(update['new_version'])}</div></td>
+</tr>
+'''
+            update_bullet_list += f'''
+* {update['slug']}
+  - Name: {update['name']}
+  - Type: {update['type']}
+  - Current version: {update['current_version']}
+  - New version:     {update['new_version']}
+
+'''
+        site_notices.append({
+            'type': 'warning',
+            'icon': '&#x26A0;',  # warning sign
+            'csv': f'{site["name"]},updates-warning,{num_updates}',
+            'short': f'{num_updates} pending add-on updates' if num_updates > 1 else '1 pending add-on update',
+            'message': f'''
+    <p><strong>{site['name']}</strong> has {num_updates} pending add-on updates.</p>
+    <p>Please update these add-ons in the site's Dev environment and
+    <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+    <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+    <div class="container">
+    <table class="responsive-table site-updates">
+    <thead><th class="rt-plan">ID</th><th class="rt-plan">Name</th><th class="rt-plan">Type</th><th class="rt-plan">Current version</th><th class="rt-plan">New version</th></thead>
+    <tbody>{update_table_rows}</tbody>
+    </table>
+    </div>
+    ''',
+            'text': f'''
+    {site['name']} has {num_updates} pending add-on updates
+    <https://dashboard.pantheon.io/sites/{site['id']}#dev/code>.
+    Please update these add-ons in the site's Dev environment and
+    deploy them to the Live environment.
+    <https://docs.pantheon.io/pantheon-workflow>
+    A variety of support options are available.
+    <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+
+    {update_bullet_list}
+    ''',
+        })
 
         # TODO: Warn if no Autopilot
         # TODO: check DNS and warn if the site is using Cloudflare IPs but is not a zone apex
@@ -2095,6 +2312,29 @@ at the moment, it should be fixed to avoid possible future problems:
 
 ''',
             })
+
+            if composer_smell != '':
+                site_notices.append({
+                    'type': 'info',
+                    'icon': '&#x1F50E;',  # magnifying glass
+                    'csv': f'{site["name"]},composer-smell,{json.dumps(composer_smell).replace(',', '\\,')}',
+                    'short': 'PHP code problems',
+                    'message': f'''
+        <p>The <code>composer</code> command is reporting PHP code problems with <strong>{site["name"]}</strong>. Even
+        if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+        <pre>{html.escape(drush_smell)}</pre>
+        ''',
+                    'text': f'''
+        The "composer" command is reporting PHP code problems with
+        {site["name"]}. Even if this is not breaking anything
+        at the moment, it should be fixed to avoid possible future problems:
+
+        ----- START COMPOSER REPORTED PROBLEMS -----
+        {composer_smell}
+        ----- END OF COMPOSER REPORTED PROBLEMS -----
+
+        ''',
+                })
 
         sc.debug('===== Notices:\n', site_notices)
         sc.debug('===== Sections:\n', site_context['sections'])
