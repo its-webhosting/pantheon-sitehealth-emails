@@ -953,6 +953,18 @@ and to find out what went wrong:
         }
         sc.invoke_hooks('check', site_context)
 
+        # Get the list of all proxied Cloudflare FQDNs.
+        # This file is created by running the following cloudflare-support-tools command:
+        #   get_proxied_fqdns --output fqdns.json
+        # Warn if the file pointed to by the symlink is more than a day old.
+        proxied_fqdns_file = 'fqdns.json'
+        if os.path.islink(proxied_fqdns_file):
+            proxied_fqdns_file = os.readlink(proxied_fqdns_file)
+        if time.time() - os.path.getmtime(proxied_fqdns_file) > 86400:
+            sc.console.print(f':exclamation: [bold red] ATTENTION: {proxied_fqdns_file} is more than a day old!')
+        with open(proxied_fqdns_file, 'r') as f:
+            proxied_fqdns = json.load(f)
+
         # Query Pantheon for the site's domains
         # TODO: check domains for site
         #   - In Cloudflare, do they all point at the correct Pantheon IPs?
@@ -968,6 +980,7 @@ and to find out what went wrong:
         dns_points_elsewhere = 0
         not_behind_cloudflare = []
         not_in_dns = []
+        behind_cloudflare_not_proxied = []
         if isinstance(domains, dict):
             for d in domains.keys():
                 domain = domains[d]
@@ -1022,9 +1035,13 @@ and to find out what went wrong:
                 if dns_points_at_cloudflare == 0 and dns_points_elsewhere == 0:
                     sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not in DNS')
                     not_in_dns.append(hostname)
-                if cloudflare_enabled and (dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0):
-                    sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare')
-                    not_behind_cloudflare.append(hostname)
+                if cloudflare_enabled:
+                    if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
+                        sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare')
+                        not_behind_cloudflare.append(hostname)
+                    if dns_points_at_cloudflare > 0 and hostname not in proxied_fqdns:
+                        sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is behind Cloudflare but not proxied')
+                        behind_cloudflare_not_proxied.append(hostname)
 
             custom_domains = [d for d in domains.keys() if domains[d]['type'] == 'custom']
             primary_domain = [d for d in custom_domains if domains[d]['primary']]
@@ -1117,6 +1134,35 @@ Please refer to the Cloudflare at U-M documentation
 
 '''
             })
+
+            if len(behind_cloudflare_not_proxied) > 0:
+                site_notices.append({
+                    'type': 'warning',
+                    'icon': '&#x26A0;',  # warning sign
+                    'csv': f'{site["name"]},behind-cloudflare-not-proxied,' + ','.join(behind_cloudflare_not_proxied),
+                    'short': 'turn on Cloudflare proxying for domains',
+                    'message': f'''
+<p>The following domains point to Cloudflare but are not benefitting from Cloudflare's caching and security
+features because proxying for these FQDNs is turned off in Cloudflare.  Please follow steps 3 and 4 of the
+<a href="https://documentation.its.umich.edu/node/4237">U-M Cloudflare: Website Migration Steps</a> to ensure
+the site is configured to work with Cloudflare and to turn on proxying.<p>
+<ul style="list-style-type: none;">
+{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in behind_cloudflare_not_proxied])}
+</ul>
+''',
+            'text': f'''
+The following domains point to Cloudflare but are not benefitting from
+Cloudflare's caching and security features because proxying for these
+FQDNs is turned off in Cloudflare.
+
+Please follow steps 3 and 4 of the U-M Cloudflare: Website Migration
+Steps <"https://documentation.its.umich.edu/node/4237> to ensure the
+site is configured to work with Cloudflare and to turn on proxying.
+
+{"\n".join([f'  * {n}' for n in not_behind_cloudflare])}
+
+'''
+                })
 
         if len(not_in_dns) > 0:
             site_notices.append({
