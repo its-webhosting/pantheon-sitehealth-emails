@@ -9,6 +9,7 @@
 /build/
 /tmp/
 *.csv
+*-results.json
 
 # Editor backup and temporary files
 .*.swp

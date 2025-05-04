@@ -962,6 +962,8 @@ and to find out what went wrong:
             proxied_fqdns_file = os.readlink(proxied_fqdns_file)
         if time.time() - os.path.getmtime(proxied_fqdns_file) > 86400:
             sc.console.print(f':exclamation: [bold red] ATTENTION: {proxied_fqdns_file} is more than a day old!')
+            if sc.options.all:
+                sys.exit('Exiting because --all was specified. Please update fqdns.json')
         with open(proxied_fqdns_file, 'r') as f:
             proxied_fqdns = json.load(f)
 
@@ -1497,13 +1499,31 @@ plugin and remove {display_name}.
                                     'title': f'<a href="{escape_url(advisory["link"])}">{html.escape(title)}</a>',
                                     'severity': severity,
                                 })
-                            add_on_updates.append({
+                            current_version = 'unknown'
+                            new_version = 'unknown'
+                            new_version_url = None
+                            if package in package_updates:
+                                if 'current' in package_updates[package]:
+                                    current_version = package_updates[package]['current']
+                                if 'new' in package_updates[package]:
+                                    new_version = package_updates[package]['new']
+                                elif 'cve' in package_updates[package]:
+                                    cve = package_updates[package]['cve']
+                                    new_version = f'See {cve}'
+                                    new_version_url = f'https://nvd.nist.gov/vuln/detail/{cve}'
+                            if new_version == 'unknown':
+                                new_version = 'See advisory'
+                                new_version_url = advisory["link"]
+                            a = {
                                 'slug': package,
                                 'name': vuln,
                                 'type': 'package',
-                                'current_version': package_updates[package]['current'],
-                                'new_version': package_updates[package]['new'],
-                            })
+                                'current_version': current_version,
+                                'new_version': new_version,
+                            }
+                            if new_version_url:
+                                a['new_version_url'] = new_version_url
+                            add_on_updates.append(a)
                     if 'abandoned' in audit and len(audit['abandoned']) > 0:
                         sc.console.print('[bold yellow]Abandoned packages:')
                         pprint(audit['abandoned'])
@@ -1528,10 +1548,11 @@ plugin and remove {display_name}.
                 sc.console.print(f'{site["name"]} has {num_updates} unapplied updates from Pantheon, the oldest from {oldest_update_days} days ago ( {oldest_update} )')
                 update_table_rows = ''
                 update_bullet_list = ''
-                for update in updates:
+                for i, update in enumerate(updates):
                     update_release_date = datetime.datetime.fromisoformat(update['datetime']).strftime('%B %e, %Y')
+                    background_color = '#fff' if i % 2 == 0 else '#CCCFCA'
                     update_table_rows += f'''
-<tr>
+<tr style="background-color: {background_color};">
 <td><div class="rt-data-header rt-plan">Date</div><div class="rt-data rt-plan">{update_release_date}</div></td>
 <td><div class="rt-data-header rt-plan">Description</div><div class="rt-data rt-plan">{update['message']}</div></td>
 <td><div class="rt-data-header rt-plan">Author</div><div class="rt-data rt-plan">{update['author']}</div></td>
@@ -1661,22 +1682,28 @@ support through either Pantheon or ITS.
             sc.console.print(f'[bold yellow]=== Add-on updates for {site["name"]}:')
             pprint(add_on_updates)
         num_updates = len(add_on_updates)
-        update_table_rows = ''
-        update_bullet_list = ''
-        for update in add_on_updates:
-            name = update['name']
-            if isinstance(name, list):
-                name = '\n'.join([f'{n["title"]}, ({n["severity"].upper()})<br /><br />' for n in name])
-            update_table_rows += f'''
-<tr>
+        if num_updates > 0:
+            update_table_rows = ''
+            update_bullet_list = ''
+            for i, update in enumerate(add_on_updates):
+                name = update['name']
+                if isinstance(name, list):
+                    name = '\n'.join([f'{n["title"]}, ({n["severity"].upper()})<br /><br />' for n in name])
+                if 'new_version_url' in update:
+                    new_version = f'<a href="{escape_url(update["new_version_url"])}">{html.escape(update["new_version"])}</a>'
+                else:
+                    new_version = html.escape(update['new_version'])
+                background_color = '#fff' if i % 2 == 0 else '#CCCFCA'
+                update_table_rows += f'''
+<tr style="background-color: {background_color};">
 <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">{html.escape(update['slug'])}</div></td>
-<td><div class="rt-data-header rt-plan">Name</div><div class="rt-data rt-plan">{name}</div></td>
+<td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan">{name}</div></td>
 <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">{html.escape(update['type'])}</div></td>
 <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">{html.escape(update['current_version'])}</div></td>
-<td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">{html.escape(update['new_version'])}</div></td>
+<td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">{new_version}</div></td>
 </tr>
 '''
-            update_bullet_list += f'''
+                update_bullet_list += f'''
 * {update['slug']}
   - Name: {update['name']}
   - Type: {update['type']}
@@ -1684,35 +1711,40 @@ support through either Pantheon or ITS.
   - New version:     {update['new_version']}
 
 '''
-        site_notices.append({
-            'type': 'warning',
-            'icon': '&#x26A0;',  # warning sign
-            'csv': f'{site["name"]},updates-warning,{num_updates}',
-            'short': f'{num_updates} pending add-on updates' if num_updates > 1 else '1 pending add-on update',
-            'message': f'''
-    <p><strong>{site['name']}</strong> has {num_updates} pending add-on updates.</p>
-    <p>Please update these add-ons in the site's Dev environment and
-    <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
-    <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
-    <div class="container">
-    <table class="responsive-table site-updates">
-    <thead><th class="rt-plan">ID</th><th class="rt-plan">Name</th><th class="rt-plan">Type</th><th class="rt-plan">Current version</th><th class="rt-plan">New version</th></thead>
-    <tbody>{update_table_rows}</tbody>
-    </table>
-    </div>
-    ''',
-            'text': f'''
-    {site['name']} has {num_updates} pending add-on updates
-    <https://dashboard.pantheon.io/sites/{site['id']}#dev/code>.
-    Please update these add-ons in the site's Dev environment and
-    deploy them to the Live environment.
-    <https://docs.pantheon.io/pantheon-workflow>
-    A variety of support options are available.
-    <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+            site_notices.append({
+                'type': 'warning',
+                'icon': '&#x26A0;',  # warning sign
+                'csv': f'{site["name"]},updates-warning,{num_updates}',
+                'short': f'{num_updates} pending add-on updates' if num_updates > 1 else '1 pending add-on update',
+                'message': f'''
+<p><strong>{site['name']}</strong> has {num_updates} pending add-on updates.</p>
+<p>Please update these add-ons in the site's Dev environment and
+<a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+Uninstall any add-ons you are not using to improve your site's security, size, and speed.
+<a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+<div class="container">
+<table class="responsive-table site-updates">
+<thead><th class="rt-plan">ID</th><th class="rt-plan">Name</th><th class="rt-plan">Type</th><th class="rt-plan">Current version</th><th class="rt-plan">New version</th></thead>
+<tbody>{update_table_rows}</tbody>
+</table>
+</div>
+''',
+                'text': f'''
+{site['name']} has {num_updates} pending add-on updates
+<https://dashboard.pantheon.io/sites/{site['id']}#dev/code>.
+Please update these add-ons in the site's Dev environment and deploy
+them to the Live environment.
+<https://docs.pantheon.io/pantheon-workflow>
 
-    {update_bullet_list}
-    ''',
-        })
+Uninstall any add-ons you are not using to improve your site's
+security, size, and speed.
+
+A variety of support options are available.
+<a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+
+{update_bullet_list}
+''',
+            })
 
         # TODO: Warn if no Autopilot
         # TODO: check DNS and warn if the site is using Cloudflare IPs but is not a zone apex
@@ -2541,13 +2573,19 @@ at the moment, it should be fixed to avoid possible future problems:
     db_engine.dispose()
     smtp_connection.quit()
 
-    sc.console.print(f'\n[bold green]Email sent for {emails_sent} of {site_count} sites.\n')
-    with open('site_warnings.csv', 'w', encoding='utf-8') as f:
-        for n in all_warnings:
-            f.write(n + '\n')
+    if sc.options.all:
+        sc.console.print(f'\n[bold green]Email sent for {emails_sent} of {site_count} sites.\n')
+        ymd = datetime.datetime.today().strftime('%Y%m%d')
+        with open(f'{ymd}-notices.csv', 'w', encoding='utf-8') as f:
+            for n in all_warnings:
+                f.write(n + '\n')
 
-    with open('site_results.json', 'w', encoding='utf-8') as f:
-        json.dump(site_results, f, indent=4)
+        with open(f'{ymd}-results.json', 'w', encoding='utf-8') as f:
+            json.dump(site_results, f, indent=4)
+    else:
+        for n in all_warnings:
+            sc.console.print(n)
+        pprint(site_results)
 
     sc.console.print(f'\n[bold green]Site savings:\n')
     pprint(site_savings)

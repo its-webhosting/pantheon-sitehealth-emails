@@ -154,8 +154,7 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
 
-* Check for out-of-date WordPress Plugins, Drupal modules, and themes.
-  * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
+* Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
 
 * Report on environment lock (no notice, just a report section)
 
