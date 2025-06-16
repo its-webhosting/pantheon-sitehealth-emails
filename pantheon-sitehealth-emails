@@ -1403,7 +1403,7 @@ plugin and remove {display_name}.
                     )
             if drupal_version.startswith('7.'):
                 updates, errors, fatal = drush(live_site, 'pm:updatestatus', '--full')
-                if fatal or updates is None:
+                if fatal:
                     site_notices += drush_error(site['name'],
                                                 'pm-updatestatus',
                                                 f'Unable to run <code>drush pm:updatestatus</code> for {site["name"]}.',
@@ -1714,7 +1714,7 @@ support through either Pantheon or ITS.
             site_notices.append({
                 'type': 'warning',
                 'icon': '&#x26A0;',  # warning sign
-                'csv': f'{site["name"]},updates-warning,{num_updates}',
+                'csv': f'{site["name"]},updates-addons,{num_updates}',
                 'short': f'{num_updates} pending add-on updates' if num_updates > 1 else '1 pending add-on update',
                 'message': f'''
 <p><strong>{site['name']}</strong> has {num_updates} pending add-on updates.</p>
