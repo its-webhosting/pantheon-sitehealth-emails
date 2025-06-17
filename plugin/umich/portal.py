@@ -23,12 +23,16 @@ def setup_portal_db():
         metadata = db.MetaData()
 
         sites_site = db.Table('sites_site', metadata, autoload_with=portal_db_engine)
-        query = db.select(sites_site.c['id', 'site_slug', 'owner_group'])
+        query = db.select(sites_site.c['id', 'site_slug', 'owner_group', 'shortcode'])
         for row in connection.execute(query).all():
             # https://github.com/sqlalchemy/sqlalchemy/discussions/10091
             # noinspection PyProtectedMember
             site = row._asdict()
-            portal_sites[site['site_slug']] = {'id': site['id'], 'owner_group': site['owner_group']}
+            portal_sites[site['site_slug']] = {
+                'id': site['id'],
+                'owner_group': site['owner_group'],
+                'shortcode': site['shortcode'],
+            }
 
         sc.config['Pantheon']['plan_sku_to_name'] = {}
         sites_pantheonplan = db.Table('sites_pantheonplan', metadata, autoload_with=portal_db_engine)

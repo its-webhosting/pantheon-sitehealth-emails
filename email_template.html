@@ -286,7 +286,7 @@ h3 { font-size: 15pt; }
 <p><span style="font-weight: 700; background-color: palegreen;"> [ This is a test report that will actually go to {{dry_run_recipient}} when it is sent for real. ] </span></p>
 {% endif %}
 
-<p>You are receiving this email because you own a <a href="https://its.umich.edu/computing/web-mobile/pantheon">U-M Pantheon website</a>, <strong>{{site_name}}</strong>{%if site_url%}, at <a href="{{site_url}}">{{site_url}}</a>{%endif%}.  {%if end_of_contract_year %}<span style="font-weight: bold; background-color: #FFE684;">The deadline for moving this website to a lower Pantheon rate plan to save money, or for deleting the website, is June 30.</span>  On July 1, you will be charged the annual fee for the Pantheon plan your site is using.{% endif %} You will {%if end_of_contract_year %}also{% endif %} receive this report at the start of each month to help you keep track of what is happening with your website.</p>
+<p>You are receiving this email because you own a <a href="https://its.umich.edu/computing/web-mobile/pantheon">U-M Pantheon website</a>, <strong>{{site_name}}</strong>{%if site_url%}, at <a href="{{site_url}}">{{site_url}}</a>{%endif%}.  {%if end_of_contract_year %}<span style="font-weight: bold; background-color: #FFE684;">The deadline for making changes to the Pantheon rate plan ahead of the July 1 annual billing is June 29.  After June 29, you will only be able to use the portal to upgrade the site to a larger plan.  To downgrade a site to a lower plan (including Sandbox) or to delete the site after June 29, you will need to send an email requesting the change to webmaster@umich.edu.</span>  On July 1, you will be charged the annual fee for the Pantheon plan your site is using.{% endif %} You will {%if end_of_contract_year %}also{% endif %} receive this report at the start of each month to help you keep track of what is happening with your website.</p>
 <p>You can manage this website through the <a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/detail/">ITS Web Hosting Services Portal</a>, and <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">obtain support through either Pantheon or ITS</a>.</p>
 
 {% if notices|length > 0 %}
@@ -384,7 +384,7 @@ h3 { font-size: 15pt; }
 </div>
 
 {% if months_until_recommendations == 0 %}
-  <div class="container">
+  <div id="estimated-costs" class="container">
     <table class="responsive-table">
       <caption>{{site_name}} Estimated Plan Costs<br /><span style="font-size: smaller;">{{estimate_start_date}} &mdash; {{estimate_end_date}}</span></caption>
       <thead>
@@ -422,7 +422,7 @@ h3 { font-size: 15pt; }
     <p>ITS will generally use the higher of the two estimates. To determine what plan a site should be on for a given level of traffic, use the <a href="https://documentation.its.umich.edu/node/4705">Estimated Pantheon Website Cost graph</a>.</p>
 </div>
 {% else %}
-  <div class="container">
+  <div id="estimated-costs" class="container">
     <table class="responsive-table">
       <caption>{{site_name}} Estimated Plan Costs<br /><span style="font-size: smaller;">{{estimate_start_date}} &mdash; {{estimate_end_date}}</span></caption>
       <tr><td><center>Cost estimates will be available once the site has five months of Pantheon traffic data.</center></td></tr>

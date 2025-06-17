@@ -754,7 +754,7 @@ def main() -> None:
     end_date = sc.options.date
     end_date_yyyy_mm = end_date.strftime('%Y-%m')
     start_date = end_date.replace(day=1, year=end_date.year - 1)  # fist day of the same month last year
-    end_of_contract_year = True if end_date.month == 6 and 16 < end_date.day < 30 else False
+    end_of_contract_year = True if end_date.month == 6 and 16 <= end_date.day < 30 else False
     sc.debug(f'Generating report for {start_date} through {end_date}')
 
     # Generate a cap shape to use at the end of the traffic surge chart bars
@@ -777,7 +777,6 @@ def main() -> None:
 
     for site_id in sites:
         site = sites[site_id]
-        its_downgrade_site = False
         site_notices = []
         wp_smell = ''
         drush_smell = ''
@@ -978,11 +977,10 @@ and to find out what went wrong:
             pprint(domains)
         site_url = ''
         main_fqdn = ''
-        dns_points_at_cloudflare = 0
-        dns_points_elsewhere = 0
         not_behind_cloudflare = []
         not_in_dns = []
         behind_cloudflare_not_proxied = []
+        cloudflare_in_use_for_site = False
         if isinstance(domains, dict):
             for d in domains.keys():
                 domain = domains[d]
@@ -994,6 +992,8 @@ and to find out what went wrong:
                     continue
                 if domain['primary'] or main_fqdn == '':
                     main_fqdn = hostname
+                dns_points_at_cloudflare = 0
+                dns_points_elsewhere = 0
                 try:
                     a = dns.resolver.resolve(hostname, 'A')
                     for rdata in a:
@@ -1041,9 +1041,12 @@ and to find out what went wrong:
                     if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
                         sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare')
                         not_behind_cloudflare.append(hostname)
-                    if dns_points_at_cloudflare > 0 and hostname not in proxied_fqdns:
-                        sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is behind Cloudflare but not proxied')
-                        behind_cloudflare_not_proxied.append(hostname)
+                    if dns_points_at_cloudflare > 0:
+                        if hostname not in proxied_fqdns:
+                            sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is behind Cloudflare but not proxied')
+                            behind_cloudflare_not_proxied.append(hostname)
+                        else:
+                            cloudflare_in_use_for_site = True
 
             custom_domains = [d for d in domains.keys() if domains[d]['type'] == 'custom']
             primary_domain = [d for d in custom_domains if domains[d]['primary']]
@@ -1239,7 +1242,7 @@ remove these domains from the Pantheon live environment for
                 'https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin',
                 'Strongly recommended to ensure PHP sessions work correctly on Pantheon.'
             )
-            if dns_points_at_cloudflare > 0:
+            if cloudflare_in_use_for_site:
                 site_notices += check_wordpress_plugin(
                     site['name'],
                     plugins,
@@ -1384,7 +1387,7 @@ plugin and remove {display_name}.
                     'Necessary for receiving extended support for Drupal 7.'
                 )
             else:
-                if dns_points_at_cloudflare > 0:
+                if cloudflare_in_use_for_site:
                     site_notices += check_drupal_module(
                         site['name'],
                         mods,
@@ -2255,44 +2258,6 @@ before June 30.
                                 site_recommended_plan = site_current_plan
                                 savings = 0
                         # TODO: if Basic still looks best, give a special message recommending switching to Basic.
-                    if site_recommended_plan != site_current_plan and end_of_contract_year:
-                        its_downgrade_site = True
-                        site_notices.append({
-                            'type': 'alert',
-                            'icon': '&#x1F6A8;',  # police car light
-                            'csv': f'{site["name"]},its-will-change-plan,{site["plan_name"]},{site_recommended_plan},{savings:,.2f}',
-                            'short': f'plan change to {site_recommended_plan} scheduled',
-                            'message': f'''
-<p>At 8 A.M. this Friday, June 28, ITS will move the <strong>{site["name"]}</strong> website from
-Pantheon's <strong>{site["plan_name"]}</strong> plan to <strong>{site_recommended_plan}</strong>.</p>
-<p>Based on the site's last 12 months of traffic, this may save you up to <strong>${savings:,.2f}</strong> over the
-coming year.</p>
-<p>You can move the site to a higher plan at any point in the year without penalty.  But if you prefer to have
-<strong>{site["name"]}</strong> remain on <strong>{site["plan_name"]}</strong> &mdash; for
-example, if you anticipate traffic will increase significantly over the next year &mdash; reply to this email
-before 8 A.M. this Friday.</p>
-{extra_message}
-<p><i>You can only move a site to a lower plan between June 16 - 30 each year without incurring a substantial
-financial penalty.</i></p>
-    ''',
-                            'text': f'''
-At 8 A.M. this Friday, June 28, ITS will move the {site["name"]}
-website from Pantheon's {site["plan_name"]} plan to
-{site_recommended_plan}.
-
-Based on the site's last 12 months of traffic, this may save you up to
-${savings:,.2f} over the coming year.
-
-You can move the site to a higher plan at any point in the year without
-penalty.  But if you prefer to have {site["name"]} remain
-on {site["plan_name"]} -- for example, if you anticipate
-traffic will increase significantly over the next year -- reply to
-this email before 8 A.M. this Friday.
-{extra_text}
-You can only move a site to a lower plan between June 16 - 30 each
-year without incurring a substantial financial penalty.
-'''
-                        })
                         site_savings.append({'site': site['name'], 'savings': savings,
                                              'current_plan': site['plan_name'],
                                              'recommended_plan': site_recommended_plan})
@@ -2433,8 +2398,74 @@ at the moment, it should be fixed to avoid possible future problems:
                          [n for n in site_notices if n['type'] == 'info']
         report = f'Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}'
         subject = f'{site["name"]}: {report}'
-        if its_downgrade_site:
-            subject = f'Time Sensitive: {site["name"]}: plan change | {report}'
+        if end_of_contract_year:
+            subject = f'Time Sensitive: {site["name"]} annual billing'
+            shortcode = sc.config['UMich']['portal']['sites'][site['name']]['shortcode']
+            annual_bill = float(plan_info[site_current_plan]['cost'])
+            sorted_notices.insert(0, {
+                'type': 'alert',
+                'icon': '&#x1F4B5;',  # dollar banknotes
+                'csv': f'{site["name"]},annual-bill,{annual_bill},{shortcode}',
+                'short': f'${annual_bill:,.2f} will be billed to shortcode {shortcode} on July 1',
+                'message': f'''
+                <p style="background-color: #f8d7da; padding: 1em; border: 2px solid #58151c;">
+                    On July 1, ${annual_bill:,.2f} will be billed to shortcode <strong>{shortcode}</strong>
+                    when ITS runs its billing process.  This charge will be for a
+                    full year (July 1 - June 30) of Pantheon hosting on the {site['plan_name']} plan for the site
+                    <strong>{site["name"]}</strong>.
+                </p>
+                <p>Please see if a different plan would be better:</p>
+                <ul>
+                    <li><a href="#estimated-costs">Estimated Plan Costs for {site['name']}</a> (see the table, below)</li>
+                    <li><a href="https://docs.pantheon.io/guides/account-mgmt/plans/resources">Pantheon Plan Resources</a></li>
+                    <li><a href="https://its.umich.edu/computing/web-mobile/pantheon/pricing">U-M Pantheon pricing</a></li>
+                </ul>
+                <p>Do you want to change to a different plan or have use a different shortcode?</p>
+                <ul>
+                    <li>
+                        <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">Change the plan for {site['name']}</a>.
+                        Changes must be made by the end of the day on June 29 for the July 1 annual billing.
+                    </li>
+                    <li>
+                        <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/edit/">Change the shortcode for {site['name']}</a>.
+                        (for all future billing).
+                    </li>
+                </ul>
+                <p>On July 1, you will be billed for the plan the site was on as of June 30.</p>
+                ''',
+                'text': f'''
+=======================================================================
+On July 1, ${annual_bill:,.2f} will be billed to shortcode {shortcode}
+when ITS runs its billing process.  This charge will be for a full
+year (July 1 - June 30) of Pantheon hosting on the
+{site['plan_name']} plan for the site {site["name"]}.
+=======================================================================
+
+Please see if a different plan would be better:
+
+  * See the Estimated Plan Costs for {site['name']}
+    in the table below.
+  * See the Pantheon Plan Resources table at
+    <https://docs.pantheon.io/guides/account-mgmt/plans/resources>
+  * See U-M Pantheon pricing at
+    <https://its.umich.edu/computing/web-mobile/pantheon/pricing>
+
+Do you want to change to a different plan or have use a different
+shortcode?
+
+  * Change the plan for {site['name']}:
+    <https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
+    Changes must be made by the end of the day on June 29 for the
+    July 1 annual billing.
+
+  * Change the shortcode for {site['name']}</a>
+    <https://admin.webservices.umich.edu/sites/{portal_site_id}/edit/>
+    (for all future billing).
+
+On July 1, you will be billed for the plan the site was on as of
+June 30.
+''',
+            })
         elif len(sorted_notices) > 0:
             if sorted_notices[0]['type'] == 'alert':
                 subject = f'Action Required: {site["name"]}: {sorted_notices[0]['short']} | {report}'
@@ -2510,6 +2541,7 @@ at the moment, it should be fixed to avoid possible future problems:
             msg['Bcc'] = 'januside@go.mail.umich.edu, its-webmaster@go.mail.umich.edu'
         else:
             msg['To'] = f'januside@go.mail.umich.edu, {sc.options.smtp_username}@umich.edu'
+            #msg['To'] = f'januside@go.mail.umich.edu, {sc.options.smtp_username}@umich.edu, ITS-proj-wolverine-web-services@umich.edu'
         msg['Reply-to'] = 'webmaster@umich.edu'
         msg['Date'] = datetime.datetime.now(datetime.UTC).strftime("%a, %d %b %Y %T %z")
         msg['Subject'] = subject
