@@ -1430,7 +1430,8 @@ plugin and remove {display_name}.
                             new_version = f'none: {u["project_status"]}'
                         add_on_updates.append({
                             'slug': package,
-                            'name': f'<a href="{escape_url(u["link"])}">{html.escape(u["title"])}</a>',
+                            'name': f'<a href="{escape_url(u["link"])}">{html.escape(u["title"])}</a>'
+                                if 'link' in u else html.escape(u['title']),
                             'type': u['type'] if type in u else 'package',
                             'current_version': current_version,
                             'new_version': new_version,
