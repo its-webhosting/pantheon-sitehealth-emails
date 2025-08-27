@@ -213,7 +213,7 @@ def escape_url(url):
     return urllib.parse.quote(url, safe=':/?#&=', encoding='utf-8', errors='strict')
 
 
-def run_terminus(command: list) -> (str, str, bool):
+def run_terminus(command: list, input_data=None) -> (str, str, bool):
 
     command = ['terminus', '--no-ansi', '--no-interaction', *command]
     commandline = ' '.join([(("'" + arg.replace("'", "\\'") + "'") if len(arg.split()) > 1 else arg) for arg in command])
@@ -221,9 +221,16 @@ def run_terminus(command: list) -> (str, str, bool):
     sc.debug('Running Terminus command:\n', commandline)
 
     with sc.console.status(f'[bold green]Running: [bright_magenta]{commandline}'):
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        p = subprocess.Popen(
+            command,
+            stdin=(subprocess.PIPE if input_data is not None else None),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            close_fds=True
+        )
         try:
-            stdout, stderr = p.communicate(timeout=300)
+            data = None if input_data is None else input_data.encode('utf-8')
+            stdout, stderr = p.communicate(input=data, timeout=300)
         except subprocess.TimeoutExpired:
             p.kill()
             stdout, stderr = p.communicate()
@@ -382,12 +389,12 @@ def drush(siteenv: str, *args) -> (Any, str):
     return result, errors.strip(), fatal
 
 
-def drush_php_eval(siteenv: str, *args) -> (Any, str):
+def drush_php_script(siteenv: str, script: str) -> (Any, str):
     """
     Run a "drush php:eval" command through Terminus and return the result as a string.
     """
-    command = ['drush', siteenv, '--', 'php:eval', *args, '--format=json']
-    output, errors, fatal = run_terminus(command)
+    command = ['drush', siteenv, '--', 'php:script', '--format=json', '-']
+    output, errors, fatal = run_terminus(command, script)
     output, errors = fix_drush_output(output, errors)
     try:
         result = json.loads(output)
@@ -1071,7 +1078,7 @@ and to find out what went wrong:
             if len(custom_domains) > 1 and len(primary_domain) == 0 and site['framework'] != 'wordpress_network':
                 is_multisite = False
                 if site['framework'].startswith('drupal'):
-                    sites_file, errors, fatal = drush_php_eval(
+                    sites_file, errors, fatal = drush_php_script(
                         live_site,
                         'echo json_encode( ["result" => (is_file("/code/web/sites/sites.php") || is_file("/code/sites/sites.php") ? true : false) ] );'
                     )
@@ -1535,7 +1542,58 @@ plugin and remove {display_name}.
                     sc.console.print(f'[bold red]Unable to run <code>composer audit</code> for {site["name"]}')
                 if sc.options.verbose:
                     pprint(audit)
+                sc.console.print(f'[bold magenta]=== Checking for Drupal user agent on {site["name"]}:')
+                ua_check_script = '''
+$result = 'unknown';
+try {
+    $client = \Drupal::httpClient();
+    $response = $client->get( 'https://ifconfig.me/ua' );
+    $result = $response->getBody();
+}
+catch ( RequestException $e ) {
+    watchdog_exception( 'pantheon_sitehealth_emails', $e->getMessage() );
+}
+echo( json_encode( array( 'result' => "{$result}" ) ) );
+'''
+                ua, errors, fatal = drush_php_script(
+                    live_site,
+                    ua_check_script,
+                )
+                if fatal or ua is None:
+                    site_notices += drush_error(site['name'], 'drupal-ua-check',
+                                                f'Failed to get the user agent string used by {site["name"]}.',
+                                                errors)
+                elif errors != '':
+                    drush_smell = errors
+                if not isinstance(ua, dict) \
+                    or 'result' not in ua \
+                    or not isinstance(ua['result'], str):
+                    site_notices += drush_error(site['name'], 'drupal-ua-check',
+                                                f'Failed to get the user agent string used by {site["name"]}.',
+                                                'Unexpected result from drush php-script.')
+                elif not ua['result'].startswith('Drupal (+https://drupal.org/); UMich; https://') \
+                    or 'your-site' in ua['result'].lower() \
+                    or 'your_site' in ua['result'].lower():
+                    site_notices.append({
+                        'type': 'info',
+                        'icon': '&#x1F50E;',  # magnifying glass
+                        'csv': f'{site["name"]},drupal-ua,{ua["result"]}',
+                        'short': 'Drupal user agent needs to be configured',
+                        'message': f'''
+<p>Please <a href="https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent">
+configure the user agent string</a> that <strong>{site['name']}</strong> uses for outgoing HTTP requests.
+This will ensure that requests for data that this site makes of other University of Michigan websites do
+not get blocked.</p>
+''',
+                        'text': f'''
+Please configure the user agent string that {site['name']}
+uses for outgoing HTTP requests.  This will ensure that requests for
+data that this site makes of other University of Michigan websites do
+not get blocked.
 
+<https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent>
+''',
+                    })
         else:
             sc.console.print(f':exclamation: [bold red] ATTENTION: unknown framework for {site["name"]}: {site["framework"]}')
 
