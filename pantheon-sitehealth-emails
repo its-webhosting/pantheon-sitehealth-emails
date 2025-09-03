@@ -1546,7 +1546,7 @@ plugin and remove {display_name}.
                 ua_check_script = '''
 $result = 'unknown';
 try {
-    $client = \Drupal::httpClient();
+    $client = \\Drupal::httpClient();
     $response = $client->get( 'https://ifconfig.me/ua' );
     $result = $response->getBody();
 }
@@ -1803,6 +1803,106 @@ security, size, and speed.
 
 A variety of support options are available.
 <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+
+{update_bullet_list}
+''',
+            })
+
+        # September 2025 - early 2026:
+        # Check to see if the site needs to migration from Pantheon PHP Runtime Generation 1 to Generation 2
+        sc.console.print(f'[bold magenta]=== Checking PHP Runtime Generation for {site["name"]}:')
+        runtime_upgrade_needed = {
+            'dev': False,
+            'test': False,
+            'live': False,
+        }
+        for env in ['dev', 'test', 'live']:
+            if site['framework'].startswith('drupal'):
+                gen1, errors, fatal = drush_php_script(
+                    site["name"] + '.' + env,
+                    'echo json_encode( ["result" => is_file("/etc/centos-release") ? true : false ] );'
+                )
+                if isinstance(gen1, dict) and 'result' in gen1 and gen1['result'] == True:
+                    runtime_upgrade_needed[env] = True
+            else:
+                gen1, errors, fatal = wp_eval(
+                    site["name"] + '.' + env,
+                    'echo is_file("/etc/centos-release") ? "true": "false";')
+                if isinstance(gen1, str) and gen1.startswith('true'):
+                    runtime_upgrade_needed[env] = True
+            if fatal or gen1 is None:
+                site_notices += drush_error(site['name'], 'multisite-check',
+                                            f'Unable to determine Pantheon PHP Runtime Generation for {site["name"]}.{env}',
+                                            errors)
+            elif errors != '' and not errors.startswith('[warning] This environment is in read-only Git mode.'):
+                if site['framework'].startswith('drupal'):
+                    drush_smell = errors
+                else:
+                    wp_smell = errors
+        if sc.options.verbose:
+            sc.console.print(f'[PHP Runtime Generation for {site["name"]}:')
+            pprint(runtime_upgrade_needed)
+        if any(runtime_upgrade_needed.values()):
+            update_table_rows = ''
+            update_bullet_list = ''
+            for env in ['dev', 'test', 'live']:
+                background_color = '#CCCFCA' if env == 'test' else '#fff'
+                env_name = env.capitalize()
+                gen = 'Gen 1' if runtime_upgrade_needed[env] else 'Gen 2'
+                status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-opt-in">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
+                status_text = '⚠️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
+                update_table_rows += f'''
+<tr style="background-color: {background_color};">
+<td><div class="rt-data-header rt-plan">Environment</div><div class="rt-data rt-plan">{env_name}</div></td>
+<td><div class="rt-data-header rt-plan"">Generation</div><div class="rt-data rt-plan">{gen}</div></td>
+<td><div class="rt-data-header rt-plan">Status</div><div class="rt-data rt-plan">{status_html}</div></td>
+</tr>
+'''
+update_bullet_list += f'''
+* {env_name} environment:
+  - Generation: {gen}
+  - Status: {status_text}
+
+'''
+            site_notices.append({
+                'type': 'warning',
+                'icon': '&#x26A0;',  # warning sign
+                'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
+                'short': f'Action needed: upgrade to PHP Runtime Generation 2',
+                'message': f'''
+<p><strong>{site['name']}</strong> has environments that need to be upgraded to Pantheon Runtime
+Generation 2.</p>
+<p>Pantheon will gradually move sites that are still on Generation 1 to Generation 2 starting
+September 17 and ending October 27.  Since this
+upgrade can potentially cause issues, especially with older sites, ITS recommends you
+<a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-opt-in">opt in to the upgrade early</a>
+for your site's Dev and Test environments, test them and fix any problems, and then move your Live
+environment to Generation 2 yourself during a low-traffic time.  Alternatively, you can
+<a href="https://docs.pantheon.io/php-runtime-generation-2#q-how-do-i-opt-out-of-the-upcoming-platform-rollout">
+take action to temporarily opt-out of the upgrade</a>.</p>
+<div class="container">
+<table class="responsive-table site-updates">
+<thead><th class="rt-plan">Environment</th><th class="rt-plan">Generation</th><th class="rt-plan">Status</th></thead>
+<tbody>{update_table_rows}</tbody>
+</table>
+</div>
+''',
+                'text': f'''
+{site['name']} has environments that need
+to be upgraded to Pantheon Runtime Generation 2.
+
+Pantheon will gradually move sites that are still on
+Generation 1 to Generation 2 starting September 17
+and ending October 27.  Since this upgrade can
+potentially cause issues, especially with older sites,
+ITS recommends you opt in to the upgrade early
+<https://docs.pantheon.io/php-runtime-generation-2#how-to-opt-in>
+for your site's Dev and Test environments, test them
+and fix any problems, and then move your Live
+environment to Generation 2 yourself during a low-
+traffic time.  Alternatively, you can take action to
+temporarily opt-out of the upgrade
+<https://docs.pantheon.io/php-runtime-generation-2#q-how-do-i-opt-out-of-the-upcoming-platform-rollout>
 
 {update_bullet_list}
 ''',
@@ -2643,7 +2743,7 @@ June 30.
         emails_sent += 1
         # TODO: add feature to send mails using SendGrid.
         # This script can run longer than some SMTP servers will allow a connection to be open.
-        if (emails_sent % 20) == 0:
+        if (emails_sent % 5) == 0:
             if sc.options.verbose:
                 sc.debug(f'[bold yellow]{emails_sent} emails sent, closing and reopening the SMTP connection.')
             smtp_connection.quit()
