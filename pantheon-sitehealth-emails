@@ -1245,7 +1245,7 @@ remove these domains from the Pantheon live environment for
                 site['name'],
                 plugins,
                 'wp-native-php-sessions',
-                'Native PHP Sessions for WordPress',
+                'Native PHP Sessions',
                 'https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin',
                 'Strongly recommended to ensure PHP sessions work correctly on Pantheon.'
             )
@@ -1858,7 +1858,7 @@ A variety of support options are available.
 <td><div class="rt-data-header rt-plan">Status</div><div class="rt-data rt-plan">{status_html}</div></td>
 </tr>
 '''
-update_bullet_list += f'''
+                update_bullet_list += f'''
 * {env_name} environment:
   - Generation: {gen}
   - Status: {status_text}

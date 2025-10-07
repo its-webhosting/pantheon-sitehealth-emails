@@ -40,7 +40,7 @@ def setup_portal_db():
                               'portal_plan_name',
                               'pantheon_plan_sku',
                               'traffic_limits',
-                              'annual_plan_charge',
+                              'annual_plan_customer_charge',
                               'is_active'])
         for row in connection.execute(query).all():
             # noinspection PyProtectedMember
@@ -49,7 +49,7 @@ def setup_portal_db():
                 if plan['portal_plan_name'] not in portal_plan_info:
                     portal_plan_info[plan['portal_plan_name']] = {}
                 portal_plan_info[plan['portal_plan_name']]['traffic_limit'] = str(plan['traffic_limits'])
-                portal_plan_info[plan['portal_plan_name']]['cost'] = str(plan['annual_plan_charge'])
+                portal_plan_info[plan['portal_plan_name']]['cost'] = str(plan['annual_plan_customer_charge'])
             sc.config['Pantheon']['plan_sku_to_name'][plan['pantheon_plan_sku']] = plan['portal_plan_name']
 
         sc.invoke_hooks('setup.umich.portal', connection)

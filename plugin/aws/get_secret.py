@@ -51,4 +51,5 @@ def get_secret(secret_name, key_name = None, region_name='', profile_name=''):
         return secrets[secret_name]
     if key_name not in secrets[secret_name]:
         raise KeyError(f'Key {key_name} not found in secret {secret_name}')
+    #sc.debug(f'Secret {secret_name}.{key_name}: {secrets[secret_name][key_name]}')
     return secrets[secret_name][key_name]
