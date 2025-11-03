@@ -8,6 +8,7 @@
 # Usage:
 #   pantheon-sitehealth-emails [-h|--help] 
 #
+# TODO: add WordPress MU plugin check (report on anything except plugin)
 
 import argparse
 import importlib
@@ -1271,6 +1272,25 @@ remove these domains from the Pantheon live environment for
                     if p['status'] == 'must-use' and p['name'] != 'loader':
                         sc.console.print(f'[bold yellow]{site["name"]} has must-use plugin:')
                         pprint(p)
+                    # Special check for Object Cache Pro upgrade, see https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config
+                    if p['name'] == 'object-cache-pro' and p['status'] != 'inactive':
+                        # This isn't a plugin, but here is a good place to check for it.
+                        ocp_config, errors, fatal = wp_eval(live_site, 'echo (defined("WP_REDIS_CONFIG") && isset(WP_REDIS_CONFIG["analytics"]["persist"]) && WP_REDIS_CONFIG["analytics"]["persist"])? "true": "false";')
+                        if fatal or ocp_config is None:
+                            site_notices += wp_error(site['name'],
+                                                     'ocp-config-check', f'Unable to check OCP configuration for {site["name"]}.',
+                                                     errors)
+                        elif errors != '':
+                            wp_smell = errors
+                        if isinstance(ocp_config, str) and ocp_config.startswith('true'):
+                            site_notices.append({
+                                'type': 'alert',
+                                'icon': '&#x1F6A8;',  # police car light
+                                'csv': f'{site["name"]},ocp-config-fix-needed',
+                                'short': 'Fix Object Cache Pro configuration',
+                                'message': f'<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>',
+                                'text': f"Please fix this site\'s Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config",
+                            })
                 # Special check for our fork of Hummingbird (version number contains 'umich')
                 name = 'hummingbird-performance'
                 display_name = 'UMich Hummingbird'
@@ -1385,6 +1405,23 @@ plugin and remove {display_name}.
                 'Necessary for automatically clearing Pantheon\'s caches (not Cloudflare\'s) when content is updated.'
             )
             if drupal_version.startswith('7.'):
+                site_notices.append({
+                    'type': 'alert',
+                    'icon': '&#x1F6A8;',  # police car light
+                    'csv': f'{site["name"]},drupal7-eol',
+                    'short': f'Migrate off Drupal 7 ASAP',
+                    'message': f'''
+<p><b>Drupal 7 Extended Support for {site["name"]} will end in December 2026.</b>
+Please migrate this site's content to a new site as soon as possible and
+then switch {site["name"]} to the Sandbox plan.</p>
+                ''',
+                    'text': f'''
+Drupal 7 Extended Support for {site["name"]} will end in
+December 2026.  Please migrate this site's content to a new site
+as soon as possible and then switch {site["name"]} to
+the Sandbox plan.
+                ''',
+                })
                 site_notices += check_drupal_module(
                     site['name'],
                     mods,
@@ -1849,7 +1886,7 @@ A variety of support options are available.
                 background_color = '#CCCFCA' if env == 'test' else '#fff'
                 env_name = env.capitalize()
                 gen = 'Gen 1' if runtime_upgrade_needed[env] else 'Gen 2'
-                status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-opt-in">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
+                status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
                 status_text = '⚠️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
                 update_table_rows += f'''
 <tr style="background-color: {background_color};">
@@ -1870,16 +1907,15 @@ A variety of support options are available.
                 'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
                 'short': f'Action needed: upgrade to PHP Runtime Generation 2',
                 'message': f'''
-<p><strong>{site['name']}</strong> has environments that need to be upgraded to Pantheon Runtime
-Generation 2.</p>
-<p>Pantheon will gradually move sites that are still on Generation 1 to Generation 2 starting
-September 17 and ending October 27.  Since this
-upgrade can potentially cause issues, especially with older sites, ITS recommends you
-<a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-opt-in">opt in to the upgrade early</a>
-for your site's Dev and Test environments, test them and fix any problems, and then move your Live
-environment to Generation 2 yourself during a low-traffic time.  Alternatively, you can
+<p><strong>{site['name']}</strong> has environments that need to be upgraded to <a href="https://docs.pantheon.io/php-runtime-generation-2">Pantheon Runtime
+Generation 2</a>.</p>
+<p>Pantheon is actively moving sites that are still on Generation 1 to Generation 2, and plans to have all sites
+on Generation 2 by November 23, except for
 <a href="https://docs.pantheon.io/php-runtime-generation-2#q-how-do-i-opt-out-of-the-upcoming-platform-rollout">
-take action to temporarily opt-out of the upgrade</a>.</p>
+sites that temporarily opt out</a>.  Since the upgrade can potentially cause issues, especially with older sites,
+ITS recommends you <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">opt in to the upgrade
+now</a> for your site's Dev and Test environments, test them and fix any problems, and then move your Live
+environment to Generation 2 yourself during a low-traffic time.</p>
 <div class="container">
 <table class="responsive-table site-updates">
 <thead><th class="rt-plan">Environment</th><th class="rt-plan">Generation</th><th class="rt-plan">Status</th></thead>
@@ -1888,21 +1924,20 @@ take action to temporarily opt-out of the upgrade</a>.</p>
 </div>
 ''',
                 'text': f'''
-{site['name']} has environments that need
-to be upgraded to Pantheon Runtime Generation 2.
+{site['name']} has environments that need to be upgraded to Pantheon
+Runtime Generation 2.
+<https://docs.pantheon.io/php-runtime-generation-2>
 
-Pantheon will gradually move sites that are still on
-Generation 1 to Generation 2 starting September 17
-and ending October 27.  Since this upgrade can
-potentially cause issues, especially with older sites,
-ITS recommends you opt in to the upgrade early
-<https://docs.pantheon.io/php-runtime-generation-2#how-to-opt-in>
-for your site's Dev and Test environments, test them
-and fix any problems, and then move your Live
-environment to Generation 2 yourself during a low-
-traffic time.  Alternatively, you can take action to
-temporarily opt-out of the upgrade
+Pantheon is actively moving sites that are still on Generation 1 to
+Generation 2, and plans to have all sites on Generation 2 by
+November 23, except for sites that temporarily opt out.
 <https://docs.pantheon.io/php-runtime-generation-2#q-how-do-i-opt-out-of-the-upcoming-platform-rollout>
+Since the upgrade can potentially cause issues, especially with older
+sites, ITS recommends you opt in to the upgrade now
+<https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade>
+for your site's Dev and Test environments, test them and fix any
+problems, and then move your Live environment to Generation 2 yourself
+during a low-traffic time.
 
 {update_bullet_list}
 ''',
