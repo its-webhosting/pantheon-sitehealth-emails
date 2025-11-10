@@ -1,0 +1,6 @@
+[default]
+region = us-east-1
+output = json
+[plugins]
+login = awscli_login
+cli_legacy_plugin_path = /Users/markmont/wws/pantheons/pantheon-sitehealth-emails/.venv/lib/python3.13/site-packages

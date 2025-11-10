@@ -9,7 +9,7 @@ Code contributions are gratefully accepted!
 
 ## Installation
 
-Works with Python 3.12.  It should work with Python 3.11 but that has not been tested.  It will not work with Python 3.10 or earlier versions.
+Works with Python 3.13 and 3.12.  It should work with Python 3.11 but that has not been tested.  It will not work with Python 3.10 or earlier versions.
 
 Running `brew install python@3.12` should work for macOS users.
 
@@ -35,19 +35,58 @@ Other requirements:
     * `brew install awscli` should work for macOS users
     * Either run `aws configure --profile webhosting` or set the `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` environment variables.
 
+Install `uv` by running `brew install uv` or see https://docs.astral.sh/uv/getting-started/installation/
+
 ```bash
 git clone git@github.com:its-webhosting/pantheon-sitehealth-emails.git
 cd pantheon-sitehealth-emails
 
-python3.12 -m venv venv   # change the version number if you're not using 3.12
-source venv/bin/activate
+uv self update
+uv python install --managed-python 3.13
+uv python upgrade --managed-python 3.13 # in case it was already installed by another project, but out of date
+uv venv --managed-python --python 3.13
+source .venv/bin/activate
+
 which python  # make sure it's under venv/
 python -V     # make sure it's the version you expect
 
 ssh-add ~/.ssh/your-github-key-file  # required for installing umcloudflare package from private repo
-pip install .[mysql,aws,cloudflare]  # remove from the list the features you won't use
+uv pip install .[mysql,aws,cloudflare]  # remove from the list the features you won't use
 
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
+```
+
+Install awscli-login
+
+https://pypi.org/project/awscli-login/
+
+```bash
+direnv allow .  # sets AWS_CONFIG to point to ./aws-config
+brew install awscli  # unless you already have it via another method
+uv pip install --upgrade setuptools
+uv pip install awscli-login
+aws configure set plugins.login awscli_login
+
+aws configure set plugins.cli_legacy_plugin_path \
+    $(uv pip show awscli-login | sed -nr 's/^Location: (.*)/\1/p')
+
+aws login configure
+# ECP Endpoint URL [None]: https://weblogin.umich.edu/idp/profile/SAML2/SOAP/ECP
+# Username [None]: markmont
+# Enable Keyring [False]:
+# Duo Factor [None]: push
+# Role ARN [None]:
+```
+
+### Log in to AWS
+
+* Log in to AWS at https://aws.it.umich.edu/
+* Select the role and account `its-wws-admin`
+
+Also log in via the command line:
+
+```bash
+aws login
 ```
 
 Get a copy of your institution's `pantheon-sitehealth-emails.toml` file and put it in the same directory as the script.  If your institution does not have one, then follow the steps in the section [One-time per-institution setup](#one-time-per-institution-setup) below.  For University of Michigan users,

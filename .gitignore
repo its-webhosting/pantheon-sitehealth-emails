@@ -25,6 +25,7 @@ logs/
 
 # Python stuff
 /venv/
+/.venv/
 /pantheon_sitehealth_emails.egg-info/
 **/__pycache__/
 *.pyc
