@@ -337,9 +337,9 @@ h3 { font-size: 15pt; }
   {% if current_plan == 'Basic' %}
   <li><strong>{{site_name}}</strong> is already on Basic, the lowest plan.  There is no cheaper plan to downgrade to.</li>
   {% elif current_plan == 'Performance Small' %}
-  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Downgrade to Basic</a> <strong><i>only between June 16 - 30 each year</i></strong> if you decide you no longer need <a href="https://its.umich.edu/computing/web-mobile/pantheon/features">Performance plan features</a>.</li>
+  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Downgrade to Basic</a> if you decide you no longer need <a href="https://its.umich.edu/computing/web-mobile/pantheon/features">Performance plan features</a>.</li>
   {% else %}
-  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Downgrade to a lower plan</a> <strong><i>only between June 16 - 30 each year</i></strong> if you think <i>Pantheon visitors</i> will be below the green dashdotted line (less than "Downgrade at") in more than 50% of future months.</li>
+  <li><a href="https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/">Downgrade to a lower plan</a> if you think <i>Pantheon visitors</i> will be below the green dashdotted line (less than "Downgrade at") in more than 50% of future months.</li>
   {% endif %}
   <li><i>This report analyzes <a href="https://docs.pantheon.io/guides/account-mgmt/traffic#how-do-you-know-if-a-visit-counts">Pantheon visitors, which are much lower than daily website visitors</a>.</i></li>
   <li><i>These numbers are best estimates. The actual numbers on Pantheon bills will be different.</i></li>

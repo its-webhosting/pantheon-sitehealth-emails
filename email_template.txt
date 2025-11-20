@@ -77,15 +77,13 @@ plan to save money:
   {% elif current_plan == 'Performance Small' %}
   * Downgrade to Basic
   <https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/>
-  ONLY BETWEEN JUNE 16 - 30 EACH YEAR if you decide you no longer need
-  Performance plan features.
+  if you decide you no longer need Performance plan features.
   <https://its.umich.edu/computing/web-mobile/pantheon/features>
   {% else %}
   * Downgrade to a lower plan
     <https://admin.webservices.umich.edu/sites/{{portal_site_id}}/plan/>
-    ONLY BETWEEN JUNE 16 - 30 EACH YEAR if you think
-    "Pantheon visitors" will be less than "Downgrade at" in more than
-    50% of future months.
+    if you think "Pantheon visitors" will be less than "Downgrade at"
+    in more than 50% of future months.
   {% endif %}
   * NOTE: This report analyzes Pantheon visitors
     <https://docs.pantheon.io/guides/account-mgmt/traffic#how-do-you-know-if-a-visit-counts>
