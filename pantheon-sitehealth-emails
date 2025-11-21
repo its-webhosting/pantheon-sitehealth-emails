@@ -1974,7 +1974,7 @@ A variety of support options are available.
                 env_name = env.capitalize()
                 gen = 'Gen 1' if runtime_upgrade_needed[env] else 'Gen 2'
                 status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
-                status_text = '⚠️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
+                status_text = '🚨️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
                 update_table_rows += f'''
 <tr style="background-color: {background_color};">
 <td><div class="rt-data-header rt-plan">Environment</div><div class="rt-data rt-plan">{env_name}</div></td>
@@ -1989,20 +1989,19 @@ A variety of support options are available.
 
 '''
             site_notices.append({
-                'type': 'warning',
-                'icon': '&#x26A0;',  # warning sign
+                'type': 'alert',
+                'icon': '&#x1F6A8;',  # police car light
                 'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
-                'short': f'Action needed: upgrade to PHP Runtime Generation 2',
+                'short': f'Action required: upgrade to PHP Runtime Generation 2',
                 'message': f'''
 <p><strong>{site['name']}</strong> has environments that need to be upgraded to <a href="https://docs.pantheon.io/php-runtime-generation-2">Pantheon Runtime
-Generation 2</a>.</p>
-<p>Pantheon is actively moving sites that are still on Generation 1 to Generation 2, and plans to have all sites
-on Generation 2 by November 23, except for
-<a href="https://docs.pantheon.io/php-runtime-generation-2#q-how-do-i-opt-out-of-the-upcoming-platform-rollout">
-sites that temporarily opt out</a>.  Since the upgrade can potentially cause issues, especially with older sites,
-ITS recommends you <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">opt in to the upgrade
-now</a> for your site's Dev and Test environments, test them and fix any problems, and then move your Live
-environment to Generation 2 yourself during a low-traffic time.</p>
+Generation 2</a> ASAP.</p>
+<p>In early 2026, Pantheon will move all remaining sites to Generation 2.  ITS strongly recommends that you 
+<a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">test your environments that are still
+on Generation 1 with Generation 2, resolve any issues, and them manually opt them in to Generation 2</a> before then
+in order to avoid any issues.  Once Pantheon moves remaining sites to Generation 2, it will not be possible to
+move them back to Generation 1 even if the site is out of service due to issues with Generation 2.
+</p>
 <div class="container">
 <table class="responsive-table site-updates">
 <thead><th class="rt-plan">Environment</th><th class="rt-plan">Generation</th><th class="rt-plan">Status</th></thead>
@@ -2015,16 +2014,15 @@ environment to Generation 2 yourself during a low-traffic time.</p>
 Runtime Generation 2.
 <https://docs.pantheon.io/php-runtime-generation-2>
 
-Pantheon is actively moving sites that are still on Generation 1 to
-Generation 2, and plans to have all sites on Generation 2 by
-November 23, except for sites that temporarily opt out.
-<https://docs.pantheon.io/php-runtime-generation-2#q-how-do-i-opt-out-of-the-upcoming-platform-rollout>
-Since the upgrade can potentially cause issues, especially with older
-sites, ITS recommends you opt in to the upgrade now
+In early 2026, Pantheon will move all remaining sites to
+Generation 2.  ITS strongly recommends that you test your
+environments that are still on Generation 1 with Generation 2,
+resolve any issues, and them manually opt them in to Generation 2
 <https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade>
-for your site's Dev and Test environments, test them and fix any
-problems, and then move your Live environment to Generation 2 yourself
-during a low-traffic time.
+before then in order to avoid any issues.  Once Pantheon moves
+remaining sites to Generation 2, it will not be possible to move
+them back to Generation 1 even if the site is out of service due
+to issues with Generation 2.
 
 {update_bullet_list}
 ''',
