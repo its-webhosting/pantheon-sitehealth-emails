@@ -9,6 +9,7 @@ dependencies = [
     "Jinja2",
     "dnspython",
     "html2text",
+    'semver',
 ]
 
 [project.optional-dependencies]
