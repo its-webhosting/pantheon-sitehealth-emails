@@ -1989,18 +1989,18 @@ A variety of support options are available.
 
 '''
             site_notices.append({
-                'type': 'alert',
-                'icon': '&#x1F6A8;',  # police car light
+                'type': 'warning',
+                'icon': '&#x26A0;',  # warning sign
                 'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
                 'short': f'Action required: upgrade to PHP Runtime Generation 2',
                 'message': f'''
 <p><strong>{site['name']}</strong> has environments that need to be upgraded to <a href="https://docs.pantheon.io/php-runtime-generation-2">Pantheon Runtime
 Generation 2</a> ASAP.</p>
-<p>In early 2026, Pantheon will move all remaining sites to Generation 2.  ITS strongly recommends that you 
+<p>From April 6 - 17, 2026, Pantheon will move all opted-out sites to Generation 2.  ITS strongly recommends that you 
 <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">test your environments that are still
-on Generation 1 with Generation 2, resolve any issues, and them manually opt them in to Generation 2</a> before then
-in order to avoid any issues.  Once Pantheon moves remaining sites to Generation 2, it will not be possible to
-move them back to Generation 1 even if the site is out of service due to issues with Generation 2.
+on Generation 1 with Generation 2, resolve any issues, and then manually opt them in to Generation 2</a> before then
+in order to avoid any issues.  After April 6, it will not be possible to
+move sites back to Generation 1 even if the site is out of service due to issues with Generation 2.
 </p>
 <div class="container">
 <table class="responsive-table site-updates">
@@ -2014,15 +2014,14 @@ move them back to Generation 1 even if the site is out of service due to issues 
 Runtime Generation 2.
 <https://docs.pantheon.io/php-runtime-generation-2>
 
-In early 2026, Pantheon will move all remaining sites to
+From April 6 - 17, 2026, Pantheon will move all remaining sites to
 Generation 2.  ITS strongly recommends that you test your
 environments that are still on Generation 1 with Generation 2,
-resolve any issues, and them manually opt them in to Generation 2
+resolve any issues, and then manually opt them in to Generation 2
 <https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade>
-before then in order to avoid any issues.  Once Pantheon moves
-remaining sites to Generation 2, it will not be possible to move
-them back to Generation 1 even if the site is out of service due
-to issues with Generation 2.
+before then in order to avoid any issues.  After April 6, it will
+not be possible to move sites back to Generation 1 even if the
+site is out of service due to issues with Generation 2.
 
 {update_bullet_list}
 ''',
