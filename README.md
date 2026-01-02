@@ -112,6 +112,11 @@ read -s -p "Paste your Cloudflare API Key here: " CLOUDFLARE_API_KEY \
 # `--smtp-userame YOUR_UNIQNAME` whenever you run the `pantheon-sitehealth-emails` script.
 read -s -p "SMTP password for ${USER}: " SMTP_PASSWORD \
     && echo && export SMTP_PASSWORD
+
+# ...or, if using 1Password:
+export CLOUDFLARE_EMAIL=$(op read "op://Private/ITS Cloudflare/username")
+export CLOUDFLARE_API_KEY=$(op read "op://Private/ITS Cloudflare/API key")
+export SMTP_PASSWORD=$(op read "op://Private/UMich Kerberos Password/password")
 ```
 
 Run `pantheon-sitehealth-emails --help` for usage information.
@@ -122,7 +127,7 @@ Once per week, run the script manually to update the visitor counts:
 ```
 
 On the first of every month, send the reports:
-```
+```bash
 # Make sure one site is correct so we don't bomb ourselves with errors.
 # Date should be the last day of the previous month.
 ./pantheon-sitehealth-emails --date 20240731 its-wws-test1

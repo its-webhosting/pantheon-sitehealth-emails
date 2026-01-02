@@ -295,6 +295,10 @@ def terminus(*args) -> Any:
     """
     Run Terminus with the given arguments and return the result as a JSON object.
     """
+    retry = True
+    if 'pshe-no-retry' in args:
+        del(args['pshe-no-retry'])
+        retry = False
     command = [*args, '--format=json']
     output, errors, fatal = run_terminus(command)
     try:
@@ -304,6 +308,11 @@ def terminus(*args) -> Any:
         errors += "\n" + output + "\n" + str(e)
     if errors != '':
         sc.console.print(f'[bold red]Terminus error: {errors}')
+        if retry and "Invalid or expired session header: X-Pantheon-Session" in errors:
+            sc.console.print('Sleeping for 5 seconds and then retrying...')
+            time.sleep(5)
+            args.push('pshe-no-retry')
+            return terminus(*args)
     #return result, errors.strip(), fatal  # TODO
     return result
 
@@ -366,7 +375,7 @@ def fix_drush_output(output: str, errors: str) -> (str, str):
         lines = output.split('\n')
         linenum = 0
         while linenum < len(lines):
-            if lines[linenum][0] == '{':
+            if lines[linenum] and lines[linenum][0] == '{':
                 break
             linenum += 1
         errors = '\n'.join(lines[:linenum]) + errors
@@ -784,8 +793,11 @@ def main() -> None:
     site_results = {}
     cloudflare_enabled = 'plugin.cloudflare' in sc.plugin
     sc.debug('Cloudflare is ' + ('[bold green]enabled' if cloudflare_enabled else '[bold red]DISABLED'))
+    site_name_to_id = {site['name']:site_id for (site_id, site) in sites.items()}
+    sc.debug(site_name_to_id)
 
-    for site_id in sites:
+    for site_name in sorted(site_name_to_id.keys()):
+        site_id = site_name_to_id[site_name]
         site = sites[site_id]
         site_notices = []
         wp_smell = ''
