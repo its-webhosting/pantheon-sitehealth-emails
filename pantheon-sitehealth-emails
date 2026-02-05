@@ -275,6 +275,7 @@ def run_terminus(command: list, input_data=None) -> (str, str, bool):
                 if line != '' \
                     and not line.endswith('[Exit: 0] (Attempt 1/1)') \
                     and not line.startswith('[warning] There are no available updates') \
+                    and not 'This environment is in read-only Git mode' in line \
                     and not (line.startswith("Warning: Permanently added") and line.endswith('to the list of known hosts.')):
                         filtered_lines.append(line)
             errors = '\n'.join(filtered_lines)
@@ -531,16 +532,20 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
     return notices
 
 
-def check_drupal_module(site: str, installed_mods: dict, name: str, display_name: str, url: str, reason: str) -> list:
+def check_drupal_module(site: str, installed_mods: dict, name: str, display_name: str, url: str, reason: str, level: str = 'warning') -> list:
     notices = []
     if not isinstance(installed_mods, dict):
         return notices  # this error should already have been handled by our caller, so skip additional work
 
+    icon = '&#x26A0;'  # warning sign
+    if level == 'info':
+        icon = '&#x1F50E;'  # magnifying glass
+
     if not name in installed_mods:
         sc.console.print(f':exclamation: [bold red] ATTENTION: {site} does not have the {display_name} module installed.')
         notices.append({
-            'type': 'warning',
-            'icon': '&#x26A0;',  # warning sign
+            'type': level,
+            'icon': icon,
             'csv': f'{site},not-installed,{name}',
             'short': f'install module {name}',
             'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be installed:</p><p>{html.escape(reason)}</p>',
@@ -552,8 +557,8 @@ def check_drupal_module(site: str, installed_mods: dict, name: str, display_name
     if not 'status' in mod or mod['status'] != 'Enabled':
         sc.console.print(f':exclamation: [bold red] ATTENTION: {site} has the {display_name} module installed but it is not enabled.')
         notices.append({
-            'type': 'warning',
-            'icon': '&#x26A0;',  # warning sign
+            'type': level,
+            'icon': icon,
             'csv': f'{site},turned-off,{name}',
             'short': f'enable module {name}',
             'message': f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be enabled:</p><p>{html.escape(reason)}</p>',
@@ -999,10 +1004,10 @@ and to find out what went wrong:
             pprint(domains)
         site_url = ''
         main_fqdn = ''
-        not_behind_cloudflare = []
+        fqdns_not_behind_cloudflare = []
+        fqdns_behind_cloudflare = []
         not_in_dns = []
         behind_cloudflare_not_proxied = []
-        cloudflare_in_use_for_site = False
         if isinstance(domains, dict):
             for d in domains.keys():
                 domain = domains[d]
@@ -1062,13 +1067,13 @@ and to find out what went wrong:
                 if cloudflare_enabled:
                     if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
                         sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare')
-                        not_behind_cloudflare.append(hostname)
+                        fqdns_not_behind_cloudflare.append(hostname)
                     if dns_points_at_cloudflare > 0:
                         if hostname not in proxied_fqdns:
                             sc.console.print(f':exclamation: [bold red] ATTENTION: {hostname} is behind Cloudflare but not proxied')
                             behind_cloudflare_not_proxied.append(hostname)
                         else:
-                            cloudflare_in_use_for_site = True
+                            fqdns_behind_cloudflare.append(hostname)
 
             custom_domains = [d for d in domains.keys() if domains[d]['type'] == 'custom']
             primary_domain = [d for d in custom_domains if domains[d]['primary']]
@@ -1137,18 +1142,18 @@ and to find out what went wrong:
             site_url = f'https://{main_fqdn}/'
         sc.debug(f'Main domain for {site["name"]}: {main_fqdn}')
 
-        if len(not_behind_cloudflare) > 0:
+        if len(fqdns_not_behind_cloudflare) > 0:
             site_notices.append({
                 'type': 'warning',
                 'icon': '&#x26A0;',  # warning sign
-                'csv': f'{site["name"]},not-behind-cloudflare,' + ','.join(not_behind_cloudflare),
+                'csv': f'{site["name"]},not-behind-cloudflare,' + ','.join(fqdns_not_behind_cloudflare),
                 'short': 'put domains behind Cloudflare',
                 'message': f'''
 <p>ITS strongly recommends you put the following domains behind Cloudflare to reduce Pantheon traffic and improve
 security.  Please refer to the <a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">
 Cloudflare at U-M documentation</a>.</p>
 <ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in not_behind_cloudflare])}
+{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in fqdns_not_behind_cloudflare])}
 </ul>
 ''',
                 'text': f'''
@@ -1157,7 +1162,7 @@ Cloudflare to reduce Pantheon traffic and improve security.
 Please refer to the Cloudflare at U-M documentation
 <https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>
 
-{"\n".join([f'  * {n}' for n in not_behind_cloudflare])}
+{"\n".join([f'  * {n}' for n in fqdns_not_behind_cloudflare])}
 
 '''
             })
@@ -1186,7 +1191,7 @@ Please follow steps 3 and 4 of the U-M Cloudflare: Website Migration
 Steps <"https://documentation.its.umich.edu/node/4237> to ensure the
 site is configured to work with Cloudflare and to turn on proxying.
 
-{"\n".join([f'  * {n}' for n in not_behind_cloudflare])}
+{"\n".join([f'  * {n}' for n in fqdns_not_behind_cloudflare])}
 
 '''
                 })
@@ -1264,7 +1269,7 @@ remove these domains from the Pantheon live environment for
                 'https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin',
                 'Strongly recommended to ensure PHP sessions work correctly on Pantheon.'
             )
-            if cloudflare_in_use_for_site:
+            if len(fqdns_behind_cloudflare) > 0:
                 site_notices += check_wordpress_plugin(
                     site['name'],
                     plugins,
@@ -1457,7 +1462,7 @@ plugin and remove {display_name}.
             elif errors != '':
                 wp_smell = errors
             sc.debug(f'{site["name"]} has a favicon.ico file: {favicon}')
-            if isinstance(favicon, str) and favicon.startswith('false') and len(not_behind_cloudflare) > 0:
+            if isinstance(favicon, str) and favicon.startswith('false') and len(fqdns_not_behind_cloudflare) > 0:
                 site_notices.append({
                     'type': 'warning',
                     'icon': '&#x26A0;',  # warning sign
@@ -1530,7 +1535,7 @@ the Sandbox plan.
                     'Necessary for receiving extended support for Drupal 7.'
                 )
             else:
-                if cloudflare_in_use_for_site:
+                if len(fqdns_behind_cloudflare) > 0:
                     site_notices += check_drupal_module(
                         site['name'],
                         mods,
@@ -1546,6 +1551,23 @@ the Sandbox plan.
                         'CloudFlare Purger',
                         'https://documentation.its.umich.edu/node/4242',
                         'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
+                    )
+                    site_notices += check_drupal_module(
+                        site['name'],
+                        mods,
+                        'purge_processor_lateruntime',
+                        'Late runtime processor (purge_processor_lateruntime)',
+                        'https://documentation.its.umich.edu/node/4242',
+                        'Necessary for automatically clearing Cloudflare\'s caches when content is updated.'
+                    )
+                    site_notices += check_drupal_module(
+                        site['name'],
+                        mods,
+                        'purge_processor_cron',
+                        'Purge Cron Processor (purge_processor_cron)',
+                        'https://documentation.its.umich.edu/node/4242',
+                        'Recommended as a fallback for clearing Cloudflare\'s caches when content is updated.',
+                        level = 'info'
                     )
             if drupal_version.startswith('7.'):
                 updates, errors, fatal = drush(live_site, 'pm:updatestatus', '--full')
@@ -2001,8 +2023,8 @@ A variety of support options are available.
 
 '''
             site_notices.append({
-                'type': 'warning',
-                'icon': '&#x26A0;',  # warning sign
+                'type': 'alert',
+                'icon': '&#x1F6A8;',  # police car light
                 'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
                 'short': f'Action required: upgrade to PHP Runtime Generation 2',
                 'message': f'''
