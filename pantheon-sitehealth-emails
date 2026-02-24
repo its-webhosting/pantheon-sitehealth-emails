@@ -518,7 +518,7 @@ def check_wordpress_plugin(site: str, installed_plugins: list, name: str, displa
         })
 
     plugin = installed[0]
-    if not 'status' in plugin or plugin['status'] not in ('active', 'must-use'):
+    if not 'status' in plugin or plugin['status'] not in ('active', 'active-network', 'must-use'):
         sc.console.print(f':exclamation: [bold red] ATTENTION: {site} has the {display_name} plugin installed but it is not active.')
         notices.append({
             'type': 'warning',
@@ -845,6 +845,12 @@ def main() -> None:
             sc.console.print(f'{site["name"]} is on the Sandbox plan, skipping it.')
             continue
 
+        # The following gets uncommented (with the list of site names to skip) if we have to resume
+        # this script after it gets interrupted partway through.
+        # if site_name in ('aaum-alumni-association', 'advance-advanceprogram'):
+        #     sc.console.print(f'[bold magenta]=== Skipping site {site_name} (on exclusion list)')
+        #     continue
+
         if site['frozen'] is not False:
             sc.console.print(f':exclamation: [bold red] ATTENTION: {site["name"]} is frozen!')
             site_notices.append({
@@ -1140,7 +1146,22 @@ and to find out what went wrong:
 
         if main_fqdn != '':
             site_url = f'https://{main_fqdn}/'
+
+        if site['framework'] == 'wordpress_network':
+            sc.console.print(f'[bold magenta]=== Getting WordPress network URL for {site["name"]}:')
+            network_home_url, errors, fatal = wp_eval(live_site,'echo network_home_url();')
+            if fatal or network_home_url is None:
+                site_notices += wp_error(site['name'],
+                    'version-check', f'Unable to get WordPress network URL for {site["name"]}.',
+                    errors)
+            elif errors != '':
+                wp_smell = errors
+            sc.debug(f'{site["name"]} WordPress network URL: {network_home_url}')
+            if isinstance(network_home_url, str):
+                site_url = network_home_url.strip()
+
         sc.debug(f'Main domain for {site["name"]}: {main_fqdn}')
+        sc.debug(f'Site URL for {site["name"]}:    {site_url}')
 
         if len(fqdns_not_behind_cloudflare) > 0:
             site_notices.append({
@@ -2332,7 +2353,7 @@ site is out of service due to issues with Generation 2.
         for ax in axs:
             ax.yaxis.set_major_formatter('{x:,.0f}')
         chart_title = f'{site["name"]} Pantheon Traffic'
-        if main_fqdn:
+        if site_url:
             chart_title += f"\n{site_url}"
         ax_top.set_title(chart_title, loc='left')
         fig.text(0.90, 0.10, 'as of ' + end_date.strftime('%B %e, %Y'), ha='right', fontsize='small')
