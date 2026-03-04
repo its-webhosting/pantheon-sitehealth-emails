@@ -2719,6 +2719,9 @@ at the moment, it should be fixed to avoid possible future problems:
             r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
             r = r.replace(' ', '.')
             recipients = f'{r}@umich.edu, {r}-owners@umich.edu'
+            if site_name == 'lsa-disko-project':
+                # special case, see TDx 10112051
+                recipients = f'{r}@umich.edu'
             contacts = f'{r}@umich.edu'
         else:
             site_team = terminus('site:team:list', site_id)
