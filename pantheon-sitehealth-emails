@@ -2719,8 +2719,8 @@ at the moment, it should be fixed to avoid possible future problems:
             r = sc.config['UMich']['portal']['sites'][site['name']]['owner_group']
             r = r.replace(' ', '.')
             recipients = f'{r}@umich.edu, {r}-owners@umich.edu'
-            if site_name == 'lsa-disko-project':
-                # special case, see TDx 10112051
+            if site_name in ('lsa-disko-project', 'umma-inside-wp'):
+                # special case, see TDx 10112051, 10165816
                 recipients = f'{r}@umich.edu'
             contacts = f'{r}@umich.edu'
         else:
