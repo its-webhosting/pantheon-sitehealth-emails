@@ -1538,13 +1538,17 @@ plugin and remove {display_name}.
                     'message': f'''
 <p><b>Drupal 7 Extended Support for {site["name"]} will end in December 2026.</b>
 Please migrate this site's content to a new site as soon as possible and
-then switch {site["name"]} to the Sandbox plan.</p>
+then switch {site["name"]} to the Sandbox plan. Plan on a large amount of
+time being needed to design the new website, set it up, migrate content, and
+then launch the new website before December.</p>
                 ''',
                     'text': f'''
 Drupal 7 Extended Support for {site["name"]} will end in
 December 2026.  Please migrate this site's content to a new site
 as soon as possible and then switch {site["name"]} to
-the Sandbox plan.
+the Sandbox plan. Plan on a large amount of time being needed to
+design the new website, set it up, migrate content, and then
+launch the new website before December.
                 ''',
                 })
                 site_notices += check_drupal_module(
