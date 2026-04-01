@@ -886,7 +886,7 @@ and to find out what went wrong:
         # "Only traffic for the Live environment is counted towards a site plan's traffic limit."
 
         # The live environment will always exist, but may not be initialized.
-        envs = terminus('env:list', site['id'])
+        envs = terminus('env:list', site['id'], '--fields=id,created,domain,connection_mode,locked,initialized,php_version,php_runtime_generation')
         if 'live' not in envs or 'initialized' not in envs['live']:
             sc.console.print(f':exclamation: [bold red] ERROR: {site["name"]} does not have a live environment, '
                              'this should never happen')
@@ -1987,40 +1987,13 @@ A variety of support options are available.
 ''',
             })
 
-        # September 2025 - early 2026:
-        # Check to see if the site needs to migration from Pantheon PHP Runtime Generation 1 to Generation 2
-        sc.console.print(f'[bold magenta]=== Checking PHP Runtime Generation for {site["name"]}:')
+        # September 2025 - April 2026:
+        # Check to see if the site needs to to a newer generation of the Pantheon PHP runtime:
         runtime_upgrade_needed = {
-            'dev': False,
-            'test': False,
-            'live': False,
+            'dev': (envs['dev']['php_runtime_generation'] < 2),
+            'test': (envs['test']['php_runtime_generation'] < 2),
+            'live': (envs['live']['php_runtime_generation'] < 2),
         }
-        for env in ['dev', 'test', 'live']:
-            if site['framework'].startswith('drupal'):
-                gen1, errors, fatal = drush_php_script(
-                    site["name"] + '.' + env,
-                    'echo json_encode( ["result" => is_file("/etc/centos-release") ? true : false ] );'
-                )
-                if isinstance(gen1, dict) and 'result' in gen1 and gen1['result'] == True:
-                    runtime_upgrade_needed[env] = True
-            else:
-                gen1, errors, fatal = wp_eval(
-                    site["name"] + '.' + env,
-                    'echo is_file("/etc/centos-release") ? "true": "false";')
-                if isinstance(gen1, str) and gen1.startswith('true'):
-                    runtime_upgrade_needed[env] = True
-            if fatal or gen1 is None:
-                site_notices += drush_error(site['name'], 'multisite-check',
-                                            f'Unable to determine Pantheon PHP Runtime Generation for {site["name"]}.{env}',
-                                            errors)
-            elif errors != '' and not errors.startswith('[warning] This environment is in read-only Git mode.'):
-                if site['framework'].startswith('drupal'):
-                    drush_smell = errors
-                else:
-                    wp_smell = errors
-        if sc.options.verbose:
-            sc.console.print(f'[PHP Runtime Generation for {site["name"]}:')
-            pprint(runtime_upgrade_needed)
         if any(runtime_upgrade_needed.values()):
             update_table_rows = ''
             update_bullet_list = ''
@@ -2081,6 +2054,63 @@ site is out of service due to issues with Generation 2.
 {update_bullet_list}
 ''',
             })
+
+        # April 2026 - September 2026:
+        # Check to see if a PHP version upgrade is needed
+        if envs['live']['php_version'] in ('7.4', '8.1'):
+            site_notices.append({
+                'type': 'warning',
+                'icon': '&#x26A0;',  # warning sign
+                'csv': f'{site["name"]},php-eol',
+                'short': f'Upgrade PHP',
+                'message': f'''
+<p><b>{site["name"]} is using PHP {envs['live']['php_version']}.</b>
+You may want to <a href="https://docs.pantheon.io/guides/php/php-versions">manually upgrade your site to PHP 8.2 or later</a>
+since <a href="https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule">Pantheon has announced they will no
+longer offer PHP {envs['live']['php_version']} soon</a>, likely sometime in 2027.</p>
+''',
+                'text': f'''
+{site["name"]} is using PHP {envs['live']['php_version']}.
+
+You may want to manually upgrade your site to PHP 8.2 or later
+<https://docs.pantheon.io/guides/php/php-versions>
+since Pantheon has announced they will no longer offer PHP {envs['live']['php_version']}
+soon</a>, likely sometime in 2027.
+<https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule>
+''',
+            })
+        elif envs['live']['php_version'] < '8.2':
+            new_php = '7.4' if envs['live']['php_version'].startswith('7') else '8.1'
+            site_notices.append({
+                'type': 'alert',
+                'icon': '&#x1F6A8;',  # police car light
+                'csv': f'{site["name"]},php-eol',
+                'short': f'Upgrade PHP',
+                'message': f'''
+<p><b>{site["name"]} is using PHP {envs['live']['php_version']}.  On September 30, 2026,
+<a href="https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule">Pantheon will move your site
+to PHP {new_php}</a>, which may break your site.</b></p>
+<p>Please <a href="https://docs.pantheon.io/guides/php/php-versions">manually upgrade your site to PHP 8.2 or later</a>
+so you can fix any problems without affecting your site's visitors.  Although you can update
+your site to use PHP {new_php} instead of 8.2, please note that Pantheon has already announced that they will also remove
+PHP {new_php} sometime after September 30, 2026.</p>
+''',
+                'text': f'''
+{site["name"]} is using PHP {envs['live']['php_version']}.  On
+September 30, 2026, Pantheon will move your site to PHP {new_php},
+which may break your site.
+<https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule>
+
+Please manually upgrade your site to PHP 8.2 or later so you can fix
+any problems without affecting your site's visitors.
+<https://docs.pantheon.io/guides/php/php-versions>
+
+Although you can update your site to use PHP {new_php} instead of 8.2,
+please note that Pantheon has already announced that they will also
+remove PHP {new_php} sometime after September 30, 2026.
+''',
+            })
+
 
         # TODO: Warn if no Autopilot
         # TODO: check DNS and warn if the site is using Cloudflare IPs but is not a zone apex
