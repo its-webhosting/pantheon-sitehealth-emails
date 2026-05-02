@@ -743,7 +743,6 @@ def main() -> None:
 
     if sc.options.smtp_username == '':
         sys.exit("--smtp-username not specified and USER environment variable not set.")
-    smtp_connection = smtp_login()
 
     if 'News' in sc.config:
         for news_item_name in sc.config['News'].keys():
@@ -2843,6 +2842,8 @@ June 30.
                 subject = f'Action Recommended: {site["name"]}: {sorted_notices[0]['short']} | {report}'
             # no subject prefix for info notices
 
+        subject = f'FY27 Pantheon rates | {subject}'  # TODO: remove in July 2026
+
         banner_cid = make_msgid(domain='webservices.umich.edu')
         chart_cid = make_msgid(domain='webservices.umich.edu')
 
@@ -2950,16 +2951,10 @@ June 30.
         with open(f'build/{site["name"]}.eml', 'wb') as f:
             f.write(msg.as_bytes(policy=SMTP))
 
+        smtp_connection = smtp_login()
         smtp_connection.send_message(msg)
         emails_sent += 1
-        # TODO: add feature to send mails using SendGrid.
-        # This script can run longer than some SMTP servers will allow a connection to be open.
-        if (emails_sent % 5) == 0:
-            if sc.options.verbose:
-                sc.debug(f'[bold yellow]{emails_sent} emails sent, closing and reopening the SMTP connection.')
-            smtp_connection.quit()
-            time.sleep(3)
-            smtp_connection = smtp_login()
+        smtp_connection.quit()
 
         for n in site_notices:
             fields = n['csv'].split(',')
@@ -2973,7 +2968,6 @@ June 30.
 
     db_session.close()
     db_engine.dispose()
-    smtp_connection.quit()
 
     if sc.options.all:
         sc.console.print(f'\n[bold green]Email sent for {emails_sent} of {site_count} sites.\n')
