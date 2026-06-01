@@ -1990,73 +1990,73 @@ A variety of support options are available.
 ''',
             })
 
-        # September 2025 - April 2026:
-        # Check to see if the site needs to to a newer generation of the Pantheon PHP runtime:
-        runtime_upgrade_needed = {
-            'dev': (envs['dev']['php_runtime_generation'] < 2),
-            'test': (envs['test']['php_runtime_generation'] < 2),
-            'live': (envs['live']['php_runtime_generation'] < 2),
-        }
-        if any(runtime_upgrade_needed.values()):
-            update_table_rows = ''
-            update_bullet_list = ''
-            for env in ['dev', 'test', 'live']:
-                background_color = '#CCCFCA' if env == 'test' else '#fff'
-                env_name = env.capitalize()
-                gen = 'Gen 1' if runtime_upgrade_needed[env] else 'Gen 2'
-                status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
-                status_text = '🚨️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
-                update_table_rows += f'''
-<tr style="background-color: {background_color};">
-<td><div class="rt-data-header rt-plan">Environment</div><div class="rt-data rt-plan">{env_name}</div></td>
-<td><div class="rt-data-header rt-plan"">Generation</div><div class="rt-data rt-plan">{gen}</div></td>
-<td><div class="rt-data-header rt-plan">Status</div><div class="rt-data rt-plan">{status_html}</div></td>
-</tr>
-'''
-                update_bullet_list += f'''
-* {env_name} environment:
-  - Generation: {gen}
-  - Status: {status_text}
-
-'''
-            site_notices.append({
-                'type': 'alert',
-                'icon': '&#x1F6A8;',  # police car light
-                'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
-                'short': f'Action required: upgrade to PHP Runtime Generation 2',
-                'message': f'''
-<p><strong>{site['name']}</strong> has environments that need to be upgraded to <a href="https://docs.pantheon.io/php-runtime-generation-2">Pantheon Runtime
-Generation 2</a> ASAP.</p>
-<p>From April 6 - 17, 2026, Pantheon will move all opted-out sites to Generation 2.  ITS strongly recommends that you 
-<a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">test your environments that are still
-on Generation 1 with Generation 2, resolve any issues, and then manually opt them in to Generation 2</a> before then
-in order to avoid any issues.  After April 6, it will not be possible to
-move sites back to Generation 1 even if the site is out of service due to issues with Generation 2.
-</p>
-<div class="container">
-<table class="responsive-table site-updates">
-<thead><th class="rt-plan">Environment</th><th class="rt-plan">Generation</th><th class="rt-plan">Status</th></thead>
-<tbody>{update_table_rows}</tbody>
-</table>
-</div>
-''',
-                'text': f'''
-{site['name']} has environments that need to be upgraded to Pantheon
-Runtime Generation 2.
-<https://docs.pantheon.io/php-runtime-generation-2>
-
-From April 6 - 17, 2026, Pantheon will move all remaining sites to
-Generation 2.  ITS strongly recommends that you test your
-environments that are still on Generation 1 with Generation 2,
-resolve any issues, and then manually opt them in to Generation 2
-<https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade>
-before then in order to avoid any issues.  After April 6, it will
-not be possible to move sites back to Generation 1 even if the
-site is out of service due to issues with Generation 2.
-
-{update_bullet_list}
-''',
-            })
+#         # September 2025 - April 2026:
+#         # Check to see if the site needs to to a newer generation of the Pantheon PHP runtime:
+#         runtime_upgrade_needed = {
+#             'dev': (envs['dev']['php_runtime_generation'] < 2),
+#             'test': (envs['test']['php_runtime_generation'] < 2),
+#             'live': (envs['live']['php_runtime_generation'] < 2),
+#         }
+#         if any(runtime_upgrade_needed.values()):
+#             update_table_rows = ''
+#             update_bullet_list = ''
+#             for env in ['dev', 'test', 'live']:
+#                 background_color = '#CCCFCA' if env == 'test' else '#fff'
+#                 env_name = env.capitalize()
+#                 gen = 'Gen 1' if runtime_upgrade_needed[env] else 'Gen 2'
+#                 status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
+#                 status_text = '🚨️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
+#                 update_table_rows += f'''
+# <tr style="background-color: {background_color};">
+# <td><div class="rt-data-header rt-plan">Environment</div><div class="rt-data rt-plan">{env_name}</div></td>
+# <td><div class="rt-data-header rt-plan"">Generation</div><div class="rt-data rt-plan">{gen}</div></td>
+# <td><div class="rt-data-header rt-plan">Status</div><div class="rt-data rt-plan">{status_html}</div></td>
+# </tr>
+# '''
+#                 update_bullet_list += f'''
+# * {env_name} environment:
+#   - Generation: {gen}
+#   - Status: {status_text}
+#
+# '''
+#             site_notices.append({
+#                 'type': 'alert',
+#                 'icon': '&#x1F6A8;',  # police car light
+#                 'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
+#                 'short': f'Action required: upgrade to PHP Runtime Generation 2',
+#                 'message': f'''
+# <p><strong>{site['name']}</strong> has environments that need to be upgraded to <a href="https://docs.pantheon.io/php-runtime-generation-2">Pantheon Runtime
+# Generation 2</a> ASAP.</p>
+# <p>From April 6 - 17, 2026, Pantheon will move all opted-out sites to Generation 2.  ITS strongly recommends that you
+# <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">test your environments that are still
+# on Generation 1 with Generation 2, resolve any issues, and then manually opt them in to Generation 2</a> before then
+# in order to avoid any issues.  After April 6, it will not be possible to
+# move sites back to Generation 1 even if the site is out of service due to issues with Generation 2.
+# </p>
+# <div class="container">
+# <table class="responsive-table site-updates">
+# <thead><th class="rt-plan">Environment</th><th class="rt-plan">Generation</th><th class="rt-plan">Status</th></thead>
+# <tbody>{update_table_rows}</tbody>
+# </table>
+# </div>
+# ''',
+#                 'text': f'''
+# {site['name']} has environments that need to be upgraded to Pantheon
+# Runtime Generation 2.
+# <https://docs.pantheon.io/php-runtime-generation-2>
+#
+# From April 6 - 17, 2026, Pantheon will move all remaining sites to
+# Generation 2.  ITS strongly recommends that you test your
+# environments that are still on Generation 1 with Generation 2,
+# resolve any issues, and then manually opt them in to Generation 2
+# <https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade>
+# before then in order to avoid any issues.  After April 6, it will
+# not be possible to move sites back to Generation 1 even if the
+# site is out of service due to issues with Generation 2.
+#
+# {update_bullet_list}
+# ''',
+#             })
 
         # April 2026 - September 2026:
         # Check to see if a PHP version upgrade is needed
