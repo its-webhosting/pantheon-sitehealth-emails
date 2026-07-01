@@ -2842,7 +2842,35 @@ June 30.
                 subject = f'Action Recommended: {site["name"]}: {sorted_notices[0]['short']} | {report}'
             # no subject prefix for info notices
 
-        subject = f'FY27 Pantheon rates | {subject}'  # TODO: remove in July 2026
+
+        # TODO: remove this section in August 2027:
+        if True:
+            shortcode = sc.config['UMich']['portal']['sites'][site['name']]['shortcode']
+            annual_bill = float(plan_info[site_current_plan]['cost'])
+            sorted_notices.insert(0, {
+                'type': 'alert',
+                'icon': '&#x1F4B5;',  # dollar banknotes
+                'csv': f'{site["name"]},annual-bill,{annual_bill},{shortcode}',
+                'short': f'${annual_bill:,.2f} is being billed to shortcode {shortcode}',
+                'message': f'''
+                <p style="background-color: #f8d7da; padding: 1em; border: 2px solid #58151c;">
+                    ITS is in the process of billing ${annual_bill:,.2f} to shortcode <strong>{shortcode}</strong>
+                    for a Pantheon {site['plan_name']} plan to cover website hosting for the site
+                    <strong>{site["name"]}</strong> from July 1, 2026 - June 30, 2027.
+                </p>
+                <p>Any changes to the site's plan between these dates will result in an additional pro-rated bill or credit in the following month.</p>
+                ''',
+                'text': f'''
+=======================================================================
+ITS is in the process of billing ${annual_bill:,.2f} to shortcode {shortcode}
+for a Pantheon {site['plan_name']} plan to cover website hosting
+for the site {site["name"]} from July 1, 2026 - June 30, 2027.
+=======================================================================
+
+Any changes to the site's plan between these dates will result in
+an additional pro-rated bill or credit in the following month.
+''',
+            })
 
         banner_cid = make_msgid(domain='webservices.umich.edu')
         chart_cid = make_msgid(domain='webservices.umich.edu')
