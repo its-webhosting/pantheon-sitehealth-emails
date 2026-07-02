@@ -1,0 +1,42 @@
+TODAY="20260601"
+
+# site counts:
+jq -r '"site_name,framework,version,plan_name", (to_entries | map([.key, .value.framework, .value.version, .value.plan_name] | join(",")))[]' \
+    ${TODAY}-results.json > all-sites.csv
+
+Edit file, remove header, remove/fix all error lines
+
+  # total sites
+wc -l all-sites.csv
+
+  # by CMS
+cut -d, -f2 < all-sites.csv | sort | uniq -c | sort -rn
+
+  # WordPress
+grep ,wordpress all-sites.csv | cut -d, -f3 | sort | uniq -c | sort -r -k2
+
+  # Drupal
+grep ,drupal all-sites.csv | cut -d, -f3 | sort | uniq -c | sort -rn -k2
+
+
+# sites with pending Pantheon updates for >= 30 days:
+grep ,updates- ${TODAY}-notices.csv | sort -n -r -k4 -t, | perl -a -n -F, -e 'print if $F[4] >= 30;' | wc -l
+grep ,updates- ${TODAY}-notices.csv | sort -n -r -k4 -t, | perl -a -n -F, -e 'printf("%5d %s\n", $F[4], $F[0]) if $F[4] >= 30;' | sort -rn | head -12
+
+# top sites needing add-on updates by number of updates:
+grep ,updates-addons ${TODAY}-notices.csv | sort -r -n -k4 -t, > all-addon-updates.csv
+head all-addon-updates.csv | perl -a -n -F, -e 'printf("%5d %s\n", $F[3], $F[0]);'
+
+# not behind Cloudflare:
+grep ,not-behind-cloudflare ${TODAY}-notices.csv | wc -l
+grep ,not-behind-cloudflare ${TODAY}-notices.csv | sort | perl -a -n -F, -e 'printf("%-30s %-65s %s", $F[0], $F[1], join(" ", @F[3..$#F]));'
+# other Cloudflare problems:
+grep cloudflare ${TODAY}-notices.csv | grep -v ,not-behind-cloudflare | wc -l
+
+# drupal 7 sites with pending updates:
+#grep ,drupal, all-sites.csv | cut -f1 -d, | xargs -n1 -I{} grep {} all-addon-updates.csv | sort -r -n -k4 -t, | perl -a -n -F, -e 'printf("%5d %-30s %s\n", $F[3], $F[0], $F[1]);'
+
+# Drupal 7 EOL sites:
+grep drupal7-eol ${TODAY}-notices.csv | sort | perl -a -n -F, -e 'printf("%-30s %-65s\n", $F[0], $F[1]);'
+
+

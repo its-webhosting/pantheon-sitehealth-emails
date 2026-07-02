@@ -1,0 +1,33 @@
+{
+  "name": "pantheon-sitehealth-emails Claude Code Sandbox",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Detroit}",
+      "CLAUDE_CODE_VERSION": "latest",
+      "GIT_DELTA_VERSION": "0.18.2"
+    }
+  },
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW"
+  ],
+  "remoteUser": "node",
+  "mounts": [
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=python-venv-${devcontainerId},target=/workspace/.venv,type=volume"
+  ],
+  "containerEnv": {
+    "CLOUDFLARE_EMAIL": "${localEnv:CLOUDFLARE_EMAIL}",
+    "CLOUDFLARE_API_KEY": "${localEnv:CLOUDFLARE_API_KEY}",
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "mise install",
+  "postStartCommand": "sudo /usr/local/bin/container-start.sh",
+  "waitFor": "postStartCommand"
+}

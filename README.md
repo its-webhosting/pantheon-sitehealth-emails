@@ -47,7 +47,7 @@ uv python upgrade --managed-python 3.13 # in case it was already installed by an
 uv venv --managed-python --python 3.13
 source .venv/bin/activate
 
-which python  # make sure it's under venv/
+which python  # make sure it's under .venv/
 python -V     # make sure it's the version you expect
 
 ssh-add ~/.ssh/your-github-key-file  # required for installing umcloudflare package from private repo
@@ -56,38 +56,11 @@ uv pip install .[mysql,aws,cloudflare]  # remove from the list the features you 
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
 ```
 
-Install awscli-login
+### AWS credentials
 
-https://pypi.org/project/awscli-login/
+If you don't already have them, [create AWS credentials for the script](docs/aws-credentials.md) to use that are restricted to only what the script actually needs to do.
 
-```bash
-direnv allow .  # sets AWS_CONFIG to point to ./aws-config
-brew install awscli  # unless you already have it via another method
-uv pip install --upgrade setuptools
-uv pip install awscli-login
-aws configure set plugins.login awscli_login
-
-aws configure set plugins.cli_legacy_plugin_path \
-    $(uv pip show awscli-login | sed -nr 's/^Location: (.*)/\1/p')
-
-aws login configure
-# ECP Endpoint URL [None]: https://weblogin.umich.edu/idp/profile/SAML2/SOAP/ECP
-# Username [None]: markmont
-# Enable Keyring [False]:
-# Duo Factor [None]: push
-# Role ARN [None]:
-```
-
-### Log in to AWS
-
-* Log in to AWS at https://aws.it.umich.edu/
-* Select the role and account `its-wws-admin`
-
-Also log in via the command line:
-
-```bash
-aws login
-```
+### Config file
 
 Get a copy of your institution's `pantheon-sitehealth-emails.toml` file and put it in the same directory as the script.  If your institution does not have one, then follow the steps in the section [One-time per-institution setup](#one-time-per-institution-setup) below.  For University of Michigan users,
 ```bash
@@ -102,7 +75,7 @@ ln -s pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml .
 git pull && \
     [ -d pantheon-sitehealth-emails-config ] && \
     ( cd pantheon-sitehealth-emails-config ; git pull ) # make sure you have the latest version
-source venv/bin/activate  # if you haven't already
+source .venv/bin/activate  # if you haven't already
 
 export CLOUDFLARE_EMAIL="bjensen@umich.edu"  # set to your email address
 read -s -p "Paste your Cloudflare API Key here: " CLOUDFLARE_API_KEY \
@@ -196,6 +169,23 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 ## TO DO
 
+* set up devcontainer
+  * make sure script works on its own
+    * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
+      * ~/.terminus config in Dockerfile
+    * SSH and key (ssh-agent for now, something else later?)
+      * ~/.ssh/config in Dockerfile
+      * copy key by hand for now
+    * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
+    * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
+    * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
+    * AWS credentials (set in environment for now)
+* set up Claude Code in devcontainer
+    * all AI-notes tasks
+* add cf-cache-status, cache-control checks
+* add everything to its-webhosting/terraform-infra repo
+* switch to Pantheon API where possible?
+
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
 
 * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
@@ -236,4 +226,3 @@ pantheon-sitehealth-emails is free software: you can redistribute it and/or modi
 pantheon-sitehealth-emails is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along with pantheon-sitehealth-emails. If not, see <https://www.gnu.org/licenses/>.
-
