@@ -181,13 +181,16 @@ Import the older (weekly and monthly) metrics for `--all` sites:
     * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
     * AWS credentials (set in environment for now)
-* have Cluade document plugin system and config file.
-* update CLAUDE.md (prompt)
+* test harness
+* test suite
+* rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
+* have Claude document plugin system and config file
+* update CLAUDE.md again (prompt)
 * add SendGrid support as an additional option to SMTP
-* add cf-cache-status, cache-control checks
 * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
-* add everything to its-webhosting/terraform-infra repo
+* add cf-cache-status, cache-control checks
 * switch to Pantheon API where possible?
+* add everything to its-webhosting/terraform-infra repo
 
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
 

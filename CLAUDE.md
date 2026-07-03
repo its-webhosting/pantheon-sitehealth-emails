@@ -65,11 +65,13 @@ available to every function.
 
 ### Plugin / check module system (`plugin/`, `check/`)
 
-`find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files and
-imports each as a dotted module (e.g. `plugin.cloudflare`, `check.umich.sitelens`'s
-package). A module's `__init__.py` runs its own registration at import time, typically
-guarded by a check of `sc.config` (e.g. only register if `[Cloudflare].enabled`). Modules
-register by:
+`find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
+empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
+containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.umich`,
+`check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
+sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`,
+`umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
+only register if `[Cloudflare].enabled`). Modules register by:
 - **Hooks** — `sc.add_hook('setup', {...})` or appending to `sc.hooks['check']`. `setup`
   hooks run once (DB connections, fetching Cloudflare IPs, etc.); `check` hooks run once
   per site with the site's `site_context`. Invoked via `sc.invoke_hooks(name, ...)`.
@@ -183,43 +185,6 @@ SITE_ID=$(curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" "https://api.panth
 
 # Use the site ID to get the site info:
 curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" "https://api.pantheon.io/v0/sites/${SITE_ID}" | jq .
-```
-
-Putting that all together, and redacting secret stuff in the output with xxxx:
-```
-$ PANTHEON_USERNAME='markmont@umich.edu'
-$ MACHINE_TOKEN="$(jq -r .token < ~/.terminus/cache/tokens/${PANTHEON_USERNAME} )"
-$ echo $MACHINE_TOKEN
-xxxxxxxxxxxxxxxx
-$ SESSION_TOKEN=$(curl -s -X POST -H "Content-Type: application/json" https://api.pantheon.io/v0/authorize/machine-token -d "{ \"machine_token\": \"${MACHINE_TOKEN}\", \"client\": \"curl\" }" | jq -r .session)
-$ echo $SESSION_TOKEN
-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:xxxxxxxxxxxxxxxx
-$ SITE_NAME="its-wws-test1"
-$ SITE_ID=$(curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" "https://api.pantheon.io/v0/site-names/${SITE_NAME}" | jq -r .id)
-$ echo $SITE_ID
-9cf2c790-c7b8-4f2f-a6f1-27385b8f958e
-$ curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" "https://api.pantheon.io/v0/sites/${SITE_ID}" | jq .
-{
-  "id": "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e",
-  "name": "its-wws-test1",
-  "label": "its-wws-test1",
-  "created": 1693852012,
-  "framework": "wordpress",
-  "organization": "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9",
-  "plan_name": "Performance Small",
-  "holder_type": "organization",
-  "holder_id": "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9",
-  "owner": "208cd53b-f09c-49b3-9f8e-91fc603082a7",
-  "frozen": false,
-  "region": "United States",
-  "max_num_multidevs": 11,
-  "upstream": {
-    "id": "e8fe8550-1ab9-4964-8838-2b9abdccf4bf",
-    "url": "https://github.com/pantheon-systems/WordPress",
-    "label": "WordPress"
-  }
-}
-$ 
 ```
 
 ## Reference material
