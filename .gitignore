@@ -14,6 +14,11 @@
 *.csv
 *-results.json
 
+# Claude development archive: keep scrubbed artifacts, never raw exports or logs
+/development/**/*.raw.txt
+/development/**/*.raw.md
+/development/**/*.jsonl
+
 # Editor backup and temporary files
 .*.swp
 *~

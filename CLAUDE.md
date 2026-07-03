@@ -136,6 +136,18 @@ tool stays reusable by other institutions.
 - There is an active TODO list in `README.md` describing planned work (daily traffic alerts,
   Cloudflare/security scoring, moving capture into the portal app, better error handling).
 
+## Development archive (`development/`)
+
+`development/` is a committed, per-feature record of how features were built with Claude —
+one `YYYY-MM-DD-slug/` folder per feature holding the prompts used, the generated+hand-edited
+`SPEC.md`, a scrubbed `transcript.md`, and an auto-generated `statistics.md`. It is a
+**historical record, not a primary source of documentation** — don't rely on it for how the
+code works (that's the code, this file, and `docs/`). See `development/README.md` for the full
+convention. Two rules matter when working here: transcripts must be **scrubbed of secrets**
+(run the `/archive-session` skill, which invokes `development/finalize-session.py`) before
+committing, and the raw session JSONL is **never committed** (gitignored). A feature's
+`development/` folder is committed **in the same commit** as the code it documents.
+
 ## Dev container
 
 `.devcontainer/` defines a sandboxed Node/Debian image (`Dockerfile`, `devcontainer.json`)
@@ -198,5 +210,6 @@ Fetch information as needed from the websites, using the HTTP request header
 * Cloudflare products and services in general: https://developers.cloudflare.com/
 
 ## Other / General
+* Avoid flattery as feedback, stick to facts that matter. For example, "Got it — that's a meaningful architecture upgrade, and a good one." doesn't add anything of value. But do give me feedback about things that are not good, could be improved, or could change what decisions get made.
 * Commit only when asked. Only branch if explicitly directed to do so.
 
