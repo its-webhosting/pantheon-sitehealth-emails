@@ -3,6 +3,9 @@
 /pantheon-sitehealth-emails-config
 /local.toml
 /database.db
+/.devcontainer/ssh/keys/**
+/.devcontainer/terminus/cache/tokens/**
+
 /site_results.json
 /fqdns.json
 /news/*.toml

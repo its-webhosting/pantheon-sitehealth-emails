@@ -71,7 +71,8 @@ RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/software_versions
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 RUN mkdir -p /workspace/.venv && chown -R $USERNAME:$USERNAME /workspace
 RUN echo '[ -f /workspace/.venv/bin/activate ] && source /workspace/.venv/bin/activate' >> /home/$USERNAME/.bashrc
-ENV UV_CACHE_DIR=/workspace/.venv/.cache
+ENV UV_CACHE_DIR=/workspace/.venv/cache
+ENV UV_PYTHON_INSTALL_DIR=/workspace/.venv/install
 
 # PHP stuff
 COPY --from=composer/composer:latest-bin /composer /usr/bin/composer
@@ -141,3 +142,9 @@ RUN npm install -g @colbymchenry/codegraph
 ADD https://api.github.com/repos/anthropics/claude-code/tags?per_page=1 /home/$USERNAME/software_versions/claude_version.json
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN npm install -g tui-use
+
+# Set up other stuff
+COPY --chown=$USERNAME:$USERNAME terminus /home/$USERNAME/.terminus
+COPY --chown=$USERNAME:$USERNAME ssh /home/$USERNAME/.ssh
+RUN echo 'eval "$(ssh-agent -s)"' >> /home/$USERNAME/.bashrc
+

@@ -42,7 +42,7 @@ git clone git@github.com:its-webhosting/pantheon-sitehealth-emails.git
 cd pantheon-sitehealth-emails
 
 uv self update
-uv python install --managed-python 3.13
+uv python install --managed-python 3.13 --allow-existing
 uv python upgrade --managed-python 3.13 # in case it was already installed by another project, but out of date
 uv venv --managed-python --python 3.13
 source .venv/bin/activate
@@ -50,7 +50,6 @@ source .venv/bin/activate
 which python  # make sure it's under .venv/
 python -V     # make sure it's the version you expect
 
-ssh-add ~/.ssh/your-github-key-file  # required for installing umcloudflare package from private repo
 uv pip install .[mysql,aws,cloudflare]  # remove from the list the features you won't use
 
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
@@ -75,21 +74,27 @@ ln -s pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml .
 git pull && \
     [ -d pantheon-sitehealth-emails-config ] && \
     ( cd pantheon-sitehealth-emails-config ; git pull ) # make sure you have the latest version
-source .venv/bin/activate  # if you haven't already
 
-export CLOUDFLARE_EMAIL="bjensen@umich.edu"  # set to your email address
-read -s -p "Paste your Cloudflare API Key here: " CLOUDFLARE_API_KEY \
-    && echo && export CLOUDFLARE_API_KEY
 
-# If ${USER} is not your uniqname, you'll need add the options
-# `--smtp-userame YOUR_UNIQNAME` whenever you run the `pantheon-sitehealth-emails` script.
-read -s -p "SMTP password for ${USER}: " SMTP_PASSWORD \
-    && echo && export SMTP_PASSWORD
+uv python upgrade --managed-python 3.13  # why each time? fix
+source .venv/bin/activate  # if needed
+ssh-add ~/.ssh/keys/pantheon-ecdsa256
+export AWS_ACCESS_KEY_ID="AKIAVV6YMRGQX7XKC4DX"
+export AWS_SECRET_ACCESS_KEY="xxx"
 
-# ...or, if using 1Password:
-export CLOUDFLARE_EMAIL=$(op read "op://Private/ITS Cloudflare/username")
-export CLOUDFLARE_API_KEY=$(op read "op://Private/ITS Cloudflare/API key")
-export SMTP_PASSWORD=$(op read "op://Private/UMich Kerberos Password/password")
+# export CLOUDFLARE_EMAIL="bjensen@umich.edu"  # set to your email address
+# read -s -p "Paste your Cloudflare API Key here: " CLOUDFLARE_API_KEY \
+#     && echo && export CLOUDFLARE_API_KEY
+
+# # If ${USER} is not your uniqname, you'll need add the options
+# # `--smtp-userame YOUR_UNIQNAME` whenever you run the `pantheon-sitehealth-emails` script.
+# read -s -p "SMTP password for ${USER}: " SMTP_PASSWORD \
+#     && echo && export SMTP_PASSWORD
+
+# # ...or, if using 1Password:
+# export CLOUDFLARE_EMAIL=$(op read "op://Private/ITS Cloudflare/username")
+# export CLOUDFLARE_API_KEY=$(op read "op://Private/ITS Cloudflare/API key")
+# export SMTP_PASSWORD=$(op read "op://Private/UMich Kerberos Password/password")
 ```
 
 Run `pantheon-sitehealth-emails --help` for usage information.
@@ -172,17 +177,14 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 * set up devcontainer
   * make sure script works on its own
     * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
-      * ~/.terminus config in Dockerfile
     * SSH and key (ssh-agent for now, something else later?)
-      * ~/.ssh/config in Dockerfile
-      * copy key by hand for now
-    * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
     * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
     * AWS credentials (set in environment for now)
 * set up Claude Code in devcontainer
     * all AI-notes tasks
 * add cf-cache-status, cache-control checks
+* fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add everything to its-webhosting/terraform-infra repo
 * switch to Pantheon API where possible?
 

@@ -1,0 +1,34 @@
+
+Host github.com
+  IdentityFile ~/.ssh/keys/github-ed25519
+
+Host *.drush.in
+  Port 2222
+  IdentityFile ~/.ssh/keys/pantheon-ecdsa256
+  IdentitiesOnly yes
+  LogLevel QUIET
+  CheckHostIP no
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ControlMaster no
+  ControlPath /tmp/ssh-%r
+ 
+Match user "dev.*,test.*,live.*" originalhost "1*,2*,3*,4*,5*,6*,7*,8*,9*"
+  Port 2222
+  IdentityFile ~/.ssh/keys/pantheon-ecdsa256
+  IdentitiesOnly yes
+  LogLevel QUIET
+  CheckHostIP no
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ControlMaster no
+  ControlPath /tmp/ssh-%r
+
+Host *
+  ServerAliveInterval 180
+  TCPKeepAlive yes
+  ControlMaster auto
+  ControlPath ~/.ssh/control-%r@%h:%p
+  UseRoaming no
+  GSSAPIAuthentication no
+

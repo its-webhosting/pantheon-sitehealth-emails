@@ -1,0 +1,7 @@
+http_max_retries: 10
+http_retry_backoff: 30
+options:
+  interactive: false
+  verbose: true
+  no-interaction: true
+  'yes': true
