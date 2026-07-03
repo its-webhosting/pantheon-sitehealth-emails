@@ -1,0 +1,61 @@
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+   Settings  Status   Config   Usage   Stats
+
+                                                                                                                   ↑
+   Total cost:            $29.12
+   Total duration (API):  49m 26s
+   Total duration (wall): 2h 15m 26s
+   Total code changes:    1272 lines added, 390 lines removed
+   Usage by model:
+        claude-opus-4-8:  53.1k input, 196.7k output, 26.0m cache read, 1.1m cache write ($28.72)
+       claude-haiku-4-5:  101.5k input, 12.3k output, 716.0k cache read, 115.0k cache write, 2 web search ($0.3984)
+
+   Current session
+   █████████▌                                         19% used
+   Resets 6pm (America/Detroit)
+
+   Current week (all models)
+   █▌                                                 3% used
+   Resets Jul 7, 7pm (America/Detroit)
+
+   Current week (Fable)
+                                                      0% used
+
+   What's contributing to your limits usage?
+   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+   Last 24h · these are independent characteristics of your usage, not a breakdown
+
+   86% of your usage came from subagent-heavy sessions
+    Each subagent runs its own requests. Be deliberate about spawning them — and consider configuring a cheaper model for simpler subagents.
+
+   70% of your usage was at >150k context
+    Longer sessions are more expensive even when cached. /compact mid-task, /clear when switching to new tasks.
+
+   13% of your usage came from /claude-api
+    Heavy skills can be scoped down or run with a cheaper model via skill frontmatter.
+
+   47% of your usage came from MCP server "plugin:context-mode:context-mode"
+    MCP tool results stay in context for the rest of the session. /compact to flush them, or disable servers you don't need.
+
+   Skills                  % of usage
+   /claude-api                    13%
+   /claude-md-management:claud…    4%
+   /init                           3%
+   /update-config                  2%
+   /context-mode:ctx-doctor        1%
+   /context-mode:ctx-index         1%
+
+
+Subagents               % of usage
+Explore                         1%
+claude-code-guide               1%
+
+Plugins                 % of usage
+claude-md-management            4%
+context-mode                    2%
+
+MCP servers             % of usage
+plugin:context-mode:context…   47%
+

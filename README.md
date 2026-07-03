@@ -174,13 +174,7 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 ## TO DO
 
-* set up devcontainer
-  * make sure script works on its own
-    * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
-    * SSH and key (ssh-agent for now, something else later?)
-    * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
-    * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
-    * AWS credentials (set in environment for now)
+* When using the AskUserQuestion tool, "You stepped away, so I'll lock in sensible defaults"
 * test harness
 * test suite
 * rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
@@ -189,8 +183,14 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 * add SendGrid support as an additional option to SMTP
 * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add cf-cache-status, cache-control checks
+* finish implementing better secrets handling
+    * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
+    * SSH and key (ssh-agent for now, something else later?)
+    * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
+    * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
+    * AWS credentials (set in environment for now)
 * switch to Pantheon API where possible?
-* add everything to its-webhosting/terraform-infra repo
+* add everything to its-webhosting/terraform-infra repo that should be there
 
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
 
