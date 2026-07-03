@@ -149,12 +149,18 @@ AI tools to do their work, or in the script. A goal is replace the script's use 
 terminus with the Pantheon API, but only in the cases where it makes sense (equivalent
 or better functionality, no significant downsides).
 
+**GUIDANCE FOR IMPLEMENTING NEW FUNCTIONALTY OR FEATURES**: prefer using the Pantheon
+API when adding new code to the script, unless using `terminus` would be better for some
+reason (examples: the API lacks necessary endpoints, it would be significantly cleaner
+or significantly simpler to use `terminus`, using `terminus` would give better results,
+...).
+
 The Pantheon's API schema is available at https://api.pantheon.io/docs/swagger.json
 Fetch it as necessary.
 
 As of July 3, 2026, there is no documentation or examples on https://docs.pantheon.io/ on
-how to use the Pantheon API, so some information is below.  Freely adapt this to Python or
-any other languages/environments where you would like to use the Pantheon API.
+how to use the Pantheon API, so some information is below.  Freely adapt what's below to
+Python or any other languages/environments where you would like to use the Pantheon API.
 
 1. Get a machine token. A machine token is already available as a part of the configuration
 for `terminus`.
