@@ -181,8 +181,8 @@ Import the older (weekly and monthly) metrics for `--all` sites:
     * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
     * AWS credentials (set in environment for now)
-* set up Claude Code in devcontainer
-    * all AI-notes tasks
+* have Cluade document plugin system and config file.
+* add SendGrid support as an additional option to SMTP
 * add cf-cache-status, cache-control checks
 * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add everything to its-webhosting/terraform-infra repo
