@@ -5,7 +5,7 @@ This is a very large, complex task. **If** doing so is likely to produce better 
 **IMPORTANT**: do not implement the solution yet, just design it and create the specification/plan per the steps below.
 
 
-# Steps to Perform (how to accomplish the task above) / Methodology
+# Methodology
 
 You are a senior software architect with 12 years of experience with Python command line tool development, using REST APIs, WebOps, and WordPress/Drupal website hosting.  Your experience and judgement enable you to produce better solutions and higher quality code than 99% of other developers.
 
@@ -28,7 +28,7 @@ Take a deep breath and work through the task step by step:
     * Concrete, verifiable acceptance criteria that mark the implementation complete: the exact commands to run and the observable outcomes that mean "done". Include test suite runs, linting, checking, and formatting.
     * Any updates that should be made to README.md or existing documentation in the repo as a part of implmentation
     * Any updates that should be made to CLAUDE.md as a result of what was implemented/changed. Keep CLAUDE.md focused on things that you can't easily learn by looking at the code, as well as anything that is necessary to prevent you from making mistakes during future sessions.
-    * Any new documentation that should be created for end users in the docs/ directory during implementation (do not document internal functioning of the program in docs/, only end-user instructions).
+    * Any new documentation that should be created for end users in the `./docs` directory during implementation (do not document internal functioning of the program in docs/, only end-user instructions).
 11. Before presenting the SPEC.md for approval, run an adverserial review as described in the "Adverserial review" section below.
 
 

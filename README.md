@@ -208,12 +208,9 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* add test language to new feature prompt template
-* test suite
-* rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
-* have Claude document plugin system and config file
 * update CLAUDE.md again (prompt)
 * add SendGrid support as an additional option to SMTP
+  * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
 * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add cf-cache-status, cache-control checks
 * finish implementing better secrets handling
@@ -222,7 +219,9 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
     * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
     * AWS credentials (set in environment for now)
-* switch to Pantheon API where possible?
+* rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
+* refactor the program to take the most advatage of the program's plugin framework and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality into plugins wherever it is appropriate (but keeping things out of plugins if there's no advantage/reason). Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
+* switch to Pantheon API where possible
 * add everything to its-webhosting/terraform-infra repo that should be there
 
 * Switch terminus() to returning tuple (output, errors, fatal) for better error handling
