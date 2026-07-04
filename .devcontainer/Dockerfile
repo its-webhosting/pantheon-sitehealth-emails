@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   locate \
   curl ca-certificates \
   build-essential default-mysql-client python3-dev \
-  php-common php-cli php-zip php-mysql php-curl php-mbstring php-xml php-dev wget \
+  php-common php-cli php-zip php-mysql php-curl php-mbstring php-xml php-dev wget
 
 # Install dependencies for Playwright, copied from Dockerfile.noble at
 # https://github.com/microsoft/playwright/tree/e9a206539527957abd177749dd893939d3c6c85c/utils/docker
@@ -155,6 +155,7 @@ RUN npm install -g tui-use
 
 # Set up other stuff
 COPY --chown=$USERNAME:$USERNAME terminus /home/$USERNAME/.terminus
+RUN /usr/local/bin/terminus self:plugin:install pantheon-systems/terminus-composer-plugin
 COPY --chown=$USERNAME:$USERNAME ssh /home/$USERNAME/.ssh
 RUN echo 'eval "$(ssh-agent -s)"' >> /home/$USERNAME/.bashrc
 
