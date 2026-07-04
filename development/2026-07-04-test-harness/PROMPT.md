@@ -1,6 +1,65 @@
 # Task
 
+Work with me to design a test harness and test suite for the program in the current project repository.  The only deliverable right now is a plan that can be used to implement the test harness later.  Consider what specific tests the harness may need to run and how they will run, but do not design or implement any tests at this stage beyond smoke tests necessary to ensure proper functioning of the test harness. **The immediate intent is to ensure that all code works as designed and continues to work as designed even in the face of other, major planned future changes and the addition of new features.**
+
+There are two constraints that apply both during design as well as during all test runs both now and in the future:
+* **NEVER** run the program with the `--all` option that can take up to 6 hours.  Instead, test using the specific sites `its-wws-test1` (a test WordPress website), `its-wws-test2` (a test Drupal website), or a specific real site you choose out of the list of all sites (one way to get a list of all sites is by running `terminus org:site:list 23c7208e-5f2a-4388-9fc4-5c3a038ef8b9`
+* **NEVER** run the program with the `--for-real` option since that can result in unexpected emails being sent to real customers, which will confuse them and create support problems.
+Adhere to these constraints even though doing so will result in gaps in the test coverage.
+
 This is a very large, complex task. **If** doing so is likely to produce better results, you can choose to break the task into multiple sub-tasks and complete each sub-task in a separate prompt and Claude session (you can still run sub-agents as needed without breaking the task into sub-tasks on disk). If you do this, keep all the files related to the sub-tasks in the same directory as this prompt file.  If you break the task into sub-tasks, number them and also create a `00-overview.md` index file that lists all the sub-tasks and is continuously updated to indicate the current state of each one together with cross-cutting conventions (so they do not need to be repeated in each sub-task description/specification file), dependencies between sub-tasks, and inter-sub-task handoff record: each subtask, on completion, records in the file the deviations from the overall design that occurred during the sub-task's execution, decisions the sub-task took, and follow-ups it left open; the next sub-tasks's discovery step consults that record together with the code itself.
+
+Right now, we're designing (and, then, after review and approval, implementing) a test harness. The next major stages are:
+  * Implement a test suite that covers all neccessary aspects of the program. It is important to have this test suite and know all the tests pass before we proceed to the next stages, below. That way, if one of the next stages introduces a problem or breaks something, the test suite can detect it early, when it is easiest to fix.
+  * We will refactor the program so the main script no longer contains most of the functionality.  The goal is to make the code more modular and easier to understand, modify, and maintain.
+  * We will refactor the program to take the most advatage of the program's plugin framework and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality into plugins wherever it is appropriate (but keeping things out of plugins if there's no advantage/reason). Similarly, we will modify all parts of the program to modify the program's configuration framework.
+  * We will re-enabled the code that sends email via SMTP, and also add support for sending emails via the SendGrid API.
+These stages are not completely independent: for example, modularizing some or all of the program may be necessary in order to implement the test harness or the test suite. You have permission to move some of the work from later stages into earlier ones, but only as necessary for the work being done at the time -- the goal is to avoid unnecssary changes that could break things ahead of getting a test suite running that can tell us both what already may be broken as well as what we break when we do the work in the later stages.
+
+Things to **not** change yet:
+  * The code to send email via SMTP is temporarily disabled. Don't re-enable (uncomment) it yet.
+  * There is a check to ensure that `fqdns.json` is less than 24 hours old, but this should not matter because you should never run the program with the `--all` option. We'll add funtionality to the program **later** to regenerate this file as needed.
+
+Right now, our main focus is on tests for local development.  There currently is only one human working on this program, so CI/CD testing is not a priority, although we will want to add CI/CD testing next year.  Also, we are not doing releases of this program yet (but we will next year); the program is currently used only in-house by doing a `git clone` of the repository's `main` branch.
+
+We **are not** going to utilize Test Driven Development.  Initially, tests will be added for the code that already exists.  After that, each Claude Code prompt (and.or the CLAUDE.md file) will include instructions for designing and implementing appropriate tests for each change at the time the change is designed and implemented.
+
+We **do not** need or want 100% test coverage. In addition to the gaps in coverage that result from never running the program with the `--all` or `--for-real` options. After the test harness is planned/designed (now) and implemented (later), a separate project will be started to design and implement tests for the test harness to ensure **appropriate** (not necessarily full) coverage. Test coverage should ensure that all meaningful and practical functionality is tested, without covering things that don't really need tests. We don't want to pursue / increase the coverage metric just for its own sake. 
+
+Test use cases for local development include:
+  * Claude Code deciding which test(s) should be run to verify that a change made by Claude Code are functioning properly and that the change did not introduce new problems, skipping tests that are clearly not relevant.
+    * The output of tests (both per-test as well as for runs of many tests) when run by Claude Code should be optimized for LLMs to understand and act on.  All useful information should be included in an easy-to-parse format without boilerplate or, fluff, or other extraneous output.
+  * A human running all tests, all tests of a particular type, or all tests related to a command, module, or area of functionality.
+    * The output of tests (both per-test as well as for runs of many tests) when run by humans should be easy for humans to read and clear/understandable.  Anticipate that humans will often copy and paste the output of a failing test into Claude Code and ask Claude Code to analyze/investigate the failure and fix the problem; therefore, the output for humans should also be friendly to LLMs.
+
+What are the best practices for testing this sort of program? Make sure to take those into account in your test harness and test design.
+
+* Include test harness support for:
+  * Unit testing
+  * Integration testing
+  * End to end testing
+  * Headless Browser testing
+
+Performance testing is not important, although far-off future work will include doing checks for a single site in parallel where possible while ensuring we do not overload or abuse Pantheon's infrastructure/capacity.
+
+Headless browser testing should be used for:
+* Testing email sending functionality email sending functionality (via SMTP, once-uncommented in the future, and via SendGrid, once implemented). Right now, the emails are being sent to a GMail account. The email sending test should ensure the email gets received within a few minutes of being sent and also look for email error messages (unknown sender, undeliverable, rejected, ...) that appear in the same GMail account. Figure out how test harness authentication to GMail will work. We will also need to ensure that the sending and recipient identities for email testing are the same so the same email account that receives the emails also receives email errors.
+* Ensuring that the reports emailed by the script render appropriately in the browser. There are two ways to test report rendering:
+  * Have a browser load the report and all associated files from disk. This is a quick and good to ensure that the HTML, CSS, and JavaScript in the template comply with basic web standards and find and correct basic problems with report formatting.
+  * Have the script send email and then use GMail to check to be sure the email displays correctly in GMail. This is much more time consuming and tricky. GMail allows only a subset of HTML, CSS, and JavaScript in email messages. GMail does not always implement/follow all web standards. GMail may display various messages that need to be handled before content (or full content) will display, such as for messages that appear to be dangerous, spam, contains remote content, or the display being truncated due to being too long.
+
+If there are other types of testing that would be good (or best practice) to include, interview me about what they are, why they would be good, and whether to include them in the design.
+
+Consider how to anticipate and optimize the effort and cost of test maintenance to ensure tests stay relevant and up-to-date as the program continues to receive changes and new features.
+
+If it makes sense and the advantages are compelling, you can write prompts for yourself that are later run multiple times for various testing related tasks, whether it is keeping the harness up to date, implementing new tests, keeping tests up to date, or something else.  It's also OK to leverage testing frameworks/tools as needed that in turn make use of Claude Code, if the advantages are compelling.
+
+What other test harness and test suite design elements, behaviors, features, and functionality beyond the requirements above would make the test harness/functionality for this program exceptional and awesome?
+
+Propose design enhancements to make the test harness and test suite as good as reasonably possible.
+
+What are the choices for test framework(s)?  Which framework(s) or other software should we use for the test harness and why should we use them in preference to the others?
+
 
 **IMPORTANT**: do not implement the solution yet, just design it and create the specification/plan per the steps below.
 
@@ -24,7 +83,6 @@ Take a deep breath and work through the task step by step:
 8. Select the best solution out of those you evaluated.
 9. For the best solution, if any of the quality control scores are under 0.9, refine and improve the solution until each score is 0.9 or above.
 10. Write the complete specfications for how to implement the resulting solution to the file SPEC.md (put it in the same directory as the file for this prompt), optimized for Claude Code to use it to implement the code when I'm ready for you to do that (don't implement the solution yet). I may hand-edit the file before asking you to implement the solution described in the specifications.  This file will also serve as a record for both Claude Code and humans for what was decided and why, but it will not be a primary source of documentation.  The file should include:
-    * What tests should be written and exercised as a part of the implementation to ensure the functionality implemented in the stage is correct and doesn't break in the future. Include all types of tests that are appropriate for what the current stage implements (e2e, integration, support, unit, other) and what each one should test. The tests must **extend the existing harness and honor its hard safety constraints** -- do not invent a parallel testing approach.
     * Concrete, verifiable acceptance criteria that mark the implementation complete: the exact commands to run and the observable outcomes that mean "done".
     * Any updates that should be made to README.md or existing documentation in the repo as a part of implmentation
     * Any updates that should be made to CLAUDE.md as a result of what was implemented/changed. Keep CLAUDE.md focused on things that you can't easily learn by looking at the code, as well as anything that is necessary to prevent you from making mistakes during future sessions.

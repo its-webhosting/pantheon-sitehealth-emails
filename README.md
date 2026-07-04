@@ -42,9 +42,9 @@ git clone git@github.com:its-webhosting/pantheon-sitehealth-emails.git
 cd pantheon-sitehealth-emails
 
 uv self update
-uv python install --managed-python 3.13 --allow-existing
+uv python install --managed-python 3.13
 uv python upgrade --managed-python 3.13 # in case it was already installed by another project, but out of date
-uv venv --managed-python --python 3.13
+uv venv --managed-python --python 3.13 --allow-existing
 source .venv/bin/activate
 
 which python  # make sure it's under .venv/
@@ -174,7 +174,6 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 ## TO DO
 
-* When using the AskUserQuestion tool, "You stepped away, so I'll lock in sensible defaults"
 * test harness
 * test suite
 * rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
