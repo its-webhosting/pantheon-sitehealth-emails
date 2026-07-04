@@ -174,7 +174,22 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 ## TO DO
 
-* test harness
+* have these not prompt -- always allow:
+```
+Tool use · from the Explore agent
+
+  plugin:context-mode:context-mode - ctx_batch_execute(commands: [{"label":"cloudflare ips network","command":"cd /workspace && grep -n 'import\\|Cloudflare\\|cloudflare\\|\\.list()\\|api_key\\|def get_cloudflare_ips\\|requests\\|httpx' plugin/cloudflare/ips.py"},{"label":"umich portal external","command":"cd /workspace && grep -n 'import\\|requests\\|httpx\\|urllib\\|\\.get(\\|\\.post(\\|http\\|api\\|def ' plugin/umich/portal.py"},{"label":"sitelens external","command":"cd /workspace && grep -n 'import\\|requests\\|httpx\\|urllib\\|\\.get(\\|\\.post(\\|http\\|api\\|gauge\\|def ' check/umich/sitelens.py | head -40"}], queries: ["cloudflare ips list api client network","umich portal http api requests network call","sitelens gauge http api requests network call"], cwd: "/workspace") (MCP)
+  Run multiple commands in ONE call. Every command's output is auto-indexed into the knowledge base; if you also pass `queries`, the matching sections come back in the same round trip so a follow-up search call is not needed.
+
+  Concurrency parallelizes the FETCH phase (run-the-commands). The DERIVATION phase — turning raw output into an answer — still belongs in code: add a processing command that consumes the indexed output and prints only the answer, so the raw bytes never enter your conversation (Think-in-Code, same principle as the sandbox tool).…
+
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, and don't ask again for plugin:context-mode:context-mode - ctx_batch_execute commands in /workspace
+  3. No
+```
+
+
 * test suite
 * rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
 * have Claude document plugin system and config file
