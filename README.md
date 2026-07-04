@@ -14,11 +14,11 @@ Works with Python 3.13 and 3.12.  It should work with Python 3.11 but that has n
 Running `brew install python@3.12` should work for macOS users.
 
 Other requirements:
-* PHP and Composer for the [Emogrifier CSS processor](https://packagist.org/packages/pelago/emogrifier). Any recent versions of PHP and Composer should work, but note that as of January 2025, Pantheon's Terminus command does not work with PHP 8.4, so you should use PHP 8.3 or earlier with the sitehealth script since the sitehealth script also runs Terminus.
+* PHP and Composer for the [Emogrifier CSS processor](https://packagist.org/packages/pelago/emogrifier). Any recent versions of PHP and Composer should work.
     ```
     brew unlink php
-    brew install php@8.3
-    brew link php@8.3
+    brew install php@8.4
+    brew link php@8.4
     ```
 * MySQL client if you will use this script with a MySQL database instead of the default SQLite3 database. `pkg-config` is needed by `pip` to install the Python package `mysqlclient`.
     ```
@@ -174,6 +174,7 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 
 ## TO DO
 
+* fix August 2027 typo
 * have these not prompt -- always allow:
 ```
 Tool use · from the Explore agent
