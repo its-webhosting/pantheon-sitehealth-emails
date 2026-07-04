@@ -8,4 +8,4 @@ if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich
     sc.add_hook('check', {'name': 'check.umich.sitelens.check_sitelens_urls', 'func': check_sitelens_urls})
     sc.add_hook('check', {'name': 'check.umich.sitelens.check_sitelens_scores', 'func': check_sitelens_scores})
 else:
-    sc.console('[bold yellow] Skipping check.umich.sitelens because UMich plugin is not enabled')
+    sc.console.print('[bold yellow] Skipping check.umich.sitelens because UMich plugin is not enabled')

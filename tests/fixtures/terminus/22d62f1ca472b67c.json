@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "eval",
+    "require ABSPATH . WPINC . \"/version.php\"; echo $wp_version;"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "eval",
+    "require ABSPATH . WPINC . \"/version.php\"; echo $wp_version;"
+  ],
+  "returncode": 0,
+  "stdout": "6.9.4",
+  "stderr": "2026-07-04 14:13:08 UTC[+0000] [notice] Command: its-wws-test1.live -- wp eval require ABSPATH . WPINC . \"/version.php\"; echo $wp_version; [Exit: 0] (Attempt 1/1)\n",
+  "recorded": "2026-07-04"
+}

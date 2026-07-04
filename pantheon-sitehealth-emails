@@ -138,85 +138,96 @@ class PantheonOverageProtection(Base):
 # Global initialization:
 #
 
-# Parse command line arguments.  This is outside main() so the arguments are available to all functions.
-args_parser = argparse.ArgumentParser(
-    description="Send emails to website owners letting them know what their Pantheon traffic has been"
-    "and make recommendations about whether/how they should change their current plan or"
-    "the configuration of their site."
-)
-args_parser.add_argument(
-    "sites",
-    metavar="SITE",
-    nargs="*",
-    help="a list of site names to process; if not specified, all sites in the Pantheon organization will be processed",
-)
-args_parser.add_argument(
-    "--all",
-    "-a",
-    action="store_true",
-    default=False,
-    help="process all sites in the Pantheon organization",
-)
-args_parser.add_argument(
-    "--date",
-    "-d",
-    type=datetime.date.fromisoformat,
-    default=datetime.date.today(),
-    help="generate the report as if it were this date (YYYYMMDD or YYYY-MM-DD); defaults to today",
-)
-args_parser.add_argument(
-    "--update",
-    action="store_true",
-    default=False,
-    help="just update the site visitors in the database, skipping the reports",
-)
-args_parser.add_argument(
-    "--for-real",
-    action="store_true",
-    default=False,
-    help="send email to the site owners; without this option, the emails will go to the logged-in user instead",
-)
-args_parser.add_argument(
-    "--config",
-    "-c",
-    action="store",
-    default="pantheon-sitehealth-emails.toml",
-    help="TOML configuration file, see pantheon-sitehealth-emails.toml.sample",
-)
-args_parser.add_argument(
-    "--only-warn",
-    action="store_true",
-    default=False,
-    help="only check sites for warnings, do not generate reports or send emails",
-)
-args_parser.add_argument(
-    "--smtp-username",
-    "-u",
-    action="store",
-    default=os.environ.get("USER", ""),
-    help="username for logging into the SMTP server to send mail",
-)
-args_parser.add_argument(
-    "--create-tables",
-    action="store_true",
-    default=False,
-    help="create the database tables and then stop, ignoring all other command line options",
-)
-args_parser.add_argument(
-    "--import-older-metrics",
-    action="store_true",
-    default=False,
-    help="load weekly and monthly Pantheon metrics into the database and then stop, "
-    "ignoring all other command line options",
-)
-args_parser.add_argument(
-    "--verbose",
-    "-v",
-    action="count",
-    default=0,
-    help="include extra information in the output",
-)
-sc.options = args_parser.parse_args()
+# Command-line argument parsing.  Building the parser is side-effect-free; parse_args()
+# (which reads sys.argv) is only invoked from the __main__ block at the bottom of this
+# file, so the module can be imported by the test harness without argv side effects.
+# Every function reads sc.options (set by the caller) at call time, not at import time.
+def build_arg_parser() -> argparse.ArgumentParser:
+    args_parser = argparse.ArgumentParser(
+        # Reject option abbreviations (e.g. `--for` resolving to `--for-real`, `--al` to
+        # `--all`).  These are dangerous options; requiring the exact spelling is a safety guard.
+        allow_abbrev=False,
+        description="Send emails to website owners letting them know what their Pantheon traffic has been"
+        "and make recommendations about whether/how they should change their current plan or"
+        "the configuration of their site."
+    )
+    args_parser.add_argument(
+        "sites",
+        metavar="SITE",
+        nargs="*",
+        help="a list of site names to process; if not specified, all sites in the Pantheon organization will be processed",
+    )
+    args_parser.add_argument(
+        "--all",
+        "-a",
+        action="store_true",
+        default=False,
+        help="process all sites in the Pantheon organization",
+    )
+    args_parser.add_argument(
+        "--date",
+        "-d",
+        type=datetime.date.fromisoformat,
+        default=datetime.date.today(),
+        help="generate the report as if it were this date (YYYYMMDD or YYYY-MM-DD); defaults to today",
+    )
+    args_parser.add_argument(
+        "--update",
+        action="store_true",
+        default=False,
+        help="just update the site visitors in the database, skipping the reports",
+    )
+    args_parser.add_argument(
+        "--for-real",
+        action="store_true",
+        default=False,
+        help="send email to the site owners; without this option, the emails will go to the logged-in user instead",
+    )
+    args_parser.add_argument(
+        "--config",
+        "-c",
+        action="store",
+        default="pantheon-sitehealth-emails.toml",
+        help="TOML configuration file, see pantheon-sitehealth-emails.toml.sample",
+    )
+    args_parser.add_argument(
+        "--only-warn",
+        action="store_true",
+        default=False,
+        help="only check sites for warnings, do not generate reports or send emails",
+    )
+    args_parser.add_argument(
+        "--smtp-username",
+        "-u",
+        action="store",
+        default=os.environ.get("USER", ""),
+        help="username for logging into the SMTP server to send mail",
+    )
+    args_parser.add_argument(
+        "--create-tables",
+        action="store_true",
+        default=False,
+        help="create the database tables and then stop, ignoring all other command line options",
+    )
+    args_parser.add_argument(
+        "--import-older-metrics",
+        action="store_true",
+        default=False,
+        help="load weekly and monthly Pantheon metrics into the database and then stop, "
+        "ignoring all other command line options",
+    )
+    args_parser.add_argument(
+        "--verbose",
+        "-v",
+        action="count",
+        default=0,
+        help="include extra information in the output",
+    )
+    return args_parser
+
+
+def parse_args(argv=None):
+    return build_arg_parser().parse_args(argv)
 
 
 def escape_url(url):
@@ -317,9 +328,12 @@ def terminus(*args) -> Any:
     """
     Run Terminus with the given arguments and return the result as a JSON object.
     """
+    # args is a tuple (from *args); work with a list so the retry sentinel can be
+    # added/removed without mutating a tuple (which previously crashed this path).
+    args = list(args)
     retry = True
     if "pshe-no-retry" in args:
-        del args["pshe-no-retry"]
+        args.remove("pshe-no-retry")
         retry = False
     command = [*args, "--format=json"]
     output, errors, fatal = run_terminus(command)
@@ -333,7 +347,7 @@ def terminus(*args) -> Any:
         if retry and "Invalid or expired session header: X-Pantheon-Session" in errors:
             sc.console.print("Sleeping for 5 seconds and then retrying...")
             time.sleep(5)
-            args.push("pshe-no-retry")
+            args.append("pshe-no-retry")
             return terminus(*args)
     # return result, errors.strip(), fatal  # TODO
     return result
@@ -3382,7 +3396,7 @@ at the moment, it should be fixed to avoid possible future problems:
             recipients = ", ".join(
                 [site_team[team_member]["email"] for team_member in site_team]
             )
-            contacts = contacts.replace(",", "")
+            contacts = recipients.replace(",", "")
 
         # Create email from template
         sorted_notices = (
@@ -3392,7 +3406,14 @@ at the moment, it should be fixed to avoid possible future problems:
         )
         report = f"Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}"
         subject = f"{site['name']}: {report}"
-        if end_of_contract_year:
+        # U-M-specific annual-billing subject + notice; only when the UMich plugin is enabled
+        # (this block reads the U-M portal config).  end_of_contract_year is date-driven, so
+        # without the UMich guard a non-U-M June-dated report crashed with KeyError('UMich').
+        if end_of_contract_year and (
+            "UMich" in sc.config
+            and "enabled" in sc.config["UMich"]
+            and sc.config["UMich"]["enabled"]
+        ):
             subject = f"Time Sensitive: {site['name']} annual billing"
             shortcode = sc.config["UMich"]["portal"]["sites"][site["name"]]["shortcode"]
             annual_bill = float(plan_info[site_current_plan]["cost"])
@@ -3470,8 +3491,15 @@ June 30.
                 subject = f"Action Recommended: {site['name']}: {sorted_notices[0]['short']} | {report}"
             # no subject prefix for info notices
 
-        # TODO: remove this section in August 2027:
-        if True:
+        # TODO: remove this section at the beginning of August 2026:
+        # U-M-specific annual-billing notice; only for institutions running the UMich
+        # plugin (it reads the U-M portal config).  Previously an unconditional `if True:`,
+        # which crashed every non-U-M / plugin-disabled run with KeyError('UMich').
+        if (
+            "UMich" in sc.config
+            and "enabled" in sc.config["UMich"]
+            and sc.config["UMich"]["enabled"]
+        ):
             shortcode = sc.config["UMich"]["portal"]["sites"][site["name"]]["shortcode"]
             annual_bill = float(plan_info[site_current_plan]["cost"])
             sorted_notices.insert(
@@ -3670,4 +3698,5 @@ an additional pro-rated bill or credit in the following month.
 
 
 if __name__ == "__main__":
+    sc.options = parse_args()
     main()

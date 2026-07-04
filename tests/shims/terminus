@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Fake `terminus` for the test harness — record and replay modes.
+
+Every Pantheon/WP/Drush interaction in the program funnels through the real
+`terminus` binary (WP and Drush are dispatched as `terminus wp …` / `terminus
+drush …`).  This shim stands in for that binary on PATH so end-to-end tests run
+the *real* subprocess/argument-building path with deterministic, offline data.
+
+Modes (via env var TERMINUS_SHIM_MODE):
+  replay (default) — look the invocation up in TERMINUS_SHIM_DIR and print the
+                     recorded stdout/stderr, exiting with the recorded code.
+                     A missing fixture is a LOUD failure (exit 3 + stderr), never
+                     a silent empty response.
+  record          — run the real terminus (TERMINUS_SHIM_REAL, default
+                    /usr/local/bin/terminus), tee its output, and save the
+                    invocation as a fixture keyed by the argv.
+
+Fixtures are keyed by a hash of the argv with the ANSI/interaction flags stripped
+(they never affect the response).  See tests/README.md.
+"""
+import datetime
+import hashlib
+import json
+import os
+import subprocess
+import sys
+
+# The always-present --no-ansi / --no-interaction flags only affect presentation, so they
+# are excluded from the fixture key.  Everything else — verbs, site/env ids, --fields,
+# --format=json, eval code — IS part of the key.  This is safe because record and replay are
+# symmetric (the program always appends --format=json to the same commands); if a future call
+# path fetched the same data both with and without --format, they would key to different
+# fixtures, so add --format here if that ever happens.
+_IGNORED_FLAGS = {"--no-ansi", "--no-interaction"}
+
+
+def _key_args(argv):
+    return [a for a in argv if a not in _IGNORED_FLAGS]
+
+
+def _key(argv):
+    payload = json.dumps(_key_args(argv), ensure_ascii=False)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def main():
+    argv = sys.argv[1:]
+    fixture_dir = os.environ.get("TERMINUS_SHIM_DIR")
+    if not fixture_dir:
+        sys.stderr.write("terminus-shim: TERMINUS_SHIM_DIR is not set\n")
+        return 2
+    mode = os.environ.get("TERMINUS_SHIM_MODE", "replay")
+    path = os.path.join(fixture_dir, _key(argv) + ".json")
+
+    if mode == "record":
+        real = os.environ.get("TERMINUS_SHIM_REAL", "/usr/local/bin/terminus")
+        proc = subprocess.run([real, *argv], capture_output=True, text=True)
+        record = {
+            "argv": _key_args(argv),
+            "full_argv": argv,
+            "returncode": proc.returncode,
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "recorded": datetime.date.today().isoformat(),
+        }
+        os.makedirs(fixture_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        sys.stdout.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        return proc.returncode
+
+    # replay
+    if not os.path.exists(path):
+        sys.stderr.write(
+            "terminus-shim: no fixture for: "
+            + json.dumps(_key_args(argv), ensure_ascii=False)
+            + f" (key {_key(argv)})\n"
+        )
+        return 3
+    with open(path, encoding="utf-8") as f:
+        record = json.load(f)
+    sys.stdout.write(record.get("stdout", ""))
+    sys.stderr.write(record.get("stderr", ""))
+    return int(record.get("returncode", 0))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

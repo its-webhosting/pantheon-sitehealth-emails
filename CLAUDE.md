@@ -136,6 +136,39 @@ tool stays reusable by other institutions.
 - There is an active TODO list in `README.md` describing planned work (daily traffic alerts,
   Cloudflare/security scoring, moving capture into the portal app, better error handling).
 
+## Testing
+
+There is a pytest harness under `tests/` (built 2026-07; design in
+`development/2026-07-04-test-harness/SPEC.md`). Run it with `./run-tests` (wrapper over
+pytest): `./run-tests --fast` is the offline inner loop; `./run-tests` adds the live tier;
+`--llm` gives terse machine-parseable output; `--coverage`, `--update-goldens`, and
+`--record` do what they say. Tiers are pytest marks: `unit`, `integration`, `e2e`, `live`,
+`render`, `email`, `slow`. **When you change the program, add/adjust the appropriate tests in
+the same change** (this project does not do TDD — tests follow the change).
+
+Non-obvious things the harness relies on:
+- **The script is imported, not re-parsed.** `tests/conftest.py` loads the extension-less
+  `pantheon-sitehealth-emails` via `importlib`/`SourceFileLoader` (fixture `psh`). Argparse was
+  refactored into `build_arg_parser()`/`parse_args()`; `sc.options` is set by the caller, so a
+  test sets it (the `reset_sc` autouse fixture does) before calling functions. `MPLBACKEND=Agg`
+  must be set before the load (conftest does this) because the module imports `matplotlib.pyplot`
+  at the top.
+- **Two mock seams.** All Pantheon/WP/Drush I/O funnels through `run_terminus()` — monkeypatch it
+  for in-process tests, or use the PATH-shim fake `terminus` (`tests/shims/terminus`, record/replay)
+  for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
+- **Safety interlock.** `run_program()` in conftest is the only sanctioned way to run the program
+  in a subprocess; it raises `ForbiddenFlagError` if `--all`/`-a`/`--for-real` appear. Never
+  bypass it. Tests use only `its-wws-test1`/`its-wws-test2`, read-only.
+- **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
+  seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
+  and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots
+  normalize the volatile `make_msgid` CIDs; refresh with `./run-tests --update-goldens`. Refresh
+  terminus fixtures with `./run-tests --record` (trims org list to the test site, scrubs emails).
+- **The reusable (non-UMich) path had latent bugs** that production never hit because U-M always
+  runs with the UMich plugin enabled. Several U-M-specific code paths in the core script are not
+  yet behind the `[UMich].enabled` flag; the planned refactor should move them out. When adding
+  code, keep institution-specific logic behind config flags / the `umich` plugin+check packages.
+
 ## Development archive (`development/`)
 
 `development/` is a committed, per-feature record of how features were built with Claude —

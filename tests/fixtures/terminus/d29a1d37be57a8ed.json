@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "theme",
+    "list",
+    "--fields=name,status,update,version,update_version,title",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "theme",
+    "list",
+    "--fields=name,status,update,version,update_version,title",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "[{\"name\":\"twentytwentyfive\",\"status\":\"inactive\",\"update\":\"available\",\"version\":\"1.4\",\"update_version\":\"1.5\",\"title\":\"Twenty Twenty-Five\"},{\"name\":\"twentytwentyfour\",\"status\":\"inactive\",\"update\":\"available\",\"version\":\"1.4\",\"update_version\":\"1.5\",\"title\":\"Twenty Twenty-Four\"},{\"name\":\"twentytwentythree\",\"status\":\"active\",\"update\":\"none\",\"version\":\"1.6\",\"update_version\":\"\",\"title\":\"Twenty Twenty-Three\"},{\"name\":\"twentytwentytwo\",\"status\":\"inactive\",\"update\":\"none\",\"version\":\"2.1\",\"update_version\":\"\",\"title\":\"Twenty Twenty-Two\"}]",
+  "stderr": "2026-07-04 14:13:18 UTC[+0000] [notice] Command: its-wws-test1.live -- wp theme list [Exit: 0] (Attempt 1/1)\n",
+  "recorded": "2026-07-04"
+}

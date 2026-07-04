@@ -26,6 +26,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   curl ca-certificates \
   build-essential default-mysql-client python3-dev \
   php-common php-cli php-zip php-mysql php-curl php-mbstring php-xml php-dev wget \
+
+# Install dependencies for Playwright, copied from Dockerfile.noble at
+# https://github.com/microsoft/playwright/tree/e9a206539527957abd177749dd893939d3c6c85c/utils/docker
+RUN apt-get install -y --no-install-recommends \
+  at-spi2-common fonts-freefont-ttf fonts-ipafont-gothic fonts-liberation fonts-noto-color-emoji fonts-tlwg-loma-otf fonts-unifont fonts-wqy-zenhei \
+  libasound2-data libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libavahi-client3 libavahi-common-data libavahi-common3 libcups2t64 \
+  libdbus-1-3 libdrm-amdgpu1 libdrm-common libdrm2 libfontenc1 libgbm1 libgl1 libgl1-mesa-dri libglvnd0 libglx-mesa0 libglx0 libllvm19 libnspr4 libnss3 \
+  libsensors-config libsensors5 libunwind8 libvulkan1 libwayland-server0 libx11-xcb1 libxaw7 libxcb-dri3-0 libxcb-glx0 libxcb-present0 libxcb-randr0 libxcb-sync1 \
+  libxcb-xfixes0 libxcomposite1 libxdamage1 libxfixes3 libxfont2 libxi6 libxkbcommon0 libxkbfile1 libxmu6 libxpm4 libxrandr2 libxshmfence1 libxxf86vm1 libz3-4 \
+  mesa-libgallium x11-xkb-utils xfonts-encodings xfonts-scalable xfonts-utils xkb-data xserver-common xvfb \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ARG USERNAME=node

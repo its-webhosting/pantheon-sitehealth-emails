@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "eval",
+    "echo is_file(\"favicon.ico\") ? \"true\": \"false\";"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "eval",
+    "echo is_file(\"favicon.ico\") ? \"true\": \"false\";"
+  ],
+  "returncode": 0,
+  "stdout": "false",
+  "stderr": "2026-07-04 14:13:22 UTC[+0000] [notice] Command: its-wws-test1.live -- wp eval echo is_file(\"favicon.ico\") ? \"true\": \"false\"; [Exit: 0] (Attempt 1/1)\n",
+  "recorded": "2026-07-04"
+}

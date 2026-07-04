@@ -52,6 +52,8 @@ python -V     # make sure it's the version you expect
 
 uv pip install .[mysql,aws,cloudflare]  # remove from the list the features you won't use
 
+python -m playwright install --with-deps chromium # only if not already installed and working
+
 composer install  # the CSS processor pantheon-sitehealth-emails needs is written in PHP
 ```
 
@@ -172,33 +174,41 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 ./pantheon-sitehealth-emails --import-older-metrics --all
 ```
 
+## Testing
+
+The project has a pytest-based test harness under `tests/`.  See
+[`tests/README.md`](tests/README.md) for the full layout and how to add tests.
+
+Install the test dependencies (once), plus the headless browser used by the render tier:
+
+```bash
+uv pip install .[test]
+python -m playwright install --with-deps chromium   # needs sudo for the system libraries
+```
+
+Run the tests with the `./run-tests` wrapper (a thin front-end for pytest):
+
+```bash
+./run-tests              # everything, including the live tier (needs Terminus auth + network)
+./run-tests --fast       # offline subset only: unit + integration + shim e2e + golden + render
+./run-tests --llm        # terse, machine-parseable summary (for pasting failures into an assistant)
+./run-tests --coverage   # report coverage (no gate; in-process tiers only)
+./run-tests --update-goldens   # refresh the rendered-report snapshots after an intended change
+./run-tests --record     # re-record the terminus fixtures from the live test site (read-only)
+```
+
+Any other arguments (`-k EXPR`, `-m MARK`, file paths) are passed straight through to pytest,
+e.g. `./run-tests -m "e2e"` or `./run-tests tests/unit`.
+
+Tiers are selected by pytest marks: `unit`, `integration`, `e2e`, `live`, `render`, `email`,
+`slow`.  `--fast` excludes `live` and `slow`.  The `email` tier is a deferred, skipped scaffold
+(it activates when email sending is re-enabled).  Two hard rules the harness enforces: tests
+never run the program with `--all` or `--for-real` (a `run_program()` interlock refuses them),
+and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
+
 ## TO DO
 
-* fix August 2027 typo
-* install headless browser dependencies
-```
-Now it's missing system libraries (libatk, libdbus, etc.) for Chromium. Let me install them via Playwright's dep installer.
-
-  Ran 2 shell commands
-
-No passwordless sudo — installing Chromium's system libraries needs your password, which I can't supply. That's an environment provisioning step, not a harness issue. I'll make the render test skip with a clear reason when the browser can't launch (so the suite stays green and CI gets a clean signal), and I'll give you the one-line command to enable it. Let me rewrite the render test to launch Chromium directly with that guard.
-```
-* have these not prompt -- always allow:
-```
-Tool use · from the Explore agent
-
-  plugin:context-mode:context-mode - ctx_batch_execute(commands: [{"label":"cloudflare ips network","command":"cd /workspace && grep -n 'import\\|Cloudflare\\|cloudflare\\|\\.list()\\|api_key\\|def get_cloudflare_ips\\|requests\\|httpx' plugin/cloudflare/ips.py"},{"label":"umich portal external","command":"cd /workspace && grep -n 'import\\|requests\\|httpx\\|urllib\\|\\.get(\\|\\.post(\\|http\\|api\\|def ' plugin/umich/portal.py"},{"label":"sitelens external","command":"cd /workspace && grep -n 'import\\|requests\\|httpx\\|urllib\\|\\.get(\\|\\.post(\\|http\\|api\\|gauge\\|def ' check/umich/sitelens.py | head -40"}], queries: ["cloudflare ips list api client network","umich portal http api requests network call","sitelens gauge http api requests network call"], cwd: "/workspace") (MCP)
-  Run multiple commands in ONE call. Every command's output is auto-indexed into the knowledge base; if you also pass `queries`, the matching sections come back in the same round trip so a follow-up search call is not needed.
-
-  Concurrency parallelizes the FETCH phase (run-the-commands). The DERIVATION phase — turning raw output into an answer — still belongs in code: add a processing command that consumes the indexed output and prints only the answer, so the raw bytes never enter your conversation (Think-in-Code, same principle as the sandbox tool).…
-
-Do you want to proceed?
-❯ 1. Yes
-  2. Yes, and don't ask again for plugin:context-mode:context-mode - ctx_batch_execute commands in /workspace
-  3. No
-```
-
-
+* add test language to new feature prompt template
 * test suite
 * rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
 * have Claude document plugin system and config file

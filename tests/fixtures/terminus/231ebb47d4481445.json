@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "plugin",
+    "list",
+    "--fields=name,status,update,version,update_version,title",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "wp",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--",
+    "plugin",
+    "list",
+    "--fields=name,status,update,version,update_version,title",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "[{\"name\":\"broken-link-notifier\",\"status\":\"active\",\"update\":\"available\",\"version\":\"1.3.7.5\",\"update_version\":\"1.3.8\",\"title\":\"Broken Link Notifier\"},{\"name\":\"custom-permalinks\",\"status\":\"active\",\"update\":\"none\",\"version\":\"3.1.2\",\"update_version\":\"\",\"title\":\"Custom Permalinks\"},{\"name\":\"wp-native-php-sessions\",\"status\":\"active\",\"update\":\"none\",\"version\":\"1.4.5\",\"update_version\":\"\",\"title\":\"Native PHP Sessions\"},{\"name\":\"pantheon-advanced-page-cache\",\"status\":\"active\",\"update\":\"none\",\"version\":\"2.1.2\",\"update_version\":\"\",\"title\":\"Pantheon Advanced Page Cache\"},{\"name\":\"pantheon-hud\",\"status\":\"active\",\"update\":\"none\",\"version\":\"0.4.5\",\"update_version\":\"\",\"title\":\"Pantheon HUD\"},{\"name\":\"patchstack\",\"status\":\"active\",\"update\":\"none\",\"version\":\"2.3.6\",\"update_version\":\"\",\"title\":\"Patchstack Security\"},{\"name\":\"umich-oidc-login\",\"status\":\"active\",\"update\":\"none\",\"version\":\"1.3.1-beta1\",\"update_version\":\"\",\"title\":\"UMich OIDC Login\"},{\"name\":\"umich-cloudflare\",\"status\":\"active\",\"update\":\"available\",\"version\":\"1.0.14\",\"update_version\":\"1.1.0\",\"title\":\"University of Michigan: Cloudflare Cache\"},{\"name\":\"wordpress-github-updater-demo\",\"status\":\"inactive\",\"update\":\"none\",\"version\":\"1.0.0\",\"update_version\":\"\",\"title\":\"WordPress GitHub Updater Demo\"},{\"name\":\"loader\",\"status\":\"must-use\",\"update\":false,\"version\":\"1.0\",\"update_version\":\"\",\"title\":\"Pantheon MU Plugin Loader\"},{\"name\":\"_patchstack\",\"status\":\"must-use\",\"update\":false,\"version\":\"\",\"update_version\":\"\",\"title\":\"\"}]",
+  "stderr": "2026-07-04 14:13:14 UTC[+0000] [notice] Command: its-wws-test1.live -- wp plugin list [Exit: 0] (Attempt 1/1)\n",
+  "recorded": "2026-07-04"
+}

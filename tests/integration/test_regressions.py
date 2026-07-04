@@ -1,0 +1,62 @@
+"""Regression tests for the bugs fixed alongside this harness (SPEC §3.1, §9).
+
+Each would fail on the pre-fix code:
+  * terminus() session-expiry retry did args.push()/del args[...] on a tuple -> crash.
+  * check/umich/__init__.py disabled branch called sc.console(...) as if callable -> TypeError.
+
+The two non-UMich render-path bugs discovered during implementation (the `contacts`
+UnboundLocalError and the unconditional `if True:` UMich annual-billing block) are
+regressed by the offline e2e in tests/e2e/ — it renders under the plugin-disabled config,
+which crashed on the pre-fix code.
+"""
+import importlib.util
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.integration
+
+
+def test_terminus_retries_on_expired_session(psh, monkeypatch):
+    calls = {"n": 0}
+
+    def fake_run_terminus(command, input_data=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ("", "Invalid or expired session header: X-Pantheon-Session", False)
+        return ('{"ok": 1}', "", False)
+
+    monkeypatch.setattr(psh, "run_terminus", fake_run_terminus)
+    monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
+
+    result = psh.terminus("org:site:list", "some-org")
+    assert result == {"ok": 1}
+    assert calls["n"] == 2  # original + one retry (pre-fix this path raised on the tuple)
+
+
+def test_terminus_retry_does_not_loop_forever(psh, monkeypatch):
+    calls = {"n": 0}
+
+    def always_expired(command, input_data=None):
+        calls["n"] += 1
+        return ("", "Invalid or expired session header: X-Pantheon-Session", False)
+
+    monkeypatch.setattr(psh, "run_terminus", always_expired)
+    monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
+
+    psh.terminus("org:site:list", "some-org")
+    assert calls["n"] == 2  # one retry only; the sentinel disables a second retry
+
+
+def test_check_umich_disabled_import_does_not_crash(psh, reset_sc):
+    sc = reset_sc
+    sc.config = {}  # UMich absent -> the module's else branch runs sc.console.print(...)
+    init = Path(psh.__file__).parent / "check" / "umich" / "__init__.py"
+    loader = SourceFileLoader("check_umich_probe", str(init))
+    spec = importlib.util.spec_from_loader("check_umich_probe", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)  # pre-fix: TypeError from sc.console('...'); post-fix: fine
+    # The disabled (else) branch ran — it only prints — so no check hooks were registered
+    # (the enabled branch would have added three). This confirms the fixed path executed.
+    assert sc.hooks["check"] == []

@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Thin wrapper over pytest for the pantheon-sitehealth-emails harness.
+
+Two audiences, one entry point (SPEC §5.8):
+  ./run-tests                 human-readable, all tiers (incl. live)
+  ./run-tests --fast          offline subset only  (-m "not live and not slow")
+  ./run-tests --llm           terse, machine-parseable summary (for Claude Code)
+  ./run-tests --coverage      pytest-cov (reported, no gate; in-process tiers)
+  ./run-tests --update-goldens  refresh syrupy snapshots
+  ./run-tests --record        re-record the terminus fixtures from the live test site
+
+Any other arguments (-k EXPR, -m MARK, paths, ...) are passed straight through to pytest.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+
+def main(argv):
+    wrapper_flags = {
+        "--fast", "--llm", "--human", "--coverage", "--update-goldens", "--record",
+    }
+    ours = [a for a in argv if a in wrapper_flags]
+    passthrough = [a for a in argv if a not in wrapper_flags]
+
+    if "--record" in ours:
+        return subprocess.call([sys.executable, str(ROOT / "tests" / "tools" / "record.py")])
+
+    pytest_args = ["-p", "no:cacheprovider"]
+
+    if "--fast" in ours:
+        pytest_args += ["-m", "not live and not slow"]
+    if "--llm" in ours:
+        # Terse and machine-parseable: quiet, short tracebacks, no color/header, plus the
+        # conftest --llm summary hook (LLM_SUMMARY / FAILED <nodeid> lines).
+        pytest_args += ["--llm", "-q", "--tb=short", "--color=no", "--no-header"]
+    if "--coverage" in ours:
+        pytest_args += ["--cov", "--cov-report=term-missing"]
+    if "--update-goldens" in ours:
+        pytest_args += ["--snapshot-update"]
+
+    pytest_args += passthrough
+    return subprocess.call([sys.executable, "-m", "pytest", *pytest_args], cwd=str(ROOT))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

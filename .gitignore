@@ -38,6 +38,11 @@ logs/
 **/__pycache__/
 *.pyc
 
+# Test harness working data
+/.pytest_cache/
+/.coverage
+/.hypothesis/
+
 # PHP stuff
 /vendor/
 # don't commit composer.lock since different people may be using

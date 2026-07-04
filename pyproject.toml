@@ -23,6 +23,13 @@ aws = [
 cloudflare = [
     "cloudflare",
 ]
+test = [
+    "pytest",
+    "syrupy",
+    "hypothesis",
+    "pytest-cov",
+    "pytest-playwright",
+]
 
 [build-system]
 requires = ["setuptools"]
@@ -30,4 +37,24 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Tiers are selected by mark; see tests/README.md and ./run-tests.
+markers = [
+    "unit: pure/in-process function tests, no I/O",
+    "integration: in-process, run_terminus monkeypatched, temp DB, check hooks",
+    "e2e: full-script subprocess runs (shim terminus + real php)",
+    "live: real Terminus, read-only, against the test sites (needs network + auth)",
+    "render: headless-browser rendering checks (pytest-playwright)",
+    "email: GMail send/receive round-trip (deferred until SMTP/SendGrid; skipped)",
+    "slow: tests that may take a while (live Pantheon, browser downloads)",
+]
+
+[tool.coverage.run]
+# The program under test is a single extension-less file, so use an include glob,
+# not `source` (which expects package names/dirs).  This measures the IN-PROCESS
+# tiers (unit/integration); e2e/live run main() in a subprocess that coverage does
+# not see unless COVERAGE_PROCESS_START plumbing is enabled (see tests/README.md).
+include = ["*/pantheon-sitehealth-emails"]
 
