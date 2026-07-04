@@ -175,6 +175,14 @@ Import the older (weekly and monthly) metrics for `--all` sites:
 ## TO DO
 
 * fix August 2027 typo
+* install headless browser dependencies
+```
+Now it's missing system libraries (libatk, libdbus, etc.) for Chromium. Let me install them via Playwright's dep installer.
+
+  Ran 2 shell commands
+
+No passwordless sudo — installing Chromium's system libraries needs your password, which I can't supply. That's an environment provisioning step, not a harness issue. I'll make the render test skip with a clear reason when the browser can't launch (so the suite stays green and CI gets a clean signal), and I'll give you the one-line command to enable it. Let me rewrite the render test to launch Chromium directly with that guard.
+```
 * have these not prompt -- always allow:
 ```
 Tool use · from the Explore agent
