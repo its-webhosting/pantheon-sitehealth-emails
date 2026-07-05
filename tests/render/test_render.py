@@ -27,11 +27,9 @@ _AXE = Path(__file__).resolve().parent.parent / "vendor" / "axe.min.js"
 # Keep this list SMALL and explicit so genuinely new serious/critical issues still fail.
 #   * color-contrast: email palette is brand-fixed and out of scope for this tool.
 #   * region: email HTML has no ARIA landmarks by design.
-#   * link-name: PRE-EXISTING template defect (some links lack discernible text) — a real
-#     WCAG issue tracked in development/2026-07-04-test-suite/PROBLEMS-DISCOVERED.md (P9),
-#     allowlisted only so the smoke still catches NEW regressions; remove when the template
-#     is fixed.
-_AXE_ALLOWLIST = {"color-contrast", "region", "link-name"}
+# (link-name was removed once P9 was fixed: the caption's site-url anchor rendered as an
+#  empty <a href=""></a> when site_url was blank; it is now guarded by {%if site_url%}.)
+_AXE_ALLOWLIST = {"color-contrast", "region"}
 
 
 def _rewrite_cids_to_local(rendered, dest_dir):

@@ -1,0 +1,80 @@
+"""Unit tests for load_news_items() (P2 fix).
+
+Before the fix, config-inline [News.<x>] sub-tables were never added: the loop tested
+`isinstance(news_item_name, dict)` on a dict KEY (always a str), so the guard's `continue`
+always fired and the add_news_item call was dead code.  load_news_items() now iterates the
+[News] table's items() and skips non-dict VALUES (scalar directives such as `folder`).
+
+reset_sc yields the script_context module; tests set sc.config directly.  sc.options is a
+real parsed default namespace (reset_sc sets it), so sc.options.config is available.
+"""
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
+def _item(message="Hello", type="info"):
+    return {"type": type, "message": message}
+
+
+def test_config_inline_items_are_added(psh, reset_sc, tmp_path):
+    reset_sc.config = {
+        "News": {
+            "folder": str(tmp_path),  # empty dir -> scalar directive, must be skipped
+            "one": _item("First"),
+            "two": _item("Second"),
+        }
+    }
+    psh.load_news_items()
+    messages = [n["message"] for n in reset_sc.news]
+    assert messages == ["First", "Second"]  # both dict sub-tables added, folder skipped
+
+
+def test_folder_scalar_directive_is_skipped(psh, reset_sc, tmp_path):
+    # Only the scalar `folder` directive, no sub-tables -> nothing added, no crash.
+    reset_sc.config = {"News": {"folder": str(tmp_path)}}
+    psh.load_news_items()
+    assert reset_sc.news == []
+
+
+def test_no_news_section_is_noop_not_crash(psh, reset_sc):
+    # Latent-bug fix: the old folder glob ran outside the `if "News"` guard and would
+    # KeyError when [News] was absent.  load_news_items() uses .get() -> clean no-op.
+    reset_sc.config = {}
+    psh.load_news_items()  # must not raise
+    assert reset_sc.news == []
+
+
+def test_file_based_items_are_added(psh, reset_sc, tmp_path):
+    (tmp_path / "a.toml").write_text(
+        '[News.item]\ntype = "info"\nmessage = "From file"\n'
+    )
+    reset_sc.config = {"News": {"folder": str(tmp_path)}}
+    psh.load_news_items()
+    assert [n["message"] for n in reset_sc.news] == ["From file"]
+
+
+def test_config_items_precede_file_items(psh, reset_sc, tmp_path):
+    (tmp_path / "a.toml").write_text(
+        '[News.item]\ntype = "info"\nmessage = "FILE"\n'
+    )
+    reset_sc.config = {
+        "News": {"folder": str(tmp_path), "inline": _item("CONFIG")}
+    }
+    psh.load_news_items()
+    assert [n["message"] for n in reset_sc.news] == ["CONFIG", "FILE"]
+
+
+def test_item_missing_message_exits(psh, reset_sc, tmp_path):
+    reset_sc.config = {
+        "News": {"folder": str(tmp_path), "bad": {"type": "info"}}  # no message
+    }
+    with pytest.raises(SystemExit):
+        psh.load_news_items()
+
+
+def test_file_missing_news_key_exits(psh, reset_sc, tmp_path):
+    (tmp_path / "a.toml").write_text('title = "no News table here"\n')
+    reset_sc.config = {"News": {"folder": str(tmp_path)}}
+    with pytest.raises(SystemExit):
+        psh.load_news_items()

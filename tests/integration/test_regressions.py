@@ -30,8 +30,10 @@ def test_terminus_retries_on_expired_session(psh, monkeypatch):
     monkeypatch.setattr(psh, "run_terminus", fake_run_terminus)
     monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
 
-    result = psh.terminus("org:site:list", "some-org")
+    result, errors, fatal = psh.terminus("org:site:list", "some-org")
     assert result == {"ok": 1}
+    assert errors == ""
+    assert fatal is False
     assert calls["n"] == 2  # original + one retry (pre-fix this path raised on the tuple)
 
 

@@ -324,9 +324,30 @@ def run_terminus(command: list, input_data=None) -> (str, str, bool):
     return output, errors, False
 
 
-def terminus(*args) -> Any:
+class TerminusError(RuntimeError):
     """
-    Run Terminus with the given arguments and return the result as a JSON object.
+    A Terminus command failed at a call site that needs its data.
+
+    Raised by terminus_data() when the command was fatal (timeout / non-zero exit) or its
+    output could not be decoded.  Carries the command and captured stderr so the failure is
+    reported with its real cause instead of a downstream TypeError far from the source (P3).
+    """
+
+    def __init__(self, command, errors: str):
+        self.command = command
+        self.errors = errors
+        super().__init__(f"Terminus command {command!r} failed: {errors}")
+
+
+def terminus(*args) -> (Any, str, bool):
+    """
+    Run Terminus with the given arguments and return (result, errors, fatal).
+
+    result is the parsed JSON on success, or None if the output could not be JSON-decoded.
+    errors is the captured stderr (plus any decode detail), fatal is True when the underlying
+    run_terminus reported a fatal condition (e.g. timeout).  On an expired-session error the
+    call is retried once before returning.  Callers that index into result should either check
+    fatal / `result is None` themselves or use terminus_data() (which raises TerminusError).
     """
     # args is a tuple (from *args); work with a list so the retry sentinel can be
     # added/removed without mutating a tuple (which previously crashed this path).
@@ -340,7 +361,7 @@ def terminus(*args) -> Any:
     try:
         result = json.loads(output)
     except json.JSONDecodeError as e:
-        result = ""  # TODO: set to None
+        result = None
         errors += "\n" + output + "\n" + str(e)
     if errors != "":
         sc.console.print(f"[bold red]Terminus error: {errors}")
@@ -349,13 +370,29 @@ def terminus(*args) -> Any:
             time.sleep(5)
             args.append("pshe-no-retry")
             return terminus(*args)
-    # return result, errors.strip(), fatal  # TODO
+    return result, errors.strip(), fatal
+
+
+def terminus_data(*args) -> Any:
+    """
+    terminus() for call sites that index into the result and cannot proceed without it.
+
+    Returns the parsed JSON, or raises TerminusError if the command was fatal or produced no
+    decodable data.  Use this where a failure should abort (org-level calls, helper functions);
+    inside the per-site loop, prefer checking fatal / `result is None` inline and skipping the
+    site so one bad site does not kill the whole run.
+    """
+    result, errors, fatal = terminus(*args)
+    if fatal or result is None:
+        raise TerminusError(list(args), errors)
     return result
 
 
-def wp(siteenv: str, *args) -> (Any, str):
+def wp(siteenv: str, *args) -> (Any, str, bool):
     """
-    Run a "wp eval" command through Terminus and return the result as JSON.
+    Run a "wp" command through Terminus and return the result as JSON.
+
+    Returns a 3-tuple (result, errors, fatal); result is None on JSON-decode failure.
     """
     command = ["wp", siteenv, "--", *args, "--format=json"]
     output, errors, fatal = run_terminus(command)
@@ -367,9 +404,11 @@ def wp(siteenv: str, *args) -> (Any, str):
     return result, errors.strip(), fatal
 
 
-def wp_eval(siteenv: str, *args) -> (str, str):
+def wp_eval(siteenv: str, *args) -> (str, str, bool):
     """
     Run a "wp eval" command through Terminus and return the result as a string.
+
+    Returns a 3-tuple (output, errors, fatal).
     """
     command = ["wp", siteenv, "--", "eval", *args]
     output, errors, fatal = run_terminus(command)
@@ -424,9 +463,11 @@ def fix_drush_output(output: str, errors: str) -> (str, str):
     return output, errors
 
 
-def drush(siteenv: str, *args) -> (Any, str):
+def drush(siteenv: str, *args) -> (Any, str, bool):
     """
     Run a "drush" command through Terminus and return the result as a JSON object.
+
+    Returns a 3-tuple (result, errors, fatal); result is None on JSON-decode failure.
     """
     command = ["drush", siteenv, "--", *args, "--format=json"]
     output, errors, fatal = run_terminus(command)
@@ -439,9 +480,11 @@ def drush(siteenv: str, *args) -> (Any, str):
     return result, errors.strip(), fatal
 
 
-def drush_php_script(siteenv: str, script: str) -> (Any, str):
+def drush_php_script(siteenv: str, script: str) -> (Any, str, bool):
     """
-    Run a "drush php:eval" command through Terminus and return the result as a string.
+    Run a "drush php:script" command through Terminus and return the result as a JSON object.
+
+    Returns a 3-tuple (result, errors, fatal); result is None on JSON-decode failure.
     """
     command = ["drush", siteenv, "--", "php:script", "--format=json", "-"]
     output, errors, fatal = run_terminus(command, script)
@@ -484,7 +527,17 @@ def get_old_metrics(
     site_env: str, site: dict, period: str, end_date: datetime.date
 ) -> list:
     sc.console.print(f"[bold magenta]=== Processing old data by {period}:")
-    metrics = terminus("env:metrics", site_env, f"--period={period}")
+    try:
+        metrics = terminus_data("env:metrics", site_env, f"--period={period}")
+    except TerminusError as e:
+        # Older-metrics import is best-effort supplementary data: a transient/undecodable
+        # failure for one site returns no rows (import nothing) rather than raising and
+        # aborting the whole run.
+        sc.console.print(
+            f":exclamation: [bold red] ERROR: could not fetch {period} metrics for "
+            f"{site['name']}: {e}"
+        )
+        return []
     new_rows = []
 
     for e in metrics["timeseries"]:
@@ -768,7 +821,10 @@ def find_modules(module_type: str) -> list[str]:
 
 def smtp_login() -> SMTP_SSL:
     # TODO: get password from config file, from secret or prompt for it
-    smtp_connection = SMTP_SSL("smtp.mail.umich.edu", port=465)
+    smtp_cfg = sc.config.get("SMTP", {})
+    host = smtp_cfg.get("host", "smtp.mail.umich.edu")
+    port = smtp_cfg.get("port", 465)
+    smtp_connection = SMTP_SSL(host, port=port)
     smtp_connection.login(sc.options.smtp_username, os.environ["SMTP_PASSWORD"])
     return smtp_connection
 
@@ -887,6 +943,145 @@ def plan_costs(
     return cost_same, costs_median, costs_best, median_visitors
 
 
+def load_news_items() -> None:
+    """
+    Populate sc.news from the config file's inline [News.<x>] sub-tables and from every
+    *.toml file in [News].folder.
+
+    Config-inline items are added first, then file-based items. Scalar directives in the
+    [News] table (e.g. `folder`) are skipped -- only sub-tables (dict values) are news items.
+    A missing [News] section is a no-op (previously the folder glob crashed with KeyError).
+    """
+    if "News" in sc.config:
+        for name, value in sc.config["News"].items():
+            if not isinstance(value, dict):
+                continue  # skip scalar directives such as `folder`
+            sc.add_news_item(
+                value,
+                f"{name} in configuration file {sc.options.config}",
+            )
+    folder = sc.config.get("News", {}).get("folder")
+    if folder:
+        for filename in sorted(glob.glob(f"{folder}/*.toml")):
+            with open(filename, "rb") as f:
+                n = tomllib.load(f)
+                if "News" not in n:
+                    sys.exit(f'News item in {filename} is missing the "News" key.')
+                for news_item_name in n["News"].keys():
+                    sc.add_news_item(
+                        n["News"][news_item_name], f"{news_item_name} in file {filename}"
+                    )
+
+
+def build_plan_over_time(plan_on_day: dict, plot_right_date) -> list:
+    """
+    Collapse a {date: plan_name} mapping into a list of contiguous plan spans,
+    each `{"start", "end", "plan"}`, with the final span ending at plot_right_date.
+
+    Returns [] for an empty mapping (a site with no traffic history); callers must
+    guard that case before using the result, since the plan/graph sections assume at
+    least one traffic day (see P10 -- indexing days[0] on an empty dict raised IndexError).
+    """
+    plan_over_time = []
+    days = sorted(plan_on_day.keys())
+    if not days:
+        return plan_over_time
+    plan = plan_on_day[days[0]]
+    plan_start = days[0]
+    for i in range(1, len(days)):
+        today = days[i]
+        if plan_on_day[today] != plan:
+            plan_over_time.append(
+                {"start": plan_start, "end": days[i - 1], "plan": plan}
+            )
+            plan_start = today
+            plan = plan_on_day[plan_start]
+    plan_over_time.append(
+        {"start": plan_start, "end": plot_right_date, "plan": plan}
+    )
+    return plan_over_time
+
+
+def classify_hostname_dns(hostname: str, site_name: str, cloudflare_enabled: bool,
+                          cf_v4_nets: list, cf_v6_nets: list) -> (int, int, list, bool):
+    """
+    Resolve hostname's A and AAAA records and classify each address as pointing at
+    Cloudflare or elsewhere.
+
+    Returns (points_at_cloudflare, points_elsewhere, notices, transient):
+      * points_* count resolved addresses inside / outside the Cloudflare ranges.
+      * notices is a list of `warning` notice dicts for *transient* resolver failures
+        (Timeout / NoNameservers).  A transient failure is distinct from a genuinely
+        unregistered hostname and must NOT be reported as "not in DNS" (P4) -- before this,
+        a resolver timeout looked identical to a missing domain and only printed to console.
+      * transient is True if any lookup hit a transient error.
+    Definitive failures (NXDOMAIN / NoAnswer) are left to the caller's aggregated
+    "not in DNS" notice (both counts stay 0 and transient stays False).
+    """
+    points_at_cloudflare = 0
+    points_elsewhere = 0
+    notices = []
+    transient = False
+
+    for rrtype, nets in (("A", cf_v4_nets), ("AAAA", cf_v6_nets)):
+        try:
+            answer = dns.resolver.resolve(hostname, rrtype)
+            for rdata in answer:
+                address = ipaddress.ip_address(rdata.address)
+                if cloudflare_enabled and any(address in net for net in nets):
+                    points_at_cloudflare += 1
+                    sc.console.print(
+                        f"{hostname} has [green]Cloudflare IP address {rdata.address}[/green]"
+                    )
+                else:
+                    points_elsewhere += 1
+                    sc.console.print(
+                        f"{hostname} has IP address [red]{rdata.address}[/red]"
+                    )
+        except dns.resolver.NoAnswer:
+            sc.console.print(f"No {rrtype} record for {hostname}", style="red")
+        except dns.resolver.NXDOMAIN:
+            sc.console.print(f"NXDOMAIN for {hostname} ({rrtype})", style="red")
+        except (dns.resolver.NoNameservers, dns.resolver.Timeout) as e:
+            transient = True
+            sc.console.print(
+                f"Transient DNS error resolving {hostname} ({rrtype}): {type(e).__name__}",
+                style="red",
+            )
+
+    if transient:
+        notices.append(
+            {
+                "type": "warning",
+                "csv": f"{site_name},dns-lookup-failed,{hostname}",
+                "short": "DNS lookup failed (transient)",
+                "message": (
+                    f"<p>The DNS lookup for <strong>{hostname}</strong> failed with a "
+                    f"transient resolver error, so its DNS status could not be checked. This "
+                    f"does not necessarily mean the domain is misconfigured &mdash; re-run "
+                    f"the report to retry.</p>"
+                ),
+            }
+        )
+
+    return points_at_cloudflare, points_elsewhere, notices, transient
+
+
+def umich_enabled() -> bool:
+    """
+    True when the config enables the U-M plugin/check packages ([UMich].enabled).
+
+    Institution-specific checks that would otherwise emit U-M content (e.g. the fqdns-gated
+    Cloudflare-cache plugin/module checks that link to U-M documentation) are gated on this so
+    a non-U-M deployment does not see them (P8b).
+    """
+    return (
+        "UMich" in sc.config
+        and "enabled" in sc.config["UMich"]
+        and sc.config["UMich"]["enabled"]
+    )
+
+
 def main() -> None:
 
     sc.debug(f"Loading configuration from {sc.options.config}")
@@ -922,7 +1117,8 @@ def main() -> None:
     if sc.options.verbose:
         sc.debug("Arguments:")
         pprint(sc.options)
-        pprint(terminus("self:info"))
+        self_info, _errors, _fatal = terminus("self:info")
+        pprint(self_info)
 
     # Create a directory named "build" if it doesn't exist:
     if not os.path.exists("build"):
@@ -974,23 +1170,7 @@ def main() -> None:
     # if sc.options.smtp_username == '':
     #     sys.exit("--smtp-username not specified and USER environment variable not set.")
 
-    if "News" in sc.config:
-        for news_item_name in sc.config["News"].keys():
-            if not isinstance(news_item_name, dict):
-                continue  # skip News configuration directives
-            sc.add_news_item(
-                sc.config["News"][news_item_name],
-                f"{news_item_name} in configuration file {sc.options.config}",
-            )
-    for filename in sorted(glob.glob(f"{sc.config['News']['folder']}/*.toml")):
-        with open(filename, "rb") as f:
-            n = tomllib.load(f)
-            if "News" not in n:
-                sys.exit(f'News item in {filename} is missing the "News" key.')
-            for news_item_name in n["News"].keys():
-                sc.add_news_item(
-                    n["News"][news_item_name], f"{news_item_name} in file {filename}"
-                )
+    load_news_items()
     if sc.options.verbose:
         sc.debug("[bold magenta]=== News:")
         pprint(sc.news)
@@ -1027,7 +1207,10 @@ def main() -> None:
     )
     cap_points = np.concatenate(([[0, 0]], cap_points, [[cap_size, 0]]), axis=0)
 
-    sites = terminus("org:site:list", sc.config["Pantheon"]["org_id"])
+    try:
+        sites = terminus_data("org:site:list", sc.config["Pantheon"]["org_id"])
+    except TerminusError as e:
+        sys.exit(f"Could not list organization sites: {e}")
     site_count = len(sites)
     current_site_number = 1
     emails_sent = 0
@@ -1045,16 +1228,11 @@ def main() -> None:
     for site_name in sorted(site_name_to_id.keys()):
         site_id = site_name_to_id[site_name]
         site = sites[site_id]
-        site_notices = []
         wp_smell = ""
         drush_smell = ""
         composer_smell = ""
         portal_site_id = 0
-        if (
-            "UMich" in sc.config
-            and "enabled" in sc.config["UMich"]
-            and sc.config["UMich"]["enabled"]
-        ):
+        if umich_enabled():
             if site["name"] not in sc.config["UMich"]["portal"]["sites"]:
                 sc.console.print(
                     f":exclamation: [bold red] ATTENTION: {site['name']} is not in the WWS portal!"
@@ -1081,7 +1259,15 @@ def main() -> None:
 
         if site["plan_name"] == "Elite":
             # Pantheon uses the same display name (but a different SKU) for each Elite plan.
-            site_plan_info = terminus("plan:info", site["name"])
+            site_plan_info, errors, fatal = terminus("plan:info", site["name"])
+            if fatal or site_plan_info is None:
+                # A transient/undecodable Terminus failure for one site skips that site
+                # rather than aborting the whole run (consistent with the other per-site
+                # terminus calls below).
+                sc.console.print(
+                    f":exclamation: [bold red] ERROR: could not fetch plan info for {site_name}: {errors}"
+                )
+                continue
             if "sku" not in site_plan_info:
                 sc.console.print(
                     f":exclamation: [bold red] ERROR: {site['name']} doesn't have a plan SKU"
@@ -1103,6 +1289,11 @@ def main() -> None:
             sc.console.print(f"{site['name']} is on the Sandbox plan, skipping it.")
             continue
 
+        # This site will be processed: build its context as far up as possible (past the
+        # portal / not-requested / Sandbox skips above).  notices/sections/attachments
+        # accumulate into it through the pipeline below.
+        site_context = sc.SiteContext(site)
+
         # The following gets uncommented (with the list of site names to skip) if we have to resume
         # this script after it gets interrupted partway through.
         # if site_name in ('aaum-alumni-association', 'advance-advanceprogram'):
@@ -1113,7 +1304,7 @@ def main() -> None:
             sc.console.print(
                 f":exclamation: [bold red] ATTENTION: {site['name']} is frozen!"
             )
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "alert",
                     "icon": "&#x1F6A8;",  # police car light
@@ -1150,11 +1341,17 @@ and to find out what went wrong:
         # "Only traffic for the Live environment is counted towards a site plan's traffic limit."
 
         # The live environment will always exist, but may not be initialized.
-        envs = terminus(
+        envs, errors, fatal = terminus(
             "env:list",
             site["id"],
             "--fields=id,created,domain,connection_mode,locked,initialized,php_version,php_runtime_generation",
         )
+        if fatal or envs is None:
+            # Transient/undecodable failure: skip this site, don't abort the whole run.
+            sc.console.print(
+                f":exclamation: [bold red] ERROR: could not fetch environments for {site_name}: {errors}"
+            )
+            continue
         if "live" not in envs or "initialized" not in envs["live"]:
             sc.console.print(
                 f":exclamation: [bold red] ERROR: {site['name']} does not have a live environment, "
@@ -1166,7 +1363,7 @@ and to find out what went wrong:
                 f":exclamation: [bold red] ERROR: {site['name']} is on a paid plan but its live "
                 "environment is not initialized"
             )
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "alert",
                     "icon": "&#x1F6A8;",  # police car light
@@ -1190,7 +1387,12 @@ and to find out what went wrong:
         # Metrics for an uninitialized live environment will be all zeroes; this is OK.
 
         live_site = site["id"] + ".live"
-        metrics = terminus("env:metrics", live_site, "--period=day")
+        metrics, errors, fatal = terminus("env:metrics", live_site, "--period=day")
+        if fatal or metrics is None:
+            sc.console.print(
+                f":exclamation: [bold red] ERROR: could not fetch metrics for {site_name}: {errors}"
+            )
+            continue
 
         sc.debug(f"[bold magenta]=== Updating metrics for {site['name']}:")
         # Preload the session with the data we're going to be updating.  This makes the call to `db_session.merge()`
@@ -1284,12 +1486,6 @@ and to find out what went wrong:
         # for row in results:
         #    sc.debug(row, level=2)
 
-        site_context = {
-            "site": site,
-            "notices": site_notices,
-            "sections": [],  # list of sections in the email
-            "attachments": [],  # list of attachments to be included in the email
-        }
         sc.invoke_hooks("check", site_context)
 
         # Get the list of all proxied Cloudflare FQDNs.
@@ -1315,7 +1511,12 @@ and to find out what went wrong:
         #   - In Cloudflare, do they all point at the correct Pantheon IPs?
         #   - If not in Cloudflare and are not DNS zone apexes, are they CNAMES (not A / AAAA) to live-${site_name}.pantheonsite.io?
         #   - Take into account CNAME chaining for these checks
-        domains = terminus("domain:list", live_site)
+        domains, errors, fatal = terminus("domain:list", live_site)
+        if fatal or domains is None:
+            sc.console.print(
+                f":exclamation: [bold red] ERROR: could not fetch domains for {site_name}: {errors}"
+            )
+            continue
         if sc.options.verbose:
             sc.debug(f"=== Domains for {site['name']}:")
             pprint(domains)
@@ -1338,74 +1539,38 @@ and to find out what went wrong:
                     continue
                 if domain["primary"] or main_fqdn == "":
                     main_fqdn = hostname
-                dns_points_at_cloudflare = 0
-                dns_points_elsewhere = 0
-                try:
-                    a = dns.resolver.resolve(hostname, "A")
-                    for rdata in a:
-                        address = ipaddress.ip_address(rdata.address)
-                        if cloudflare_enabled and any(
-                            [
-                                address in net
-                                for net in sc.plugin_context["plugin.cloudflare"][
-                                    "cloudflare_ipv4_nets"
-                                ]
-                            ]
-                        ):
-                            dns_points_at_cloudflare += 1
-                            sc.console.print(
-                                f"{hostname} has [green]Cloudflare IP address {rdata.address}[/green]"
-                            )
-                        else:
-                            dns_points_elsewhere += 1
-                            sc.console.print(
-                                f"{hostname} has IP address [red]{rdata.address}[/red]"
-                            )
-                except dns.resolver.NoAnswer:
-                    sc.console.print(f"No A record for {hostname}", style="red")
-                except dns.resolver.NXDOMAIN:
-                    sc.console.print(f"NXDOMAIN for {hostname} (A)", style="red")
-                except dns.resolver.NoNameservers:
-                    sc.console.print(f"No nameservers for {hostname}", style="red")
-                except dns.resolver.Timeout:
-                    sc.console.print(f"Timeout resolving {hostname}", style="red")
+                (
+                    dns_points_at_cloudflare,
+                    dns_points_elsewhere,
+                    dns_notices,
+                    dns_transient,
+                ) = classify_hostname_dns(
+                    hostname,
+                    site["name"],
+                    cloudflare_enabled,
+                    sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv4_nets"]
+                    if cloudflare_enabled
+                    else [],
+                    sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv6_nets"]
+                    if cloudflare_enabled
+                    else [],
+                )
+                for n in dns_notices:
+                    site_context.add_notice(n)
 
-                try:
-                    aaaa = dns.resolver.resolve(hostname, "AAAA")
-                    for rdata in aaaa:
-                        address = ipaddress.ip_address(rdata.address)
-                        if cloudflare_enabled and any(
-                            [
-                                address in net
-                                for net in sc.plugin_context["plugin.cloudflare"][
-                                    "cloudflare_ipv6_nets"
-                                ]
-                            ]
-                        ):
-                            dns_points_at_cloudflare += 1
-                            sc.console.print(
-                                f"{hostname} has [green]Cloudflare IP address {rdata.address}[/green]"
-                            )
-                        else:
-                            dns_points_elsewhere += 1
-                            sc.console.print(
-                                f"{hostname} has IP address [red]{rdata.address}[/red]"
-                            )
-                except dns.resolver.NoAnswer:
-                    sc.console.print(f"No AAAA record for {hostname}")
-                except dns.resolver.NXDOMAIN:
-                    sc.console.print(f"NXDOMAIN for {hostname} (AAAA)", style="red")
-                except dns.resolver.NoNameservers:
-                    sc.console.print(f"No nameservers for {hostname}", style="red")
-                except dns.resolver.Timeout:
-                    sc.console.print(f"Timeout resolving {hostname}", style="red")
-
-                if dns_points_at_cloudflare == 0 and dns_points_elsewhere == 0:
+                if (
+                    dns_points_at_cloudflare == 0
+                    and dns_points_elsewhere == 0
+                    and not dns_transient
+                ):
                     sc.console.print(
                         f":exclamation: [bold red] ATTENTION: {hostname} is not in DNS"
                     )
                     not_in_dns.append(hostname)
-                if cloudflare_enabled:
+                # Skip the Cloudflare classification on a transient resolver failure: with
+                # 0/0 counts it would otherwise report "not behind Cloudflare" for a host
+                # whose config never changed, contradicting the transient notice (P4).
+                if cloudflare_enabled and not dns_transient:
                     if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
                         sc.console.print(
                             f":exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare"
@@ -1425,7 +1590,7 @@ and to find out what went wrong:
             ]
             primary_domain = [d for d in custom_domains if domains[d]["primary"]]
             if len(custom_domains) == 0:
-                site_notices.append(
+                site_context.add_notice(
                     {
                         "type": "alert",
                         "icon": "&#x1F6A8;",  # police car light
@@ -1456,12 +1621,12 @@ and to find out what went wrong:
                         'echo json_encode( ["result" => (is_file("/code/web/sites/sites.php") || is_file("/code/sites/sites.php") ? true : false) ] );',
                     )
                     if fatal or sites_file is None:
-                        site_notices += drush_error(
+                        site_context.add_notices(drush_error(
                             site["name"],
                             "multisite-check",
                             f"The check for whether {site['name']} is a Drupal multisite failed.",
                             errors,
-                        )
+                        ))
                     elif errors != "":
                         drush_smell = errors
                     if (
@@ -1474,7 +1639,7 @@ and to find out what went wrong:
                         f"{site['name']} is a Drupal multisite: {sites_file}"
                     )
                 if not is_multisite:
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "info",
                             "icon": "&#x1F50E;",  # magnifying glass
@@ -1514,12 +1679,12 @@ and to find out what went wrong:
                 live_site, "echo network_home_url();"
             )
             if fatal or network_home_url is None:
-                site_notices += wp_error(
+                site_context.add_notices(wp_error(
                     site["name"],
                     "version-check",
                     f"Unable to get WordPress network URL for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 wp_smell = errors
             sc.debug(f"{site['name']} WordPress network URL: {network_home_url}")
@@ -1530,7 +1695,7 @@ and to find out what went wrong:
         sc.debug(f"Site URL for {site['name']}:    {site_url}")
 
         if len(fqdns_not_behind_cloudflare) > 0:
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "warning",
                     "icon": "&#x26A0;",  # warning sign
@@ -1558,7 +1723,7 @@ Please refer to the Cloudflare at U-M documentation
             )
 
             if len(behind_cloudflare_not_proxied) > 0:
-                site_notices.append(
+                site_context.add_notice(
                     {
                         "type": "warning",
                         "icon": "&#x26A0;",  # warning sign
@@ -1590,7 +1755,7 @@ site is configured to work with Cloudflare and to turn on proxying.
                 )
 
         if len(not_in_dns) > 0:
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "alert",
                     "icon": "&#x1F6A8;",  # police car light
@@ -1625,12 +1790,12 @@ remove these domains from the Pantheon live environment for
                 live_site, 'require ABSPATH . WPINC . "/version.php"; echo $wp_version;'
             )
             if fatal or wordpress_version is None:
-                site_notices += wp_error(
+                site_context.add_notices(wp_error(
                     site["name"],
                     "version-check",
                     f"Unable to check WordPress version for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 wp_smell = errors
             sc.debug(f"{site['name']} WordPress version: {wordpress_version}")
@@ -1652,41 +1817,41 @@ remove these domains from the Pantheon live environment for
                 "--fields=name,status,update,version,update_version,title",
             )
             if fatal or plugins is None:
-                site_notices += wp_error(
+                site_context.add_notices(wp_error(
                     site["name"],
                     "plugin-list",
                     f"Unable to run <code>wp plugin list</code> for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 wp_smell = errors
             if sc.options.verbose:
                 pprint(plugins)
-            site_notices += check_wordpress_plugin(
+            site_context.add_notices(check_wordpress_plugin(
                 site["name"],
                 plugins,
                 "pantheon-advanced-page-cache",
                 "Pantheon Advanced Page Cache",
                 "https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin",
                 "Needed for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
-            )
-            site_notices += check_wordpress_plugin(
+            ))
+            site_context.add_notices(check_wordpress_plugin(
                 site["name"],
                 plugins,
                 "wp-native-php-sessions",
                 "Native PHP Sessions",
                 "https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin",
                 "Strongly recommended to ensure PHP sessions work correctly on Pantheon.",
-            )
-            if len(fqdns_behind_cloudflare) > 0:
-                site_notices += check_wordpress_plugin(
+            ))
+            if umich_enabled() and len(fqdns_behind_cloudflare) > 0:
+                site_context.add_notices(check_wordpress_plugin(
                     site["name"],
                     plugins,
                     "umich-cloudflare",
                     "University of Michigan: Cloudflare Cache",
                     "https://documentation.its.umich.edu/node/5114",
                     "Needed for automatically clearing Cloudflare's caches when content is updated.",
-                )
+                ))
             if isinstance(plugins, list):
                 for p in plugins:
                     if p["update"] == "available":
@@ -1707,7 +1872,7 @@ remove these domains from the Pantheon live environment for
                     # Special check for umich-oidc-login upgrade, December 2025
                     if p["name"] == "umich-oidc-login" and p["status"] != "inactive":
                         if semver.compare(p["version"], "1.2.99") <= 0:
-                            site_notices.append(
+                            site_context.add_notice(
                                 {
                                     "type": "warning",
                                     "icon": "&#x26A0;",  # warning sign
@@ -1799,18 +1964,18 @@ the OIDC buttons/links.
                             'echo (defined("WP_REDIS_CONFIG") && isset(WP_REDIS_CONFIG["analytics"]["persist"]) && WP_REDIS_CONFIG["analytics"]["persist"])? "true": "false";',
                         )
                         if fatal or ocp_config is None:
-                            site_notices += wp_error(
+                            site_context.add_notices(wp_error(
                                 site["name"],
                                 "ocp-config-check",
                                 f"Unable to check OCP configuration for {site['name']}.",
                                 errors,
-                            )
+                            ))
                         elif errors != "":
                             wp_smell = errors
                         if isinstance(ocp_config, str) and ocp_config.startswith(
                             "true"
                         ):
-                            site_notices.append(
+                            site_context.add_notice(
                                 {
                                     "type": "alert",
                                     "icon": "&#x1F6A8;",  # police car light
@@ -1835,7 +2000,7 @@ the OIDC buttons/links.
                         f":exclamation: [bold red] ATTENTION: {site} has {display_name} installed."
                     )
                     if "status" in plugin and plugin["status"] == "inactive":
-                        site_notices.append(
+                        site_context.add_notice(
                             {
                                 "type": "info",
                                 "icon": "&#x1F50E;",  # magnifying glass
@@ -1846,7 +2011,7 @@ the OIDC buttons/links.
                             }
                         )
                     else:
-                        site_notices.append(
+                        site_context.add_notice(
                             {
                                 "type": "alert",
                                 "icon": "&#x1F6A8;",  # police car light
@@ -1876,12 +2041,12 @@ plugin and remove {display_name}.
                 "--fields=name,status,update,version,update_version,title",
             )
             if fatal or themes is None:
-                site_notices += wp_error(
+                site_context.add_notices(wp_error(
                     site["name"],
                     "plugin-list",
                     f"Unable to run <code>wp theme list</code> for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 wp_smell = errors
             if sc.options.verbose:
@@ -1903,12 +2068,12 @@ plugin and remove {display_name}.
                 live_site, 'echo is_file("favicon.ico") ? "true": "false";'
             )
             if fatal or favicon is None:
-                site_notices += wp_error(
+                site_context.add_notices(wp_error(
                     site["name"],
                     "favicon-check",
                     f"Unable to check for <code>/favicon.ico</code> file for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 wp_smell = errors
             sc.debug(f"{site['name']} has a favicon.ico file: {favicon}")
@@ -1917,7 +2082,7 @@ plugin and remove {display_name}.
                 and favicon.startswith("false")
                 and len(fqdns_not_behind_cloudflare) > 0
             ):
-                site_notices.append(
+                site_context.add_notice(
                     {
                         "type": "warning",
                         "icon": "&#x26A0;",  # warning sign
@@ -1934,12 +2099,12 @@ plugin and remove {display_name}.
             )
             drupal_status, errors, fatal = drush(live_site, "core-status")
             if fatal or drupal_status is None:
-                site_notices += drush_error(
+                site_context.add_notices(drush_error(
                     site["name"],
                     "core-status",
                     f"Unable to run <code>drush core-status</code> for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 drush_smell = errors
             if sc.options.verbose:
@@ -1956,26 +2121,26 @@ plugin and remove {display_name}.
             }
             mods, errors, fatal = drush(live_site, "pm:list")
             if fatal or mods is None:
-                site_notices += drush_error(
+                site_context.add_notices(drush_error(
                     site["name"],
                     "pm-list",
                     f"Unable to run <code>drush pm:list</code> for {site['name']}.",
                     errors,
-                )
+                ))
             elif errors != "":
                 drush_smell = errors
             if sc.options.verbose:
                 pprint(mods)
-            site_notices += check_drupal_module(
+            site_context.add_notices(check_drupal_module(
                 site["name"],
                 mods,
                 "pantheon_advanced_page_cache",
                 "Pantheon Advanced Page Cache",
                 "https://www.drupal.org/project/pantheon_advanced_page_cache",
                 "Necessary for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
-            )
+            ))
             if drupal_version.startswith("7."):
-                site_notices.append(
+                site_context.add_notice(
                     {
                         "type": "alert",
                         "icon": "&#x1F6A8;",  # police car light
@@ -1998,41 +2163,41 @@ launch the new website before December.
                 """,
                     }
                 )
-                site_notices += check_drupal_module(
+                site_context.add_notices(check_drupal_module(
                     site["name"],
                     mods,
                     "tag1_d7es",
                     "Tag1 D7ES",
                     "https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support",
                     "Necessary for receiving extended support for Drupal 7.",
-                )
+                ))
             else:
-                if len(fqdns_behind_cloudflare) > 0:
-                    site_notices += check_drupal_module(
+                if umich_enabled() and len(fqdns_behind_cloudflare) > 0:
+                    site_context.add_notices(check_drupal_module(
                         site["name"],
                         mods,
                         "cloudflare",
                         "CloudFlare",  # note: capital F here
                         "https://documentation.its.umich.edu/node/4242",
                         "Necessary for automatically clearing Cloudflare's caches when content is updated.",
-                    )
-                    site_notices += check_drupal_module(
+                    ))
+                    site_context.add_notices(check_drupal_module(
                         site["name"],
                         mods,
                         "cloudflarepurger",
                         "CloudFlare Purger",
                         "https://documentation.its.umich.edu/node/4242",
                         "Necessary for automatically clearing Cloudflare's caches when content is updated.",
-                    )
-                    site_notices += check_drupal_module(
+                    ))
+                    site_context.add_notices(check_drupal_module(
                         site["name"],
                         mods,
                         "purge_processor_lateruntime",
                         "Late runtime processor (purge_processor_lateruntime)",
                         "https://documentation.its.umich.edu/node/4242",
                         "Necessary for automatically clearing Cloudflare's caches when content is updated.",
-                    )
-                    site_notices += check_drupal_module(
+                    ))
+                    site_context.add_notices(check_drupal_module(
                         site["name"],
                         mods,
                         "purge_processor_cron",
@@ -2040,16 +2205,16 @@ launch the new website before December.
                         "https://documentation.its.umich.edu/node/4242",
                         "Recommended as a fallback for clearing Cloudflare's caches when content is updated.",
                         level="info",
-                    )
+                    ))
             if drupal_version.startswith("7."):
                 updates, errors, fatal = drush(live_site, "pm:updatestatus", "--full")
                 if fatal:
-                    site_notices += drush_error(
+                    site_context.add_notices(drush_error(
                         site["name"],
                         "pm-updatestatus",
                         f"Unable to run <code>drush pm:updatestatus</code> for {site['name']}.",
                         errors,
-                    )
+                    ))
                 # elif errors != '':
                 #     drush_smell = errors  # there will always be verbose progress output for pm:upstatestatus
                 if sc.options.verbose:
@@ -2085,7 +2250,7 @@ launch the new website before December.
                 command = ["composer", live_site, "--", "update", "--dry-run"]
                 updates, errors, fatal = run_terminus(command)
                 if fatal or updates is None:
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "alert",
                             "icon": "&#x1F6A8;",  # police car light
@@ -2127,7 +2292,7 @@ launch the new website before December.
                 sc.console.print(
                     f"[bold magenta]=== Running audit for packages on {site['name']}:"
                 )
-                audit = terminus("composer", live_site, "--", "audit")
+                audit, _errors, _fatal = terminus("composer", live_site, "--", "audit")
                 if isinstance(audit, dict):
                     if "advisories" in audit:
                         package_list = audit["advisories"]
@@ -2215,12 +2380,12 @@ echo( json_encode( array( 'result' => "{$result}" ) ) );
                     ua_check_script,
                 )
                 if fatal or ua is None:
-                    site_notices += drush_error(
+                    site_context.add_notices(drush_error(
                         site["name"],
                         "drupal-ua-check",
                         f"Failed to get the user agent string used by {site['name']}.",
                         errors,
-                    )
+                    ))
                 elif errors != "":
                     drush_smell = errors
                 if (
@@ -2228,12 +2393,12 @@ echo( json_encode( array( 'result' => "{$result}" ) ) );
                     or "result" not in ua
                     or not isinstance(ua["result"], str)
                 ):
-                    site_notices += drush_error(
+                    site_context.add_notices(drush_error(
                         site["name"],
                         "drupal-ua-check",
                         f"Failed to get the user agent string used by {site['name']}.",
                         "Unexpected result from drush php-script.",
-                    )
+                    ))
                 elif (
                     not ua["result"].startswith(
                         "Drupal (+https://drupal.org/); UMich; https://"
@@ -2241,7 +2406,7 @@ echo( json_encode( array( 'result' => "{$result}" ) ) );
                     or "your-site" in ua["result"].lower()
                     or "your_site" in ua["result"].lower()
                 ):
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "info",
                             "icon": "&#x1F50E;",  # magnifying glass
@@ -2273,7 +2438,7 @@ not get blocked.
         sc.console.print(
             f"[bold magenta]=== Checking for unapplied updates for {site['name']}:"
         )
-        updates = terminus("upstream:updates:list", live_site)
+        updates, _errors, _fatal = terminus("upstream:updates:list", live_site)
         if isinstance(updates, list):
             num_updates = len(updates)
             if num_updates > 0:
@@ -2311,7 +2476,7 @@ not get blocked.
 
 """
                 if oldest_update_days <= 7:
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "info",
                             "icon": "&#x1F50E;",  # magnifying glass
@@ -2345,7 +2510,7 @@ How to:
                         }
                     )
                 elif oldest_update_days <= 30:
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "warning",
                             "icon": "&#x26A0;",  # warning sign
@@ -2381,7 +2546,7 @@ A variety of support options are available.
                         }
                     )
                 else:
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "alert",
                             "icon": "&#x1F6A8;",  # police car light
@@ -2475,7 +2640,7 @@ support through either Pantheon or ITS.
   - New version:     {update["new_version"]}
 
 """
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "warning",
                     "icon": "&#x26A0;",  # warning sign
@@ -2585,7 +2750,7 @@ A variety of support options are available.
         # April 2026 - September 2026:
         # Check to see if a PHP version upgrade is needed
         if envs["live"]["php_version"] in ("7.4", "8.1"):
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "warning",
                     "icon": "&#x26A0;",  # warning sign
@@ -2610,7 +2775,7 @@ soon</a>, likely sometime in 2027.
             )
         elif envs["live"]["php_version"] < "8.2":
             new_php = "7.4" if envs["live"]["php_version"].startswith("7") else "8.1"
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "alert",
                     "icon": "&#x1F6A8;",  # police car light
@@ -2647,7 +2812,7 @@ remove PHP {new_php} sometime after September 30, 2026.
 
         # TODO: instead of continuing here, proceed below to calculate plan recommendations, skipping the graph and email
         if sc.options.only_warn:
-            for n in site_notices:
+            for n in site_context['notices']:
                 all_warnings.append(n["csv"])
             continue
 
@@ -2672,22 +2837,23 @@ remove PHP {new_php} sometime after September 30, 2026.
         # Create a list of time ranges when the site was on each plan
         last_day = calendar.monthrange(end_date.year, end_date.month)[1]
         plot_right_date = end_date.replace(day=last_day)
-        plan_over_time = []
+        if not plan_on_day:
+            # A brand-new site with no traffic history yet.  Rather than dropping the whole
+            # report -- which would silently discard any alerts already gathered above
+            # (frozen, not-in-DNS, missing security/cache plugins, ...) and never email the
+            # owner -- seed a single synthetic plan-day at the report end date.  That gives
+            # the chart/plan code a non-empty plan_on_day (no IndexError, P10) and, because
+            # it counts as one in-window month, the report renders in the normal "not enough
+            # data yet" state (median_visitors stays 0) while still delivering the alerts.
+            sc.console.print(
+                f":mag: No traffic recorded yet for {site_name}; rendering the "
+                f'"not enough data" report with any alerts.'
+            )
+            plan_on_day = {end_date: site_current_plan}
+
         # noinspection PyTypeChecker
         days = sorted(plan_on_day.keys())
-        plan = plan_on_day[days[0]]
-        plan_start = days[0]
-        for i in range(1, len(days)):
-            today = days[i]
-            if plan_on_day[today] != plan:
-                plan_over_time.append(
-                    {"start": plan_start, "end": days[i - 1], "plan": plan}
-                )
-                plan_start = today
-                plan = plan_on_day[plan_start]
-        plan_over_time.append(
-            {"start": plan_start, "end": plot_right_date, "plan": plan}
-        )
+        plan_over_time = build_plan_over_time(plan_on_day, plot_right_date)
         sc.debug(plan_over_time)
 
         # Convert the keys of the visits_by_month dictionary to datetime objects
@@ -3288,7 +3454,7 @@ before June 30.
                             }
                         )
                 else:
-                    site_notices.append(
+                    site_context.add_notice(
                         {
                             "type": "info",
                             "icon": "&#x1F50E;",  # magnifying glass
@@ -3356,7 +3522,7 @@ be moved to a lower plan between June 16 - 30 each year.
             ) - datetime.timedelta(days=1)
 
         if wp_smell != "":
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "info",
                     "icon": "&#x1F50E;",  # magnifying glass
@@ -3381,7 +3547,7 @@ the moment, it should be fixed to avoid possible future problems:
             )
 
         if drush_smell != "":
-            site_notices.append(
+            site_context.add_notice(
                 {
                     "type": "info",
                     "icon": "&#x1F50E;",  # magnifying glass
@@ -3406,7 +3572,7 @@ at the moment, it should be fixed to avoid possible future problems:
             )
 
             if composer_smell != "":
-                site_notices.append(
+                site_context.add_notice(
                     {
                         "type": "info",
                         "icon": "&#x1F50E;",  # magnifying glass
@@ -3430,14 +3596,10 @@ at the moment, it should be fixed to avoid possible future problems:
                     }
                 )
 
-        sc.debug("===== Notices:\n", site_notices)
+        sc.debug("===== Notices:\n", site_context['notices'])
         sc.debug("===== Sections:\n", site_context["sections"])
 
-        if (
-            "UMich" in sc.config
-            and "enabled" in sc.config["UMich"]
-            and sc.config["UMich"]["enabled"]
-        ):
+        if umich_enabled():
             r = sc.config["UMich"]["portal"]["sites"][site["name"]]["owner_group"]
             r = r.replace(" ", ".")
             recipients = f"{r}@umich.edu, {r}-owners@umich.edu"
@@ -3446,7 +3608,12 @@ at the moment, it should be fixed to avoid possible future problems:
                 recipients = f"{r}@umich.edu"
             contacts = f"{r}@umich.edu"
         else:
-            site_team = terminus("site:team:list", site_id)
+            site_team, errors, fatal = terminus("site:team:list", site_id)
+            if fatal or site_team is None:
+                sc.console.print(
+                    f":exclamation: [bold red] ERROR: could not fetch team for {site_name}: {errors}"
+                )
+                continue
             recipients = ", ".join(
                 [site_team[team_member]["email"] for team_member in site_team]
             )
@@ -3454,20 +3621,16 @@ at the moment, it should be fixed to avoid possible future problems:
 
         # Create email from template
         sorted_notices = (
-            [n for n in site_notices if n["type"] == "alert"]
-            + [n for n in site_notices if n["type"] == "warning"]
-            + [n for n in site_notices if n["type"] == "info"]
+            [n for n in site_context['notices'] if n["type"] == "alert"]
+            + [n for n in site_context['notices'] if n["type"] == "warning"]
+            + [n for n in site_context['notices'] if n["type"] == "info"]
         )
         report = f"Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}"
         subject = f"{site['name']}: {report}"
         # U-M-specific annual-billing subject + notice; only when the UMich plugin is enabled
         # (this block reads the U-M portal config).  end_of_contract_year is date-driven, so
         # without the UMich guard a non-U-M June-dated report crashed with KeyError('UMich').
-        if end_of_contract_year and (
-            "UMich" in sc.config
-            and "enabled" in sc.config["UMich"]
-            and sc.config["UMich"]["enabled"]
-        ):
+        if end_of_contract_year and umich_enabled():
             subject = f"Time Sensitive: {site['name']} annual billing"
             shortcode = sc.config["UMich"]["portal"]["sites"][site["name"]]["shortcode"]
             annual_bill = float(plan_info[site_current_plan]["cost"])
@@ -3549,11 +3712,7 @@ June 30.
         # U-M-specific annual-billing notice; only for institutions running the UMich
         # plugin (it reads the U-M portal config).  Previously an unconditional `if True:`,
         # which crashed every non-U-M / plugin-disabled run with KeyError('UMich').
-        if (
-            "UMich" in sc.config
-            and "enabled" in sc.config["UMich"]
-            and sc.config["UMich"]["enabled"]
-        ):
+        if umich_enabled():
             shortcode = sc.config["UMich"]["portal"]["sites"][site["name"]]["shortcode"]
             annual_bill = float(plan_info[site_current_plan]["cost"])
             sorted_notices.insert(
@@ -3584,8 +3743,8 @@ an additional pro-rated bill or credit in the following month.
                 },
             )
 
-        banner_cid = make_msgid(domain="webservices.umich.edu")
-        chart_cid = make_msgid(domain="webservices.umich.edu")
+        banner_cid = make_msgid(domain=sc.msgid_domain())
+        chart_cid = make_msgid(domain=sc.msgid_domain())
 
         template_dict = dict(
             dry_run_recipient="" if sc.options.for_real else recipients,
@@ -3659,16 +3818,23 @@ an additional pro-rated bill or credit in the following month.
             f.write(html_body)
 
         msg = EmailMessage()
-        msg["From"] = "University of Michigan Webmaster Team <webmaster@umich.edu>"
+        # Sender identity + dry-run addressing come from the [Email] config section; the
+        # defaults reproduce the historical U-M literals byte-for-byte so an institution that
+        # does not set [Email] gets the same output (P8a).
+        email_cfg = sc.config.get("Email", {})
+        msg["From"] = email_cfg.get(
+            "from", "University of Michigan Webmaster Team <webmaster@umich.edu>"
+        )
         if sc.options.for_real:
             msg["To"] = recipients
-            msg["Bcc"] = "januside@go.mail.umich.edu, its-webmaster@go.mail.umich.edu"
-        else:
-            msg["To"] = (
-                f"januside@go.mail.umich.edu, {sc.options.smtp_username}@umich.edu"
+            msg["Bcc"] = email_cfg.get(
+                "bcc", "januside@go.mail.umich.edu, its-webmaster@go.mail.umich.edu"
             )
-            # msg['To'] = f'januside@go.mail.umich.edu, {sc.options.smtp_username}@umich.edu, ITS-proj-wolverine-web-services@umich.edu'
-        msg["Reply-to"] = "webmaster@umich.edu"
+        else:
+            dry_run_to = email_cfg.get("dry_run_to", "januside@go.mail.umich.edu")
+            dry_run_domain = email_cfg.get("dry_run_username_domain", "umich.edu")
+            msg["To"] = f"{dry_run_to}, {sc.options.smtp_username}@{dry_run_domain}"
+        msg["Reply-to"] = email_cfg.get("reply_to", "webmaster@umich.edu")
         msg["Date"] = datetime.datetime.now(datetime.UTC).strftime("%a, %d %b %Y %T %z")
         msg["Subject"] = subject
 
@@ -3712,12 +3878,12 @@ an additional pro-rated bill or credit in the following month.
         # emails_sent += 1
         # smtp_connection.quit()
 
-        for n in site_notices:
+        for n in site_context['notices']:
             fields = n["csv"].split(",")
             fields.insert(1, contacts)
             all_warnings.append(",".join(fields))
 
-        plt.close(fig)  # needed to free up memory when sc.options.all_sites is True
+        plt.close(fig)  # needed to free up memory when sc.options.all is True
 
         # TODO: % Pages Cached -- should be Cloudflare
         # TODO: CSV attachment

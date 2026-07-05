@@ -11,12 +11,15 @@ pytestmark = [pytest.mark.live, pytest.mark.slow]
 def test_real_terminus_self_info_parses(psh):
     # Uses the program's own terminus() wrapper against the real binary (the shim is NOT
     # on PATH in-process), proving auth + subprocess + JSON parse end to end.
-    info = psh.terminus("self:info")
+    # terminus() returns (result, errors, fatal) (P3).
+    info, errors, fatal = psh.terminus("self:info")
+    assert not fatal, f"terminus self:info was fatal: {errors!r}"
     assert isinstance(info, dict) and info, f"unexpected self:info result: {info!r}"
 
 
 def test_real_read_only_site_info(psh):
-    info = psh.terminus("site:info", "its-wws-test1")
+    info, errors, fatal = psh.terminus("site:info", "its-wws-test1")
+    assert not fatal, f"terminus site:info was fatal: {errors!r}"
     assert isinstance(info, dict)
     assert info.get("name") == "its-wws-test1"
     assert info.get("framework", "").startswith("wordpress")

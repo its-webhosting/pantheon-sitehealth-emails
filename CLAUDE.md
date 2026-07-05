@@ -91,16 +91,35 @@ For each site: build a `site_context` dict (holds `notices`, `sections`, `attach
 traffic data, plan info), run `check` hooks against it, gather Pantheon/WP/Drupal data,
 compute the plan recommendation from `[Pantheon.plan_info]` in the config, then render.
 
-- **Notices vs. news**: `add_notice()` adds a per-site alert to `site_context['notices']`;
-  `add_news_item()` adds an org-wide item to `sc.news`. Both take `type` (`info`/`warning`/
-  `alert`, which maps to an emoji `icon`) and an HTML `message`; the plaintext `text` is
-  auto-generated via `html2text` if absent. News items also come from `*.toml` files in the
-  `[News].folder` dir (`./news`); see `sample-news/` for the format.
+- **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
+  `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
+  per processed site, as far up the per-site loop as possible (after the portal/not-requested/
+  Sandbox skips). Add to it via its methods — `site_context.add_notice(notice)` /
+  `.add_notices(list)` (builders: `wp_error`/`drush_error`/`check_*module`) / `.add_section(...)` /
+  `.add_attachment(...)` — this is the **canonical** path (the old module-level
+  `sc.add_notice`/`add_notices` free functions were removed). `add_notice` fills in
+  `icon` (from `type`), plaintext `text` (via `html2text`), and honors `order`
+  (`prepend`/`first` → front). `add_news_item()` (still an `sc` function) adds an org-wide item to
+  `sc.news` (config-inline `[News.<x>]` sub-tables + `*.toml` files in `[News].folder` are both
+  loaded by `load_news_items()`). Notice dicts carry their own bespoke `text`, so `add_notice`'s
+  defaults are no-ops for them; every notice needs a `csv` key (`site,code,...`) — several report
+  paths read `n["csv"]`. Check hooks receive the `SiteContext` and call these methods directly
+  (see `check/umich/sitelens.py`); tests build one with `sc.SiteContext({"name": ...})`.
 - **Terminus/WP/Drush wrappers**: `run_terminus()` is the low-level subprocess call (5-min
   timeout, returns `(stdout, stderr, fatal)`). `terminus()` wraps it for JSON with a
-  session-expiry retry. `wp()`/`wp_eval()` and `drush()`/`drush_php_script()` run WordPress
-  and Drupal commands on a `site.env` remotely; `wp_error()`/`drush_error()` build alert
-  notices from command failures. Prefer these wrappers over calling `terminus` directly.
+  session-expiry retry and **returns `(result, errors, fatal)`** (`result` is `None` on a JSON
+  decode failure). Call sites that index into the result use `terminus_data(...)`, which raises
+  the named `TerminusError` when the command was fatal or returned no data (org-level calls
+  abort; per-site calls skip that site). `wp()`/`wp_eval()` and `drush()`/`drush_php_script()`
+  run WordPress and Drupal commands on a `site.env` remotely (all return 3-tuples too);
+  `wp_error()`/`drush_error()` build alert notices from command failures. Prefer these wrappers
+  over calling `terminus` directly.
+- **Email/SMTP config**: sender identity and the mail server come from the optional
+  `[Email]`/`[SMTP]` config sections (`from`/`reply_to`/`bcc`/`dry_run_to`/
+  `dry_run_username_domain`/`msgid_domain`, `host`/`port`); when a key is absent the default is
+  the original U-M literal, so U-M output is unchanged. Keep new institution-specific behavior
+  behind config / the `umich` packages — use the `umich_enabled()` helper to gate U-M-only
+  checks (e.g. the fqdns-gated Cloudflare-cache checks).
 - **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
@@ -162,18 +181,24 @@ Non-obvious things the harness relies on:
   a non-fixture config (a config-**path** allowlist, not a backend-type test — the production
   default DB is also sqlite). Never bypass it. Tests use only `its-wws-test1`/`its-wws-test2`,
   read-only.
-- **Pure-helper seam.** Four pure functions were extracted from `main()` as module-level defs so
-  they're importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
-  `estimate_month_visits`, and `plan_costs` (the cost model — DB-free via an injected
-  `op_lookup(month)`; the U-M downgrade guardrails/notices remain inline in `main()` for the later
-  de-monolith stage). The extraction is behavior-preserving (WordPress golden byte-identical).
+- **Pure-helper seam.** Pure functions extracted from `main()` as module-level defs so they're
+  importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
+  `estimate_month_visits`, `plan_costs` (the cost model — DB-free via an injected
+  `op_lookup(month)`), plus `load_news_items` (P2), `build_plan_over_time` (P10 — returns `[]` for
+  zero traffic; `main()` guards the empty case and skips the plan sections), and
+  `classify_hostname_dns` (P4 — separates transient DNS failures from "not in DNS"). The
+  extractions are behavior-preserving (goldens byte-identical).
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
   and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots
   normalize the volatile `make_msgid` CIDs; refresh with `./run-tests --update-goldens`. There are
-  two goldens: WordPress (`its-wws-test1`, fixtures in `tests/fixtures/terminus/`) and Drupal
-  (`its-wws-test2`, `tests/fixtures/terminus-drupal/`, selected via `run_program(fixtures_dir=…)`).
-  Refresh WordPress fixtures with `./run-tests --record`, Drupal with `python tests/tools/record.py
+  **three** goldens: WordPress (`its-wws-test1`, fixtures in `tests/fixtures/terminus/`), Drupal
+  (`its-wws-test2`, `tests/fixtures/terminus-drupal/`, selected via `run_program(fixtures_dir=…)`),
+  and a **non-U-M** golden (`test_golden_nonumich.py`, `minimal-nonumich.toml` with `[UMich]`
+  disabled + generic `[Email]`) that proves the P8 config-driven email headers/msgid and that the
+  U-M-guarded doc-URL checks don't appear for a non-U-M run. The `.eml` identity headers have no
+  byte golden (the `Date:` is volatile) — `test_eml_headers.py` asserts them explicitly. Refresh
+  WordPress fixtures with `./run-tests --record`, Drupal with `python tests/tools/record.py
   --drupal` (both trim the org list to the one test site and scrub team emails).
 - **The offline golden only reaches the ≤4-month "not enough data" state** (its recorded metrics
   fall after the March report date), so the extracted `plan_costs` cost model is exercised
@@ -181,9 +206,16 @@ Non-obvious things the harness relies on:
   unit/property tests — not by the golden. The render tier vendors axe-core locally
   (`tests/vendor/axe.min.js`) so it stays offline.
 - **The reusable (non-UMich) path had latent bugs** that production never hit because U-M always
-  runs with the UMich plugin enabled. Several U-M-specific code paths in the core script are not
-  yet behind the `[UMich].enabled` flag; the planned refactor should move them out. When adding
-  code, keep institution-specific logic behind config flags / the `umich` plugin+check packages.
+  runs with the UMich plugin enabled. A pragmatic subset was addressed (P8): email/SMTP identity
+  moved to `[Email]`/`[SMTP]` config, and the fqdns-gated Cloudflare-cache checks are now behind
+  `umich_enabled()`. Still **not** yet relocated (deferred to the full de-monolith stage): the
+  large date-driven annual-billing notices, the `umich-oidc-login`/Hummingbird/Drupal user-agent
+  checks, and the U-M branding hardcoded in `email_template.html` (its.umich.edu URLs,
+  `webmaster@umich.edu`, `node/4705`) — the non-U-M golden asserts only the strings P8 removed, not
+  "no umich.edu anywhere". A clean relocation of the fqdns-gated checks into the `umich` package
+  needs a new post-gather per-site hook seam (the existing `check` hook fires before the plugin/DNS
+  data exists). When adding code, keep institution-specific logic behind config flags / the `umich`
+  plugin+check packages.
 
 ## Development archive (`development/`)
 

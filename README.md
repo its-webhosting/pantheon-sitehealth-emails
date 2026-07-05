@@ -69,6 +69,13 @@ git clone git@github.com:its-webhosting/pantheon-sitehealth-emails-config.git  #
 ln -s pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml .
 ```
 
+Sender identity and the outgoing mail server are configured in the optional `[Email]` and
+`[SMTP]` sections of the config (From/Reply-to/Bcc, the dry-run recipient, the inline-image
+message-id domain, and the SMTP host/port).  If those sections are omitted the University of
+Michigan defaults are used, so non-U-M deployments should set them — see
+[`docs/email-configuration.md`](docs/email-configuration.md) and the annotated
+`sample-pantheon-sitehealth-emails.toml`.
+
 
 ## Usage
 
@@ -224,19 +231,22 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
 * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add cf-cache-status, cache-control checks
+  * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 * finish implementing better secrets handling
     * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
     * SSH and key (ssh-agent for now, something else later?)
     * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
     * AWS credentials (set in environment for now)
-* rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
-* refactor the program to take the most advatage of the program's plugin framework and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality into plugins wherever it is appropriate (but keeping things out of plugins if there's no advantage/reason). Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
+* rework everything from ~3,700 line script into a combination of checks (in the `checks` directory), plugins (where appropriate), and other Python files/packages
+* refactor the program to take the most advatage of the program's check framework,plugin framework, and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality under `./checks` and `./plugins` wherever it is appropriate. Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
 * Add ruff for linting+formatting, switch from "house styles" to best-practice/standard Python styles
 * switch to Pantheon API where possible
 * add everything to its-webhosting/terraform-infra repo that should be there
 
-* Switch terminus() to returning tuple (output, errors, fatal) for better error handling
+* ~~Switch terminus() to returning tuple (output, errors, fatal) for better error handling~~
+  (done: `terminus()` returns `(result, errors, fatal)` and `terminus_data()` raises the
+  named `TerminusError` at call sites that need the data)
 
 * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
 
@@ -253,8 +263,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 * Add a notice for accessibility scores below a certain number given to us by the accessibility team.
 
 * Measure PHP memory usage and factor that into plan recommendations
-
-* Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 
 * Add security score to SiteLens.  Include Cloudflare Radar, SSL Labs, securityheaders.com / Mozilla Observatory API, pending updates, best practices, check internals of site (filesystem config, ...)
 

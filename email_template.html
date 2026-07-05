@@ -353,7 +353,7 @@ h3 { font-size: 15pt; }
 
 <div class="container">
   <table class="responsive-table">
-    <caption>{{site_name}} Pantheon Traffic<br /><span style="font-size: smaller;"><a href="{{site_url}}">{{site_url}}</a></span></caption>
+    <caption>{{site_name}} Pantheon Traffic{%if site_url%}<br /><span style="font-size: smaller;"><a href="{{site_url}}">{{site_url}}</a></span>{%endif%}</caption>
     <thead>
       <tr>
         {% for column in traffic_table_columns %}

@@ -107,7 +107,7 @@ def check_sitelens_urls(site_context) -> None:
         return
 
     sc.debug(f'[red]NOTE: {site_name} only has {num_paths_configured} SiteLens paths configured')
-    sc.add_notice({
+    site_context.add_notice({
         'type': 'info',
         'csv': f'{site_name},sitelens-url-paths,{num_paths_configured}',
         'short': f'add paths to SiteLens',
@@ -116,7 +116,7 @@ def check_sitelens_urls(site_context) -> None:
 <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/scan-configurations/">configure at least two
 URL paths</a>, not counting '<code>/</code>', for SiteLens to analyze on <strong>{site_name}</strong>.</p>
 '''
-    }, site_context)
+    })
 
 
 def create_gauge_image(value: int, color: str, title: str) -> bytes:
@@ -204,8 +204,8 @@ def check_sitelens_scores(site_context) -> None:
             color = BAD_SCORE_COLOR
 
         image = create_gauge_image(score[key]['value'], color, score[key]['label'])
-        image_cid = make_msgid(domain='webservices.umich.edu')
-        site_context['attachments'].append({
+        image_cid = make_msgid(domain=sc.msgid_domain())
+        site_context.add_attachment({
             'data': image,
             'maintype': 'image',
             'subtype': 'png',
@@ -233,7 +233,7 @@ def check_sitelens_scores(site_context) -> None:
     last_run = timestamp.strftime('%B %e, %Y, %I:%M %p')
     text += f'as of {last_run}.\n\n'
 
-    site_context['sections'].append({
+    site_context.add_section({
         'heading': 'SiteLens',
         'content': f'''
 <table role="presentation" border="0" cellpadding="0" cellspacing="30">

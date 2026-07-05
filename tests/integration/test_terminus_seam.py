@@ -13,13 +13,21 @@ pytestmark = pytest.mark.integration
 
 def test_terminus_parses_json_from_monkeypatched_run_terminus(psh, monkeypatch):
     monkeypatch.setattr(psh, "run_terminus", lambda *a, **k: ('{"framework": "wordpress"}', "", False))
-    assert psh.terminus("site:info", "its-wws-test1") == {"framework": "wordpress"}
+    # terminus() returns (result, errors, fatal) (P3).
+    result, errors, fatal = psh.terminus("site:info", "its-wws-test1")
+    assert result == {"framework": "wordpress"}
+    assert errors == ""
+    assert fatal is False
 
 
-def test_terminus_empty_output_yields_empty_result(psh, monkeypatch):
-    # json.loads("") raises JSONDecodeError, caught at the terminus() try/except -> "".
+def test_terminus_empty_output_yields_none_result(psh, monkeypatch):
+    # json.loads("") raises JSONDecodeError; terminus() now returns result=None (not "") and
+    # records the decode detail in errors (P3), instead of silently swallowing it.
     monkeypatch.setattr(psh, "run_terminus", lambda *a, **k: ("", "", False))
-    assert psh.terminus("env:info", "x") == ""
+    result, errors, fatal = psh.terminus("env:info", "x")
+    assert result is None
+    assert errors != ""
+    assert fatal is False
 
 
 def test_temp_db_roundtrips_a_traffic_row(temp_db):

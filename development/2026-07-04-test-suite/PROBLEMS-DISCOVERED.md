@@ -14,6 +14,28 @@ implementation (render tier / live Drupal recording). The constraints still forb
 
 ---
 
+## Status (fixed 2026-07-05)
+
+See `development/2026-07-05-fix-existing-problems/SPEC.md` for the design and decisions.
+
+| # | Status |
+|---|--------|
+| P1 | Not a bug — no change (existing e2e pins the ≤4-month state). |
+| P2 | **Fixed** — `load_news_items()` iterates `[News]` values; config-inline items now added. |
+| P3 | **Fixed** — `terminus()` returns `(result, errors, fatal)`; `terminus_data()` raises `TerminusError`; 10 call sites updated. |
+| P4 | **Fixed** — `classify_hostname_dns()` separates transient (Timeout/NoNameservers) from definitive; transient failures get a distinct warning notice and are not called "not in DNS". |
+| P5 | **Deferred** (documented) — behind `--all` + disabled SMTP; untestable in-harness. No change. |
+| P6 | **Fixed** — wrapper annotations/docstrings corrected to the real 3-tuple. |
+| P7 | **Fixed** — comment now references `sc.options.all`. |
+| P8 | **Partly fixed (pragmatic subset)** — email/SMTP → `[Email]`/`[SMTP]` config; fqdns-gated Cloudflare checks behind `umich_enabled()`. Large billing notices + template branding deferred to the de-monolith stage. |
+| P9 | **Fixed** — the caption's site-url anchor rendered `<a href=""></a>` when `site_url` was blank; now guarded by `{%if site_url%}`. `link-name` removed from the render allowlist. |
+| P10 | **Fixed** — `build_plan_over_time()` + an empty-`plan_on_day` guard skip the plan sections instead of raising `IndexError`. |
+
+Also: `sc.add_notice()` is now the canonical notice path (25 live appends + 4 builders migrated,
+byte-identical), and a third (non-U-M) golden was added to prove the P8 config path.
+
+---
+
 ## P1 — NOT A BUG (disproven during implementation): the ≤4-month path already renders
 
 **Original claim (design time).** That a site with ≤4 months of traffic would `NameError` on

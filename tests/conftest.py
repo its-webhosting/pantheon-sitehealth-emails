@@ -105,8 +105,8 @@ _SC_ATTRS = (
 def reset_sc(psh):
     """Restore script_context's mutable globals (deep-copied) around every test.
 
-    `sc.hooks` is a dict-of-lists and add_hook/add_notice/add_news_item mutate the
-    nested lists in place, so a shallow snapshot would leak between tests.
+    `sc.hooks` is a dict-of-lists and add_hook/add_news_item (and SiteContext.add_notice)
+    mutate the nested lists in place, so a shallow snapshot would leak between tests.
     """
     import script_context as sc
 

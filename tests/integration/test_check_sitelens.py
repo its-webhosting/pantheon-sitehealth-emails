@@ -58,7 +58,7 @@ def test_scores_section_and_attachments(sitelens, reset_sc):
         1: _score(0.80, 0.60, 0.30, 1.00, 1),
         2: _score(1.00, 0.80, 0.50, 1.00, 2),
     }
-    ctx = {"site": {"name": SITE}, "attachments": [], "sections": []}
+    ctx = reset_sc.SiteContext({"name": SITE})
 
     sitelens.check_sitelens_scores(ctx)
 
@@ -77,13 +77,21 @@ def test_scores_section_and_attachments(sitelens, reset_sc):
         assert band in section["text"]
     # HTML references the inline images by cid.
     assert section["content"].count("cid:") == 4
+    # P9 (link-name): every gauge <img> (each wrapped in an anchor) must carry a non-empty
+    # alt so the anchor has a discernible name.  Guards against re-introducing a text-less link.
+    import re
+    imgs = re.findall(r"<img\b[^>]*>", section["content"])
+    assert imgs
+    for tag in imgs:
+        m = re.search(r'alt="([^"]*)"', tag)
+        assert m and m.group(1).strip(), f"gauge img missing non-empty alt: {tag}"
 
 
 def test_urls_notice_when_too_few_paths(sitelens, reset_sc):
     sc = reset_sc
     sc.config = {"UMich": {"portal": {"sites": {SITE: {"id": PORTAL_ID}}}}}
     sitelens.sitelens_configured_scans_by_site = {PORTAL_ID: [1, 2]}  # 2 < 4 -> notice
-    ctx = {"site": {"name": SITE}, "notices": []}
+    ctx = reset_sc.SiteContext({"name": SITE})
 
     sitelens.check_sitelens_urls(ctx)
 
@@ -95,7 +103,7 @@ def test_no_urls_notice_when_enough_paths(sitelens, reset_sc):
     sc = reset_sc
     sc.config = {"UMich": {"portal": {"sites": {SITE: {"id": PORTAL_ID}}}}}
     sitelens.sitelens_configured_scans_by_site = {PORTAL_ID: [1, 2, 3, 4]}  # >= 4 -> no notice
-    ctx = {"site": {"name": SITE}, "notices": []}
+    ctx = reset_sc.SiteContext({"name": SITE})
 
     sitelens.check_sitelens_urls(ctx)
 

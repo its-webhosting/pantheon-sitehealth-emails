@@ -1,5 +1,5 @@
 # serializer version: 1
-# name: test_rendered_html_matches_golden
+# name: test_nonumich_html_matches_golden
   '''
   <!DOCTYPE html>
   <html lang="en">
@@ -539,7 +539,7 @@
   
   '''
 # ---
-# name: test_rendered_txt_matches_golden
+# name: test_nonumich_txt_matches_golden
   '''
   -----------------------------------------------
       U-M Information and Technology Services

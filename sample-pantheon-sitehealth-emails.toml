@@ -112,6 +112,25 @@ profile = "webhosting"
 default_region = "us-east-1"
 
 
+[Email]
+# Identity of the report emails.  All keys are optional; if omitted, the University of
+# Michigan defaults are used (the tool's original hardcoded values), so existing U-M runs
+# are unaffected.  Set these for a non-U-M deployment.
+# from        = "Example Web Team <webteam@example.edu>"      # the From: header
+# reply_to    = "webteam@example.edu"                          # the Reply-to: header
+# msgid_domain = "reports.example.edu"                         # domain for inline-image Content-IDs
+# Sent only with --for-real:
+# bcc         = "ops@example.edu"                              # the Bcc: header
+# Dry-run addressing (without --for-real, all mail goes to the logged-in user):
+# dry_run_to             = "ops@example.edu"                   # extra dry-run recipient
+# dry_run_username_domain = "example.edu"                      # {smtp-username}@<this> is added to To:
+
+[SMTP]
+# Outgoing mail server.  Optional; defaults to the U-M server.  The password comes from the
+# SMTP_PASSWORD environment variable (not stored here).
+# host = "smtp.example.edu"
+# port = 465
+
 [News]
 # News items can go in this section here and/or in *.toml files in the directory below.
 folder = "./news"

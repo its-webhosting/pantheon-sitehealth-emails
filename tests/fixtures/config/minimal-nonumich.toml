@@ -1,0 +1,110 @@
+# Self-contained test config — NEVER depends on the private production config symlink.
+# All plugins are disabled (Cloudflare/AWS via enabled=false; UMich section absent, which
+# is KeyError-safe).  Database and News paths are RELATIVE so they resolve inside the
+# per-test temporary working directory the harness sets up.
+#
+# org_id is the (non-secret) U-M org id used only so the recorded org:site:list argv matches
+# during replay; no live call is made in offline tiers.
+
+[Pantheon]
+org_id = "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9"
+overage_block_size = 10000
+overage_block_cost = 40.00
+
+[Pantheon.plan_info."Basic"]
+upgrade_at    = 155000
+upgrade_to    = "Performance Large"
+downgrade_to  = "-"
+traffic_limit = 35000
+cost          = 500.00
+
+[Pantheon.plan_info."Performance Small"]
+upgrade_at    = 65000
+upgrade_to    = "Performance Medium"
+downgrade_to  = "-"
+traffic_limit = 35000
+cost          = 1925.00
+
+[Pantheon.plan_info."Performance Medium"]
+upgrade_at    = 140000
+upgrade_to    = "Performance Large"
+downgrade_to  = "Performance Small"
+traffic_limit = 70000
+cost          = 3300.00
+
+[Pantheon.plan_info."Performance Large"]
+upgrade_at    = 300000
+upgrade_to    = "Performance Extra Large"
+downgrade_to  = "Performance Medium"
+traffic_limit = 210000
+cost          = 6600.00
+
+[Pantheon.plan_info."Performance Extra Large"]
+upgrade_at    = 540000
+upgrade_to    = "Performance 2X Large"
+downgrade_to  = "Performance Large"
+traffic_limit = 420000
+cost          = 11000.00
+
+[Pantheon.plan_info."Performance 2X Large"]
+upgrade_at    = 1000000
+upgrade_to    = "Elite 1M"
+downgrade_to  = "Performance Extra Large"
+traffic_limit = 840000
+cost          = 16500.00
+
+[Pantheon.plan_info."Elite 1M"]
+upgrade_at    = 2000000
+upgrade_to    = "Elite 2M"
+downgrade_to  = "Performance 2X Large"
+traffic_limit = 1000000
+cost          = 99999.99
+
+[Pantheon.plan_info."Elite 2M"]
+upgrade_at    = 3000000
+upgrade_to    = "-"
+downgrade_to  = "Elite 1M"
+traffic_limit = 2000000
+cost          = 999999.99
+
+[Pantheon.plan_sku_to_name]
+plan-free-preferred-monthly-1              = "Sandbox"
+plan-basic_small-contract-annual-1         = "Basic"
+plan-performance_small-contract-annual-1   = "Performance Small"
+plan-performance_medium-contract-annual-1  = "Performance Medium"
+plan-performance_large-contract-annual-1   = "Performance Large"
+plan-performance_xlarge-contract-annual-1  = "Performance Extra Large"
+plan-performance_2xlarge-contract-annual-1 = "Performance 2X Large"
+plan-elite_1m-contract-annual-1            = "Elite 1M"
+plan-elite_2m-contract-annual-1            = "Elite 2M"
+
+[Database]
+type = "sqlite"
+name = "test.db"
+
+[Cloudflare]
+enabled = false
+member_email = "user@example.com"
+member_api_key = "xxxxxxxx"
+
+[AWS]
+enabled = false
+profile = "webhosting"
+default_region = "us-east-1"
+
+[News]
+folder = "./news"
+
+# Generic (non-U-M) sender identity + SMTP, to prove P8's [Email]/[SMTP] config drives the
+# moved MIME headers and message-id domain for a non-U-M deployment.
+[Email]
+from = "Example Web Team <webteam@example.edu>"
+reply_to = "webteam@example.edu"
+bcc = "ops@example.edu"
+dry_run_to = "ops@example.edu"
+dry_run_username_domain = "example.edu"
+msgid_domain = "reports.example.edu"
+
+[SMTP]
+host = "smtp.example.edu"
+port = 465
