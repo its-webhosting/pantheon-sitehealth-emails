@@ -20,7 +20,8 @@ Design and implement the appropriate tests for it, following the existing harnes
    - a rendering/CSS/template change → the `render` tier.
 2. Reuse the existing fixtures (`psh`, `reset_sc`, `temp_db`, `program_runner`, `rendered_report`,
    `minimal_config`). Never invoke the program except via `run_program` (the `--all`/`--for-real`
-   interlock).
+   interlock), and never run `--create-tables` or `--import-older-metrics` against the live
+   database.
 3. If the change alters Pantheon responses the offline e2e depends on, refresh fixtures with
    `./run-tests --record` and review the diff. If it intentionally changes rendered output, run
    `./run-tests --update-goldens` and review the snapshot diff.

@@ -24,7 +24,7 @@ Take a deep breath and work through the task step by step:
 8. Select the best solution out of those you evaluated.
 9. For the best solution, if any of the quality control scores are under 0.9, refine and improve the solution until each score is 0.9 or above.
 10. Write the complete specfications for how to implement the resulting solution to the file SPEC.md (put it in the same directory as the file for this prompt), optimized for Claude Code to use it to implement the code when I'm ready for you to do that (don't implement the solution yet). I may hand-edit the file before asking you to implement the solution described in the specifications.  This file will also serve as a record for both Claude Code and humans for what was decided and why, but it will not be a primary source of documentation.  The file should include:
-    * What tests should be written and exercised as a part of the implementation to ensure the functionality implemented in the stage is correct and doesn't break in the future. Include all types of tests that are appropriate for what the current stage implements (e2e, integration, support, unit, other) and what each one should test. The tests must **extend the existing harness and honor its hard safety constraints** -- do not invent a parallel testing approach.
+    * Per the "Test creation" section below, what tests should be written and exercised as a part of the implementation to ensure the functionality implemented in the stage is correct and doesn't break in the future. Include all types of tests that are appropriate for what the current stage implements (e2e, integration, support, unit, other) and what each one should test. The tests must **extend the existing harness and honor its hard safety constraints** -- do not invent a parallel testing approach.
     * Concrete, verifiable acceptance criteria that mark the implementation complete: the exact commands to run and the observable outcomes that mean "done". Include test suite runs, linting, checking, and formatting.
     * Any updates that should be made to README.md or existing documentation in the repo as a part of implmentation
     * Any updates that should be made to CLAUDE.md as a result of what was implemented/changed. Keep CLAUDE.md focused on things that you can't easily learn by looking at the code, as well as anything that is necessary to prevent you from making mistakes during future sessions.
@@ -66,6 +66,33 @@ When evaluating a solution to compare it to other solutions, rate the solution u
 - Clarity
 
 If any score is below 0.9, refine your solution.
+
+# Test creation
+
+Design and include specifications for the appropriate tests to create for the change(s)
+described above, following the existing harness in `tests/` (see `tests/README.md` and 
+`development/2026-07-04-test-harness/SPEC.md`):
+
+1. Pick the right tier(s) by what changed:
+   - pure/in-process logic → `tests/unit/` (add a Hypothesis property test if the function is
+     pure and has an invariant worth fuzzing);
+   - anything going through `run_terminus`/WP/Drush, the DB, or a check hook → `tests/integration/`
+     (monkeypatch `run_terminus`, use `temp_db`);
+   - a change visible in the rendered report or the full pipeline → extend the `e2e` run and the
+     `golden` snapshot; if it changes real Pantheon interaction, add/adjust a `live` case;
+   - a rendering/CSS/template change → the `render` tier.
+2. Reuse the existing fixtures (`psh`, `reset_sc`, `temp_db`, `program_runner`, `rendered_report`,
+   `minimal_config`). Never invoke the program except via `run_program` (the `--all`/`--for-real`
+   interlock), and never run `--create-tables` or `--import-older-metrics` against the live
+   database.
+3. If the change alters Pantheon responses the offline e2e depends on, refresh fixtures with
+   `./run-tests --record` and review the diff. If it intentionally changes rendered output, run
+   `./run-tests --update-goldens` and review the snapshot diff.
+4. Run `./run-tests --fast` (and the relevant `live` cases) and confirm green. Show the output.
+
+Keep any institution-specific logic behind config flags / the `umich` plugin+check packages so the
+non-UMich path keeps working.
+
 
 # Adversarial Review
 
