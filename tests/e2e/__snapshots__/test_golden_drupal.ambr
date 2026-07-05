@@ -1,0 +1,865 @@
+# serializer version: 1
+# name: test_drupal_html_matches_golden
+  '''
+  <!DOCTYPE html>
+  <html lang="en">
+  <head><META http-equiv="Content-Type" content="text/html;"><meta content="width=device-width, initial-scale=1" name="viewport"/><meta content="IE=edge" http-equiv="X-UA-Compatible"/><meta name="x-apple-disable-message-reformatting"/>
+  	<title>Action Required: its-wws-test2: no domains connected | Pantheon Traffic Report, Mar 31, 2026</title>
+  	<style>
+    h1, h2, h3, h4 {
+      font-family: Roboto, Arial, Helvetica, sans-serif;
+      line-height: 1.15;
+      padding-top: 1em;
+      }
+  a:hover, a:focus {
+      color: #c30;
+      text-decoration: underline;
+      }
+  body { margin: 0; }
+  #bodyTable { width: 100%; }
+  #templateContainer { width: 100%; }
+  #templateHeader { width: 100%; }
+  img.banner_image, img.inline_image {
+    width: 100%;
+    height: auto;
+  }
+  img.banner_image {
+    width: 100%;
+    max-width: 610px;
+  }
+  img.chart_image {
+    width: 100%;
+  	height: auto;
+  	display: block;
+  }
+  #templateBody { width: 100%; }
+  td { font-size: 11pt; }
+  h1 { font-size: 21pt; }
+  h2 { font-size: 17pt; }
+  h3 { font-size: 15pt; }
+  /* The following table styles are adapted from code by Charlie Cathcart https://codepen.io/pixelchar/pen/rNaKLM */
+  .container {
+    margin: 5% 3%;
+    color: #000;
+    box-sizing: border-box;
+  }
+  .responsive-table {
+    width: 100%;
+    margin-bottom: 1.5em;
+    font-size: 11pt;
+    text-align: right;
+    border-spacing: 0;
+    box-sizing: inherit;
+  }
+  .responsive-table thead {
+    position: relative;
+    height: auto;
+    width: auto;
+    overflow: auto;
+    margin: 0 3%;
+    border: 0;
+    padding: 0;
+  }
+  .responsive-table thead th {
+    display: table-cell;
+    vertical-align: center;
+  }
+  .responsive-table tbody, .responsive-table tr {
+    font-size: 11pt;
+    padding: 0;
+  }
+  .responsive-table tbody { display: table-row-group; }
+  .responsive-table tr { display: table-row; }
+  .responsive-table th {
+    display: table-cell;
+    padding: 0.5em;
+    background-color: #00274C;
+    color: #fff;
+    font-weight: bold;
+    text-align: right;
+  }
+  .responsive-table th, .responsive-table td {
+    font-size: 11pt;
+    display: block;
+    padding: 0.75em 0.5em;
+    vertical-align: middle;
+  }
+  .responsive-table tbody td {
+    display: table-cell;
+    padding: 0.5em;
+    vertical-align: top;
+  }
+  .responsive-table caption {
+    font-size: 1.5em;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 1em;
+  }
+  .responsive-table tfoot {
+    font-size: 0.8em;
+    font-style: italic;
+    text-align: left;
+    margin: 0.5em 0;
+  }
+  .responsive-table tbody tr { margin: 2em 1em; }
+  .responsive-table tfoot td { display: table-cell; }
+  /* Workaround for clients that don't support nth-of-type, particularly GMail and Outlook.  The following is OK because the table will usually have 12 months. */
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr,
+  .responsive-table tbody tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr th,
+  .responsive-table tbody tr th
+  {
+    color: #000;
+    background-color: #fff;
+  }
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr,
+  .responsive-table tbody tr + tr + tr + tr,
+  .responsive-table tbody tr + tr,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr + tr + tr th,
+  .responsive-table tbody tr + tr th
+  {
+    color: #000;
+    background-color: #CCCFCA;
+  }
+  /* end workaround */
+  .responsive-table .rt-data-header { display: none; }
+  .responsive-table .rt-data { float: none; display: block; }
+  
+  .responsive-table .rt-plan { text-align: left; }
+  .responsive-table .rt-next-plan { text-align: left; }
+  .responsive-table .rt-previous-plan { text-align: left; }
+  .responsive-table .rt-overage-protection { text-align: left; }
+  .responsive-table .rt-cost-plan { text-align: left; }
+  .responsive-table .rt-cost-notes { text-align: left; }
+  
+  /* NOTE: Thunderbird strips out media queries staring in Thunderbird 78. As of Thunderbird 115 (June 2024), this has not been fixed.
+   * See https://bugzilla.mozilla.org/show_bug.cgi?id=1659362#c2
+   * A workaround is to set the Thunderbird advanced config setting mail.html_sanitize.drop_conditional_css to false. */
+  @media (max-width: 75em) {
+    .container { margin: 2em auto; }
+  }
+  @media (max-width: 62em) {
+    .responsive-table { font-size: 0.9em; }
+    .responsive-table thead {
+      position: absolute;
+      height: 1px;
+      width: 1px;
+      overflow: hidden;
+    }
+    .responsive-table thead th { display: none; }
+    .responsive-table th { display: block; text-align: left; color: #fff !important; background-color: #00274C !important; }
+    .responsive-table tbody { display: block; padding: 0; white-space: normal; }
+    .responsive-table tbody th { color: #fff !important; background-color: #00274C !important; }
+    .responsive-table tbody td { display: block; padding: 0.75em 0.5em; }
+    .responsive-table tr { display: block; padding: 0; color: #000 !important; background-color: #fff !important; }
+    .responsive-table td { display: block; }
+    /* GMail doesn't support the "content" property, so we can't insert a node before the table cell containing the contents of the data-header attribute. */
+    .responsive-table .rt-data-header { float: left; display: block; }
+    .responsive-table .rt-data { float: right; display: block; }
+    .responsive-table tfoot { font-size: 0.5em; }
+  }
+  @media (max-width: 48em) {
+    .container { margin: 2%; }
+  }
+  @media (max-width: 30em) {
+    .responsive-table th, .responsive-table td { padding: 0.5em; }
+  }
+  
+  .pill {
+    /* from https://github.com/shoelace-style/shoelace/blob/next/src/components/badge/badge.styles.ts */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    line-height: 1;
+    border-radius: 9999px;
+    border: solid 1px #000;
+    white-space: nowrap;
+    padding: 0.35em 0.6em;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: inherit;
+  }
+  .pill-primary { background-color: #00274C; color: #FFCB05; }
+  .pill-warning { background-color: #FFCB05; color: #000; }
+  /* notice based on https://codepen.io/hmps/pen/gOPeBN by Hampus Persson */
+  .notice {
+    box-sizing: border-box;
+    display: table;
+    position: relative;
+    color: #000;
+  }
+  .notice-icon-area {
+    display: table-cell;
+    vertical-align: top;
+    padding: 1em;
+    text-align: center;
+    background-color: #fff7;
+  }
+  .notice-icon-area .notice-icon {
+    font-size: 40px;
+    font-family:
+      "Apple Color Emoji",
+      "Segoe UI Emoji",
+      "Segoe UI Symbol",
+      "Noto Color Emoji",
+      "Android Emoji",
+      "EmojiSymbols",
+      "Twemoji",
+      "emojione",
+      "Symbola",
+      "Noto Sans Emoji",
+      sans-serif;
+  }
+  .notice-text {
+    display: table-cell;
+    vertical-align: middle;
+    padding: 1em;
+    font-weight: bold;
+  }
+  .notice-text p {
+    line-height: 1.2;
+    margin-top: 0.6em;
+  }
+  @media (max-width: 48em) {
+    .notice { margin: 1em auto 0; }
+    .notice-icon-area { padding: 0.5em; }
+    .notice-icon-area .notice-icon { font-size: 21px; }
+  }
+  	</style>
+  </head>
+  <body bgcolor="#ffffff">
+  <table align="center" border="0" cellpadding="0" cellspacing="0" id="bodyTable" width="100%" role="presentation">
+  	<tbody>
+  		<tr>
+  			<td align="center" id="bodyCell" valign="top">
+  			<table border="0" cellpadding="0" cellspacing="0" id="templateContainer" width="100%" role="presentation">
+  				<tbody>
+  					<tr>
+  						<td align="center" valign="top">
+  						<table bgcolor="#00274c" border="0" cellpadding="0" cellspacing="0" id="templateHeader" width="100%" role="presentation">
+  							<tbody>
+  								<tr>
+  									<td class="headerContainer" valign="top">
+  									<table border="0" cellpadding="0" cellspacing="30" width="100%">
+  										<tbody>
+  											<tr>
+                                                  <td valign="top">
+                                                      <a href="https://its.umich.edu/" target="_blank"><img alt="U-M Information and Technology Services" class="banner_image" src="cid:NORMALIZED" style="display:block;" width="610px" /></a>
+                                                  </td>
+  											</tr>
+  										</tbody>
+  									</table>
+  									</td>
+  								</tr>
+  							</tbody>
+  						</table>
+  						</td>
+  					</tr>
+  					<tr>
+  						<td align="center" valign="top">
+  						<table bgcolor="#ffffff" border="0" cellpadding="0" cellspacing="30" id="templateBody" width="100%" role="presentation">
+  							<tbody>
+  								<tr>
+  									<td valign="top">
+  									<table border="0" cellpadding="0" cellspacing="0" width="100%">
+  										<tbody>
+  											<tr>
+  												<td valign="top" style="font-size:11pt; font-family:Roboto,Arial,Helvetica,sans-serif; color:#333333; line-height:1.45;">
+  <!-- Start email content -->
+  
+  
+  <p><span style="font-weight: 700; background-color: palegreen;"> [ This is a test report that will actually go to test-owner1@umich.edu, test-owner2@umich.edu when it is sent for real. ] </span></p>
+  
+  
+  <p>You are receiving this email because you own a <a href="https://its.umich.edu/computing/web-mobile/pantheon">U-M Pantheon website</a>, <strong>its-wws-test2</strong>.   You will  receive this report at the start of each month to help you keep track of what is happening with your website.</p>
+  <p>You can manage this website through the <a href="https://admin.webservices.umich.edu/sites/0/detail/">ITS Web Hosting Services Portal</a>, and <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">obtain support through either Pantheon or ITS</a>.</p>
+  
+  
+  <h1>Notices</h1>
+  
+  <div class="notice notice-type-alert">
+    <div class="notice-icon-area"><span class="notice-icon">&#x1F6A8;</span></div>
+    <div class="notice-text">
+                  <p>its-wws-test2 is on a paid plan but does not have any custom domains connected.  Either connect
+                  a domain through which people will access the site or downgrade the site's plan to Sandbox to save
+                  money.</p>
+                  </div>
+  </div>
+  
+  <div class="notice notice-type-warning">
+    <div class="notice-icon-area"><span class="notice-icon">&#x26A0;</span></div>
+    <div class="notice-text">
+  <p><strong>its-wws-test2</strong> has 12 pending add-on updates.</p>
+  <p>Please update these add-ons in the site's Dev environment and
+  <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+  Uninstall any add-ons you are not using to improve your site's security, size, and speed.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">ID</th><th class="rt-plan">Name</th><th class="rt-plan">Type</th><th class="rt-plan">Current version</th><th class="rt-plan">New version</th></thead>
+  <tbody>
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">drupal/core</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://www.drupal.org/sa-core-2025-004">Drupal core - Cross Site Scripting - SA-CORE-2025-004</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2025-007">Drupal core - Defacement - SA-CORE-2025-007</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2025-008">Drupal core - Information disclosure - SA-CORE-2025-008</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2025-005">Drupal core - Denial of Service - SA-CORE-2025-005</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2025-006">Drupal core - Gadget chain - SA-CORE-2025-006</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-001">Drupal core - Cross-site scripting - SA-CORE-2026-001</a>, (CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-002">Drupal core - Gadget Chain - SA-CORE-2026-002</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-004">Drupal core - SQL injection - SA-CORE-2026-004</a>, (HIGHLY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-007">Drupal core - Cache poisoning and open redirect - SA-CORE-2026-007</a>, (LESS CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-008">Drupal core - Server-side request forgery - SA-CORE-2026-008</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-009">Drupal core - Improper validation - SA-CORE-2026-009</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-005">Drupal core - PHP object injection - SA-CORE-2026-005</a>, (CRITICAL)<br /><br />
+  <a href="https://www.drupal.org/sa-core-2026-006">Drupal core - Gadget chain - SA-CORE-2026-006</a>, (MODERATELY CRITICAL)<br /><br />
+  <a href="https://github.com/advisories/GHSA-ghwc-95x2-682j">Drupal Core has a SQL Injection issue</a>, (CRITICAL)<br /><br />
+  <a href="https://github.com/advisories/GHSA-f3cj-mjqm-fhvj">Drupal core is Vulnerable to Cross-Site Scripting</a>, (MEDIUM)<br /><br />
+  <a href="https://github.com/advisories/GHSA-xmjc-63pr-2mpg">Drupal core allows Object Injection</a>, (MEDIUM)<br /><br />
+  <a href="https://github.com/advisories/GHSA-mhpg-hpj5-73r2">Drupal core allows Exploiting Incorrectly Configured Access Control Security Levels</a>, (LOW)<br /><br />
+  <a href="https://github.com/advisories/GHSA-h89p-5896-f4q8">Drupal core allows Content Spoofing</a>, (LOW)<br /><br />
+  <a href="https://github.com/advisories/GHSA-83v7-c2cf-p9c2">Drupal core allows Forceful Browsing</a>, (LOW)<br /><br />
+  <a href="https://github.com/advisories/GHSA-m6vv-vcj8-w8m7">Drupal core allows Object Injection</a>, (MEDIUM)<br /><br />
+  <a href="https://github.com/advisories/GHSA-m4wj-hhwj-47qp">Drupal Core Cross-Site Scripting (XSS) Vulnerability</a>, (LOW)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">10.4.3</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">10.6.12</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">guzzlehttp/guzzle</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://github.com/guzzle/guzzle/security/advisories/GHSA-cwxw-98qj-8qjx">Dot-only cookie domains match all hosts</a>, (MEDIUM)<br /><br />
+  <a href="https://github.com/guzzle/guzzle/security/advisories/GHSA-wpwq-4j6v-78m3">Silent HTTPS proxy downgrade to cleartext</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">7.9.2</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">7.12.3</div></td>
+  </tr>
+  
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">guzzlehttp/psr7</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://github.com/guzzle/psr7/security/advisories/GHSA-vm85-hxw5-5432">CRLF injection in HTTP start-line serialization</a>, (MEDIUM)<br /><br />
+  <a href="https://github.com/guzzle/psr7/security/advisories/GHSA-hq7v-mx3g-29hw">CRLF injection via URI host component</a>, (MEDIUM)<br /><br />
+  <a href="https://github.com/guzzle/psr7/security/advisories/GHSA-34xg-wgjx-8xph">Host confusion via authority reinterpretation</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">2.7.0</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">2.12.3</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">psy/psysh</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://github.com/advisories/GHSA-4486-gxhx-5mg7">PsySH has Local Privilege Escalation via CWD .psysh.php auto-load</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v0.12.7</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v0.12.24</div></td>
+  </tr>
+  
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/http-foundation</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://symfony.com/cve-2026-48736">CVE-2026-48736: IpUtils::PRIVATE_SUBNETS Omits IPv6 Transition Forms (6to4, NAT64, Teredo, IPv4-compatible): SSRF Bypass in NoPrivateNetworkHttpClient</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/blog/cve-2025-64500-incorrect-parsing-of-path-info-can-lead-to-limited-authorization-bypass">CVE-2025-64500: Incorrect parsing of PATH_INFO can lead to limited authorization bypass</a>, (HIGH)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v6.4.18</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v6.4.42</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/mailer</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://symfony.com/cve-2026-45068">CVE-2026-45068: Argument Injection in SendmailTransport via Dash-Prefixed Recipient Address</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v6.4.18</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v6.4.40</div></td>
+  </tr>
+  
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/mime</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://symfony.com/cve-2026-45070">CVE-2026-45070: Email Header Injection via Non-Token Characters in Mime Parameter Names</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/cve-2026-45067">CVE-2026-45067: Email Header / SMTP Command Injection via CRLF in Symfony\Component\Mime\Address</a>, (HIGH)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v6.4.19</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v6.4.41</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/polyfill-intl-idn</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://symfony.com/cve-2026-46644">CVE-2026-46644: symfony/polyfill-intl-idn accepts xn-- labels whose Punycode payload decodes to ASCII-only: insecure equivalence</a>, (LOW)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v1.31.0</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v1.38.1</div></td>
+  </tr>
+  
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/process</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://github.com/advisories/GHSA-r39x-jcww-82v6">Symfony&#x27;s incorrect argument escaping under MSYS2/Git Bash can lead to destructive file operations on Windows</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v6.4.19</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v6.4.41</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/routing</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://symfony.com/cve-2026-48784">CVE-2026-48784: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` → Generated URL Collapses Off-Route Under RFC 3986 Normalization</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/cve-2026-45065">CVE-2026-45065: UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation → Off-Site //host URL Injection</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v6.4.18</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v6.4.41</div></td>
+  </tr>
+  
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">symfony/yaml</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://symfony.com/cve-2026-45304">CVE-2026-45304: YAML Parser Exponential Memory Allocation via Recursive Collection-Alias Expansion (&quot;Billion Laughs&quot;)</a>, (LOW)<br /><br />
+  <a href="https://symfony.com/cve-2026-45305">CVE-2026-45305: YAML Parser ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex</a>, (LOW)<br /><br />
+  <a href="https://symfony.com/cve-2026-45133">CVE-2026-45133: YAML Parser Stack Exhaustion via Unbounded Recursion in Nested Blocks, Sequences, and Mappings</a>, (LOW)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v6.4.18</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v6.4.42</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">twig/twig</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan"><a href="https://github.com/advisories/GHSA-529h-vh3j-85hq">Twig: Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders for a cached `Template`</a>, (HIGH)<br /><br />
+  <a href="https://symfony.com/blog/cve-2026-48808-sandbox-property-allowlist-bypass-via-the-column-filter-under-sourcepolicyinterface">Sandbox property allowlist bypass via the `column` filter under `SourcePolicyInterface`</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/blog/cve-2026-48805-sandbox-state-regression-in-deprecated-internal-wrappers-in-src-resources-core-php">Sandbox state regression in deprecated internal wrappers in `src/Resources/core.php`</a>, (LOW)<br /><br />
+  <a href="https://symfony.com/blog/cve-2026-46636-sandbox-filter-tag-and-function-allow-list-bypass-when-sandbox-state-changes-between-renders">Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders</a>, (UNKNOWN)<br /><br />
+  <a href="https://symfony.com/blog/cve-2026-48806-sandbox-tostring-policy-bypass-via-dynamic-mapping-keys">Sandbox `__toString()` policy bypass via dynamic mapping keys</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/blog/cve-2026-48807-sandbox-tostring-policy-bypass-via-traversable-in-join-replace-and-in-not-in-operators">Sandbox `__toString()` policy bypass via `Traversable` in `join`/`replace` and `in`/`not in` operators</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/cve-2026-46640">Arbitrary PHP code execution via `_self.(&lt;string&gt;)` macro-reference compilation</a>, (HIGH)<br /><br />
+  <a href="https://symfony.com/cve-2026-46628">The `spaceless` filter implicitly marks its output as safe</a>, (LOW)<br /><br />
+  <a href="https://symfony.com/cve-2026-46633">PHP code injection via `{% use %}` template name</a>, (CRITICAL)<br /><br />
+  <a href="https://symfony.com/cve-2026-47730">XSS in profiler HtmlDumper via unescaped template and profile names</a>, (LOW)<br /><br />
+  <a href="https://symfony.com/cve-2026-46627">Sandbox does not protect against resource exhaustion</a>, (UNKNOWN)<br /><br />
+  <a href="https://symfony.com/cve-2026-46635">Sandbox property allowlist bypass via the `column` filter (array_column on objects)</a>, (LOW)<br /><br />
+  <a href="https://symfony.com/cve-2026-46638">`{% sandbox %}{% include %}` skips checkSecurity() on cached templates (incomplete fix for CVE-2024-45411)</a>, (MEDIUM)<br /><br />
+  <a href="https://symfony.com/cve-2026-24425">Possible sandbox bypass when using a source policy</a>, (HIGH)<br /><br />
+  <a href="https://symfony.com/cve-2026-47732">Sandbox: multiple `__toString()` policy bypasses via unguarded string coercion points</a>, (HIGH)<br /><br />
+  <a href="https://symfony.com/cve-2026-46634">`template_from_string()` escapes a SourcePolicy-driven sandbox via synthesized template name</a>, (MEDIUM)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">package</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">v3.19.0</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">v3.27.1</div></td>
+  </tr>
+  </tbody>
+  </table>
+  </div>
+  </div>
+  </div>
+  
+  
+  
+  
+  
+  
+  
+  <h1>Pantheon plan recommendation</h1>
+    <table style="border: 0; width: max-content; font-weight: bold;">
+      <tr><td>Pantheon website name:</td><td></td><td>its-wws-test2</td></tr>
+      <tr><td>Main URL:</td><td></td><td></td></tr>
+      <tr><td colspan=3>&nbsp;</td></tr>
+  
+      <tr><td>Current plan:</td><td></td><td>Performance Small</td></tr>
+      <tr><td>Recommended plan:</td><td></td><td>(needs 4 months more data)</td></tr>
+      <tr><td colspan=3>&nbsp;</td></tr>
+      <tr><td>Median Pantheon visitors:</td><td></td><td>(needs 4 months more data)</td></tr>
+  
+    </table>
+  
+  <p>Please look at your website's <i>Pantheon visitors</i> below &mdash; and also <a href="https://its.umich.edu/computing/web-mobile/pantheon/pricing">U-M Pantheon pricing</a> &mdash; to decide if you want to make any changes to your website's hosting plan to save money:</p>
+  <ul>
+    <li><a href="https://admin.webservices.umich.edu/sites/0/plan/">Upgrade to a higher plan</a> when you think <i>Pantheon visitors</i> will be above the red dashed line (more than "Upgrade at") in more than 50% of future months.</li>
+    
+    <li><a href="https://admin.webservices.umich.edu/sites/0/plan/">Downgrade to Basic</a> if you decide you no longer need <a href="https://its.umich.edu/computing/web-mobile/pantheon/features">Performance plan features</a>.</li>
+    
+    <li><i>This report analyzes <a href="https://docs.pantheon.io/guides/account-mgmt/traffic#how-do-you-know-if-a-visit-counts">Pantheon visitors, which are much lower than daily website visitors</a>.</i></li>
+    <li><i>These numbers are best estimates. The actual numbers on Pantheon bills will be different.</i></li>
+  </ul>
+  
+  
+  <h1>Site traffic</h1>
+  <div>
+    <img alt="Chart showing Pantheon website traffic over time.  The same data is presented in table form, below." class="chart_image" src="cid:NORMALIZED" />
+  </div>
+  
+  <div class="container">
+    <table class="responsive-table">
+      <caption>its-wws-test2 Pantheon Traffic<br /><span style="font-size: smaller;"><a href=""></a></span></caption>
+      <thead>
+        <tr>
+          
+          <th class="rt-month" scope="col">Month</th>
+          
+          <th class="rt-visitors" scope="col">Pantheon Visitors</th>
+          
+          <th class="rt-month" scope="col">Month</th>
+          
+          <th class="rt-visitors" scope="col">Pantheon Visitors</th>
+          
+          <th class="rt-plan" scope="col">Plan</th>
+          
+          <th class="rt-plan-limit" scope="col">Plan Limit</th>
+          
+          <th class="rt-overage" scope="col">Overage</th>
+          
+          <th class="rt-overage-blocks" scope="col">Overage Blocks</th>
+          
+          <th class="rt-overage-cost" scope="col">Overage Cost</th>
+          
+          <th class="rt-overage-protection" scope="col">Overage Protection</th>
+          
+          <th class="rt-upgrade-at" scope="col">Upgrade At</th>
+          
+          <th class="rt-next-plan" scope="col">Upgrade To</th>
+          
+          <th class="rt-downgrade-at" scope="col">Downgrade At</th>
+          
+          <th class="rt-previous-plan" scope="col">Downgrade To</th>
+          
+        </tr>
+      </thead>
+      <tfoot>
+        
+        <tr><td colspan="12">Traffic is as of March 31, 2026.</td></tr>
+      </tfoot>
+      <tbody>
+        
+        <tr>
+          <th class="rt-month" scope="row">March 2026</th>
+          
+          <td class="rt-visitors">
+            <div class="rt-data-header rt-visitors">Pantheon Visitors</div>
+            <div class="rt-data rt-visitors">35,960</div>
+          </td>
+          
+          <td class="rt-month">
+            <div class="rt-data-header rt-month">Month</div>
+            <div class="rt-data rt-month">March 2026</div>
+          </td>
+          
+          <td class="rt-visitors">
+            <div class="rt-data-header rt-visitors">Pantheon Visitors</div>
+            <div class="rt-data rt-visitors">35,960</div>
+          </td>
+          
+          <td class="rt-plan">
+            <div class="rt-data-header rt-plan">Plan</div>
+            <div class="rt-data rt-plan">Performance Small</div>
+          </td>
+          
+          <td class="rt-plan-limit">
+            <div class="rt-data-header rt-plan-limit">Plan Limit</div>
+            <div class="rt-data rt-plan-limit">35,000</div>
+          </td>
+          
+          <td class="rt-overage">
+            <div class="rt-data-header rt-overage">Overage</div>
+            <div class="rt-data rt-overage">960</div>
+          </td>
+          
+          <td class="rt-overage-blocks">
+            <div class="rt-data-header rt-overage-blocks">Overage Blocks</div>
+            <div class="rt-data rt-overage-blocks">1</div>
+          </td>
+          
+          <td class="rt-overage-cost">
+            <div class="rt-data-header rt-overage-cost">Overage Cost</div>
+            <div class="rt-data rt-overage-cost">$0 (<span style="font-size:smaller;">waived $40)</span></div>
+          </td>
+          
+          <td class="rt-overage-protection">
+            <div class="rt-data-header rt-overage-protection">Overage Protection</div>
+            <div class="rt-data rt-overage-protection">used 1 month, 3 months remaining</div>
+          </td>
+          
+          <td class="rt-upgrade-at">
+            <div class="rt-data-header rt-upgrade-at">Upgrade At</div>
+            <div class="rt-data rt-upgrade-at">65,000</div>
+          </td>
+          
+          <td class="rt-next-plan">
+            <div class="rt-data-header rt-next-plan">Upgrade To</div>
+            <div class="rt-data rt-next-plan">Performance Medium</div>
+          </td>
+          
+          <td class="rt-downgrade-at">
+            <div class="rt-data-header rt-downgrade-at">Downgrade At</div>
+            <div class="rt-data rt-downgrade-at">-</div>
+          </td>
+          
+          <td class="rt-previous-plan">
+            <div class="rt-data-header rt-previous-plan">Downgrade To</div>
+            <div class="rt-data rt-previous-plan">-</div>
+          </td>
+          
+        </tr>
+        
+      </tbody>
+    </table>
+  </div>
+  
+  
+    <div id="estimated-costs" class="container">
+      <table class="responsive-table">
+        <caption>its-wws-test2 Estimated Plan Costs<br /><span style="font-size: smaller;">March 31, 2026 &mdash; March 31, 2026</span></caption>
+        <tr><td><center>Cost estimates will be available once the site has five months of Pantheon traffic data.</center></td></tr>
+      </table>
+    </div>
+  
+  
+  --<br />
+  University of Michigan ITS Web Hosting Team<br />
+  <a href="mailto:webmaster@umich.edu">webmaster@umich.edu</a>
+  
+  <!-- End email content -->
+  												</td>
+  											</tr>
+  										</tbody>
+  									</table>
+  									</td>
+  								</tr>
+  							</tbody>
+  						</table>
+  						</td>
+  					</tr>
+  				</tbody>
+  			</table>
+  			</td>
+  		</tr>
+  	</tbody>
+  </table>
+  </body>
+  </html>
+  
+  '''
+# ---
+# name: test_drupal_txt_matches_golden
+  '''
+  -----------------------------------------------
+      U-M Information and Technology Services
+              https://its.umich.edu/
+  -----------------------------------------------
+  
+  
+  [ This is a test report that will actually go to
+      test-owner1@umich.edu, test-owner2@umich.edu
+  when it is sent for real. ]
+  
+  You are receiving this email because you own a U-M Pantheon
+  <https://its.umich.edu/computing/web-mobile/pantheon> website,
+  its-wws-test2,
+  
+  
+  You will receive this report at the start of each month
+  to help you keep track of what is happening with your website.
+  
+  You can manage this website through the ITS Web Hosting Services Portal
+  <https://admin.webservices.umich.edu/sites/0/detail/>
+  and obtain support through either Pantheon or ITS
+  <https://its.umich.edu/computing/web-mobile/pantheon/support>
+  
+  
+  === Notices
+  
+  - ALERT -
+  
+                  its-wws-test2 is on a paid plan but does not have
+                  any custom domains connected. Either connect a domain through
+                  which people will access the ste or downgrade the site's plan
+                  to Sandbox to save money.
+                  
+  
+  
+  - WARNING -
+  
+  its-wws-test2 has 12 pending add-on updates
+  <https://dashboard.pantheon.io/sites/acb22aef-4f92-49c0-8559-f95f6257a358#dev/code>.
+  Please update these add-ons in the site's Dev environment and deploy
+  them to the Live environment.
+  <https://docs.pantheon.io/pantheon-workflow>
+  
+  Uninstall any add-ons you are not using to improve your site's
+  security, size, and speed.
+  
+  A variety of support options are available.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+  
+  
+  * drupal/core
+    - Name: [{'title': '<a href="https://www.drupal.org/sa-core-2025-004">Drupal core - Cross Site Scripting - SA-CORE-2025-004</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2025-007">Drupal core - Defacement - SA-CORE-2025-007</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2025-008">Drupal core - Information disclosure - SA-CORE-2025-008</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2025-005">Drupal core - Denial of Service - SA-CORE-2025-005</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2025-006">Drupal core - Gadget chain - SA-CORE-2025-006</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-001">Drupal core - Cross-site scripting - SA-CORE-2026-001</a>', 'severity': 'Critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-002">Drupal core - Gadget Chain - SA-CORE-2026-002</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-004">Drupal core - SQL injection - SA-CORE-2026-004</a>', 'severity': 'Highly critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-007">Drupal core - Cache poisoning and open redirect - SA-CORE-2026-007</a>', 'severity': 'Less critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-008">Drupal core - Server-side request forgery - SA-CORE-2026-008</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-009">Drupal core - Improper validation - SA-CORE-2026-009</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-005">Drupal core - PHP object injection - SA-CORE-2026-005</a>', 'severity': 'Critical'}, {'title': '<a href="https://www.drupal.org/sa-core-2026-006">Drupal core - Gadget chain - SA-CORE-2026-006</a>', 'severity': 'Moderately critical'}, {'title': '<a href="https://github.com/advisories/GHSA-ghwc-95x2-682j">Drupal Core has a SQL Injection issue</a>', 'severity': 'critical'}, {'title': '<a href="https://github.com/advisories/GHSA-f3cj-mjqm-fhvj">Drupal core is Vulnerable to Cross-Site Scripting</a>', 'severity': 'medium'}, {'title': '<a href="https://github.com/advisories/GHSA-xmjc-63pr-2mpg">Drupal core allows Object Injection</a>', 'severity': 'medium'}, {'title': '<a href="https://github.com/advisories/GHSA-mhpg-hpj5-73r2">Drupal core allows Exploiting Incorrectly Configured Access Control Security Levels</a>', 'severity': 'low'}, {'title': '<a href="https://github.com/advisories/GHSA-h89p-5896-f4q8">Drupal core allows Content Spoofing</a>', 'severity': 'low'}, {'title': '<a href="https://github.com/advisories/GHSA-83v7-c2cf-p9c2">Drupal core allows Forceful Browsing</a>', 'severity': 'low'}, {'title': '<a href="https://github.com/advisories/GHSA-m6vv-vcj8-w8m7">Drupal core allows Object Injection</a>', 'severity': 'medium'}, {'title': '<a href="https://github.com/advisories/GHSA-m4wj-hhwj-47qp">Drupal Core Cross-Site Scripting (XSS) Vulnerability</a>', 'severity': 'low'}]
+    - Type: package
+    - Current version: 10.4.3
+    - New version:     10.6.12
+  
+  
+  * guzzlehttp/guzzle
+    - Name: [{'title': '<a href="https://github.com/guzzle/guzzle/security/advisories/GHSA-cwxw-98qj-8qjx">Dot-only cookie domains match all hosts</a>', 'severity': 'medium'}, {'title': '<a href="https://github.com/guzzle/guzzle/security/advisories/GHSA-wpwq-4j6v-78m3">Silent HTTPS proxy downgrade to cleartext</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: 7.9.2
+    - New version:     7.12.3
+  
+  
+  * guzzlehttp/psr7
+    - Name: [{'title': '<a href="https://github.com/guzzle/psr7/security/advisories/GHSA-vm85-hxw5-5432">CRLF injection in HTTP start-line serialization</a>', 'severity': 'medium'}, {'title': '<a href="https://github.com/guzzle/psr7/security/advisories/GHSA-hq7v-mx3g-29hw">CRLF injection via URI host component</a>', 'severity': 'medium'}, {'title': '<a href="https://github.com/guzzle/psr7/security/advisories/GHSA-34xg-wgjx-8xph">Host confusion via authority reinterpretation</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: 2.7.0
+    - New version:     2.12.3
+  
+  
+  * psy/psysh
+    - Name: [{'title': '<a href="https://github.com/advisories/GHSA-4486-gxhx-5mg7">PsySH has Local Privilege Escalation via CWD .psysh.php auto-load</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: v0.12.7
+    - New version:     v0.12.24
+  
+  
+  * symfony/http-foundation
+    - Name: [{'title': '<a href="https://symfony.com/cve-2026-48736">CVE-2026-48736: IpUtils::PRIVATE_SUBNETS Omits IPv6 Transition Forms (6to4, NAT64, Teredo, IPv4-compatible): SSRF Bypass in NoPrivateNetworkHttpClient</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/blog/cve-2025-64500-incorrect-parsing-of-path-info-can-lead-to-limited-authorization-bypass">CVE-2025-64500: Incorrect parsing of PATH_INFO can lead to limited authorization bypass</a>', 'severity': 'high'}]
+    - Type: package
+    - Current version: v6.4.18
+    - New version:     v6.4.42
+  
+  
+  * symfony/mailer
+    - Name: [{'title': '<a href="https://symfony.com/cve-2026-45068">CVE-2026-45068: Argument Injection in SendmailTransport via Dash-Prefixed Recipient Address</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: v6.4.18
+    - New version:     v6.4.40
+  
+  
+  * symfony/mime
+    - Name: [{'title': '<a href="https://symfony.com/cve-2026-45070">CVE-2026-45070: Email Header Injection via Non-Token Characters in Mime Parameter Names</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/cve-2026-45067">CVE-2026-45067: Email Header / SMTP Command Injection via CRLF in Symfony\\Component\\Mime\\Address</a>', 'severity': 'high'}]
+    - Type: package
+    - Current version: v6.4.19
+    - New version:     v6.4.41
+  
+  
+  * symfony/polyfill-intl-idn
+    - Name: [{'title': '<a href="https://symfony.com/cve-2026-46644">CVE-2026-46644: symfony/polyfill-intl-idn accepts xn-- labels whose Punycode payload decodes to ASCII-only: insecure equivalence</a>', 'severity': 'low'}]
+    - Type: package
+    - Current version: v1.31.0
+    - New version:     v1.38.1
+  
+  
+  * symfony/process
+    - Name: [{'title': '<a href="https://github.com/advisories/GHSA-r39x-jcww-82v6">Symfony&#x27;s incorrect argument escaping under MSYS2/Git Bash can lead to destructive file operations on Windows</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: v6.4.19
+    - New version:     v6.4.41
+  
+  
+  * symfony/routing
+    - Name: [{'title': '<a href="https://symfony.com/cve-2026-48784">CVE-2026-48784: UrlGenerator Dot-Segment Encoding Skips Every Other Chained `../` or `./` → Generated URL Collapses Off-Route Under RFC 3986 Normalization</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/cve-2026-45065">CVE-2026-45065: UrlGenerator Route-Requirement Bypass via Unanchored Regex Alternation → Off-Site //host URL Injection</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: v6.4.18
+    - New version:     v6.4.41
+  
+  
+  * symfony/yaml
+    - Name: [{'title': '<a href="https://symfony.com/cve-2026-45304">CVE-2026-45304: YAML Parser Exponential Memory Allocation via Recursive Collection-Alias Expansion (&quot;Billion Laughs&quot;)</a>', 'severity': 'low'}, {'title': '<a href="https://symfony.com/cve-2026-45305">CVE-2026-45305: YAML Parser ReDoS via Catastrophic Backtracking in Parser::cleanup() Regex</a>', 'severity': 'low'}, {'title': '<a href="https://symfony.com/cve-2026-45133">CVE-2026-45133: YAML Parser Stack Exhaustion via Unbounded Recursion in Nested Blocks, Sequences, and Mappings</a>', 'severity': 'low'}]
+    - Type: package
+    - Current version: v6.4.18
+    - New version:     v6.4.42
+  
+  
+  * twig/twig
+    - Name: [{'title': '<a href="https://github.com/advisories/GHSA-529h-vh3j-85hq">Twig: Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders for a cached `Template`</a>', 'severity': 'high'}, {'title': '<a href="https://symfony.com/blog/cve-2026-48808-sandbox-property-allowlist-bypass-via-the-column-filter-under-sourcepolicyinterface">Sandbox property allowlist bypass via the `column` filter under `SourcePolicyInterface`</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/blog/cve-2026-48805-sandbox-state-regression-in-deprecated-internal-wrappers-in-src-resources-core-php">Sandbox state regression in deprecated internal wrappers in `src/Resources/core.php`</a>', 'severity': 'low'}, {'title': '<a href="https://symfony.com/blog/cve-2026-46636-sandbox-filter-tag-and-function-allow-list-bypass-when-sandbox-state-changes-between-renders">Sandbox filter, tag and function allow-list bypass when sandbox state changes between renders</a>', 'severity': 'unknown'}, {'title': '<a href="https://symfony.com/blog/cve-2026-48806-sandbox-tostring-policy-bypass-via-dynamic-mapping-keys">Sandbox `__toString()` policy bypass via dynamic mapping keys</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/blog/cve-2026-48807-sandbox-tostring-policy-bypass-via-traversable-in-join-replace-and-in-not-in-operators">Sandbox `__toString()` policy bypass via `Traversable` in `join`/`replace` and `in`/`not in` operators</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/cve-2026-46640">Arbitrary PHP code execution via `_self.(&lt;string&gt;)` macro-reference compilation</a>', 'severity': 'high'}, {'title': '<a href="https://symfony.com/cve-2026-46628">The `spaceless` filter implicitly marks its output as safe</a>', 'severity': 'low'}, {'title': '<a href="https://symfony.com/cve-2026-46633">PHP code injection via `{% use %}` template name</a>', 'severity': 'critical'}, {'title': '<a href="https://symfony.com/cve-2026-47730">XSS in profiler HtmlDumper via unescaped template and profile names</a>', 'severity': 'low'}, {'title': '<a href="https://symfony.com/cve-2026-46627">Sandbox does not protect against resource exhaustion</a>', 'severity': 'unknown'}, {'title': '<a href="https://symfony.com/cve-2026-46635">Sandbox property allowlist bypass via the `column` filter (array_column on objects)</a>', 'severity': 'low'}, {'title': '<a href="https://symfony.com/cve-2026-46638">`{% sandbox %}{% include %}` skips checkSecurity() on cached templates (incomplete fix for CVE-2024-45411)</a>', 'severity': 'medium'}, {'title': '<a href="https://symfony.com/cve-2026-24425">Possible sandbox bypass when using a source policy</a>', 'severity': 'high'}, {'title': '<a href="https://symfony.com/cve-2026-47732">Sandbox: multiple `__toString()` policy bypasses via unguarded string coercion points</a>', 'severity': 'high'}, {'title': '<a href="https://symfony.com/cve-2026-46634">`template_from_string()` escapes a SourcePolicy-driven sandbox via synthesized template name</a>', 'severity': 'medium'}]
+    - Type: package
+    - Current version: v3.19.0
+    - New version:     v3.27.1
+  
+  
+  
+  
+  
+  
+  
+  
+  === PANTHEON PLAN RECOMMENDATION
+  
+  Pantheon website name:     its-wws-test2
+  Main URL:                  
+  
+  Current plan:              Performance Small
+  Recommended plan:          (needs 4 months more data)
+  
+  Median Pantheon visitors:  (needs 4 months more data)
+  
+  Please look at your website's "Pantheon visitors" below -- and
+  also U-M Pantheon pricing
+  <https://its.umich.edu/computing/web-mobile/pantheon/pricing> --
+  to decide if you want to make any changes to your website's hosting
+  plan to save money:
+  
+    * Upgrade to a higher plan
+      <https://admin.webservices.umich.edu/sites/0/plan/>
+      when you think "Pantheon visitors" will be greater than "Upgrade at"
+      in more than 50% of future months.
+    
+    * Downgrade to Basic
+    <https://admin.webservices.umich.edu/sites/0/plan/>
+    if you decide you no longer need Performance plan features.
+    <https://its.umich.edu/computing/web-mobile/pantheon/features>
+    
+    * NOTE: This report analyzes Pantheon visitors
+      <https://docs.pantheon.io/guides/account-mgmt/traffic#how-do-you-know-if-a-visit-counts>
+      which are much lower than daily website visitors.
+  
+    * These numbers are best estimates. The actual numbers on Pantheon bills
+      will be different.
+  
+  
+  === SITE TRAFFIC
+  
+  A chart showing Pantheon website traffic over time is available in the
+  HTML version of this email.  The data is presented in list form, below.
+  
+  its-wws-test2 Pantheon Traffic
+  
+  
+  
+  MARCH 2026
+       Pantheon Visitors:                    35,960
+                   Month:                March 2026
+       Pantheon Visitors:                    35,960
+                    Plan:         Performance Small
+              Plan Limit:                    35,000
+                 Overage:                       960
+          Overage Blocks:                         1
+            Overage Cost:           $0 (waived $40)
+      Overage Protection: used 1 month, 3 months remaining
+              Upgrade At:                    65,000
+              Upgrade To:        Performance Medium
+            Downgrade At:                         -
+            Downgrade To:                         -
+  
+  
+  Traffic is as of March 31, 2026.
+  
+  
+  its-wws-test2 Estimated Plan Costs
+  March 31, 2026 -- March 31, 2026
+  
+  Cost estimates will be available once the site has five months of
+  Pantheon traffic data.
+  
+  
+  --
+  University of Michigan ITS Web Hosting Team
+  webmaster@umich.edu
+  
+  '''
+# ---

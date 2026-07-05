@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "domain:list",
+    "acb22aef-4f92-49c0-8559-f95f6257a358.live",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "domain:list",
+    "acb22aef-4f92-49c0-8559-f95f6257a358.live",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\"live-its-wws-test2.pantheonsite.io\": {\"id\": \"live-its-wws-test2.pantheonsite.io\", \"type\": \"platform\", \"primary\": false, \"deletable\": false, \"status\": \"OK\"}}",
+  "stderr": "",
+  "recorded": "2026-07-05",
+  "_scrubbed": "custom domains removed so replay makes no live DNS calls"
+}

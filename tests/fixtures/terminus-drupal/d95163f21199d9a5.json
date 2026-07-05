@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "env:list",
+    "acb22aef-4f92-49c0-8559-f95f6257a358",
+    "--fields=id,created,domain,connection_mode,locked,initialized,php_version,php_runtime_generation",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "env:list",
+    "acb22aef-4f92-49c0-8559-f95f6257a358",
+    "--fields=id,created,domain,connection_mode,locked,initialized,php_version,php_runtime_generation",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n    \"multi2\": {\n        \"id\": \"multi2\",\n        \"created\": 1732569610,\n        \"domain\": \"multi2-its-wws-test2.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"multi1\": {\n        \"id\": \"multi1\",\n        \"created\": 1732560490,\n        \"domain\": \"multi1-its-wws-test2.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"live\": {\n        \"id\": \"live\",\n        \"created\": 1707252926,\n        \"domain\": \"live-its-wws-test2.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"test\": {\n        \"id\": \"test\",\n        \"created\": 1707252926,\n        \"domain\": \"test-its-wws-test2.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"dev\": {\n        \"id\": \"dev\",\n        \"created\": 1707252923,\n        \"domain\": \"dev-its-wws-test2.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    }\n}\n",
+  "stderr": "",
+  "recorded": "2026-07-05"
+}

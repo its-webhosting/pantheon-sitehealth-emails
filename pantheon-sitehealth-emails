@@ -773,6 +773,120 @@ def smtp_login() -> SMTP_SSL:
     return smtp_connection
 
 
+def overage_blocks(overage, overage_block_size) -> int:
+    """Number of overage blocks billed for `overage` visits (rounded to the nearest block)."""
+    return round((overage + overage_block_size / 2.0) / overage_block_size)
+
+
+def contract_year_end(report_date: datetime.date) -> bool:
+    """True if `report_date` is in the U-M contract-year-end window (June 16-29)."""
+    return report_date.month == 6 and 16 <= report_date.day < 30
+
+
+def estimate_month_visits(visits_by_month, dates, last_day, end_day) -> int:
+    """Extrapolate the final (partial) month's visits.
+
+    Returns -1 when the reporting month is complete or too early to extrapolate (i.e. not
+    ``1 < end_day < last_day``), matching the inline behavior it replaces.  ``dates`` is the
+    ordered list of month midpoints (datetime.date) whose keys index ``visits_by_month``.
+    """
+    estimate = -1
+    if last_day > end_day > 1:
+        extrapolate = (
+            visits_by_month[dates[-1].strftime("%Y-%m")] * last_day / (end_day - 1)
+        )
+        if len(visits_by_month) > 1:
+            previous_month = visits_by_month[dates[-2].strftime("%Y-%m")]
+            if last_day >= 25:
+                estimate = round(extrapolate)
+            elif last_day >= 15:
+                estimate = round((2 * extrapolate + previous_month) / 3)
+            else:
+                estimate = round((extrapolate + previous_month) / 2)
+        else:
+            estimate = round(extrapolate)
+    return estimate
+
+
+def plan_costs(
+    plan_info,
+    plan_names,
+    visits_by_month,
+    v,
+    estimate,
+    end_date_yyyy_mm,
+    site_plan_start,
+    overage_block_size,
+    overage_block_cost,
+    op_lookup,
+):
+    """Project each plan's annual cost for a site and pick per-plan cost metrics.
+
+    Pure cost model extracted from main().  ``op_lookup(month) -> PantheonOverageProtection
+    | None`` injects the overage-protection state so this function does no DB I/O.  Returns
+    ``(cost_same, costs_median, costs_best, median_visitors)``.  Only invoked when a site has
+    more than four months of data (main() leaves ``median_visitors = 0`` otherwise).
+    """
+    sc.debug("[bold magenta]=== Generating plan recommendations:")
+    sc.debug("===== future costs for same traffic")
+    cost_same = {}
+    costs_median = {}
+    for plan in plan_names:
+        cost = float(plan_info[plan]["cost"])
+        cost_by_month = []
+        cost_for_plan_months = []
+        op_remaining = 0
+        for month in visits_by_month.keys():
+            visits = visits_by_month[month]
+            if month == end_date_yyyy_mm and estimate > 0:
+                visits = estimate
+            overage = max(visits - int(plan_info[plan]["traffic_limit"]), 0)
+            overage_cost = overage_blocks(overage, overage_block_size) * overage_block_cost
+            if plan != "Basic":
+                op = op_lookup(month)
+                if op is not None:
+                    if op.used_this_month:
+                        overage_cost = 0
+                else:
+                    if month.endswith("-01"):
+                        op_remaining = 4
+                    if overage > 0 and op_remaining > 0:
+                        overage_cost = 0
+                        op_remaining -= 1
+            cost += overage_cost
+            cost_by_month.append(overage_cost)
+            if month >= site_plan_start.strftime("%Y-%m"):
+                cost_for_plan_months.append(overage_cost)
+        if len(cost_by_month) < 12:
+            cost += (12 - len(cost_by_month)) * np.median(cost_for_plan_months)
+        cost_same[plan] = cost
+        sc.debug(f"{plan}: ${cost:,.2f}")
+
+    v = list(v)
+    if estimate > 0:
+        v[-1] = estimate
+    median_visitors = np.median(v)
+    sc.debug(f"Median Pantheon visitors per month: {median_visitors:,.0f}")
+    sc.debug("===== future costs for median traffic")
+    for plan in plan_names:
+        overage = median_visitors - int(plan_info[plan]["traffic_limit"])
+        if overage < 0:
+            overage = 0
+        months_without_op = 12 if plan == "Basic" else 8
+        costs_median[plan] = (
+            float(plan_info[plan]["cost"])
+            + overage_blocks(overage, overage_block_size)
+            * overage_block_cost
+            * months_without_op
+        )
+        sc.debug(f"{plan}: ${costs_median[plan]:,.2f}")
+
+    # find best costs
+    # For each plan, we want to be conservative by picking the highest cost metric:
+    costs_best = {p: max(cost_same[p], costs_median[p]) for p in plan_names}
+    return cost_same, costs_median, costs_best, median_visitors
+
+
 def main() -> None:
 
     sc.debug(f"Loading configuration from {sc.options.config}")
@@ -900,9 +1014,7 @@ def main() -> None:
     start_date = end_date.replace(
         day=1, year=end_date.year - 1
     )  # fist day of the same month last year
-    end_of_contract_year = (
-        True if end_date.month == 6 and 16 <= end_date.day < 30 else False
-    )
+    end_of_contract_year = contract_year_end(end_date)
     sc.debug(f"Generating report for {start_date} through {end_date}")
 
     # Generate a cap shape to use at the end of the traffic surge chart bars
@@ -2614,23 +2726,8 @@ remove PHP {new_php} sometime after September 30, 2026.
         sc.debug(f"[bold magenta]=== Creating chart for {site['name']}:")
 
         # Estimate the visits for the last month if it isn't over yet:
-        estimate = -1
-        if last_day > end_date.day > 1:
-            extrapolate = (
-                visits_by_month[dates[-1].strftime("%Y-%m")]
-                * last_day
-                / (end_date.day - 1)
-            )
-            if len(visits_by_month) > 1:
-                previous_month = visits_by_month[dates[-2].strftime("%Y-%m")]
-                if last_day >= 25:
-                    estimate = round(extrapolate)
-                elif last_day >= 15:
-                    estimate = round((2 * extrapolate + previous_month) / 3)
-                else:
-                    estimate = round((extrapolate + previous_month) / 2)
-            else:
-                estimate = round(extrapolate)
+        estimate = estimate_month_visits(visits_by_month, dates, last_day, end_date.day)
+        if estimate != -1:
             estimates_by_month = visits_covered_by_month.copy()
             for month in estimates_by_month.keys():
                 estimates_by_month[month] = 0
@@ -3033,12 +3130,10 @@ remove PHP {new_php} sometime after September 30, 2026.
                 traffic_table_rows[month]["downgrade-at"] = "-"
                 traffic_table_rows[month]["previous-plan"] = "-"
             overage = max(visits_by_month[month] - traffic_limit, 0)
-            overage_blocks = round(
-                (overage + overage_block_size / 2.0) / overage_block_size
-            )
-            overage_cost = overage_blocks * overage_block_cost
+            n_blocks = overage_blocks(overage, overage_block_size)
+            overage_cost = n_blocks * overage_block_cost
             overage_text = f"{overage:,.0f}"
-            overage_blocks_text = f"{overage_blocks:,.0f}"
+            overage_blocks_text = f"{n_blocks:,.0f}"
             overage_cost_text = f"${overage_cost:,.0f}"
             overage_protection_status = "-"
             # Overage protection started retroactively on 2024-01-01
@@ -3108,69 +3203,28 @@ remove PHP {new_php} sometime after September 30, 2026.
         v = [visits_by_month[d] for d in k]
         months_until_recommendations = 0 if len(v) > 4 else 5 - len(v)
         if len(v) > 4:
-            sc.debug("[bold magenta]=== Generating plan recommendations:")
-            sc.debug("===== future costs for same traffic")
-            for plan in plan_names:
-                cost = float(plan_info[plan]["cost"])
-                cost_by_month = []
-                cost_for_plan_months = []
-                op_remaining = 0
-                for month in visits_by_month.keys():
-                    visits = visits_by_month[month]
-                    if month == end_date_yyyy_mm and estimate > 0:
-                        visits = estimate
-                    overage = max(visits - int(plan_info[plan]["traffic_limit"]), 0)
-                    overage_blocks = round(
-                        (overage + overage_block_size / 2.0) / overage_block_size
-                    )
-                    overage_cost = overage_blocks * overage_block_cost
-                    if plan != "Basic":
-                        op = db_session.get(
-                            PantheonOverageProtection,
-                            {
-                                "site_id": site["id"],
-                                "month": datetime.date.fromisoformat(month + "-01"),
-                            },
-                        )
-                        if op is not None:
-                            if op.used_this_month:
-                                overage_cost = 0
-                        else:
-                            if month.endswith("-01"):
-                                op_remaining = 4
-                            if overage > 0 and op_remaining > 0:
-                                overage_cost = 0
-                                op_remaining -= 1
-                    cost += overage_cost
-                    cost_by_month.append(overage_cost)
-                    if month >= site_plan_start.strftime("%Y-%m"):
-                        cost_for_plan_months.append(overage_cost)
-                if len(cost_by_month) < 12:
-                    cost += (12 - len(cost_by_month)) * np.median(cost_for_plan_months)
-                cost_same[plan] = cost
-                sc.debug(f"{plan}: ${cost:,.2f}")
 
-            if estimate > 0:
-                v[-1] = estimate
-            median_visitors = np.median(v)
-            sc.debug(f"Median Pantheon visitors per month: {median_visitors:,.0f}")
-            sc.debug("===== future costs for median traffic")
-            for plan in plan_names:
-                overage = median_visitors - int(plan_info[plan]["traffic_limit"])
-                if overage < 0:
-                    overage = 0
-                months_without_op = 12 if plan == "Basic" else 8
-                costs_median[plan] = (
-                    float(plan_info[plan]["cost"])
-                    + round((overage + overage_block_size / 2.0) / overage_block_size)
-                    * overage_block_cost
-                    * months_without_op
+            def op_lookup(month):
+                return db_session.get(
+                    PantheonOverageProtection,
+                    {
+                        "site_id": site["id"],
+                        "month": datetime.date.fromisoformat(month + "-01"),
+                    },
                 )
-                sc.debug(f"{plan}: ${costs_median[plan]:,.2f}")
 
-            # find best costs
-            # For each plan, we want to be conservative by picking the highest cost metric:
-            costs_best = {p: max(cost_same[p], costs_median[p]) for p in plan_names}
+            cost_same, costs_median, costs_best, median_visitors = plan_costs(
+                plan_info,
+                plan_names,
+                visits_by_month,
+                v,
+                estimate,
+                end_date_yyyy_mm,
+                site_plan_start,
+                overage_block_size,
+                overage_block_cost,
+                op_lookup,
+            )
             # find the key in costs_best with the lowest value:
             site_recommended_plan = min(costs_best, key=costs_best.get)
 

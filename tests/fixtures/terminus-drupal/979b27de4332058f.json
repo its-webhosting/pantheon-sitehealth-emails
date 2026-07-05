@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "self:info",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "self:info",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n    \"php_binary_path\": \"/usr/bin/php8.4\",\n    \"php_version\": \"8.4.23\",\n    \"php_ini\": \"/etc/php/8.4/cli/php.ini\",\n    \"project_config_path\": null,\n    \"terminus_path\": \"phar:///usr/local/bin/terminus\",\n    \"terminus_version\": \"4.3.2\",\n    \"os_version\": \"#1 SMP Thu Jun 18 21:12:39 UTC 2026\"\n}\n",
+  "stderr": "",
+  "recorded": "2026-07-05"
+}

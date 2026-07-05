@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "site:team:list",
+    "acb22aef-4f92-49c0-8559-f95f6257a358",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "site:team:list",
+    "acb22aef-4f92-49c0-8559-f95f6257a358",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\"13bb09d1-4b35-4949-ba9a-4fedbb23c918\": {\"email\": \"test-owner1@umich.edu\", \"role\": \"team_member\", \"id\": \"13bb09d1-4b35-4949-ba9a-4fedbb23c918\", \"is_owner\": false}, \"208cd53b-f09c-49b3-9f8e-91fc603082a7\": {\"email\": \"test-owner2@umich.edu\", \"role\": \"team_member\", \"id\": \"208cd53b-f09c-49b3-9f8e-91fc603082a7\", \"is_owner\": true}}",
+  "stderr": "",
+  "recorded": "2026-07-05",
+  "_scrubbed": "real team emails replaced with test-owner{1,2}@umich.edu"
+}

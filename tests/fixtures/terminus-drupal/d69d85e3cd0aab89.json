@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "drush",
+    "acb22aef-4f92-49c0-8559-f95f6257a358.live",
+    "--",
+    "core-status",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "drush",
+    "acb22aef-4f92-49c0-8559-f95f6257a358.live",
+    "--",
+    "core-status",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n    \"drupal-version\": \"10.4.3\",\n    \"uri\": \"http://live-its-wws-test2.pantheonsite.io\",\n    \"db-driver\": \"mysql\",\n    \"db-hostname\": \"dbhost\",\n    \"db-port\": \"6033\",\n    \"db-username\": \"5af75119021243599d9ca9ae3943bf8b\",\n    \"db-password\": \"0n1oy1ousCHm58VqVJfVqqmgi81BKxgC\",\n    \"db-name\": \"pantheon\",\n    \"db-status\": \"Connected\",\n    \"bootstrap\": \"Successful\",\n    \"theme\": \"umami\",\n    \"admin-theme\": \"claro\",\n    \"php-bin\": \"/usr/bin/php8.2\",\n    \"php-conf\": [\n        \"/etc/php/8.2/cli/php.ini\"\n    ],\n    \"php-os\": \"Linux\",\n    \"php-version\": \"8.2.31\",\n    \"drush-script\": \"/code/vendor/bin/drush\",\n    \"drush-version\": \"12.5.3.0\",\n    \"drush-temp\": \"/tmp\",\n    \"drush-conf\": [\n        \"/.drush/drush.yml\",\n        \"/code/vendor/drush/drush/drush.yml\"\n    ],\n    \"drush-alias-files\": [],\n    \"alias-searchpaths\": [],\n    \"install-profile\": \"demo_umami\",\n    \"root\": \"/code/web\",\n    \"drupal-settings-file\": \"sites/default/settings.php\",\n    \"site\": \"sites/default\",\n    \"themes\": \"sites/all/themes\",\n    \"modules\": \"sites/all/modules\",\n    \"files\": \"sites/default/files\",\n    \"private\": \"sites/default/files/private\",\n    \"temp\": \"/tmp\",\n    \"config-sync\": \"../config/sync\",\n    \"%paths\": {\n        \"%root\": \"/code/web\",\n        \"%site\": \"sites/default\",\n        \"%modules\": \"sites/all/modules\",\n        \"%themes\": \"sites/all/themes\",\n        \"%config-sync\": \"../config/sync\",\n        \"%files\": \"sites/default/files\",\n        \"%temp\": \"/tmp\",\n        \"%private\": \"sites/default/files/private\"\n    }\n}\n",
+  "stderr": "2026-07-05 12:59:32 UTC[+0000] [notice] Command: its-wws-test2.live -- drush core-status [Exit: 0] (Attempt 1/1)\n",
+  "recorded": "2026-07-05"
+}

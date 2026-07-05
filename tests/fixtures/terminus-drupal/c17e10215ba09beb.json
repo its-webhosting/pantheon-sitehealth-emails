@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "drush",
+    "acb22aef-4f92-49c0-8559-f95f6257a358.live",
+    "--",
+    "php:script",
+    "--format=json",
+    "-"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "drush",
+    "acb22aef-4f92-49c0-8559-f95f6257a358.live",
+    "--",
+    "php:script",
+    "--format=json",
+    "-"
+  ],
+  "returncode": 0,
+  "stdout": "{\"result\":\"Drupal (+https:\\/\\/drupal.org\\/); UMich; https:\\/\\/wws-test2.cdn-dev.it.umich.edu\\/\"}",
+  "stderr": "2026-07-05 12:59:59 UTC[+0000] [notice] Command: its-wws-test2.live -- drush php:script [Exit: 0] (Attempt 1/1)\n",
+  "recorded": "2026-07-05"
+}

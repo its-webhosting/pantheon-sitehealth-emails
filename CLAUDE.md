@@ -157,13 +157,29 @@ Non-obvious things the harness relies on:
   for in-process tests, or use the PATH-shim fake `terminus` (`tests/shims/terminus`, record/replay)
   for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
 - **Safety interlock.** `run_program()` in conftest is the only sanctioned way to run the program
-  in a subprocess; it raises `ForbiddenFlagError` if `--all`/`-a`/`--for-real` appear. Never
-  bypass it. Tests use only `its-wws-test1`/`its-wws-test2`, read-only.
+  in a subprocess; it raises `ForbiddenFlagError` if `--all`/`-a`/`--for-real` appear, and
+  `ForbiddenLiveDataError` if `--create-tables`/`--import-older-metrics` would run live or against
+  a non-fixture config (a config-**path** allowlist, not a backend-type test — the production
+  default DB is also sqlite). Never bypass it. Tests use only `its-wws-test1`/`its-wws-test2`,
+  read-only.
+- **Pure-helper seam.** Four pure functions were extracted from `main()` as module-level defs so
+  they're importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
+  `estimate_month_visits`, and `plan_costs` (the cost model — DB-free via an injected
+  `op_lookup(month)`; the U-M downgrade guardrails/notices remain inline in `main()` for the later
+  de-monolith stage). The extraction is behavior-preserving (WordPress golden byte-identical).
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
   and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots
-  normalize the volatile `make_msgid` CIDs; refresh with `./run-tests --update-goldens`. Refresh
-  terminus fixtures with `./run-tests --record` (trims org list to the test site, scrubs emails).
+  normalize the volatile `make_msgid` CIDs; refresh with `./run-tests --update-goldens`. There are
+  two goldens: WordPress (`its-wws-test1`, fixtures in `tests/fixtures/terminus/`) and Drupal
+  (`its-wws-test2`, `tests/fixtures/terminus-drupal/`, selected via `run_program(fixtures_dir=…)`).
+  Refresh WordPress fixtures with `./run-tests --record`, Drupal with `python tests/tools/record.py
+  --drupal` (both trim the org list to the one test site and scrub team emails).
+- **The offline golden only reaches the ≤4-month "not enough data" state** (its recorded metrics
+  fall after the March report date), so the extracted `plan_costs` cost model is exercised
+  end-to-end by `tests/e2e/test_recommendation_e2e.py` (seeds >4 in-window months) plus its
+  unit/property tests — not by the golden. The render tier vendors axe-core locally
+  (`tests/vendor/axe.min.js`) so it stays offline.
 - **The reusable (non-UMich) path had latent bugs** that production never hit because U-M always
   runs with the UMich plugin enabled. Several U-M-specific code paths in the core script are not
   yet behind the `[UMich].enabled` flag; the planned refactor should move them out. When adding

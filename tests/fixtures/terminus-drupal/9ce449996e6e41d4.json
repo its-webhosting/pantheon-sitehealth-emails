@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "org:site:list",
+    "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "org:site:list",
+    "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\"acb22aef-4f92-49c0-8559-f95f6257a358\": {\"name\": \"its-wws-test2\", \"id\": \"acb22aef-4f92-49c0-8559-f95f6257a358\", \"plan_name\": \"Performance Small\", \"framework\": \"drupal8\", \"owner\": \"208cd53b-f09c-49b3-9f8e-91fc603082a7\", \"created\": 1707252923, \"tags\": \"Content Publisher\", \"frozen\": false}}",
+  "stderr": "",
+  "recorded": "2026-07-05",
+  "_scrubbed": "trimmed to the test site only (raw call returns all org sites)"
+}

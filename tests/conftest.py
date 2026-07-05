@@ -56,6 +56,13 @@ class ForbiddenFlagError(RuntimeError):
     """Raised by run_program() when a test tries to pass --all/-a/--for-real."""
 
 
+class ForbiddenLiveDataError(RuntimeError):
+    """Raised by run_program() when --create-tables/--import-older-metrics could run against a
+    non-fixture config (possibly the production DB).  This is a config-PATH allowlist check,
+    NOT a backend-type test: the program's production default DB is also sqlite, so an
+    'is it sqlite?' test would fail open (SPEC 2026-07-04-test-suite Part C, constraint C2)."""
+
+
 class FixtureNotFoundError(FileNotFoundError):
     """Raised when a required committed fixture is missing."""
 
@@ -171,6 +178,12 @@ E2E_DATE = "2026-03-31"
 E2E_SMTP_USERNAME = "testuser"  # fixes the dev-mode To: header for a stable golden
 MINIMAL_CONFIG = CONFIG_DIR / "minimal.toml"
 
+# A real Drupal test site (drush path), recorded into its own fixture dir so the WordPress
+# fixtures above are never disturbed.
+E2E_SITE2 = "its-wws-test2"
+E2E_SITE2_ID = "acb22aef-4f92-49c0-8559-f95f6257a358"
+TERMINUS_FIXTURES_DRUPAL = FIXTURES / "terminus-drupal"
+
 # make_msgid() produces a fresh CID per run; normalize all of them for golden stability.
 _CID_RE = re.compile(r"cid:[^\"'\s>]+")
 
@@ -200,31 +213,47 @@ def seed_traffic(db_path, *, site_id=E2E_SITE_ID, year=2026, month=3,
         con.close()
 
 
-def build_rendered_report(work):
+def build_rendered_report(work, *, site=E2E_SITE, site_id=E2E_SITE_ID, fixtures_dir=None):
     """Run the full offline shim-backed pipeline in `work`; return the CompletedProcess.
 
     Creates the schema, seeds deterministic traffic, then renders the report.  Raises
-    ForbiddenFlagError via run_program if a forbidden flag ever slips in.
+    ForbiddenFlagError via run_program if a forbidden flag ever slips in.  `site`/`site_id`/
+    `fixtures_dir` select the site to render and which recorded fixtures to replay.
     """
     # --create-tables exits non-zero by design (sys.exit("Tables created.")); just ensure
     # the schema file appears.
     run_program(
         ["--create-tables", "--config", MINIMAL_CONFIG],
         cwd=work,
+        fixtures_dir=fixtures_dir,
     )
     db_path = work / "test.db"
     if not db_path.exists():
         raise FixtureNotFoundError(f"--create-tables did not create {db_path}")
-    seed_traffic(db_path)
+    seed_traffic(db_path, site_id=site_id)
     return run_program(
         [
-            E2E_SITE,
+            site,
             "--date", E2E_DATE,
             "--smtp-username", E2E_SMTP_USERNAME,
             "--config", MINIMAL_CONFIG,
         ],
         cwd=work,
+        fixtures_dir=fixtures_dir,
     )
+
+
+def _rendered_artifacts(work, proc, site):
+    build = work / "build"
+    return {
+        "work": work,
+        "proc": proc,
+        "build": build,
+        "html": build / f"{site}.html",
+        "txt": build / f"{site}.txt",
+        "eml": build / f"{site}.eml",
+        "inline2": build / f"{site}-inline2.html",
+    }
 
 
 @pytest.fixture(scope="session")
@@ -232,21 +261,29 @@ def rendered_report(tmp_path_factory):
     """Session-scoped: run the offline pipeline once for the whole suite; expose artifacts."""
     work = make_workdir(tmp_path_factory.mktemp("rendered"))
     proc = build_rendered_report(work)
-    build = work / "build"
-    return {
-        "work": work,
-        "proc": proc,
-        "build": build,
-        "html": build / f"{E2E_SITE}.html",
-        "txt": build / f"{E2E_SITE}.txt",
-        "eml": build / f"{E2E_SITE}.eml",
-        "inline2": build / f"{E2E_SITE}-inline2.html",
-    }
+    return _rendered_artifacts(work, proc, E2E_SITE)
+
+
+@pytest.fixture(scope="session")
+def rendered_report_drupal(tmp_path_factory):
+    """Session-scoped: the Drupal (drush path) offline render for its-wws-test2."""
+    work = make_workdir(tmp_path_factory.mktemp("rendered-drupal"))
+    proc = build_rendered_report(
+        work, site=E2E_SITE2, site_id=E2E_SITE2_ID, fixtures_dir=TERMINUS_FIXTURES_DRUPAL
+    )
+    return _rendered_artifacts(work, proc, E2E_SITE2)
 
 
 # ── The one sanctioned way to run the program ───────────────────────────────────────
 # The dangerous long options whose argparse abbreviations must also be blocked.
 _FORBIDDEN_LONG = ("--all", "--for-real")
+
+# Flags that create/modify the traffic database.  They must only ever run offline against a
+# throwaway fixture DB — never the production config/DB (constraint C2).
+OFFLINE_ONLY_DATA_FLAGS = ("--create-tables", "--import-older-metrics")
+# A --config is treated as a safe test fixture only if it resolves under one of these roots
+# (plus the run's own cwd).  Path allowlist, never a backend-type test.
+_CONFIG_ALLOWLIST_ROOTS = (CONFIG_DIR,)
 
 
 def _forbidden_msg(token):
@@ -279,18 +316,95 @@ def _assert_flags_allowed(args):
             raise ForbiddenFlagError(_forbidden_msg(token))
 
 
-def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300):
+def _resolve_config_arg(args, cwd):
+    """Return the realpath of the effective --config/-c value, or None if not supplied.
+
+    Must mirror argparse's option parsing exactly, including stopping at ``--`` (everything
+    after it is positional): otherwise the guard could validate a config the program ignores
+    and fall open (a post-``--`` --config satisfying the allowlist while argparse uses the
+    default production config)."""
+    value = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--":
+            break  # everything after "--" is positional, not an option — argparse ignores it
+        if arg in ("--config", "-c"):
+            value = args[i + 1] if i + 1 < len(args) else None
+            i += 2
+            continue
+        if arg.startswith("--config="):
+            value = arg.split("=", 1)[1]
+        elif arg.startswith("-c="):
+            value = arg.split("=", 1)[1]
+        i += 1
+    if value is None:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = Path(cwd) / path
+    return os.path.realpath(path)
+
+
+def _assert_offline_data_flags(args, mode, cwd):
+    """Fail closed if --create-tables/--import-older-metrics could touch the production DB.
+
+    Refused whenever the run is live, or the effective --config does not resolve under the
+    fixture allowlist (or the run's cwd).  Deliberately a config-PATH check, not a
+    backend-type test — the production default DB is also sqlite (constraint C2).
+    """
+    dangerous = None
+    for arg in args:
+        if arg == "--":
+            break
+        token = arg.split("=", 1)[0]
+        for flag in OFFLINE_ONLY_DATA_FLAGS:
+            if token == flag or (
+                token.startswith("--") and len(token) > 2 and flag.startswith(token)
+            ):
+                dangerous = token
+                break
+        if dangerous:
+            break
+    if not dangerous:
+        return
+    if mode == "live":
+        raise ForbiddenLiveDataError(
+            f"refusing to run {dangerous!r} in live mode: it may create/modify the "
+            "production database (constraint C2)."
+        )
+    config_path = _resolve_config_arg(args, cwd)
+    allowed_roots = [os.path.realpath(root) for root in _CONFIG_ALLOWLIST_ROOTS]
+    allowed_roots.append(os.path.realpath(cwd))
+    if config_path is None or not any(
+        config_path == root or config_path.startswith(root + os.sep)
+        for root in allowed_roots
+    ):
+        raise ForbiddenLiveDataError(
+            f"refusing to run {dangerous!r} with config {config_path!r}: not under a test "
+            "fixture allowlist (a config-path check, not a backend-type test; the production "
+            "default DB is also sqlite) (constraint C2)."
+        )
+
+
+def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300, fixtures_dir=None):
     """Run ./pantheon-sitehealth-emails as a subprocess through the terminus shim.
 
-    Raises ForbiddenFlagError (before exec) if args contain --all/-a/--for-real.
+    Raises ForbiddenFlagError (before exec) if args contain --all/-a/--for-real, or
+    ForbiddenLiveDataError if --create-tables/--import-older-metrics could hit the
+    production DB (live mode or a non-fixture config).  `fixtures_dir` selects the shim's
+    record/replay directory (defaults to the WordPress fixtures).
     Returns a subprocess.CompletedProcess.
     """
     args = [str(a) for a in args]
     _assert_flags_allowed(args)
+    _assert_offline_data_flags(args, mode, cwd)
 
     env = dict(os.environ)
     env["PATH"] = f"{SHIM_DIR}{os.pathsep}{env.get('PATH', '')}"
-    env["TERMINUS_SHIM_DIR"] = str(TERMINUS_FIXTURES)
+    env["TERMINUS_SHIM_DIR"] = str(
+        fixtures_dir if fixtures_dir is not None else TERMINUS_FIXTURES
+    )
     env["TERMINUS_SHIM_MODE"] = mode
     env["TERMINUS_SHIM_REAL"] = REAL_TERMINUS
     env["MPLBACKEND"] = "Agg"
@@ -318,6 +432,13 @@ def forbidden_flag_error():
     """The exception class run_program raises — exposed as a fixture so tests match the
     exact class object pytest loaded (avoids the conftest double-import identity trap)."""
     return ForbiddenFlagError
+
+
+@pytest.fixture
+def forbidden_live_data_error():
+    """The exception run_program raises for live/non-fixture --create-tables/--import-older-
+    metrics (exposed as a fixture for the same identity reason as forbidden_flag_error)."""
+    return ForbiddenLiveDataError
 
 
 @pytest.fixture

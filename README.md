@@ -208,8 +208,19 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
+* update prompt template, fix problems identified when implementing test suite
 * update CLAUDE.md again (prompt)
 * add SendGrid support as an additional option to SMTP
+  * add an `env` plugin: config file example for Cloudflare: `member_api_key = "<{env CLOUDFLARE_API_KEY}"`, move appropropriate env var checks in the code to then use the config, creating new config items as needed
+      * AWS_ACCESS_KEY_ID, defaults to `<{env AWS_ACCESS_KEY_ID}`
+      * AWS_SECRET_ACCESS_KEY, defaults to `<{env AWS_SECRET_ACCESS_KEY}`
+      * SMTP_PASSWORD, defaults to `<{env SMTP_PASSWORD}`
+      * SMTP_USERNAME, defaults to `<{env USER}`, overridable via `--smtp-username` command line option
+      * Config accepts/uses *either* CLOUDFLARE_API_TOKEN (preferred, if present) or CLOUDFLARE_API_KEY + CLOUDFLARE_API_EMAIL.
+        * CLOUDFLARE_API_KEY, defaults to `<{env CLOUDFLARE_API_KEY}`
+        * CLOUDFLARE_API_EMAIL, defaults to `<{env CLOUDFLARE_API_EMAIL}`
+        * CLOUDFLARE_API_TOKEN, defaults to `<{env CLOUDFLARE_API_TOKEN}`
+  * make sure Claude can use Chrome / headless chrome as installed in the container, together with Chrome DevTools Integration
   * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
 * fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add cf-cache-status, cache-control checks
