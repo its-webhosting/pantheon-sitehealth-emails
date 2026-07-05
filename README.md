@@ -208,10 +208,10 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* update prompt template, fix problems identified when implementing test suite
+* fix prompting permissions problem
 * update CLAUDE.md again (prompt)
 * add SendGrid support as an additional option to SMTP
-  * add an `env` plugin: config file example for Cloudflare: `member_api_key = "<{env CLOUDFLARE_API_KEY}"`, move appropropriate env var checks in the code to then use the config, creating new config items as needed
+  * add an `env` plugin: config file example for Cloudflare: `member_api_key = "<{env CLOUDFLARE_API_KEY}"`, move appropriate env var checks in the code to then use the config, creating new config items as needed
       * AWS_ACCESS_KEY_ID, defaults to `<{env AWS_ACCESS_KEY_ID}`
       * AWS_SECRET_ACCESS_KEY, defaults to `<{env AWS_SECRET_ACCESS_KEY}`
       * SMTP_PASSWORD, defaults to `<{env SMTP_PASSWORD}`
@@ -232,6 +232,7 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
     * AWS credentials (set in environment for now)
 * rework everything from ~3,700 line script into a combination of plugins and other Python files/packages
 * refactor the program to take the most advatage of the program's plugin framework and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality into plugins wherever it is appropriate (but keeping things out of plugins if there's no advantage/reason). Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
+* Add ruff for linting+formatting, switch from "house styles" to best-practice/standard Python styles
 * switch to Pantheon API where possible
 * add everything to its-webhosting/terraform-infra repo that should be there
 
