@@ -151,6 +151,7 @@ RUN npm install -g @colbymchenry/codegraph
 # The ADD forces everything after to not be cached when a new version is released.
 ADD https://api.github.com/repos/anthropics/claude-code/tags?per_page=1 /home/$USERNAME/software_versions/claude_version.json
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+RUN npm install -g pyright
 RUN npm install -g tui-use
 
 # Set up other stuff

@@ -14,7 +14,7 @@ Web Hosting Services and is written to be reusable by other institutions via a c
 
 The whole tool is one executable script, `./pantheon-sitehealth-emails` (run it directly;
 it has a `#!/usr/bin/env python` shebang and expects the venv active). There is no build
-step and no test suite.
+step; for the test suite see **Testing** below.
 
 ```bash
 # Environment (see README.md for full first-time setup with uv/PHP/mysql/aws)
@@ -37,10 +37,12 @@ composer install                          # installs the PHP Emogrifier CSS inli
 ```
 
 Key flags: `--all` vs. an explicit `SITE` list are mutually exclusive (one is required
-unless `--create-tables`). Without `--for-real`, all mail is sent to the logged-in user,
+unless `--create-tables`). Without `--for-real`, mail is addressed to the logged-in user,
 not to owners — this is the primary safety mechanism, always dry-run first. `--update`
-only refreshes traffic data; `--import-older-metrics` backfills Pantheon's weekly/monthly
-aggregates; `-v`/`-vv`/`-vvv` increase verbosity (`--create-tables` forces `-vvv`).
+only refreshes traffic data; `--only-warn` checks sites for warnings without generating
+reports or sending mail; `--import-older-metrics` backfills Pantheon's weekly/monthly
+aggregates (and is mutually exclusive with `--create-tables`); `-v`/`-vv`/`-vvv` increase
+verbosity (`--create-tables` forces `-vvv`).
 
 ## Required runtime credentials / external tools
 
@@ -55,13 +57,14 @@ earlier.
 
 ### Single-module core + `script_context` shared state
 
-Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3700 lines).
+Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
 Cross-cutting state and helpers live in **`script_context.py`** (imported everywhere as
 `sc`): `sc.options` (parsed argv), `sc.config` (parsed TOML), `sc.plugin`/`sc.check`
 (loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.substitutions`, and
-helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_notice()`, `add_news_item()`.
-Because argparse runs at import time (module scope, not inside `main()`), `sc.options` is
-available to every function.
+helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_news_item()` (notice-adding is now a
+`SiteContext` method, below). The parser is built by `build_arg_parser()` and `sc.options`
+is populated by the caller via `parse_args()` before other functions run, so it is
+available to every function at call time.
 
 ### Plugin / check module system (`plugin/`, `check/`)
 
@@ -95,7 +98,7 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
   `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
   per processed site, as far up the per-site loop as possible (after the portal/not-requested/
   Sandbox skips). Add to it via its methods — `site_context.add_notice(notice)` /
-  `.add_notices(list)` (builders: `wp_error`/`drush_error`/`check_*module`) / `.add_section(...)` /
+  `.add_notices(list)` (builders: `wp_error`/`drush_error`/`check_wordpress_plugin`/`check_drupal_module`) / `.add_section(...)` /
   `.add_attachment(...)` — this is the **canonical** path (the old module-level
   `sc.add_notice`/`add_notices` free functions were removed). `add_notice` fills in
   `icon` (from `type`), plaintext `text` (via `html2text`), and honors `order`
@@ -124,15 +127,19 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
   (traffic surge bars, SiteLens gauges) are generated with matplotlib and attached as inline
-  images (`make_msgid` CIDs). Everything is assembled into a MIME `EmailMessage` and sent
-  via `SMTP_SSL`.
+  images (`make_msgid` CIDs). Everything is assembled into a MIME `EmailMessage` and written
+  to `build/<site>.eml`. **The SMTP send is currently commented out** (`smtp_login()`/
+  `send_message`, a TODO pending SendGrid support) — no mail is actually sent; the tool only
+  produces `.eml` files. `--for-real` still selects the real `To`/`Bcc` recipients vs. the
+  dry-run addressing baked into the assembled message.
 
 ### Database
 
 SQLAlchemy declarative models `PantheonTraffic` and `PantheonOverageProtection` (see class
 defs near the top of the script). Backend is chosen by the `[Database]` TOML section:
 `sqlite` (default, `database.db` in repo) or `mysql`. `--create-tables` creates the schema;
-traffic rows are upserted (note the `sqlite_insert` import for dialect-specific upsert).
+new traffic rows are inserted while existing ones are skipped, not updated (`ON CONFLICT DO
+NOTHING` on sqlite via the `sqlite_insert` import, `INSERT IGNORE` on mysql).
 
 ### Configuration (`pantheon-sitehealth-emails.toml`)
 
@@ -194,8 +201,8 @@ Non-obvious things the harness relies on:
   normalize the volatile `make_msgid` CIDs; refresh with `./run-tests --update-goldens`. There are
   **three** goldens: WordPress (`its-wws-test1`, fixtures in `tests/fixtures/terminus/`), Drupal
   (`its-wws-test2`, `tests/fixtures/terminus-drupal/`, selected via `run_program(fixtures_dir=…)`),
-  and a **non-U-M** golden (`test_golden_nonumich.py`, `minimal-nonumich.toml` with `[UMich]`
-  disabled + generic `[Email]`) that proves the P8 config-driven email headers/msgid and that the
+  and a **non-U-M** golden (`test_golden_nonumich.py`, `minimal-nonumich.toml` with no
+  `[UMich]` section + generic `[Email]`) that proves the P8 config-driven email headers/msgid and that the
   U-M-guarded doc-URL checks don't appear for a non-U-M run. The `.eml` identity headers have no
   byte golden (the `Date:` is volatile) — `test_eml_headers.py` asserts them explicitly. Refresh
   WordPress fixtures with `./run-tests --record`, Drupal with `python tests/tools/record.py
