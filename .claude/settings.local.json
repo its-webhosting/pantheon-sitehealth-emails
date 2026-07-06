@@ -8,10 +8,12 @@
       "mcp__plugin_context-mode_context-mode__ctx_fetch_and_index",
       "mcp__plugin_context-mode_context-mode__ctx_index",
       "mcp__plugin_context-mode_context-mode__ctx_stats",
-      "mcp__plugin_context-mode_context-mode__ctx_doctor"
+      "mcp__plugin_context-mode_context-mode__ctx_doctor",
+      "mcp__chrome-devtools__*"
     ]
   },
   "enabledMcpjsonServers": [
-    "codegraph"
+    "codegraph",
+    "chrome-devtools"
   ]
 }

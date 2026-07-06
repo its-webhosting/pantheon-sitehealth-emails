@@ -9,8 +9,8 @@
     }
   },
   "runArgs": [
-    "--cap-add=NET_ADMIN",
-    "--cap-add=NET_RAW"
+    "--shm-size=1g",
+    "--security-opt=seccomp=unconfined"
   ],
   "remoteUser": "node",
   "mounts": [

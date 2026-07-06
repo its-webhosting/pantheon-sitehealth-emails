@@ -154,6 +154,16 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN npm install -g pyright
 RUN npm install -g tui-use
 
+# Playwright + Chromium for chrome-devtools-mcp, installed into the image so it
+# survives container rebuilds (~/.cache is not a persisted volume). Browsers go
+# to a system-wide path, and chrome-current is a stable symlink the MCP's
+# --executablePath points at (see /workspace/.mcp.json).
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/ms-playwright
+RUN npm install -g playwright \
+  && playwright install chromium \
+  && ln -sfn "$(ls -d /usr/local/share/ms-playwright/chromium-* | sort -V | tail -1)" \
+       /usr/local/share/ms-playwright/chrome-current
+
 # Set up other stuff
 COPY --chown=$USERNAME:$USERNAME terminus /home/$USERNAME/.terminus
 RUN /usr/local/bin/terminus self:plugin:install pantheon-systems/terminus-composer-plugin

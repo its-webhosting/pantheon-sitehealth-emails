@@ -1,6 +1,13 @@
 #!/bin/bash
-#echo "skipping firewall setup"
-#exit 0
+echo "skipping firewall setup"
+exit 0
+
+# If you want to enable this script, make sure the following is in devcontainer.json:
+#   "runArgs": [
+#     "--cap-add=NET_ADMIN",
+#     "--cap-add=NET_RAW"
+#   ],
+
 
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
