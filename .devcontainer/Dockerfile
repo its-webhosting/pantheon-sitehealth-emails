@@ -90,13 +90,15 @@ ADD https://api.github.com/repos/pantheon-systems/terminus/tags?per_page=1 /home
 RUN curl -L https://github.com/pantheon-systems/terminus/releases/latest/download/terminus.phar --output /usr/local/bin/terminus \
   && chmod 755 /usr/local/bin/terminus
 
-# awscli
+# awscli (uname -m reports x86_64 / aarch64, which match AWS CLI's asset names)
+# The installer URL always serves "latest", so pull the aws-cli tags list first
+# to bust this layer's cache whenever a new release is published.
+ADD https://api.github.com/repos/aws/aws-cli/tags?per_page=1 /home/$USERNAME/software_versions/awscli_version.json
 RUN cd /tmp \
-  && curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
+  && curl "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o "awscliv2.zip" \
   && unzip awscliv2.zip \
   && /bin/sh aws/install \
   && rm -rf awscliv2.zip aws
-
 
 # Copy and set up the container start script
 COPY container-start.sh /usr/local/bin/
