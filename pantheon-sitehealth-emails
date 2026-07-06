@@ -138,6 +138,7 @@ class PantheonOverageProtection(Base):
 # Global initialization:
 #
 
+
 # Command-line argument parsing.  Building the parser is side-effect-free; parse_args()
 # (which reads sys.argv) is only invoked from the __main__ block at the bottom of this
 # file, so the module can be imported by the test harness without argv side effects.
@@ -149,7 +150,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,
         description="Send emails to website owners letting them know what their Pantheon traffic has been"
         "and make recommendations about whether/how they should change their current plan or"
-        "the configuration of their site."
+        "the configuration of their site.",
     )
     args_parser.add_argument(
         "sites",
@@ -897,7 +898,9 @@ def plan_costs(
             if month == end_date_yyyy_mm and estimate > 0:
                 visits = estimate
             overage = max(visits - int(plan_info[plan]["traffic_limit"]), 0)
-            overage_cost = overage_blocks(overage, overage_block_size) * overage_block_cost
+            overage_cost = (
+                overage_blocks(overage, overage_block_size) * overage_block_cost
+            )
             if plan != "Basic":
                 op = op_lookup(month)
                 if op is not None:
@@ -969,7 +972,8 @@ def load_news_items() -> None:
                     sys.exit(f'News item in {filename} is missing the "News" key.')
                 for news_item_name in n["News"].keys():
                     sc.add_news_item(
-                        n["News"][news_item_name], f"{news_item_name} in file {filename}"
+                        n["News"][news_item_name],
+                        f"{news_item_name} in file {filename}",
                     )
 
 
@@ -996,14 +1000,17 @@ def build_plan_over_time(plan_on_day: dict, plot_right_date) -> list:
             )
             plan_start = today
             plan = plan_on_day[plan_start]
-    plan_over_time.append(
-        {"start": plan_start, "end": plot_right_date, "plan": plan}
-    )
+    plan_over_time.append({"start": plan_start, "end": plot_right_date, "plan": plan})
     return plan_over_time
 
 
-def classify_hostname_dns(hostname: str, site_name: str, cloudflare_enabled: bool,
-                          cf_v4_nets: list, cf_v6_nets: list) -> (int, int, list, bool):
+def classify_hostname_dns(
+    hostname: str,
+    site_name: str,
+    cloudflare_enabled: bool,
+    cf_v4_nets: list,
+    cf_v6_nets: list,
+) -> (int, int, list, bool):
     """
     Resolve hostname's A and AAAA records and classify each address as pointing at
     Cloudflare or elsewhere.
@@ -1166,9 +1173,8 @@ def main() -> None:
     with open("header-image.png", "rb") as img:
         wordmark_image = img.read()
 
-    # TODO: uncomment and also add SendGrid support
-    # if sc.options.smtp_username == '':
-    #     sys.exit("--smtp-username not specified and USER environment variable not set.")
+    if sc.options.smtp_username == "":
+        sys.exit("--smtp-username not specified and USER environment variable not set.")
 
     load_news_items()
     if sc.options.verbose:
@@ -1621,12 +1627,14 @@ and to find out what went wrong:
                         'echo json_encode( ["result" => (is_file("/code/web/sites/sites.php") || is_file("/code/sites/sites.php") ? true : false) ] );',
                     )
                     if fatal or sites_file is None:
-                        site_context.add_notices(drush_error(
-                            site["name"],
-                            "multisite-check",
-                            f"The check for whether {site['name']} is a Drupal multisite failed.",
-                            errors,
-                        ))
+                        site_context.add_notices(
+                            drush_error(
+                                site["name"],
+                                "multisite-check",
+                                f"The check for whether {site['name']} is a Drupal multisite failed.",
+                                errors,
+                            )
+                        )
                     elif errors != "":
                         drush_smell = errors
                     if (
@@ -1679,12 +1687,14 @@ and to find out what went wrong:
                 live_site, "echo network_home_url();"
             )
             if fatal or network_home_url is None:
-                site_context.add_notices(wp_error(
-                    site["name"],
-                    "version-check",
-                    f"Unable to get WordPress network URL for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    wp_error(
+                        site["name"],
+                        "version-check",
+                        f"Unable to get WordPress network URL for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 wp_smell = errors
             sc.debug(f"{site['name']} WordPress network URL: {network_home_url}")
@@ -1790,12 +1800,14 @@ remove these domains from the Pantheon live environment for
                 live_site, 'require ABSPATH . WPINC . "/version.php"; echo $wp_version;'
             )
             if fatal or wordpress_version is None:
-                site_context.add_notices(wp_error(
-                    site["name"],
-                    "version-check",
-                    f"Unable to check WordPress version for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    wp_error(
+                        site["name"],
+                        "version-check",
+                        f"Unable to check WordPress version for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 wp_smell = errors
             sc.debug(f"{site['name']} WordPress version: {wordpress_version}")
@@ -1817,41 +1829,49 @@ remove these domains from the Pantheon live environment for
                 "--fields=name,status,update,version,update_version,title",
             )
             if fatal or plugins is None:
-                site_context.add_notices(wp_error(
-                    site["name"],
-                    "plugin-list",
-                    f"Unable to run <code>wp plugin list</code> for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    wp_error(
+                        site["name"],
+                        "plugin-list",
+                        f"Unable to run <code>wp plugin list</code> for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 wp_smell = errors
             if sc.options.verbose:
                 pprint(plugins)
-            site_context.add_notices(check_wordpress_plugin(
-                site["name"],
-                plugins,
-                "pantheon-advanced-page-cache",
-                "Pantheon Advanced Page Cache",
-                "https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin",
-                "Needed for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
-            ))
-            site_context.add_notices(check_wordpress_plugin(
-                site["name"],
-                plugins,
-                "wp-native-php-sessions",
-                "Native PHP Sessions",
-                "https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin",
-                "Strongly recommended to ensure PHP sessions work correctly on Pantheon.",
-            ))
-            if umich_enabled() and len(fqdns_behind_cloudflare) > 0:
-                site_context.add_notices(check_wordpress_plugin(
+            site_context.add_notices(
+                check_wordpress_plugin(
                     site["name"],
                     plugins,
-                    "umich-cloudflare",
-                    "University of Michigan: Cloudflare Cache",
-                    "https://documentation.its.umich.edu/node/5114",
-                    "Needed for automatically clearing Cloudflare's caches when content is updated.",
-                ))
+                    "pantheon-advanced-page-cache",
+                    "Pantheon Advanced Page Cache",
+                    "https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin",
+                    "Needed for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
+                )
+            )
+            site_context.add_notices(
+                check_wordpress_plugin(
+                    site["name"],
+                    plugins,
+                    "wp-native-php-sessions",
+                    "Native PHP Sessions",
+                    "https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin",
+                    "Strongly recommended to ensure PHP sessions work correctly on Pantheon.",
+                )
+            )
+            if umich_enabled() and len(fqdns_behind_cloudflare) > 0:
+                site_context.add_notices(
+                    check_wordpress_plugin(
+                        site["name"],
+                        plugins,
+                        "umich-cloudflare",
+                        "University of Michigan: Cloudflare Cache",
+                        "https://documentation.its.umich.edu/node/5114",
+                        "Needed for automatically clearing Cloudflare's caches when content is updated.",
+                    )
+                )
             if isinstance(plugins, list):
                 for p in plugins:
                     if p["update"] == "available":
@@ -1964,12 +1984,14 @@ the OIDC buttons/links.
                             'echo (defined("WP_REDIS_CONFIG") && isset(WP_REDIS_CONFIG["analytics"]["persist"]) && WP_REDIS_CONFIG["analytics"]["persist"])? "true": "false";',
                         )
                         if fatal or ocp_config is None:
-                            site_context.add_notices(wp_error(
-                                site["name"],
-                                "ocp-config-check",
-                                f"Unable to check OCP configuration for {site['name']}.",
-                                errors,
-                            ))
+                            site_context.add_notices(
+                                wp_error(
+                                    site["name"],
+                                    "ocp-config-check",
+                                    f"Unable to check OCP configuration for {site['name']}.",
+                                    errors,
+                                )
+                            )
                         elif errors != "":
                             wp_smell = errors
                         if isinstance(ocp_config, str) and ocp_config.startswith(
@@ -2041,12 +2063,14 @@ plugin and remove {display_name}.
                 "--fields=name,status,update,version,update_version,title",
             )
             if fatal or themes is None:
-                site_context.add_notices(wp_error(
-                    site["name"],
-                    "plugin-list",
-                    f"Unable to run <code>wp theme list</code> for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    wp_error(
+                        site["name"],
+                        "plugin-list",
+                        f"Unable to run <code>wp theme list</code> for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 wp_smell = errors
             if sc.options.verbose:
@@ -2068,12 +2092,14 @@ plugin and remove {display_name}.
                 live_site, 'echo is_file("favicon.ico") ? "true": "false";'
             )
             if fatal or favicon is None:
-                site_context.add_notices(wp_error(
-                    site["name"],
-                    "favicon-check",
-                    f"Unable to check for <code>/favicon.ico</code> file for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    wp_error(
+                        site["name"],
+                        "favicon-check",
+                        f"Unable to check for <code>/favicon.ico</code> file for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 wp_smell = errors
             sc.debug(f"{site['name']} has a favicon.ico file: {favicon}")
@@ -2099,12 +2125,14 @@ plugin and remove {display_name}.
             )
             drupal_status, errors, fatal = drush(live_site, "core-status")
             if fatal or drupal_status is None:
-                site_context.add_notices(drush_error(
-                    site["name"],
-                    "core-status",
-                    f"Unable to run <code>drush core-status</code> for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    drush_error(
+                        site["name"],
+                        "core-status",
+                        f"Unable to run <code>drush core-status</code> for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 drush_smell = errors
             if sc.options.verbose:
@@ -2121,24 +2149,28 @@ plugin and remove {display_name}.
             }
             mods, errors, fatal = drush(live_site, "pm:list")
             if fatal or mods is None:
-                site_context.add_notices(drush_error(
-                    site["name"],
-                    "pm-list",
-                    f"Unable to run <code>drush pm:list</code> for {site['name']}.",
-                    errors,
-                ))
+                site_context.add_notices(
+                    drush_error(
+                        site["name"],
+                        "pm-list",
+                        f"Unable to run <code>drush pm:list</code> for {site['name']}.",
+                        errors,
+                    )
+                )
             elif errors != "":
                 drush_smell = errors
             if sc.options.verbose:
                 pprint(mods)
-            site_context.add_notices(check_drupal_module(
-                site["name"],
-                mods,
-                "pantheon_advanced_page_cache",
-                "Pantheon Advanced Page Cache",
-                "https://www.drupal.org/project/pantheon_advanced_page_cache",
-                "Necessary for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
-            ))
+            site_context.add_notices(
+                check_drupal_module(
+                    site["name"],
+                    mods,
+                    "pantheon_advanced_page_cache",
+                    "Pantheon Advanced Page Cache",
+                    "https://www.drupal.org/project/pantheon_advanced_page_cache",
+                    "Necessary for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
+                )
+            )
             if drupal_version.startswith("7."):
                 site_context.add_notice(
                     {
@@ -2163,58 +2195,70 @@ launch the new website before December.
                 """,
                     }
                 )
-                site_context.add_notices(check_drupal_module(
-                    site["name"],
-                    mods,
-                    "tag1_d7es",
-                    "Tag1 D7ES",
-                    "https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support",
-                    "Necessary for receiving extended support for Drupal 7.",
-                ))
+                site_context.add_notices(
+                    check_drupal_module(
+                        site["name"],
+                        mods,
+                        "tag1_d7es",
+                        "Tag1 D7ES",
+                        "https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support",
+                        "Necessary for receiving extended support for Drupal 7.",
+                    )
+                )
             else:
                 if umich_enabled() and len(fqdns_behind_cloudflare) > 0:
-                    site_context.add_notices(check_drupal_module(
-                        site["name"],
-                        mods,
-                        "cloudflare",
-                        "CloudFlare",  # note: capital F here
-                        "https://documentation.its.umich.edu/node/4242",
-                        "Necessary for automatically clearing Cloudflare's caches when content is updated.",
-                    ))
-                    site_context.add_notices(check_drupal_module(
-                        site["name"],
-                        mods,
-                        "cloudflarepurger",
-                        "CloudFlare Purger",
-                        "https://documentation.its.umich.edu/node/4242",
-                        "Necessary for automatically clearing Cloudflare's caches when content is updated.",
-                    ))
-                    site_context.add_notices(check_drupal_module(
-                        site["name"],
-                        mods,
-                        "purge_processor_lateruntime",
-                        "Late runtime processor (purge_processor_lateruntime)",
-                        "https://documentation.its.umich.edu/node/4242",
-                        "Necessary for automatically clearing Cloudflare's caches when content is updated.",
-                    ))
-                    site_context.add_notices(check_drupal_module(
-                        site["name"],
-                        mods,
-                        "purge_processor_cron",
-                        "Purge Cron Processor (purge_processor_cron)",
-                        "https://documentation.its.umich.edu/node/4242",
-                        "Recommended as a fallback for clearing Cloudflare's caches when content is updated.",
-                        level="info",
-                    ))
+                    site_context.add_notices(
+                        check_drupal_module(
+                            site["name"],
+                            mods,
+                            "cloudflare",
+                            "CloudFlare",  # note: capital F here
+                            "https://documentation.its.umich.edu/node/4242",
+                            "Necessary for automatically clearing Cloudflare's caches when content is updated.",
+                        )
+                    )
+                    site_context.add_notices(
+                        check_drupal_module(
+                            site["name"],
+                            mods,
+                            "cloudflarepurger",
+                            "CloudFlare Purger",
+                            "https://documentation.its.umich.edu/node/4242",
+                            "Necessary for automatically clearing Cloudflare's caches when content is updated.",
+                        )
+                    )
+                    site_context.add_notices(
+                        check_drupal_module(
+                            site["name"],
+                            mods,
+                            "purge_processor_lateruntime",
+                            "Late runtime processor (purge_processor_lateruntime)",
+                            "https://documentation.its.umich.edu/node/4242",
+                            "Necessary for automatically clearing Cloudflare's caches when content is updated.",
+                        )
+                    )
+                    site_context.add_notices(
+                        check_drupal_module(
+                            site["name"],
+                            mods,
+                            "purge_processor_cron",
+                            "Purge Cron Processor (purge_processor_cron)",
+                            "https://documentation.its.umich.edu/node/4242",
+                            "Recommended as a fallback for clearing Cloudflare's caches when content is updated.",
+                            level="info",
+                        )
+                    )
             if drupal_version.startswith("7."):
                 updates, errors, fatal = drush(live_site, "pm:updatestatus", "--full")
                 if fatal:
-                    site_context.add_notices(drush_error(
-                        site["name"],
-                        "pm-updatestatus",
-                        f"Unable to run <code>drush pm:updatestatus</code> for {site['name']}.",
-                        errors,
-                    ))
+                    site_context.add_notices(
+                        drush_error(
+                            site["name"],
+                            "pm-updatestatus",
+                            f"Unable to run <code>drush pm:updatestatus</code> for {site['name']}.",
+                            errors,
+                        )
+                    )
                 # elif errors != '':
                 #     drush_smell = errors  # there will always be verbose progress output for pm:upstatestatus
                 if sc.options.verbose:
@@ -2380,12 +2424,14 @@ echo( json_encode( array( 'result' => "{$result}" ) ) );
                     ua_check_script,
                 )
                 if fatal or ua is None:
-                    site_context.add_notices(drush_error(
-                        site["name"],
-                        "drupal-ua-check",
-                        f"Failed to get the user agent string used by {site['name']}.",
-                        errors,
-                    ))
+                    site_context.add_notices(
+                        drush_error(
+                            site["name"],
+                            "drupal-ua-check",
+                            f"Failed to get the user agent string used by {site['name']}.",
+                            errors,
+                        )
+                    )
                 elif errors != "":
                     drush_smell = errors
                 if (
@@ -2393,12 +2439,14 @@ echo( json_encode( array( 'result' => "{$result}" ) ) );
                     or "result" not in ua
                     or not isinstance(ua["result"], str)
                 ):
-                    site_context.add_notices(drush_error(
-                        site["name"],
-                        "drupal-ua-check",
-                        f"Failed to get the user agent string used by {site['name']}.",
-                        "Unexpected result from drush php-script.",
-                    ))
+                    site_context.add_notices(
+                        drush_error(
+                            site["name"],
+                            "drupal-ua-check",
+                            f"Failed to get the user agent string used by {site['name']}.",
+                            "Unexpected result from drush php-script.",
+                        )
+                    )
                 elif (
                     not ua["result"].startswith(
                         "Drupal (+https://drupal.org/); UMich; https://"
@@ -2812,7 +2860,7 @@ remove PHP {new_php} sometime after September 30, 2026.
 
         # TODO: instead of continuing here, proceed below to calculate plan recommendations, skipping the graph and email
         if sc.options.only_warn:
-            for n in site_context['notices']:
+            for n in site_context["notices"]:
                 all_warnings.append(n["csv"])
             continue
 
@@ -3596,7 +3644,7 @@ at the moment, it should be fixed to avoid possible future problems:
                     }
                 )
 
-        sc.debug("===== Notices:\n", site_context['notices'])
+        sc.debug("===== Notices:\n", site_context["notices"])
         sc.debug("===== Sections:\n", site_context["sections"])
 
         if umich_enabled():
@@ -3621,9 +3669,9 @@ at the moment, it should be fixed to avoid possible future problems:
 
         # Create email from template
         sorted_notices = (
-            [n for n in site_context['notices'] if n["type"] == "alert"]
-            + [n for n in site_context['notices'] if n["type"] == "warning"]
-            + [n for n in site_context['notices'] if n["type"] == "info"]
+            [n for n in site_context["notices"] if n["type"] == "alert"]
+            + [n for n in site_context["notices"] if n["type"] == "warning"]
+            + [n for n in site_context["notices"] if n["type"] == "info"]
         )
         report = f"Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}"
         subject = f"{site['name']}: {report}"
@@ -3872,13 +3920,12 @@ an additional pro-rated bill or credit in the following month.
         with open(f"build/{site['name']}.eml", "wb") as f:
             f.write(msg.as_bytes(policy=SMTP))
 
-        # TODO: uncomment and also add SendGrid support
-        # smtp_connection = smtp_login()
-        # smtp_connection.send_message(msg)
-        # emails_sent += 1
-        # smtp_connection.quit()
+        smtp_connection = smtp_login()
+        smtp_connection.send_message(msg)
+        emails_sent += 1
+        smtp_connection.quit()
 
-        for n in site_context['notices']:
+        for n in site_context["notices"]:
             fields = n["csv"].split(",")
             fields.insert(1, contacts)
             all_warnings.append(",".join(fields))

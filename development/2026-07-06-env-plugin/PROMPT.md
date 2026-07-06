@@ -1,9 +1,45 @@
 # Task
 
-This is a very large, complex task. **If** doing so is likely to produce better results, you can choose to break the task into multiple sub-tasks and complete each sub-task in a separate prompt and Claude session (you can still run sub-agents as needed without breaking the task into sub-tasks on disk). If you do this, keep all the files related to the sub-tasks in the same directory as this prompt file.  If you break the task into sub-tasks, number them and also create a `00-overview.md` index file that lists all the sub-tasks and is continuously updated to indicate the current state of each one together with cross-cutting conventions (so they do not need to be repeated in each sub-task description/specification file), dependencies between sub-tasks, and inter-sub-task handoff record: each subtask, on completion, records in the file the deviations from the overall design that occurred during the sub-task's execution, decisions the sub-task took, and follow-ups it left open; the next sub-tasks's discovery step consults that record together with the code itself.
+The pantheon-sitehealth-email config file currently supports invoking a plugin to retrive the value for an AWS Secrets Manager secret.  Example:
 
-**IMPORTANT**: do not implement the solution yet, just design it and create the specification/plan per the steps below.
+```
+password = "<{secret aws webinfo db_pass}"
+```
 
+Create a new plugin, named `env`, that will make a configuration setting value available from the process environment.  For example, the following would set the configuration setting "password" to whatever the value of the environment variable "DATABASE_PASSWORD" is currently set to.  If the environment variable is not set and something attempts to read/use the setting value, exit at that point (time of access/use) with a helpful error message.
+
+```
+password = "<{secret env DATABASE_PASSWORD}"
+```
+
+There should be a second convenience method to invoke the same functionality that omits the first argument, `secret` but has the same result:
+
+```
+password = "<{env DATABASE_PASSWORD}"
+```
+
+Also change any code that retrieves configuration information from environment variables to use configuration file settings instead, adding settings to the config files where needed for this.  That should include all of the following:
+
+* In the `[AWS]` configuration file section,
+    * add a setting `aws_access_key_id` with the value `<{secret env AWS_ACCESS_KEY_ID}`
+    * add a setting `aws_secret_access_key` with the value `<{secret env AWS_SECRET_ACCESS_KEY}`
+    * Note that if the AWS plugin is disabled, these environment variables will not be set; that's OK. Exit with an error if anything attempts to read/use these settings from the config.
+* Add a `[SMTP]` section to the configuraton file:
+    * add settings to the config file that are already used by the current code:
+        * `host` with the value `smtp.mail.umich.edu`
+        * `port` with the value `465`
+    * add a setting named `enabled` with the value `false`, and change existing code to use this
+    * add a setting `password` with the value `<{secret env SMTP_PASSWORD}`, and change existing code to use this
+    * add a setting `username` with the value `<{env USER}`, and change existing code to use this but keep it overridable via the `--smtp-username` command line option
+* Make sure the program accepts/uses *either* CLOUDFLARE_API_TOKEN (preferred, if present) or CLOUDFLARE_API_KEY + CLOUDFLARE_API_EMAIL.
+* In the `[Cloudflare]` section,
+    * rename the `member_email` setting to `cloudflare_api_email` and set the value to `<{secret env CLOUDFLARE_API_EMAIL}`, changing existing code to use the new name
+    * rename the `member_api_key` setting to `cloudflare_api_key`, and set the value to `<{secret env CLOUDFLARE_API_KEY}`, changing existing code to use the new name
+    * add a commented-out setting named `cloudflare_api_token` that defaults to the value `<{secret env CLOUDFLARE_API_TOKEN}` when uncommented, changing existing code to use this new setting
+
+Did I miss any environment variables that should be added as configuration settings?
+
+NOTE: I have re-enabled (uncommented) the previously commented out SMTP code (see the most recent commit). The script should send email if SMTP is enabled and configured in the configuration file, but don't write tests for this yet or test it, we'll do that in a later session.  I have set the `SMTP_PASSWORD` environment variable to the script can run and send emails.
 
 # Methodology
 
@@ -18,18 +54,16 @@ Take a deep breath and work through the task step by step:
 2. Gather any additional information necessary to gain a solid understanding of the current version of the software and create an implementation plan for the design.
 3. **Independently verify load-bearing factual claims from the requirements, documentation, and code rather than trusting them.**
 4. Interview me relentlessly and in detail using the AskUserQuestion tool until we reach a shared understanding.  Ask about technical implementation, expansion opportunities, edge cases, concerns, tradeoffs, gaps in the requirements, inconsistencies/contradictions in the requirements, and other potential problems/issues/oversights. Don't ask obvious questions, dig into the hard parts I might not have considered.
-5. Using the requirements, information you gathered on your own, the results of the interview, and other factors you deem helpful, come up with at least three different approaches (solutions) that should accomplish the task.
-6. Do any additional investigation, interviewing, and validation that is needed to properly evaluate each solution and compare it to the others.
-7. Evaluate each solution against the criteria in the "Quality control" section below.
-8. Select the best solution out of those you evaluated.
-9. For the best solution, if any of the quality control scores are under 0.9, refine and improve the solution until each score is 0.9 or above.
-10. Write the complete specfications for how to implement the resulting solution to the file SPEC.md (put it in the same directory as the file for this prompt), optimized for Claude Code to use it to implement the code when I'm ready for you to do that (don't implement the solution yet). I may hand-edit the file before asking you to implement the solution described in the specifications.  This file will also serve as a record for both Claude Code and humans for what was decided and why, but it will not be a primary source of documentation.  The file should include:
+5. Come up with an implementation plan.  Evaluate the plan against the "Quality control" section below. If any of the quality control scores are under 0.9, refine and improve the plan until each score is 0.9 or above.
+6. Write the complete specfications for for the implementation to the file SPEC.md (put it in the same directory as the file for this prompt), optimized for Claude Code to use it to implement the code when I'm ready for you to do that (don't implement the solution yet). I may hand-edit the file before asking you to implement the solution described in the specifications.  This file will also serve as a record for both Claude Code and humans for what was decided and why, but it will not be a primary source of documentation.  The file should include:
     * Per the "Test creation" section below, what tests should be written and exercised as a part of the implementation to ensure the functionality implemented in the stage is correct and doesn't break in the future. Include all types of tests that are appropriate for what the current stage implements (e2e, integration, support, unit, other) and what each one should test. The tests must **extend the existing harness and honor its hard safety constraints** -- do not invent a parallel testing approach.
     * Concrete, verifiable acceptance criteria that mark the implementation complete: the exact commands to run and the observable outcomes that mean "done". Also include a full test suite run via `./run-tests`.
     * Any updates that should be made to README.md or existing documentation in the repo as a part of implmentation
     * Any updates that should be made to CLAUDE.md as a result of what was implemented/changed. Keep CLAUDE.md focused on things that you can't easily learn by looking at the code, as well as anything that is necessary to prevent you from making mistakes during future sessions.
     * Any new documentation that should be created for end users in the `./docs` directory during implementation (do not document internal functioning of the program in docs/, only end-user instructions).
-11. Before presenting the SPEC.md for approval, run an adverserial review as described in the "Adverserial review" section below.
+7. Before presenting the SPEC.md for approval, run an adverserial review as described in the "Adverserial review" section below.
+8. Present the plan to me for approval.
+9. Upon approval, perform the implementation as described in SPEC.md.
 
 
 # Prime Directives
