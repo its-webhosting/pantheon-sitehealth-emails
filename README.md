@@ -242,10 +242,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 * switch to Pantheon API where possible
 * add everything to its-webhosting/terraform-infra repo that should be there
 
-* ~~Switch terminus() to returning tuple (output, errors, fatal) for better error handling~~
-  (done: `terminus()` returns `(result, errors, fatal)` and `terminus_data()` raises the
-  named `TerminusError` at call sites that need the data)
-
 * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
 
 * Report on environment lock (no notice, just a report section)
