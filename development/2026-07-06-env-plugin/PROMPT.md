@@ -1,12 +1,12 @@
 # Task
 
-The pantheon-sitehealth-email config file currently supports invoking a plugin to retrive the value for an AWS Secrets Manager secret.  Example:
+The pantheon-sitehealth-email configuration file currently supports invoking a plugin to retrive the value for an AWS Secrets Manager secret.  Here is an example of how that plugin is used in the configuration file::
 
 ```
 password = "<{secret aws webinfo db_pass}"
 ```
 
-Create a new plugin, named `env`, that will make a configuration setting value available from the process environment.  For example, the following would set the configuration setting "password" to whatever the value of the environment variable "DATABASE_PASSWORD" is currently set to.  If the environment variable is not set and something attempts to read/use the setting value, exit at that point (time of access/use) with a helpful error message.
+Create a new plugin, named `env`, that will make a configuration setting value available from the process environment.  For example, the following would set the configuration setting "password" to whatever the value of the environment variable "DATABASE_PASSWORD" is currently set to.
 
 ```
 password = "<{secret env DATABASE_PASSWORD}"
@@ -18,14 +18,13 @@ There should be a second convenience method to invoke the same functionality tha
 password = "<{env DATABASE_PASSWORD}"
 ```
 
-Also change any code that retrieves configuration information from environment variables to use configuration file settings instead, adding settings to the config files where needed for this.  That should include all of the following:
+Also change any code that retrieves configuration information from environment variables to use configuration file settings instead, adding settings to the configuration files where needed for this.  That should include all of the following:
 
 * In the `[AWS]` configuration file section,
     * add a setting `aws_access_key_id` with the value `<{secret env AWS_ACCESS_KEY_ID}`
     * add a setting `aws_secret_access_key` with the value `<{secret env AWS_SECRET_ACCESS_KEY}`
-    * Note that if the AWS plugin is disabled, these environment variables will not be set; that's OK. Exit with an error if anything attempts to read/use these settings from the config.
 * Add a `[SMTP]` section to the configuraton file:
-    * add settings to the config file that are already used by the current code:
+    * add settings to the configuration file that are already used by the current code:
         * `host` with the value `smtp.mail.umich.edu`
         * `port` with the value `465`
     * add a setting named `enabled` with the value `false`, and change existing code to use this
@@ -39,7 +38,11 @@ Also change any code that retrieves configuration information from environment v
 
 Did I miss any environment variables that should be added as configuration settings?
 
-NOTE: I have re-enabled (uncommented) the previously commented out SMTP code (see the most recent commit). The script should send email if SMTP is enabled and configured in the configuration file, but don't write tests for this yet or test it, we'll do that in a later session.  I have set the `SMTP_PASSWORD` environment variable to the script can run and send emails.
+For a configuration section that has an `enabled` setting with the value `false`, populate only the value for `enabled` in the processed configuration, skipping all other settings in that section. Otherwise (if there is no `enabled` setting in the section or if its value is anything other than `false`), handle the section's settings normally. For settings that are handled normally, if a setting's value attempts to reference an environment varaible that does not exist, exit immediately with a helpful error message.
+
+Is it easy and reasonable to add an optional default last argument for the `env` plugin (both forms)?  If so, propose 2-3 ways to do that (in this case, an reference to an environment variable that is unset would use the default rather than exiting with an error); if not, then mark this idea as "not in scope".
+
+NOTE: I have re-enabled (uncommented) the previously commented out SMTP code. The script should send email if SMTP is enabled and configured in the configuration file, but don't write tests for this yet or test it, we'll do that in a later session.  I have set the `SMTP_PASSWORD` environment variable to the script can run and send emails.
 
 # Methodology
 
