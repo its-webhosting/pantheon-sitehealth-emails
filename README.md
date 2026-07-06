@@ -216,7 +216,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 ## TO DO
 
 * add SendGrid support as an additional option to SMTP
-  * create SendGrid API key, add to AWS Secrets Manager
   * add an `env` plugin: config file example for Cloudflare: `member_api_key = "<{env CLOUDFLARE_API_KEY}"`, move appropriate env var checks in the code to then use the config, creating new config items as needed
       * AWS_ACCESS_KEY_ID, defaults to `<{env AWS_ACCESS_KEY_ID}`
       * AWS_SECRET_ACCESS_KEY, defaults to `<{env AWS_SECRET_ACCESS_KEY}`
