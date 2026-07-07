@@ -1,12 +1,13 @@
 """Integration tests for plugin/cloudflare/ips.py (test-suite SPEC §7.4).
 
-No live Cloudflare and no dependency on the `cloudflare` package being installed: a fake
-`cloudflare` module is injected into sys.modules before the plugin file is loaded, so
-`from cloudflare import Cloudflare` binds to the fake.
+ips.py no longer builds its own client; it reads the ONE shared client from
+sc.plugin_context['plugin.cloudflare']['client'] (built by client.init_cloudflare_client).
+So these tests seed a fake client there and call get_cloudflare_ips.  ips.py has no
+`from cloudflare import Cloudflare` anymore, so no fake `cloudflare` module is needed to load it.
+Auth-selection tests live in test_plugin_cloudflare_client.py.
 """
 import importlib.util
 import ipaddress
-import sys
 import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -25,24 +26,15 @@ class _FakeIPList:
         self.ipv6_cidrs = v6
 
 
-def _make_cloudflare(list_impl, seen_kwargs=None):
-    class FakeCloudflare:
-        def __init__(self, **kwargs):
-            if seen_kwargs is not None:
-                seen_kwargs.update(kwargs)
-            self.ips = types.SimpleNamespace(list=list_impl)
-
-    return FakeCloudflare
+def _fake_client(ips_list_impl):
+    """A stand-in for the shared Cloudflare client exposing only `.ips.list`."""
+    return types.SimpleNamespace(ips=types.SimpleNamespace(list=ips_list_impl))
 
 
 @pytest.fixture
-def load_ips(psh, monkeypatch):
-    """Load plugin/cloudflare/ips.py with a fake `cloudflare` module, returning (module, sc)."""
+def load_ips(psh):
+    """Load plugin/cloudflare/ips.py, returning (module, sc) with an empty plugin_context bag."""
     import script_context as sc
-
-    fake_pkg = types.ModuleType("cloudflare")
-    fake_pkg.Cloudflare = object  # placeholder; each test monkeypatches module.Cloudflare
-    monkeypatch.setitem(sys.modules, "cloudflare", fake_pkg)
 
     path = Path(psh.__file__).parent / "plugin" / "cloudflare" / "ips.py"
     loader = SourceFileLoader("cloudflare_ips_probe", str(path))
@@ -50,14 +42,16 @@ def load_ips(psh, monkeypatch):
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
 
-    sc.config = {"Cloudflare": {"email": "e@example.com", "api_key": "k"}}
+    sc.config = {"Cloudflare": {"enabled": True}}
     sc.plugin_context = {"plugin.cloudflare": {}}
     return module, sc
 
 
-def test_cidrs_become_ip_networks(load_ips, monkeypatch):
+def test_cidrs_become_ip_networks(load_ips):
     module, sc = load_ips
-    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6)))
+    sc.plugin_context["plugin.cloudflare"]["get_client"] = lambda: _fake_client(
+        lambda: _FakeIPList(V4, V6)
+    )
 
     module.get_cloudflare_ips()
 
@@ -66,43 +60,31 @@ def test_cidrs_become_ip_networks(load_ips, monkeypatch):
     assert ctx["cloudflare_ipv6_nets"] == [ipaddress.ip_network(c) for c in V6]
 
 
-def test_client_failure_exits(load_ips, monkeypatch):
+def test_client_failure_exits(load_ips):
     def boom():
         raise RuntimeError("cloudflare down")
 
-    module, _sc = load_ips
-    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(boom))
+    module, sc = load_ips
+    sc.plugin_context["plugin.cloudflare"]["get_client"] = lambda: _fake_client(boom)
 
     with pytest.raises(SystemExit):
         module.get_cloudflare_ips()
 
 
-def test_auth_uses_email_and_api_key(load_ips, monkeypatch):
-    """With no api_token, the client is built from email + api_key."""
-    module, _sc = load_ips
-    seen = {}
-    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6), seen))
+def test_cloudflare_enabled_reads_config(psh):
+    """Lock the detection fix by exercising the real helper: cloudflare_enabled() must read
+    config, not `"plugin.cloudflare" in sc.plugin` (always True because every plugin package is
+    imported regardless of `enabled`).  A revert to the buggy form would fail these assertions.
+    """
+    import script_context as sc
 
-    module.get_cloudflare_ips()
-    assert seen == {"api_email": "e@example.com", "api_key": "k"}
+    sc.config = {"Cloudflare": {"enabled": True}}
+    assert psh.cloudflare_enabled() is True
 
+    sc.config = {"Cloudflare": {"enabled": False}}
+    # The package is present in sc.plugin (the bug's always-True condition), yet the helper is False.
+    sc.plugin = {"plugin.cloudflare": object()}
+    assert psh.cloudflare_enabled() is False
 
-def test_auth_prefers_api_token(load_ips, monkeypatch):
-    """When api_token is present it is preferred and email/api_key are not passed."""
-    module, sc = load_ips
-    sc.config["Cloudflare"]["api_token"] = "tok-123"
-    seen = {}
-    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6), seen))
-
-    module.get_cloudflare_ips()
-    assert seen == {"api_token": "tok-123"}
-
-
-def test_auth_missing_credentials_exits(load_ips, monkeypatch):
-    """Enabled but neither api_token nor email+api_key -> a clear exit, not a bare KeyError."""
-    module, sc = load_ips
-    sc.config["Cloudflare"] = {}  # no credentials at all
-    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6)))
-
-    with pytest.raises(SystemExit):
-        module.get_cloudflare_ips()
+    sc.config = {}  # section absent
+    assert psh.cloudflare_enabled() is False

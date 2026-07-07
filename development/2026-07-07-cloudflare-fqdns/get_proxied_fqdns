@@ -1,0 +1,144 @@
+#!/usr/bin/env python
+#
+# get_proxied_fqdns
+#
+# Outputs a JSON dictionary of all FQDNs that are proxied through Cloudflare together with their backends.  This
+# information is used by the ITS Web Hosting inventory script to map website FQDNs to server or pool names, but it can
+# also be used for other purposes.
+#
+# If run using an API token, the token should have only the
+# permission DNS:Read but for all zones.  The script can also be
+# run using credentials from the CLOUDFLARE_EMAIL and
+# CLOUDFLARE_API_KEY environment variables.
+#
+
+import argparse
+import json
+import logging
+import os
+import sys
+
+import rich.logging
+import rich.progress
+from rich.console import Console
+from rich.pretty import pprint
+
+
+CLOUDFLARE_ACCOUNT_ID = 'b6a4063d6fa89fba31cf8bf99540d7e5'  # Regents of the University of Michigan
+
+parser = argparse.ArgumentParser(description='Get JSON dictionary of all FQDNs proxied through our Cloudflare account.')
+parser.add_argument(
+    '--output', '-o',
+    type=argparse.FileType('w'),
+    default=sys.stdout,
+    help='output file name; defaults to stdout'
+)
+parser.add_argument(
+    '--no-certcheck',
+    action='store_true',
+    default=False,
+    help='skip FQDNs that have the no-certcheck tag in Cloudflare'
+)
+parser.add_argument(
+    '--verbose', '-v',
+    action='count',
+    default=0,
+    help='increase the level of detail in the output; can be specified multiple times'
+)
+options = parser.parse_args()
+
+console = Console()
+console_style = {
+    'status': '[bold green]',
+    'error': '[bold red]',
+}
+
+if options.verbose >= 2:
+    os.environ['CLOUDFLARE_LOG'] = 'info'
+    logging.basicConfig(
+        level=logging.INFO, format="%(message)s", datefmt="[%X]",
+        handlers=[rich.logging.RichHandler(console=console, markup=True, rich_tracebacks=True)]
+    )
+import cloudflare
+
+
+def verbose_log(*args, **kwargs) -> None:
+    verbosity = 1
+    if 'verbosity' in kwargs:
+        verbosity = kwargs['verbosity']
+        del kwargs['verbosity']
+    if options.verbose >= verbosity:
+        console.log(*args, _stack_offset=2, **kwargs)
+
+
+class CFProgress:
+    """
+    Wrap a Cloudflare object to provide Rich progress updates.
+    """
+    def __init__(self, obj, progress, task):
+        self.cf_obj = obj
+        self.progress = progress
+        self.task = task
+        self.cf_iter = None
+        if hasattr(self.cf_obj, 'result_info'):
+            self.progress.update(self.task, total=obj.result_info.total_count, refresh=True)
+
+    def __iter__(self):
+        if self.cf_iter is None:
+            self.cf_iter = self.cf_obj.__iter__()
+        return self
+
+    def __next__(self):
+        n = self.cf_iter.__next__()
+        self.progress.advance(self.task, advance=1)
+        return n
+
+
+def progress_bar() -> rich.progress.Progress:
+    return rich.progress.Progress(
+        rich.progress.TextColumn("[progress.description]{task.description}"),
+        rich.progress.MofNCompleteColumn(),
+        rich.progress.BarColumn(),
+        rich.progress.TaskProgressColumn(),
+        rich.progress.TimeElapsedColumn(),
+        rich.progress.TimeRemainingColumn(),
+        console=console,
+        transient=False if options.verbose else True,
+    )
+
+
+def main() -> None:
+
+    verbose_log('Getting list of zones...')
+    cf = cloudflare.Cloudflare()
+    with progress_bar() as progress:
+        task = progress.add_task('Getting list of zones', total=None)
+        zones = list(CFProgress(cf.zones.list(account={'id': CLOUDFLARE_ACCOUNT_ID}), progress, task))
+    zone_count = len(zones)
+    verbose_log(f'Found {zone_count} zones')
+
+    websites = {}
+    blank = ' '
+    with progress_bar() as progress:
+        zone_name = blank
+        zone_task = progress.add_task(f'Checking zone:  {zone_name:32s}', total=zone_count)
+        for zone in zones:
+            progress.update(zone_task, description=f'Checking zone:  {zone.name:32s}', advance=1)
+            dns_records = cf.dns.records.list(zone_id=zone.id, proxied=True)
+            for dns_record in dns_records:
+                if options.no_certcheck and 'no-certcheck' in dns_record.tags:
+                    verbose_log(f'  skipping {dns_record.name} because of no-certcheck tag')
+                    continue
+                r_name = dns_record.name
+                r_value = dns_record.content
+                if r_name not in websites:
+                    websites[r_name] = [r_value]
+                else:
+                    websites[r_name].append(r_value)
+
+    verbose_log(f'Total websites: {len(websites)}')
+    print(json.dumps(websites, indent=4, sort_keys=True), file=options.output)
+
+
+if __name__ == '__main__':
+    main()

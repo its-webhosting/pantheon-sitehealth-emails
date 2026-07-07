@@ -138,6 +138,12 @@ On the first of every month, send the reports:
 # Move all of the bcc:'s of the email from Inbox to this new label.
 ```
 
+When the `[Cloudflare]` section is enabled, the program fetches the set of Cloudflare-proxied
+FQDNs (`fqdns.json`) directly from the Cloudflare API and refreshes it automatically (when it is
+missing, or stale and you are processing multiple sites). Force a refresh with
+`--update-cloudflare-fqdns`, or suppress the staleness refresh with `--no-update-cloudflare-fqdns`.
+See [docs/cloudflare-fqdns.md](docs/cloudflare-fqdns.md) for details.
+
 
 ## One-time per-institution setup
 
@@ -225,7 +231,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 * add SendGrid support as an additional option to SMTP
   * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
-* fqdns.json (get direct from Cloudflare instead; refresh if --all or multiple sites and >= 24h)
 * add cf-cache-status, cache-control checks
   * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 * finish implementing better secrets handling
@@ -237,7 +242,9 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 * rework everything from ~3,700 line script into a combination of checks (in the `checks` directory), plugins (where appropriate), and other Python files/packages
 * refactor the program to take the most advatage of the program's check framework,plugin framework, and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality under `./checks` and `./plugins` wherever it is appropriate. Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
 * Add ruff for linting+formatting, switch from "house styles" to best-practice/standard Python styles
+* update dependencies
 * switch to Pantheon API where possible
+* parallelize where safe and possible, both within a single site (careful about data dependencies!) as well as handling a predefinied number of multiple sites in parallel (when run with `--all` or multiple sites explicitly specified)
 * add everything to its-webhosting/terraform-infra repo that should be there
 
 * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.

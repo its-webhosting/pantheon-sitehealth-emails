@@ -218,6 +218,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="load weekly and monthly Pantheon metrics into the database and then stop, "
         "ignoring all other command line options",
     )
+    # Refreshing fqdns.json (the map of Cloudflare-proxied FQDNs) from the Cloudflare API is
+    # handled by the cloudflare plugin.  --update-cloudflare-fqdns forces a refresh;
+    # --no-update-cloudflare-fqdns suppresses the automatic stale-file refresh.  They are
+    # contradictory, so make them mutually exclusive (argparse reports the conflict).
+    cloudflare_fqdns_group = args_parser.add_mutually_exclusive_group()
+    cloudflare_fqdns_group.add_argument(
+        "--update-cloudflare-fqdns",
+        action="store_true",
+        default=False,
+        help="force-refresh fqdns.json from Cloudflare before this run "
+        "(requires the [Cloudflare] section to be enabled)",
+    )
+    cloudflare_fqdns_group.add_argument(
+        "--no-update-cloudflare-fqdns",
+        action="store_true",
+        default=False,
+        help="suppress the automatic refresh of a stale fqdns.json",
+    )
     args_parser.add_argument(
         "--verbose",
         "-v",
@@ -1149,6 +1167,17 @@ def umich_enabled() -> bool:
     )
 
 
+def cloudflare_enabled() -> bool:
+    """True when [Cloudflare].enabled is set.
+
+    Read from config, NOT `"plugin.cloudflare" in sc.plugin`: every plugin package is imported
+    regardless of `enabled` (the gating lives inside the plugin's __init__), so the membership
+    test is always True.  This is the true signal, and it guards the plugin_context reads
+    (cloudflare_ipv*_nets, proxied_fqdns) that exist only when enabled.
+    """
+    return bool(sc.config.get("Cloudflare", {}).get("enabled"))
+
+
 def main() -> None:
 
     sc.debug(f"Loading configuration from {sc.options.config}")
@@ -1185,6 +1214,15 @@ def main() -> None:
         not sc.options.all and len(sc.options.sites) == 0
     ):
         sys.exit("You must specify either at least one site or the --all option.")
+
+    # --update-cloudflare-fqdns only does anything with the Cloudflare plugin enabled; refuse it
+    # otherwise rather than silently doing nothing.  (Gate on config, not `"plugin.cloudflare" in
+    # sc.plugin`: every plugin package is imported regardless of `enabled`.)
+    if sc.options.update_cloudflare_fqdns and not sc.config.get("Cloudflare", {}).get("enabled"):
+        sys.exit(
+            "--update-cloudflare-fqdns requires the [Cloudflare] section to be enabled in the config."
+        )
+
     if sc.options.verbose:
         sc.debug("Arguments:")
         pprint(sc.options)
@@ -1284,10 +1322,9 @@ def main() -> None:
     site_savings = []
     all_warnings = []
     site_results = {}
-    cloudflare_enabled = "plugin.cloudflare" in sc.plugin
     sc.debug(
         "Cloudflare is "
-        + ("[bold green]enabled" if cloudflare_enabled else "[bold red]DISABLED")
+        + ("[bold green]enabled" if cloudflare_enabled() else "[bold red]DISABLED")
     )
     smtp_enabled = bool(sc.config.get("SMTP", {}).get("enabled"))
     sc.debug(
@@ -1560,23 +1597,10 @@ and to find out what went wrong:
 
         sc.invoke_hooks("check", site_context)
 
-        # Get the list of all proxied Cloudflare FQDNs.
-        # This file is created by running the following cloudflare-support-tools command:
-        #   get_proxied_fqdns --output fqdns.json
-        # Warn if the file pointed to by the symlink is more than a day old.
-        proxied_fqdns_file = "fqdns.json"
-        if os.path.islink(proxied_fqdns_file):
-            proxied_fqdns_file = os.readlink(proxied_fqdns_file)
-        if time.time() - os.path.getmtime(proxied_fqdns_file) > 86400:
-            sc.console.print(
-                f":exclamation: [bold red] ATTENTION: {proxied_fqdns_file} is more than a day old!"
-            )
-            if sc.options.all:
-                sys.exit(
-                    "Exiting because --all was specified. Please update fqdns.json"
-                )
-        with open(proxied_fqdns_file, "r") as f:
-            proxied_fqdns = json.load(f)
+        # The set of Cloudflare-proxied FQDNs (fqdns.json) is fetched-or-loaded once, before this
+        # loop, by the cloudflare plugin's update_and_load_proxied_fqdns setup hook; read it from
+        # plugin_context here.  Only consulted below under `if cloudflare_enabled` (which is where
+        # the plugin_context bag exists).
 
         # Query Pantheon for the site's domains
         # TODO: check domains for site
@@ -1598,6 +1622,7 @@ and to find out what went wrong:
         fqdns_behind_cloudflare = []
         not_in_dns = []
         behind_cloudflare_not_proxied = []
+        proxied_in_multiple_zones = []
         if isinstance(domains, dict):
             for d in domains.keys():
                 domain = domains[d]
@@ -1619,12 +1644,12 @@ and to find out what went wrong:
                 ) = classify_hostname_dns(
                     hostname,
                     site["name"],
-                    cloudflare_enabled,
+                    cloudflare_enabled(),
                     sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv4_nets"]
-                    if cloudflare_enabled
+                    if cloudflare_enabled()
                     else [],
                     sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv6_nets"]
-                    if cloudflare_enabled
+                    if cloudflare_enabled()
                     else [],
                 )
                 for n in dns_notices:
@@ -1642,20 +1667,30 @@ and to find out what went wrong:
                 # Skip the Cloudflare classification on a transient resolver failure: with
                 # 0/0 counts it would otherwise report "not behind Cloudflare" for a host
                 # whose config never changed, contradicting the transient notice (P4).
-                if cloudflare_enabled and not dns_transient:
+                if cloudflare_enabled() and not dns_transient:
                     if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
                         sc.console.print(
                             f":exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare"
                         )
                         fqdns_not_behind_cloudflare.append(hostname)
                     if dns_points_at_cloudflare > 0:
-                        if hostname not in proxied_fqdns:
+                        if hostname not in sc.plugin_context["plugin.cloudflare"]["proxied_fqdns"]:
                             sc.console.print(
                                 f":exclamation: [bold red] ATTENTION: {hostname} is behind Cloudflare but not proxied"
                             )
                             behind_cloudflare_not_proxied.append(hostname)
                         else:
                             fqdns_behind_cloudflare.append(hostname)
+                            # Warn if this proxied domain lives in more than one Cloudflare zone
+                            # (only known on a fresh fetch; the file keeps a single zone_id).
+                            if hostname in sc.plugin_context["plugin.cloudflare"].get(
+                                "fqdn_zone_conflicts", {}
+                            ):
+                                sc.console.print(
+                                    f":exclamation: [bold red] ATTENTION: {hostname} is proxied "
+                                    "through more than one Cloudflare zone"
+                                )
+                                proxied_in_multiple_zones.append(hostname)
 
             custom_domains = [
                 d for d in domains.keys() if domains[d]["type"] == "custom"
@@ -1825,6 +1860,34 @@ Steps <"https://documentation.its.umich.edu/node/4237> to ensure the
 site is configured to work with Cloudflare and to turn on proxying.
 
 {"\n".join([f"  * {n}" for n in fqdns_not_behind_cloudflare])}
+
+""",
+                    }
+                )
+
+            if len(proxied_in_multiple_zones) > 0:
+                site_context.add_notice(
+                    {
+                        "type": "warning",
+                        "icon": "&#x26A0;",  # warning sign
+                        "csv": f"{site['name']},proxied-in-multiple-cloudflare-zones,"
+                        + ",".join(proxied_in_multiple_zones),
+                        "short": "domain in multiple Cloudflare zones",
+                        "message": f"""
+<p>The following domains are configured (proxied) in more than one Cloudflare zone.  Serving a domain
+from multiple zones can cause inconsistent caching, TLS, and security settings.  Please consolidate
+each domain into a single Cloudflare zone.</p>
+<ul style="list-style-type: none;">
+{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in proxied_in_multiple_zones])}
+</ul>
+""",
+                        "text": f"""
+The following domains are configured (proxied) in more than one
+Cloudflare zone.  Serving a domain from multiple zones can cause
+inconsistent caching, TLS, and security settings.  Please consolidate
+each domain into a single Cloudflare zone.
+
+{"\n".join([f"  * {n}" for n in proxied_in_multiple_zones])}
 
 """,
                     }

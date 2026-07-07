@@ -42,7 +42,9 @@ not to owners — this is the primary safety mechanism, always dry-run first. `-
 only refreshes traffic data; `--only-warn` checks sites for warnings without generating
 reports or sending mail; `--import-older-metrics` backfills Pantheon's weekly/monthly
 aggregates (and is mutually exclusive with `--create-tables`); `-v`/`-vv`/`-vvv` increase
-verbosity (`--create-tables` forces `-vvv`).
+verbosity (`--create-tables` forces `-vvv`). `--update-cloudflare-fqdns` /
+`--no-update-cloudflare-fqdns` (mutually exclusive) force / suppress the `fqdns.json` refresh
+(Cloudflare plugin; see the fqdns note under Architecture).
 
 ## Required runtime credentials / external tools
 
@@ -146,9 +148,36 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
   `--smtp-username` → `[SMTP].username` → `""`), and `password` (`<{secret env SMTP_PASSWORD}`).
   Keep new institution-specific behavior behind config / the `umich` packages — use the
   `umich_enabled()` helper to gate U-M-only checks (e.g. the fqdns-gated Cloudflare-cache checks).
-- **Cloudflare auth**: `plugin/cloudflare/ips.py` builds the client **only** from `[Cloudflare]`
-  config (no direct-env fallback) — `api_token` if present (preferred), else `email` + `api_key`
-  (renamed from the old `member_email`/`member_api_key`). Missing creds while enabled → clear exit.
+- **Cloudflare auth + shared client**: the plugin builds **one** `Cloudflare` client from
+  `[Cloudflare]` config (no direct-env fallback) — `api_token` if present (preferred), else
+  `email` + `api_key` (renamed from the old `member_email`/`member_api_key`); missing creds while
+  enabled → clear exit. `plugin/cloudflare/client.py` has `build_client()` (auth) and
+  `get_client()` (**lazy** build-or-return, cached in
+  `sc.plugin_context['plugin.cloudflare']['client']`). `__init__.py` stashes a reference to
+  `get_client` in the bag (`['get_client']`); `ips.py` and `fqdns.py` call
+  `sc.plugin_context['plugin.cloudflare']['get_client']()` — so they import nothing from the plugin
+  (stay standalone-loadable by the tests) and there is **no hook-ordering dependency** (the client
+  builds on first use, whichever hook runs first). **Cred-resolution invariant:** the client is
+  built at the setup-hook stage (after pass-1 substitution, before the deferred pass), so Cloudflare
+  creds must be pass-1-resolvable (nothing today defers them; only `plugin.umich` returns
+  `sc.DEFER`).
+- **Cloudflare proxied-FQDN fetch (`plugin/cloudflare/fqdns.py`)**: a setup hook
+  (`update_and_load_proxied_fqdns`) fetches every proxied FQDN (accounts → zones →
+  `dns.records.list(proxied=True)`), **writes `fqdns.json` atomically** (temp + `os.replace`,
+  replacing a symlink with a plain file), and loads it into
+  `sc.plugin_context['plugin.cloudflare']['proxied_fqdns']`. This replaces the old per-site file
+  read; the per-site loop only does a keys-only membership test (`hostname not in …`), so
+  `fqdns.json` values are now `{zone_id, origins}` objects (was bare arrays) but **only the keys
+  are consumed** — old array-format files still load, and `zone_id` is stored for a future feature,
+  unused now. Refresh rules (see `docs/cloudflare-fqdns.md`): update if the file is missing, or
+  stale (>24h) + processing multiple sites + not `--no-update-cloudflare-fqdns`, or
+  `--update-cloudflare-fqdns` (forces; requires `[Cloudflare]` enabled). `--update` /
+  `--import-older-metrics` skip the refresh (they never consume fqdns). Any fetch error is fatal;
+  **zero zones is fatal** (likely a DNS:Read scope problem).
+- **`cloudflare_enabled` is read from config**, `bool(sc.config["Cloudflare"]["enabled"])`, **not**
+  `"plugin.cloudflare" in sc.plugin` (which is always True — every plugin package is imported
+  regardless of `enabled`; that was a latent bug that would `KeyError` for a disabled adopter with
+  custom domains).
 - **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
@@ -183,7 +212,9 @@ tool stays reusable by other institutions.
 - The core script is deliberately one big file; match that style rather than splitting it,
   and put institution- or integration-specific code in `plugin/`/`check/` packages.
 - Generated artifacts land in `build/` (git-ignored); `database.db`, `fqdns.json`, and the
-  `.eml`/`.html`/`.txt` outputs are working data, not source.
+  `.eml`/`.html`/`.txt` outputs are working data, not source. `fqdns.json` is now **program-
+  generated** by the cloudflare plugin (was produced by a standalone script); it is git-ignored
+  yet still tracked (`git ls-files` shows it) — `git rm --cached fqdns.json` to stop tracking it.
 - Type-hint tuples like `-> (str, str, bool)` appear throughout; these are the existing
   (technically non-idiomatic) house style — follow the surrounding code.
 - There is an active TODO list in `README.md` describing planned work (daily traffic alerts,

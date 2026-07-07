@@ -119,7 +119,10 @@ name = "database.db"
 enabled = false
 # Credentials come entirely from the settings below (no direct-environment fallback).  Use either
 # an API token (preferred, uncomment api_token) or the email + Global API Key pair.  Each value can
-# be a literal or an <{...}> substitution (see the top of this file).
+# be a literal or an <{...}> substitution (see the top of this file).  The credentials need
+# DNS:Read.  When enabled, the tool fetches the set of Cloudflare-proxied FQDNs (fqdns.json)
+# directly from the Cloudflare API and auto-refreshes it (see docs/cloudflare-fqdns.md); the two
+# --*-cloudflare-fqdns flags control that refresh.
 email   = "<{secret env CLOUDFLARE_EMAIL}"
 api_key = "<{secret env CLOUDFLARE_API_KEY}"
 # api_token = "<{secret env CLOUDFLARE_API_TOKEN}"   # preferred when uncommented; overrides email/api_key

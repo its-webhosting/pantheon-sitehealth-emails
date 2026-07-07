@@ -116,8 +116,12 @@ def test_secret_env_does_not_collide_with_aws_secret(psh, env_plugin, monkeypatc
 # ── Property: set -> get round-trips; unset -> default ────────────────────────────────
 @given(
     name=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=1, max_size=12),
-    # os.environ rejects the null byte in values (an OS constraint, not a get_env concern).
-    value=st.text(alphabet=st.characters(blacklist_characters="\x00"), max_size=50),
+    # os.environ rejects the null byte and lone surrogates in values (OS/UTF-8 constraints, not a
+    # get_env concern).
+    value=st.text(
+        alphabet=st.characters(blacklist_characters="\x00", blacklist_categories=["Cs"]),
+        max_size=50,
+    ),
 )
 def test_property_set_get_roundtrip(name, value):
     # os.environ managed directly (not via the function-scoped monkeypatch fixture, which

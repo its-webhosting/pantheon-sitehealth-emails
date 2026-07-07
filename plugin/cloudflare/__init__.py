@@ -8,6 +8,18 @@ import script_context as sc
 # fallback here.
 if 'Cloudflare' in sc.config and 'enabled' in sc.config['Cloudflare'] and sc.config['Cloudflare']['enabled']:
 
+    from .client import get_client
     from .ips import get_cloudflare_ips
-    sc.plugin_context['plugin.cloudflare'] = {}
-    sc.hooks['setup'].append({ 'name': 'plugin.cloudflare.ips.get_cloudflare_ips', 'func': get_cloudflare_ips})
+    from .fqdns import update_and_load_proxied_fqdns
+
+    # Expose the shared-client accessor in the state bag so ips.py / fqdns.py can reach it without
+    # importing this package (keeps them standalone-loadable) and without any hook-ordering
+    # dependency -- the client is built lazily on first use, whichever hook runs first.
+    bag = sc.plugin_context.setdefault('plugin.cloudflare', {})
+    bag['get_client'] = get_client
+
+    for name, func in (
+        ('plugin.cloudflare.ips.get_cloudflare_ips', get_cloudflare_ips),
+        ('plugin.cloudflare.fqdns.update_and_load_proxied_fqdns', update_and_load_proxied_fqdns),
+    ):
+        sc.hooks['setup'].append({'name': name, 'func': func})

@@ -162,7 +162,11 @@ def make_workdir(base):
             raise FixtureNotFoundError(f"expected repo asset missing: {src}")
         (work / asset).symlink_to(src)
     (work / "news").mkdir()
-    # No proxied FQDNs -> the DNS/FQDN loop finds nothing to resolve (offline-safe).
+    # A neutral fqdns.json.  With the offline configs all Cloudflare-*disabled*, the cloudflare
+    # plugin's fqdns setup hook never registers and the program never reads this file -- so it is
+    # effectively vestigial today.  Kept as belt-and-suspenders: were a Cloudflare-enabled
+    # subprocess config ever added, a fresh empty file makes decide_fqdns_update() return "skip"
+    # (exists + fresh + single-site), so the run stays offline instead of hitting the real API.
     (work / "fqdns.json").write_text("{}\n")
     return work
 
