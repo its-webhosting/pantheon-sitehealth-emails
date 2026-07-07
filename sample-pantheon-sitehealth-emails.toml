@@ -1,4 +1,23 @@
 
+# ---------------------------------------------------------------------------------------------
+# Value substitutions
+#
+# Any string value below may pull its value from an external source with a "<{ ... }>" marker:
+#
+#   <{env NAME}                 -> the value of environment variable NAME (error if unset)
+#   <{secret env NAME}          -> same as above (the "secret" prefix is an accepted alias)
+#   <{env NAME default}         -> NAME if set, else the literal "default" (quote for spaces)
+#   <{secret aws SECRET KEY}    -> a key from an AWS Secrets Manager secret (needs [AWS] enabled)
+#
+# A referenced environment variable that is not set aborts the run with an error naming the
+# setting and the variable -- unless a default was supplied.  A variable that is set but empty
+# yields "" (set is not the same as unset).
+#
+# Disabled sections: if a section has `enabled = false`, only `enabled` is kept and all other
+# settings in that section are dropped before substitution -- so turning a feature off never
+# requires that feature's secrets/environment variables to exist.
+# ---------------------------------------------------------------------------------------------
+
 [Pantheon]
 org_id = "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9"
 
@@ -98,10 +117,12 @@ name = "database.db"
 
 [Cloudflare]
 enabled = false
-# Values to use if the environnment variables CLOUDFLARE_EMAIL
-# or CLOUDFLARE_API_KEY are not set.
-member_email = "user@example.com"
-member_api_key = "xxxxxxxx"
+# Credentials come entirely from the settings below (no direct-environment fallback).  Use either
+# an API token (preferred, uncomment api_token) or the email + Global API Key pair.  Each value can
+# be a literal or an <{...}> substitution (see the top of this file).
+email   = "<{secret env CLOUDFLARE_EMAIL}"
+api_key = "<{secret env CLOUDFLARE_API_KEY}"
+# api_token = "<{secret env CLOUDFLARE_API_TOKEN}"   # preferred when uncommented; overrides email/api_key
 
 
 [AWS]
@@ -126,10 +147,13 @@ default_region = "us-east-1"
 # dry_run_username_domain = "example.edu"                      # {smtp-username}@<this> is added to To:
 
 [SMTP]
-# Outgoing mail server.  Optional; defaults to the U-M server.  The password comes from the
-# SMTP_PASSWORD environment variable (not stored here).
-# host = "smtp.example.edu"
-# port = 465
+# Outgoing mail server.  When enabled, the tool sends the generated reports (to the dry-run test
+# addresses unless --for-real is given); when disabled it only writes the .eml files.
+enabled  = false
+host     = "smtp.mail.umich.edu"
+port     = 465
+username = "<{env USER}"                    # override at runtime with --smtp-username
+password = "<{secret env SMTP_PASSWORD}"    # required when enabled
 
 [News]
 # News items can go in this section here and/or in *.toml files in the directory below.

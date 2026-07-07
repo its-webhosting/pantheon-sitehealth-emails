@@ -18,11 +18,8 @@ There should be a second convenience method to invoke the same functionality tha
 password = "<{env DATABASE_PASSWORD}"
 ```
 
-Also change any code that retrieves configuration information from environment variables to use configuration file settings instead, adding settings to the configuration files where needed for this.  That should include all of the following:
+Also change any code in the program itself (but not PyPI/vendor packages) that retrieves configuration information from the process environment variables directly to instead use configuration file settings, adding settings to the configuration files where needed for this.  That should include all of the following:
 
-* In the `[AWS]` configuration file section,
-    * add a setting `aws_access_key_id` with the value `<{secret env AWS_ACCESS_KEY_ID}`
-    * add a setting `aws_secret_access_key` with the value `<{secret env AWS_SECRET_ACCESS_KEY}`
 * Add a `[SMTP]` section to the configuraton file:
     * add settings to the configuration file that are already used by the current code:
         * `host` with the value `smtp.mail.umich.edu`
@@ -30,19 +27,17 @@ Also change any code that retrieves configuration information from environment v
     * add a setting named `enabled` with the value `false`, and change existing code to use this
     * add a setting `password` with the value `<{secret env SMTP_PASSWORD}`, and change existing code to use this
     * add a setting `username` with the value `<{env USER}`, and change existing code to use this but keep it overridable via the `--smtp-username` command line option
-* Make sure the program accepts/uses *either* CLOUDFLARE_API_TOKEN (preferred, if present) or CLOUDFLARE_API_KEY + CLOUDFLARE_API_EMAIL.
+* Add support to the script/plugins for using CLOUDFLARE_API_TOKEN (preferred, if present/configured) with the `cloudflare` package, falling back to CLOUDFLARE_API_KEY + CLOUDFLARE_EMAIL.
 * In the `[Cloudflare]` section,
-    * rename the `member_email` setting to `cloudflare_api_email` and set the value to `<{secret env CLOUDFLARE_API_EMAIL}`, changing existing code to use the new name
-    * rename the `member_api_key` setting to `cloudflare_api_key`, and set the value to `<{secret env CLOUDFLARE_API_KEY}`, changing existing code to use the new name
-    * add a commented-out setting named `cloudflare_api_token` that defaults to the value `<{secret env CLOUDFLARE_API_TOKEN}` when uncommented, changing existing code to use this new setting
-
-Did I miss any environment variables that should be added as configuration settings?
+    * rename the `member_email` setting to `email` and set the value to `<{secret env CLOUDFLARE_EMAIL}`, changing existing code to use the new name
+    * rename the `member_api_key` setting to `api_key`, and set the value to `<{secret env CLOUDFLARE_API_KEY}`, changing existing code to use the new name
+    * add a commented-out setting named `api_token` that defaults to the value `<{secret env CLOUDFLARE_API_TOKEN}` when uncommented, to be used by the new support for CLOUDFLARE_API_TOKEN above.
 
 For a configuration section that has an `enabled` setting with the value `false`, populate only the value for `enabled` in the processed configuration, skipping all other settings in that section. Otherwise (if there is no `enabled` setting in the section or if its value is anything other than `false`), handle the section's settings normally. For settings that are handled normally, if a setting's value attempts to reference an environment varaible that does not exist, exit immediately with a helpful error message.
 
-Is it easy and reasonable to add an optional default last argument for the `env` plugin (both forms)?  If so, propose 2-3 ways to do that (in this case, an reference to an environment variable that is unset would use the default rather than exiting with an error); if not, then mark this idea as "not in scope".
+Is it easy and reasonable to add an optional default last argument for the `env` plugin (both forms of the substitution)?  If so, propose 2-3 ways to do that (in this case, an reference to an environment variable that is unset would use the default rather than exiting with an error); if not, then mark this idea as "not in scope".
 
-NOTE: I have re-enabled (uncommented) the previously commented out SMTP code. The script should send email if SMTP is enabled and configured in the configuration file, but don't write tests for this yet or test it, we'll do that in a later session.  I have set the `SMTP_PASSWORD` environment variable to the script can run and send emails.
+NOTE: I have re-enabled (uncommented) the previously commented out SMTP code. The script should send email (to just the test addresses unless the `--for-real` command line option is included) if SMTP is enabled and configured in the configuration file. Don't write tests for SMTP sending yet; we'll do that in a later session.  I have set the `SMTP_PASSWORD` environment variable to the script can run and send emails.
 
 # Methodology
 

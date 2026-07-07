@@ -48,10 +48,13 @@ verbosity (`--create-tables` forces `-vvv`).
 
 Running against real sites needs, in the environment: `terminus` authenticated with a
 Pantheon machine token; an SSH agent holding the Pantheon key (`ssh-add`); `SMTP_PASSWORD`
-(U-M Kerberos password for `smtp.mail.umich.edu:465`, hardcoded in `smtp_login()`);
-optionally `AWS_*` and `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY`. `php` + `composer` must be
-on PATH. Note the README warning: Terminus does not work with PHP 8.4 — use PHP 8.3 or
-earlier.
+(U-M Kerberos password, referenced by `[SMTP].password = "<{secret env SMTP_PASSWORD}"`);
+optionally `AWS_*` and `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY` (or `CLOUDFLARE_API_TOKEN`),
+referenced by the `[Cloudflare]` settings. **No credentials are read from the environment
+directly anymore** (except the two `AWS_*` boto-plumbing lines in `plugin/aws/__init__.py`):
+everything flows through config `<{env …}>` / `<{secret env …}>` substitutions (see the
+config-substitution note under Architecture). `php` + `composer` must be on PATH. Note the
+README warning: Terminus does not work with PHP 8.4 — use PHP 8.3 or earlier.
 
 ## Architecture
 
@@ -70,18 +73,36 @@ available to every function at call time.
 
 `find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
-containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.umich`,
+containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
 `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
-sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`,
+sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`, `env/get_env.py`,
 `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
-only register if `[Cloudflare].enabled`). Modules register by:
+only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{env NAME}` /
+`<{secret env NAME}` substitutions, with an optional trailing default) registers
+**unconditionally** — no `[Env]` section — because it has no dependency and core config
+(`[SMTP].username = "<{env USER}"`) needs it. Modules register by:
 - **Hooks** — `sc.add_hook('setup', {...})` or appending to `sc.hooks['check']`. `setup`
   hooks run once (DB connections, fetching Cloudflare IPs, etc.); `check` hooks run once
   per site with the site's `site_context`. Invoked via `sc.invoke_hooks(name, ...)`.
 - **Config substitutions** — appending to `sc.substitutions`. TOML string values
   containing `<{ ... }>` are resolved by `process_config()`/`config_substitution()`
-  against these registered functions. `process_config()` is run twice: once before `setup`
-  hooks and once after (so hooks can populate data that later substitutions consume).
+  against these registered functions. `process_config()` is run twice: a pre-setup pass resolves
+  everything, then a post-setup `deferred_pass=True` pass re-resolves **only** substitutions that
+  deferred. A substitution whose backing data a `setup` hook populates (e.g. `plugin.umich`'s
+  `plan_info`, which needs the portal DB) returns the `sc.DEFER` sentinel; `config_substitution`
+  re-emits its marker with an invisible NUL tag that only the deferred pass matches. This is what
+  lets pass 2 resolve deferrals **without** re-interpreting a pass-1 final value that merely
+  contains a `<{…}>` sequence (e.g. a password) — so route secrets through substitutions freely.
+  A substitution function aborts the run by raising `sc.ConfigSubstitutionError` (caught in
+  `config_substitution`, which prints the offending config *path* + message and exits) — this is
+  how `plugin.env.get_env` (missing env var) and `plugin.aws.get_secret` (missing secret key) both
+  report failures. Just before those substitutions run,
+  `main()` calls `gate_disabled_sections()`: any top-level section with `enabled = false`
+  (boolean) is reduced to just `{'enabled': False}`, dropping its other keys **before**
+  substitution — so a disabled feature's `<{secret env …}>` values are never required to exist.
+  For substitutions that take an optional trailing arg (like `env`), register the shorter
+  pattern **before** the longer one (`['env','$name']` before `['env','$name','$default']`), or
+  the best-match engine mis-binds and `KeyError`s.
 
 `plugin/` = data sources / integrations (aws secrets, cloudflare IPs, umich portal DB);
 `check/` = site-health checks that add report sections (e.g. `check/umich/sitelens.py`).
@@ -120,18 +141,24 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
 - **Email/SMTP config**: sender identity and the mail server come from the optional
   `[Email]`/`[SMTP]` config sections (`from`/`reply_to`/`bcc`/`dry_run_to`/
   `dry_run_username_domain`/`msgid_domain`, `host`/`port`); when a key is absent the default is
-  the original U-M literal, so U-M output is unchanged. Keep new institution-specific behavior
-  behind config / the `umich` packages — use the `umich_enabled()` helper to gate U-M-only
-  checks (e.g. the fqdns-gated Cloudflare-cache checks).
+  the original U-M literal, so U-M output is unchanged. `[SMTP]` also holds `enabled` (gates the
+  send, below), `username` (default `<{env USER}`; the `sc.smtp_username()` helper resolves
+  `--smtp-username` → `[SMTP].username` → `""`), and `password` (`<{secret env SMTP_PASSWORD}`).
+  Keep new institution-specific behavior behind config / the `umich` packages — use the
+  `umich_enabled()` helper to gate U-M-only checks (e.g. the fqdns-gated Cloudflare-cache checks).
+- **Cloudflare auth**: `plugin/cloudflare/ips.py` builds the client **only** from `[Cloudflare]`
+  config (no direct-env fallback) — `api_token` if present (preferred), else `email` + `api_key`
+  (renamed from the old `member_email`/`member_api_key`). Missing creds while enabled → clear exit.
 - **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
   (traffic surge bars, SiteLens gauges) are generated with matplotlib and attached as inline
   images (`make_msgid` CIDs). Everything is assembled into a MIME `EmailMessage` and written
-  to `build/<site>.eml`. **The SMTP send is currently commented out** (`smtp_login()`/
-  `send_message`, a TODO pending SendGrid support) — no mail is actually sent; the tool only
-  produces `.eml` files. `--for-real` still selects the real `To`/`Bcc` recipients vs. the
-  dry-run addressing baked into the assembled message.
+  to `build/<site>.eml`. **The SMTP send (`smtp_login()`/`send_message`) is live but gated on
+  `[SMTP].enabled`**: when disabled (or `[SMTP]` absent) only the `.eml` files are written; when
+  enabled the tool sends (to test addresses unless `--for-real`). `--for-real` selects the real
+  `To`/`Bcc` recipients vs. the dry-run addressing; on a dry run the operator copy
+  (`{username}@{domain}`) is only added to `To:` when a username is resolvable.
 
 ### Database
 

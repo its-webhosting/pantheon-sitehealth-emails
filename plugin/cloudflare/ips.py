@@ -12,10 +12,17 @@ def get_cloudflare_ips():
 
     global cloudflare_ipv4_nets, cloudflare_ipv6_nets
 
-    cloudflare = Cloudflare(
-        api_email=sc.config['Cloudflare']['member_email'],
-        api_key=sc.config['Cloudflare']['member_api_key']
-    )
+    cf = sc.config['Cloudflare']
+    api_token = cf.get('api_token')
+    if api_token:
+        cloudflare = Cloudflare(api_token=api_token)
+    else:
+        email = cf.get('email')
+        api_key = cf.get('api_key')
+        if not email or not api_key:
+            sys.exit('ERROR: [Cloudflare] is enabled but needs either api_token, '
+                     'or both email and api_key.')
+        cloudflare = Cloudflare(api_email=email, api_key=api_key)
 
     with sc.console.status('[bold green]Getting Cloudflare IP ranges ...'):
         try:

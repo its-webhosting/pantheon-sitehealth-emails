@@ -1,0 +1,3201 @@
+ ▐▛███▜▌   Claude Code v2.1.202
+▝▜█████▛▘  Opus 4.8 · Claude Max
+  ▘▘ ▝▝    /workspace
+
+ ▎ Fable 5 is back.
+ ▎ Until July 7, you can use up to 50% of your plan's weekly usage limit on Fable 5. If you hit your limit, you can continue on Fable 5 with usage credits. Fable 5 draws down usage faster than Opus 4.8. Learn more (https://support.claude.com/en/articles/15424964-claude-fable-5-promotional-access)
+   +1 more · /status
+
+❯ /clear                                                                        
+
+❯ /plan                                                                         
+  ⎿  Enabled plan mode
+
+❯ @development/2026-07-06-env-plugin/PROMPT.md                                  
+  ⎿  Read development/2026-07-06-env-plugin/PROMPT.md (171 lines)
+
+● I'll start by invoking the brainstorming skill, since this is design work,
+  then explore the codebase.
+
+● Skill(superpowers:brainstorming)
+  ⎿  Successfully loaded skill
+
+● Let me explore the codebase in parallel to understand the current state. I'll
+  launch focused Explore agents.
+
+● 3 background agents launched (↓ to manage)
+   ├ Explore config substitution/plugin system
+   ├ Find direct env var reads
+   └ Explore config files and SMTP/Cloudflare sections
+
+● These are running in the background. Let me wait for them to complete before
+  proceeding.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The three Explore agents are working in parallel. I'll continue once they
+  report back — you'll see me resume automatically when they complete.
+
+✻ Cooked for 1m 19s
+
+● Agent "Explore config substitution/plugin system" finished · 1m 43s
+
+● First agent is back with strong detail. Key finding: the delimiter is a single
+  } (not }>), and substitutions use a best-match scoring engine — which has
+  real implications for the optional-default question. Waiting on the other two
+  agents.
+
+✻ Churned for 30s
+
+● Agent "Find direct env var reads" finished · 1m 45s
+
+● Second agent confirms exactly 6 direct env-read sites and that SMTP send is
+  live. Waiting on the config-files agent.
+
+✻ Worked for 6s
+
+● Agent "Explore config files and SMTP/Cloudflare sections" finished · 2m 50s
+
+● All three explorations are in. I have a clear picture. Before finalizing
+  questions, I need to verify how the test harness currently supplies
+  --smtp-username (this determines whether the SMTP/username changes disturb the
+  goldens). Let me read the relevant test files directly.
+
+  Searched for 1 pattern, ran 1 shell command (ctrl+o to expand)
+
+● The test harness always passes --smtp-username testuser explicitly for e2e
+  runs, so the goldens are insulated from the username-default change (only
+  test_argparse_contract.py:24 asserts the old USER default and would need
+  updating). Good — that de-risks the SMTP change.
+
+  I now have enough to interview. Four decisions genuinely need your input:
+
+● User answered Claude's questions:
+  ⎿  · How should the new `env` plugin be registered/gated? Unlike 
+     aws/cloudflare/umich, `env` has no external dependency or setup cost, and 
+     the core [SMTP] config you specified uses `<{env USER}` — which fails to 
+     resolve if the plugin isn't registered before config substitution runs. → 
+     Always-on (no [Env] section)
+     · When [SMTP].enabled=false (so the strip rule removes username/password) 
+     and no --smtp-username is passed, how should the operator username for the 
+     dry-run To: header resolve? (e2e tests always pass --smtp-username, so this
+     only affects real ad-hoc runs.) → CLI > config > omit
+     · Add the optional default argument to the `env` plugin? I verified it's 
+     implementable cleanly via a trailing argument (`<{env FOO mydefault}` / 
+     `<{secret env FOO mydefault}`), registering both 2-arg and 3-arg patterns 
+     in a specific order so the best-match engine binds correctly. → Yes — 
+     trailing arg
+     · Renaming [Cloudflare].member_email→email / member_api_key→api_key and 
+     adding [SMTP] settings will break the live U-M config (a separate private 
+     repo, symlinked in as pantheon-sitehealth-emails.toml) until it's migrated.
+     How should that repo be handled? → Update prod config repo too
+● Good — all four answered. Let me verify one implementation landmine before
+  writing the spec: that the installed cloudflare SDK actually accepts an
+  api_token argument (needed for the CLOUDFLARE_API_TOKEN path), and re-read the
+  current client construction.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed: the cloudflare SDK accepts api_token. One more thing I want to nail
+  down before writing the spec — two production-config decisions, since you
+  chose to have me update the live private config repo. These are operational
+  and I don't want to assume:
+
+● User answered Claude's questions:
+  ⎿  · Today, plugin/cloudflare/__init__.py treats 
+     CLOUDFLARE_EMAIL/CLOUDFLARE_API_KEY as OPTIONAL env overrides — if unset, 
+     it falls back to the literal member_email/member_api_key in the config. 
+     After this change, the production config's `email = "<{secret env 
+     CLOUDFLARE_EMAIL}"` will HARD-EXIT if that env var is unset when Cloudflare
+     is enabled. How should the live U-M config handle this? → The code should 
+     always use the settings in the `[Cloudflare]` section of the config. The 
+     user will indicate (by editing the config file) what the values are or 
+     where they come from.  No fallbacks.
+     · For the LIVE U-M config's new [SMTP] section, what should `enabled` be? 
+     (SMTP send is now live code; when enabled, monthly report runs will 
+     actually send — to test addresses unless --for-real. You've set 
+     SMTP_PASSWORD in the environment.) → enabled = true
+
+● All decisions are settled. Let me write the plan file.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● The plan is written. Here's the summary before you approve:
+
+  What this does: Adds an always-on env substitution plugin (<{env NAME} /
+  <{secret env NAME}, with an optional trailing default), then converts all 6
+  direct env reads to config settings that use it — [SMTP]
+  (host/port/enabled/username/password), [Cloudflare] (renamed email/api_key +
+  preferred api_token), and the --smtp-username default. Adds the enabled=false
+  → strip-to-just-enabled rule (applied before substitution, so disabled
+  features never force their env vars to exist), a named ConfigSubstitutionError
+  for helpful path-annotated failures, and gates the now-live SMTP send on
+  [SMTP].enabled.
+
+  Key correctness points I verified: the delimiter is a single }; the best-match
+  engine requires the 2-arg patterns registered before the 3-arg default
+  patterns (else KeyError); e2e goldens are insulated from the username change
+  (tests pass --smtp-username testuser); the cloudflare SDK accepts api_token.
+
+  Confirmed with you: env always-on (no [Env] section); dry-run username
+  CLI→config→omit; optional default via trailing arg; Cloudflare config-only
+  auth with no fallback; live config repo updated too (prod SMTP enabled=true,
+  Cloudflare stays enabled).
+
+  After approval, per your PROMPT methodology, I'll first write
+  development/2026-07-06-env-plugin/SPEC.md, run the adversarial reviewer on it,
+  fix findings, and pause for you to hand-edit SPEC.md — only then write code
+  and tests. Nothing touches the live config/DB during testing.
+
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/.claude/plans/development-2026-07-06-env-plugin-promp-decl
+     arative-neumann.md · /plan to edit
+     Plan: env config-substitution plugin + route all env reads through config
+
+     Context
+
+     pantheon-sitehealth-emails resolves <{ ... }> substitutions in TOML config
+     values against
+     plugin-registered functions (e.g. <{secret aws webinfo db_pass} → AWS
+     Secrets Manager). Today
+     the program also reads process environment variables directly in 6 places,
+     bypassing the
+     config file. This work adds a new env substitution plugin so any setting
+     can be sourced from
+     an environment variable, then converts every direct env read to a config
+     setting that uses it.
+     Outcome: the config file becomes the single source of truth for where
+     values come from; SMTP
+     sending (now live code) is gated and configured; Cloudflare auth is
+     config-driven with token
+     support.
+
+     Verified facts (via code exploration):
+     - Substitution delimiter is <{ ... } (single closing }, regex
+     pantheon-sitehealth-emails:786).
+     Inner text is shlex-split; a best-match scoring engine picks the registered
+     pattern
+     (config_substitution() :721-783). Functions receive positional string args,
+     one per $var
+     named in func_args. Returning None → framework sys.exit(1); raising
+     propagates.
+     - process_config() runs twice in main(): pre-setup (:1105, after plugin
+     import at :1099)
+     and post-setup (:1137). Substitutions must be registered at plugin import
+     time to be usable
+     in the pre-setup pass.
+     - Plugins self-register in plugin/<name>/__init__.py, discovered by
+     find_modules() (non-empty
+     __init__.py), imported in sorted order (plugin.aws < plugin.cloudflare <
+     plugin.env <
+     plugin.umich). Existing plugins gate on '<Sec>' in sc.config and 'enabled' 
+     in ... and ...['enabled'].
+     - Exactly 6 direct env reads in program code: USER (:204, --smtp-username
+     default),
+     SMTP_PASSWORD (:829, smtp_login), CLOUDFLARE_EMAIL/CLOUDFLARE_API_KEY
+     (plugin/cloudflare/__init__.py:9-12), AWS_PROFILE/AWS_DEFAULT_REGION
+     (plugin/aws/__init__.py:10-13, boto plumbing — left as-is, they configure
+     boto not app logic).
+     - SMTP send is LIVE (not commented): smtp_login()+send_message() at
+     :3923-3926.
+     - cloudflare SDK accepts api_token (verified Cloudflare.__init__ params).
+     - e2e/golden runs always pass --smtp-username testuser (conftest.py:238),
+     so the username-default
+     change does not disturb goldens; only
+     tests/unit/test_argparse_contract.py:24 asserts the old
+     USER default and must be updated.
+
+     Decisions (confirmed with user)
+
+     1. env plugin is always-on — registered unconditionally at import (no [Env]
+     section), since
+     core [SMTP].username = "<{env USER}" must resolve regardless of any enable
+     flag.
+     2. SMTP dry-run username precedence: CLI → config → omit. When [SMTP] is
+     disabled (keys
+     stripped) and no --smtp-username, drop the {user}@{domain} operator copy
+     from the dry-run
+     To: (no direct env read remains).
+     3. Optional default arg: yes, trailing form <{env NAME default} / <{secret 
+     env NAME default}.
+     4. Cloudflare auth is config-only, no fallback — remove the os.getenv
+     override block; the code
+     always uses the [Cloudflare] settings as resolved (the user decides in the
+     config where values
+     come from). api_token preferred over email+api_key when present.
+     5. Update the live private config repo (pantheon-sitehealth-emails-config/)
+     too, committed
+     separately. Prod [SMTP].enabled = true; prod [Cloudflare] stays enabled = 
+     true.
+
+     Diagrams
+
+     Substitution resolution (with new env forms):
+     "<{secret env SMTP_PASSWORD}"
+        └─regex─► "secret env SMTP_PASSWORD" ─shlex─► [secret,env,SMTP_PASSWORD]
+             └─best-match─► ['secret','env','$name']  ($name=SMTP_PASSWORD)
+                  └─► get_env("SMTP_PASSWORD")
+                        ├─ set   → value
+                        ├─ unset+default → default
+                        └─ unset+no-default → raise ConfigSubstitutionError
+                               └─engine catches → "ERROR: SMTP.password:
+     environment variable 'SMTP_PASSWORD' is not set" → exit 1
+
+     Section gating vs. substitution ordering (why gate BEFORE substitute):
+     tomllib.load ─► gate_disabled_sections ─► import plugins ─►
+     process_config(pre) ─► setup hooks ─► process_config(post)
+                          │                                             │
+                  [X].enabled is False?                      resolves <{secret
+     env …}>
+                  yes → {enabled:False}  ◄── drops <{secret env MISSING}> so a
+     disabled
+                                               feature never forces its env var
+     to exist
+
+     SMTP username precedence:
+     --smtp-username given? ─yes─► use it
+             │no
+     config[SMTP].username present? ─yes─► use it (= <{env USER}> when SMTP
+     enabled)
+             │no
+        "" → dry-run To omits operator copy; smtp_login (only if enabled) errors
+     clearly
+
+     Cloudflare auth selection (in ips.get_cloudflare_ips):
+     config[Cloudflare].api_token truthy? ─yes─► Cloudflare(api_token=…)
+             │no
+             └─► Cloudflare(api_email=email, api_key=api_key)
+
+     Implementation
+
+     A. New plugin plugin/env/
+
+     - plugin/env/get_env.py — get_env(name, default=_UNSET) using a
+     module-level _UNSET sentinel:
+     return os.environ[name] if name in os.environ (empty-but-set → "", i.e.
+     unset ≠ empty);
+     else return default if provided; else raise 
+     sc.ConfigSubstitutionError(f"environment variable '{name}' is not set").
+     - plugin/env/__init__.py — always-on, appends 4 substitutions in this exact
+     order so the
+     engine's perfect-match short-circuit binds <{env NAME} to the no-default
+     pattern (a 3-arg
+     pattern seen first would KeyError on the missing $default):
+       a. ['env','$name'] → ['$name']
+       b. ['env','$name','$default'] → ['$name','$default']
+       c. ['secret','env','$name'] → ['$name']
+       d. ['secret','env','$name','$default'] → ['$name','$default']
+
+     B. Named-exception error path (engine)
+
+     - script_context.py: add class ConfigSubstitutionError(Exception).
+     - config_substitution() (~:766): wrap best_match["func"](*func_args) in
+     try/except sc.ConfigSubstitutionError as e: → print [bold red]ERROR: 
+     configuration value for {path}: {e} then sys.exit(1). Only this named type
+     is caught; aws's raised exceptions
+     keep propagating (no behavior change). Preserves the existing result is 
+     None → sys.exit(1).
+
+     C. enabled = false section stripping
+
+     - New gate_disabled_sections(config) near process_config in the main
+     script: for each top-level
+     table whose .get('enabled') is False (strict bool), replace with
+     {'enabled': False} and
+     sc.debug(...). Nested tables and non-false values untouched.
+     - Call it in main() immediately after tomllib.load (:1096), before plugin
+     import/substitution
+     so disabled sections' <{secret env …}> are never resolved.
+
+     D. SMTP (route env → config, gate the send)
+
+     - build_arg_parser (:200-206): --smtp-username default None (drop
+     os.environ.get("USER","")).
+     - Add sc.smtp_username() helper in script_context.py:
+     sc.options.smtp_username if not None,
+     else config['SMTP'].get('username',''), else ''.
+     - smtp_login() (:823-830): host/port from [SMTP] (existing defaults kept);
+     username = sc.smtp_username();
+     password = sc.config.get('SMTP',{}).get('password'); if password/username
+     falsy → sys.exit
+     with a clear message (only reached when enabled+sending). Remove
+     os.environ["SMTP_PASSWORD"].
+     - Gate the send block (:3923-3926) on smtp_enabled = 
+     bool(sc.config.get('SMTP',{}).get('enabled'));
+     when disabled, skip smtp_login/send_message (still writes .eml).
+     - Dry-run To: (:3884): build from non-empty parts — dry_run_to always
+     included; append
+     f"{u}@{dry_run_domain}" only when sc.smtp_username() non-empty.
+     Remove/replace the
+     unconditional empty-username sys.exit guard at :1176 (superseded).
+
+     E. Cloudflare (config-only auth + rename + token)
+
+     - plugin/cloudflare/__init__.py: delete the os.getenv override block (lines
+     9-12) and import os;
+     keep the enabled-gated setup-hook registration.
+     - plugin/cloudflare/ips.py: read cf = sc.config['Cloudflare']; if
+     cf.get('api_token') truthy →
+     Cloudflare(api_token=…), else Cloudflare(api_email=cf['email'], 
+     api_key=cf['api_key']).
+
+     F. Config files
+
+     - sample-pantheon-sitehealth-emails.toml: [Cloudflare] rename
+     member_email→email = "<{secret env CLOUDFLARE_EMAIL}",
+     member_api_key→api_key = "<{secret env CLOUDFLARE_API_KEY}", add commented
+     # api_token = "<{secret env CLOUDFLARE_API_TOKEN}"; rewrite [SMTP] to
+     enabled = false, host = "smtp.mail.umich.edu", port = 465, username = 
+     "<{env USER}",
+     password = "<{secret env SMTP_PASSWORD}"; add explanatory comments for the
+     env plugin + default arg.
+     - Live repo
+     pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml
+     (committed separately):
+     same [Cloudflare] rename + commented api_token; add [SMTP] with enabled = 
+     true, host,
+     port, username = "<{env USER}", password = "<{secret env SMTP_PASSWORD}".
+     - Test fixtures: rename Cloudflare keys in
+     minimal.toml/minimal-nonumich.toml (both enabled=false
+     → stripped anyway, rename for consistency; no golden impact). Add [SMTP]
+     fixtures only as needed
+     by new tests (below); keep e2e goldens byte-identical.
+
+     G. Tests (extend existing harness — tests/)
+
+     - unit/test_env_plugin.py: get_env
+     set/default/unset-raises/empty-returns-"" ; registration
+     order (2-arg before 3-arg, 4 entries); end-to-end via process_config for
+     all four forms + a
+     Hypothesis property (set→get roundtrip). Missing var → SystemExit with
+     path-annotated message.
+     - unit/test_section_gating.py: strip drops non-enabled keys for
+     enabled=false; leaves
+     enabled=true/absent/enabled="false"-string intact; disabled section with
+     <{secret env MISSING}
+     does not exit after gate → process_config.
+     - unit/test_argparse_contract.py: update :24 to assert new --smtp-username
+     default (None).
+     - integration/test_email_config.py (update): password/username sourced from
+     [SMTP] config
+     (monkeypatch SMTP_SSL to a capturing fake — no real send); send skipped
+     when enabled=false;
+     dry-run To: omits operator when username empty. (No SMTP-sending tests per
+     instruction.)
+     - integration/test_cloudflare_auth.py: monkeypatch cloudflare.Cloudflare +
+     .ips.list; assert
+     api_token used when present, else email+api_key.
+     - e2e/golden: run ./run-tests --update-goldens and confirm empty diff
+     (rename/SMTP-disabled
+     additions must not change rendered output); WordPress + Drupal + nonumich
+     goldens stay green.
+
+     H. Docs
+
+     - README.md: document the env/secret env substitutions (+ default arg), the
+     [SMTP] section,
+     the renamed [Cloudflare] keys + api_token, the enabled=false strip
+     semantics, and the
+     operational note: enabled sections' <{secret env …}> require the env var
+     present (no fallback).
+     Correct the "SMTP send is commented out" statement (now live + gated by
+     [SMTP].enabled).
+     - CLAUDE.md: same corrections + note ConfigSubstitutionError,
+     gate-before-substitute ordering,
+     and Cloudflare config-only (no-fallback) auth.
+     - docs/: new end-user page (e.g. docs/env-and-smtp-configuration.md) — how
+     to back settings with
+     env vars, configure [SMTP], and set Cloudflare creds/token. End-user
+     instructions only.
+
+     Execution order (after approval)
+
+     Per the PROMPT methodology, upon approval I will, before writing code:
+     1. Write the full spec to development/2026-07-06-env-plugin/SPEC.md (this
+     plan expanded, with the
+     test matrix, acceptance criteria, and diagrams).
+     2. Run the adversarial reviewer subagent on SPEC.md (≤3 iterations); fix
+     findings on disk.
+     3. Pause for you to review/hand-edit SPEC.md.
+
+     Then implement in order: A→B→C (core substitution+gating) → D (SMTP) → E
+     (Cloudflare) → F (configs)
+     → G (tests) → H (docs), running ./run-tests --fast after each cohesive
+     step.
+
+     Verification
+
+     - ./run-tests --fast green (offline gate); show output.
+     - Golden diff empty after --update-goldens (rename/SMTP additions are
+     non-rendering).
+     - Manual smoke (scratch config under tests/fixtures, never the live
+     config/DB):
+       - <{env FOO} resolves; unset FOO → exit with ERROR: <path>: environment 
+     variable 'FOO' is not set.
+       - <{env FOO fallback} → fallback when unset.
+       - a [Section] enabled=false containing <{secret env MISSING} runs without
+     error.
+       - Cloudflare: with api_token set, client constructed with api_token=.
+     - Full ./run-tests (live tier only if Pantheon/SSH creds present in the
+     session).
+     - SMTP sending is intentionally left untested this session (per
+     instruction); the enabled-gate and
+     config-sourcing of credentials are covered without performing a real send.
+
+● Plan approved. Per your PROMPT's methodology, I'll first write the full
+  SPEC.md, run the adversarial reviewer on it, then pause for you to
+  review/hand-edit before any code. Let me set up tracking and write the spec.
+
+● Now let me write the SPEC.md.
+● Write(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Wrote 407 lines to development/2026-07-06-env-plugin/SPEC.md
+       1 # SPEC: `env` config-substitution plugin + route all env reads t
+       2 
+       3 Status: approved plan, pre-implementation. This document is the 
+       4 "what/why" record. It is not primary documentation (the code, `C
+       5 
+       6 ## 1. Problem & goal
+       8 `pantheon-sitehealth-emails` resolves `<{ ... }>` substitutions 
+         in TOML config values against
+         ` → AWS Secrets Manager). The
+          a handful of places, bypassing the
+     … +587 lines (ctrl+o to expand)
+
+● Now the adversarial review — an independent reviewer with fresh context, per
+  your PROMPT's methodology.
+
+● Agent(Adversarial review of SPEC.md)
+  ⎿  Done (22 tool uses · 96.5k tokens · 6m 23s)
+  (ctrl+o to expand)
+
+● The reviewer verified every load-bearing technical claim against the code (the
+  2-arg-before-3-arg ordering genuinely prevents the KeyError; the exception
+  narrowing is behavior-preserving; gate-before-substitute works; all edit sites
+  confirmed) and scored it 8/10. It found real issues I'll fix — most
+  importantly that the e2e tier is currently RED (the unconditional SMTP send
+  fails auth), which my sequencing didn't acknowledge. Let me apply the fixes.
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 6 lines
+      55  - e2e/golden runs always pass `--smtp-username testuser` (`conf
+          test.py:238`, `E2E_SMTP_USERNAME`),
+      56    so changing the `--smtp-username` **default** does not distur
+          b goldens. Only
+      57    `tests/unit/test_argparse_contract.py:24` asserts the old `US
+          ER` default and must change.
+      58 +- **Current baseline is RED.** Because the SMTP send was uncond
+         +itionally re-enabled (commit                                   
+      59 +  `8c5fc01`) with no `enabled` gate, `./run-tests --fast` curre
+         +ntly has **6 e2e failures**: each                              
+      60 +  subprocess run reaches `smtp_login()` and dies with `SMTPAuth
+         +enticationError(535)` against                                  
+      61 +  `smtp.mail.umich.edu:465`. The unit/integration tiers and the
+         + rendered snapshots are green                                  
+      62 +  (only the e2e subprocess exit codes are non-zero). **Step D's
+         + `smtp_enabled` gate is what                                   
+      63 +  restores the e2e tier to green** — it is a prerequisite, not 
+         +a neutral change (see §9).                                     
+      64  
+      65  ## 3. Design decisions (confirmed with the user)
+      66  
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 5 lines, removed 3 lines
+      65  ## 3. Design decisions (confirmed with the user)
+      66  
+      67  1. **`env` plugin is always-on.** Registered unconditionally at
+           import (no `[Env]` section),
+      68 -   because the core `[SMTP].username = "<{env USER}"` must reso
+         -lve regardless of any enable flag,                             
+      69 -   and `env` has no external dependency or setup cost. This is 
+         -a deliberate, documented exception                             
+      70 -   to the "gate every plugin on an `enabled` flag" convention. 
+      68 +   because `env` has no external dependency or setup cost and c
+         +ore config values use it (e.g.                                 
+      69 +   `[SMTP].username = "<{env USER}"`, resolved whenever `[SMTP]
+         +` is enabled). Gating `env` behind                             
+      70 +   its own `enabled` flag would create a chicken-and-egg proble
+         +m (a disabled `[Env]` would break                              
+      71 +   every `<{env …}>` in the file). This is a deliberate, docume
+         +nted exception to the "gate every                              
+      72 +   plugin on an `enabled` flag" convention.                    
+      73  2. **SMTP dry-run username precedence: CLI → config → omit.** W
+          hen `[SMTP]` is disabled (its keys
+      74     are stripped, §4.3) and no `--smtp-username` is given, drop 
+          the `{user}@{domain}` operator copy
+      75     from the dry-run `To:` rather than reading `USER` directly. 
+          No direct env read remains.
+
+● Now the engine hardening for the zero-name / missing-arg edge (§4.2):
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 19 lines, removed 4 lines
+      141      config-path-annotated message (caught in config_substituti
+           on)."""
+      142  ```
+      143  
+      144 -`config_substitution()` (`pantheon-sitehealth-emails`, ~`:766`
+          -) — wrap only the function call:                              
+      144 +`config_substitution()` (`pantheon-sitehealth-emails`, ~`:761-
+          +769`) — two edits inside the                                  
+      145 +`if best_match_score == argc:` branch. (1) Guard the `func_arg
+          +s` build so a malformed substitution                          
+      146 +that matches a `$var` count but leaves a `$var` uncaptured — e
+          +.g. the zero-name `<{env}` /                                  
+      147 +`<{secret env}` forms, which dispatch with `best_match_score =
+          += argc` but an empty `args_map` —                             
+      148 +fails cleanly with a path-annotated message instead of a bare 
+          +`KeyError`. (2) Wrap the call to                              
+      149 +catch `ConfigSubstitutionError`:                              
+      150  ```python
+      151          try:
+      152 +            func_args = [best_match_args_map[arg] for arg in b
+          +est_match["func_args"]]                                       
+      153 +        except KeyError:                                      
+      154 +            sc.console.print(                                 
+      155 +                f"[bold red]ERROR: configuration value for {pa
+          +th}: malformed substitution: {expr}"                          
+      156 +            )                                                 
+      157 +            sys.exit(1)                                       
+      158 +        ...                                                   
+      159 +        try:                                                  
+      160              result = best_match["func"](*func_args)
+      161          except sc.ConfigSubstitutionError as e:
+      162              sc.console.print(
+     ...
+      167              sys.exit(1)
+      168          return str(result)
+      169  ```
+      157 -Only `ConfigSubstitutionError` is caught; any other exception 
+          -(e.g. aws `get_secret`'s `KeyError`)                          
+      158 -still propagates unchanged. Yields, e.g.:                     
+      159 -`ERROR: configuration value for SMTP.password: environment var
+          -iable 'SMTP_PASSWORD' is not set`.                            
+      170 +Only `ConfigSubstitutionError` is caught around the call; any 
+          +other exception (e.g. aws                                     
+      171 +`get_secret`'s `KeyError`) still propagates unchanged. Yields,
+          + e.g.:                                                        
+      172 +`ERROR: configuration value for SMTP.password: environment var
+          +iable 'SMTP_PASSWORD' is not set`,                            
+      173 +and for `<{env}`: `ERROR: configuration value for <path>: malf
+          +ormed substitution: env`. This                                
+      174 +`func_args` guard hardens **all** substitutions, not just `env
+          +`.                                                            
+      175  
+      176  ### 4.3 `enabled = false` section stripping (§PROMPT rule)
+      177  
+
+● Now the SMTP smtp_enabled location clarity (§4.4):
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 5 lines, removed 4 lines
+      227      smtp_connection.login(username, password)
+      228      return smtp_connection
+      229  ```
+      230 -- Gate the send block (`:3923-3926`) on                       
+      231 -  `smtp_enabled = bool(sc.config.get("SMTP", {}).get("enabled"
+          -))`; when false, skip                                         
+      232 -  `smtp_login()`/`send_message()` (the `.eml` is still written
+          -). Compute `smtp_enabled` once near                           
+      233 -  the top of the send loop / `main()`.                        
+      230 +- Gate the send block (`:3923-3926`) on `smtp_enabled`; when f
+          +alse, skip                                                    
+      231 +  `smtp_login()`/`send_message()` (the `.eml` is still written
+          +). Compute                                                    
+      232 +  `smtp_enabled = bool(sc.config.get("SMTP", {}).get("enabled"
+          +))` **once before the per-site loop                           
+      233 +  begins** (the loop that contains `:3923`), not inside it, an
+          +d reference it in the `if` that wraps                         
+      234 +  the two send lines. This restores the e2e tier to green (§2,
+          + current-baseline note).                                      
+      235  - Dry-run `To:` (`:3884`): build from non-empty parts so the o
+           perator copy is omitted when no
+      236    username is resolvable:
+      237  ```python
+
+● Now the Cloudflare ips.py friendlier failure (§4.6):
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 9 lines, removed 2 lines
+      283      if api_token:
+      284          cloudflare = Cloudflare(api_token=api_token)
+      285      else:
+      286 -        cloudflare = Cloudflare(api_email=cf['email'], api_key
+          -=cf['api_key'])                                               
+      286 +        email = cf.get('email')                               
+      287 +        api_key = cf.get('api_key')                           
+      288 +        if not email or not api_key:                          
+      289 +            sys.exit("ERROR: [Cloudflare] is enabled but needs
+          + either api_token, or both "                                  
+      290 +                     "email and api_key.")                    
+      291 +        cloudflare = Cloudflare(api_email=email, api_key=api_k
+          +ey)                                                           
+      292  ```
+      288 -(Renames `member_email` → `email`, `member_api_key` → `api_key
+          -`; adds preferred `api_token`.)                               
+      293 +(Renames `member_email` → `email`, `member_api_key` → `api_key
+          +`; adds preferred `api_token`. Uses                           
+      294 +`.get` + a clear `sys.exit` rather than a bare `KeyError` if t
+          +he config repo wasn't renamed in                              
+      295 +lockstep — see §8.)                                           
+      296  
+      297  ### 4.7 Config files (§decision 5)
+      298  
+
+● Now the fixture-awareness and test-migration fixes (§4.7, §5.4):
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 6 lines, removed 3 lines
+      321  Test fixtures (`tests/fixtures/config/`): rename the Cloudflar
+           e keys in `minimal.toml` and
+      322  `minimal-nonumich.toml` to `email`/`api_key` (both have `[Clou
+           dflare].enabled = false`, so the
+      323  strip rule removes them regardless — the rename is for schema 
+           consistency and has no golden
+      324 -impact). Do **not** add `[SMTP]` to the e2e golden fixtures (k
+          -eeps goldens byte-identical); new                             
+      325 -SMTP/strip/env behavior is exercised by dedicated unit/integra
+          -tion configs (inline dicts or small                           
+      326 -fixtures) in §5.                                              
+      324 +impact). `minimal-nonumich.toml` **already has an `[SMTP]` sec
+          +tion** (`host`/`port`, no `enabled`                           
+      325 +key); leave it that way — it must **not** gain `enabled = true
+          +`. Its missing `enabled` key makes                            
+      326 +`smtp_enabled = bool(...get("enabled"))` False, which is exact
+          +ly what keeps the non-U-M e2e run                             
+      327 +from attempting a send after step D. Do **not** add an enabled
+          + `[SMTP]` to any e2e golden fixture                           
+      328 +(that would trigger a real send); new SMTP/strip/env behavior 
+          +is exercised by dedicated                                     
+      329 +unit/integration configs (inline dicts or small fixtures) in §
+          +5.                                                            
+      330  
+      331  ## 5. Tests (extend the existing `tests/` harness — honor its 
+           safety interlocks)
+      332  
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 5 lines
+      361    `[SMTP].username` when the option is `None`.
+      362  
+      363  ### 5.4 `tests/integration/test_email_config.py` (update)
+      364 +- **Migrate the credential seeding**: the existing cases seed 
+          +the password via                                              
+      365 +  `monkeypatch.setenv("SMTP_PASSWORD", ...)` and set `reset_sc
+          +.config = {"SMTP": {host, port}}`                             
+      366 +  (no `password`). After the `smtp_login` rewrite, `password =
+          + smtp_cfg.get("password")` → `None`                           
+      367 +  → the new guard `sys.exit`s. So these cases must put `passwo
+          +rd` (and, where the CLI username is                           
+      368 +  not set, `username`) **into the `[SMTP]` config dict**, not 
+          +the environment.                                              
+      369  - SMTP password/username are sourced from `[SMTP]` config (mon
+           keypatch `SMTP_SSL` with a fake that
+      370    captures `login(user, pass)`; assert the captured values com
+           e from config, not env). No real
+      371    network/send.
+
+● Now the §5.6 and §9 sequencing/wording fixes:
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 5 lines, removed 4 lines
+      381    - `api_token` absent → constructed with `api_email=email, ap
+           i_key=api_key`.
+      382  
+      383  ### 5.6 e2e / golden
+      384 -- Run `./run-tests --update-goldens` and confirm an **empty** 
+          -diff (the Cloudflare key rename and                           
+      385 -  disabled-section strip must not change rendered output). Wor
+          -dPress (`its-wws-test1`), Drupal                              
+      386 -  (`its-wws-test2`), and non-U-M goldens stay green. If any di
+          -ff appears, stop and investigate                              
+      387 -  before committing.                                          
+      384 +- The rendered **snapshots** must stay byte-identical (the Clo
+          +udflare key rename and                                        
+      385 +  disabled-section strip do not change rendered output): `./ru
+          +n-tests --update-goldens` yields an                           
+      386 +  empty diff. Distinct from the snapshot content, the e2e **su
+          +bprocess exit codes** are currently                           
+      387 +  non-zero (§2 red baseline) and return to 0 once step D's `sm
+          +tp_enabled` gate lands — after which                          
+      388 +  the WordPress (`its-wws-test1`), Drupal (`its-wws-test2`), a
+          +nd non-U-M e2e tests pass.                                    
+      389  - No fixture re-record (`--record`) is expected; no Pantheon i
+           nteraction changes.
+      390  
+      391  ## 6. Acceptance criteria (exact commands + observable outcome
+           s)
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 10 lines, removed 2 lines
+      443  
+      444  A (env plugin) → B (`ConfigSubstitutionError` + engine catch) 
+           → C (`gate_disabled_sections`) →
+      445  D (SMTP) → E (Cloudflare) → F (config files incl. separate pro
+           d-repo commit) → G (tests) →
+      446 -H (docs). Run `./run-tests --fast` after each cohesive step; r
+          -un the golden check before final                              
+      447 -commit.                                                       
+      446 +H (docs).                                                     
+      447 +                                                              
+      448 +**Per-step verification, given the red baseline (§2):** the e2
+          +e tier does not go green until D                              
+      449 +lands. So after A–C, run the unaffected tiers (`./run-tests --
+          +fast -k "not e2e"`, i.e. unit +                               
+      450 +integration) and expect green there; the 6 pre-existing e2e se
+          +nd failures persist. After **D**,                             
+      451 +run full `./run-tests --fast` and expect the whole offline gat
+          +e green (D restores the e2e exit                              
+      452 +codes). Continue full `--fast` after E–H. Run the golden check
+          + (`--update-goldens`, empty diff)                             
+      453 +before the final commit. Rationale: D is a prerequisite for a 
+          +green e2e tier, not a neutral change;                         
+      454 +attempting a full-green `--fast` gate after A–C would fail on 
+          +the inherited baseline, not on the                            
+      455 +new work.                                                     
+
+● Let me add a test for the malformed-substitution edge to §5.1 and note the
+  hardening:
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 2 lines
+      344    `<{env FOO}`, `<{secret env FOO}`, `<{env FOO def}`, `<{secr
+           et env FOO def}` resolves correctly;
+      345    an unset var with no default raises `SystemExit` and the pri
+           nted message contains the config
+      346    path and the var name (capture via `capsys`/`console`).
+      347 +- Malformed form `<{env}` (no name) raises `SystemExit` with a
+          + `malformed substitution` message                             
+      348 +  (the `func_args` guard from §4.2), not a bare `KeyError` tra
+          +ceback.                                                       
+      349  - Hypothesis property: for arbitrary valid env-name/value pair
+           s (monkeypatched), `get_env(name)`
+      350    round-trips the set value; with the var unset, `get_env(name
+           , d)` returns `d`.
+      351  
+
+● All seven findings are addressed. Let me re-dispatch the reviewer (round 2) to
+  confirm the fixes resolved its issues and nothing new broke.  ⎿  Agent "ad8f0e25df0cd3879" had no active task; resumed from transcript 
+     in the background with your message. You'll be notified when it 
+     finishes. Output: /tmp/claude-501/-workspace/b3a6077f-faab-4ee9-a9fc-c
+     1e80d87e9a4/tasks/ad8f0e25df0cd3879.output
+
+● The round-2 reviewer is running. I'll continue once it reports back.
+
+✻ Cooked for 21m 30s
+
+● Agent "Adversarial review of SPEC.md" finished · 2m 33s
+
+● Round 2: all five dimensions PASS, quality score 9/10, no new issues, and the
+  reviewer empirically confirmed --fast -k "not e2e" is green (156 passed). I'll
+  apply its one optional refinement (-m is the idiomatic marker deselection):
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 1 line, removed 1 line
+      448  H (docs).
+      449  
+      450  **Per-step verification, given the red baseline (§2):** the e2
+           e tier does not go green until D
+      451 -lands. So after A–C, run the unaffected tiers (`./run-tests --
+          -fast -k "not e2e"`, i.e. unit +                               
+      451 +lands. So after A–C, run the unaffected tiers (`./run-tests --
+          +fast -m "not e2e"`, i.e. unit +                               
+      452  integration) and expect green there; the 6 pre-existing e2e se
+           nd failures persist. After **D**,
+      453  run full `./run-tests --fast` and expect the whole offline gat
+           e green (D restores the e2e exit
+      454  codes). Continue full `--fast` after E–H. Run the golden check
+            (`--update-goldens`, empty diff)
+
+● Spec review complete. Your doc survived 2 rounds of adversarial review. 9
+  issues caught and fixed. Quality score: 9/10.
+
+  The reviewer (fresh context, independent) verified every load-bearing
+  technical claim against the actual code — including the tricky ones:
+  - The 2-arg-before-3-arg registration order genuinely prevents the KeyError
+  (traced the best-match engine: dispatch is best_match_score == argc without
+  the perfect-match requirement, so a 3-arg-first order would mis-bind).
+  - Catching only ConfigSubstitutionError is behavior-preserving (aws's
+  exceptions still propagate).
+  - gate-before-substitute actually stops disabled-section substitutions from 
+  resolving.
+  - The func_args guard fires exactly as claimed for the malformed <{env} /
+  <{secret env} forms.
+  - The -m "not e2e" sequencing is empirically green (156 passed) — and it
+  re-confirmed step D restores the full e2e tier.
+
+  The single most important catch: the e2e tier is currently RED (6 failures)
+  because the re-enabled SMTP send has no gate and fails auth against the U-M
+  server. Step D's smtp_enabled gate is what restores green — the spec now
+  treats it as a prerequisite, not a neutral change.
+
+  The finalized spec is at development/2026-07-06-env-plugin/SPEC.md. Per your
+  methodology, I'm pausing here for you to review and hand-edit SPEC.md before I
+  write any code.
+
+  A few things worth your eye specifically:
+  1. §3 / §4.7 — production config repo. I'll edit the live private repo
+  (pantheon-sitehealth-emails-config/) as a separate commit: rename Cloudflare
+  keys, add [SMTP] with enabled = true + password = "<{secret env 
+  SMTP_PASSWORD}". This means the next prod report run will actually send (test
+  addresses unless --for-real) and will hard-exit if SMTP_PASSWORD isn't set.
+  Confirm that's the intent.
+  2. §4.2 — a small shared-engine change (the func_args KeyError guard in
+  config_substitution). It hardens all substitutions, not just env. It's
+  behavior-neutral for well-formed values, but it does touch the core engine —
+  flag if you'd rather keep it env-local.
+  3. §8 — Cloudflare breaking change. Once shipped, an enabled [Cloudflare]
+  requires its env vars present (no fallback, per your decision) or it
+  hard-exits at substitution time.
+
+  Let me know if you want any changes, or say go and I'll implement in the A→H
+  order.
+
+✻ Brewed for 38m 13s
+
+❯ go ahead and implement                                                        
+
+● Approved. Starting implementation in A→H order. Let me read the exact regions
+  I'll edit.
+
+  Read 2 files (ctrl+o to expand)
+
+● Let me find the per-site loop start and emails_sent initialization to place
+  the smtp_enabled computation.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● I have everything I need. Let me update task status and begin implementing
+  (A/B/C first).
+
+● Now the env plugin (A):
+
+● Write(plugin/env/get_env.py)
+  ⎿  Wrote 21 lines to plugin/env/get_env.py
+       1 import os
+       2 
+       3 import script_context as sc
+       5 
+       6 _UNSET = object()  # distinguishes "no default supplied" from an
+          empty-string default
+       7 
+       8 
+      10     """Return the value of environment variable `name` for a con
+         fig substitution.
+     … +18 lines (ctrl+o to expand)
+
+● Write(plugin/env/__init__.py)
+  ⎿  Wrote 24 lines to plugin/env/__init__.py
+       1 import script_context as sc
+       3 from .get_env import get_env
+       4 
+       5 
+         d by core [SMTP] config
+       7 # (e.g. username = "<{env USER}"), so it is registered unconditi
+       8 # `enabled` flag -- gating it would create a chicken-and-egg pro
+         blem (a disabled [Env] would
+       9 # break every <{env ...}> in the file).  This is a deliberate ex
+      10 # enable-flag convention.
+     … +26 lines (ctrl+o to expand)
+  ⎿  Found 1 new diagnostic issue in 1 file (ctrl+o to expand)
+● Now (B) — add ConfigSubstitutionError and the smtp_username() helper to
+  script_context.py:
+
+● Update(script_context.py)
+  ⎿  Added 7 lines
+      15  
+      16  console = Console()
+      17  
+      18 +                                                               
+      19 +class ConfigSubstitutionError(Exception):                      
+      20 +    """Raised by a config-substitution function (e.g. plugin.en
+         +v.get_env) to abort the run                                    
+      21 +    with a helpful, config-path-annotated message.  Caught in c
+         +onfig_substitution(), which                                    
+      22 +    prints the offending config path plus this message and exit
+         +s."""                                                          
+      23 +                                                               
+      24 +                                                               
+      25  substitutions = []
+      26  
+      27  hooks = {
+
+● Update(script_context.py)
+  ⎿  Added 11 lines
+      124      return config.get('Email', {}).get('msgid_domain', 'webser
+           vices.umich.edu')
+      125  
+      126  
+      127 +def smtp_username() -> str:                                   
+      128 +    """                                                       
+      129 +    The effective SMTP / dry-run username: the --smtp-username
+          + option if given, else                                        
+      130 +    [SMTP].username (which is dropped when [SMTP] is disabled,
+          + per the section-gating rule),                                
+      131 +    else the empty string.  Used both for SMTP login and for t
+          +he dry-run To: operator copy.                                 
+      132 +    """                                                       
+      133 +    if options.smtp_username is not None:                     
+      134 +        return options.smtp_username                          
+      135 +    return config.get('SMTP', {}).get('username', '') or ''   
+      136 +                                                              
+      137 +                                                              
+      138  def add_news_item(news_item: dict, from_where: str = 'check') 
+           -> None:
+      139      if 'message' not in news_item:
+      140          console.print(f'ERROR: News item in {from_where} is mi
+           ssing the "message" key: {news_item}')
+
+● Now the engine edits in config_substitution (B — the func_args guard + the
+  ConfigSubstitutionError catch):
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 18 lines, removed 2 lines
+      759          pprint(best_match)
+      760  
+      761      if best_match_score == argc:
+      762 -        func_args = [best_match_args_map[arg] for arg in best_
+          -match["func_args"]]                                           
+      762 +        # A malformed substitution can match on token count ye
+          +t leave a $var uncaptured -- e.g.                             
+      763 +        # the zero-name forms "<{env}" / "<{secret env}", whic
+          +h score == argc with an empty                                 
+      764 +        # args_map.  Guard the func_args build so that fails c
+          +leanly instead of with a bare                                 
+      765 +        # KeyError traceback.                                 
+      766 +        try:                                                  
+      767 +            func_args = [best_match_args_map[arg] for arg in b
+          +est_match["func_args"]]                                       
+      768 +        except KeyError:                                      
+      769 +            sc.console.print(                                 
+      770 +                f"[bold red]ERROR: configuration value for {pa
+          +th}: malformed substitution: {expr}"                          
+      771 +            )                                                 
+      772 +            sys.exit(1)                                       
+      773          if sc.options.verbose >= 2:
+      774              sc.debug("args:")
+      775              pprint(func_args)
+      766 -        result = best_match["func"](*func_args)               
+      776 +        try:                                                  
+      777 +            result = best_match["func"](*func_args)           
+      778 +        except sc.ConfigSubstitutionError as e:               
+      779 +            sc.console.print(                                 
+      780 +                f"[bold red]ERROR: configuration value for {pa
+          +th}: {e}"                                                     
+      781 +            )                                                 
+      782 +            sys.exit(1)                                       
+      783          if result is None:
+      784              sys.exit(1)
+      785          return str(result)
+  ⎿  Found 5 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● The options.smtp_username/options.verbose pyright notes are the pre-existing
+  house pattern (sc.options is an argparse Namespace at runtime, typed as {}) —
+  consistent with the existing options.verbose usage. Now (C) — add
+  gate_disabled_sections:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 18 lines
+      820      return data
+      821  
+      822  
+      823 +def gate_disabled_sections(config: dict) -> dict:             
+      824 +    """For every top-level section whose `enabled` is the bool
+          +ean False, keep only                                          
+      825 +    {'enabled': False} and drop the section's other settings. 
+      826 +                                                              
+      827 +    Done BEFORE substitution resolution (process_config) so a 
+          +disabled feature never forces its                             
+      828 +    `<{secret env ...}>` / `<{secret aws ...}>` values to exis
+          +t -- turning a feature off must not                           
+      829 +    require its credentials to be present.  Sections without a
+          +n `enabled` key, or whose `enabled`                           
+      830 +    is anything other than the boolean False (e.g. True, or th
+          +e string "false"), are left                                   
+      831 +    untouched.  Only top-level tables are considered; nested t
+          +ables like [Pantheon.plan_info]                               
+      832 +    are unaffected.                                           
+      833 +    """                                                       
+      834 +    for name, value in list(config.items()):                  
+      835 +        if isinstance(value, dict) and value.get("enabled") is
+          + False:                                                       
+      836 +            sc.debug(f"Section [{name}] is disabled; keeping o
+          +nly 'enabled', dropping other keys")                          
+      837 +            config[name] = {"enabled": False}                 
+      838 +    return config                                             
+      839 +                                                              
+      840 +                                                              
+      841  def find_modules(module_type: str) -> list[str]:
+      842      modules = []
+      843      # find all non-empty regular files in/under the directory 
+           f"{type}" that are named "__init__.py":
+
+● Now the call site — invoke gate_disabled_sections right after config load:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 4 lines
+      1129      with open(sc.options.config, "rb") as f:
+      1130          sc.config = tomllib.load(f)
+      1131  
+      1132 +    # Drop the non-`enabled` settings of any disabled section
+           + BEFORE substitution resolution,                             
+      1133 +    # so a disabled feature's <{secret env ...}> values are n
+           +ever required to exist.                                      
+      1134 +    sc.config = gate_disabled_sections(sc.config)            
+      1135 +                                                             
+      1136      sc.debug(f"[bold magenta]=== Loading plugins:")
+      1137      for plugin_name in find_modules("plugin"):
+      1138          sc.debug(f"Loading plugin: {plugin_name}")
+
+● A/B/C done. Now D/E (SMTP + Cloudflare).
+
+● D1 — --smtp-username default None:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 3 lines, removed 2 lines
+      201          "--smtp-username",
+      202          "-u",
+      203          action="store",
+      204 -        default=os.environ.get("USER", ""),                   
+      205 -        help="username for logging into the SMTP server to sen
+          -d mail",                                                      
+      204 +        default=None,                                         
+      205 +        help="username for logging into the SMTP server to sen
+          +d mail "                                                      
+      206 +        "(overrides [SMTP].username in the config file)",     
+      207      )
+      208      args_parser.add_argument(
+      209          "--create-tables",
+
+● D2 — smtp_login() sources credentials from config:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 8 lines, removed 2 lines
+      856  
+      857  
+      858  def smtp_login() -> SMTP_SSL:
+      859 -    # TODO: get password from config file, from secret or prom
+          -pt for it                                                     
+      859      smtp_cfg = sc.config.get("SMTP", {})
+      860      host = smtp_cfg.get("host", "smtp.mail.umich.edu")
+      861      port = smtp_cfg.get("port", 465)
+      862 +    username = sc.smtp_username()                             
+      863 +    password = smtp_cfg.get("password")                       
+      864 +    if not username or not password:                          
+      865 +        sys.exit(                                             
+      866 +            "SMTP is enabled but the username or password is n
+          +ot configured "                                               
+      867 +            "(set [SMTP].username / [SMTP].password, or pass -
+          +-smtp-username)."                                             
+      868 +        )                                                     
+      869      smtp_connection = SMTP_SSL(host, port=port)
+      864 -    smtp_connection.login(sc.options.smtp_username, os.environ
+          -["SMTP_PASSWORD"])                                            
+      870 +    smtp_connection.login(username, password)                 
+      871      return smtp_connection
+      872  
+      873  
+
+● D5 — remove the superseded empty-username guard:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Removed 3 lines
+      1218      with open("header-image.png", "rb") as img:
+      1219          wordmark_image = img.read()
+      1220  
+      1221 -    if sc.options.smtp_username == "":                       
+      1222 -        sys.exit("--smtp-username not specified and USER envi
+           -ronment variable not set.")                                  
+      1223 -                                                             
+      1221      load_news_items()
+      1222      if sc.options.verbose:
+      1223          sc.debug("[bold magenta]=== News:")
+
+● D3 — compute smtp_enabled before the per-site loop (next to
+  cloudflare_enabled):
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 5 lines
+      1270          "Cloudflare is "
+      1271          + ("[bold green]enabled" if cloudflare_enabled else "
+            [bold red]DISABLED")
+      1272      )
+      1273 +    smtp_enabled = bool(sc.config.get("SMTP", {}).get("enable
+           +d"))                                                         
+      1274 +    sc.debug(                                                
+      1275 +        "SMTP sending is "                                   
+      1276 +        + ("[bold green]enabled" if smtp_enabled else "[bold 
+           +red]DISABLED")                                               
+      1277 +    )                                                        
+      1278      site_name_to_id = {site["name"]: site_id for (site_id, si
+            te) in sites.items()}
+      1279      sc.debug(site_name_to_id)
+      1280  
+
+● D3 (cont.) — gate the send block on smtp_enabled:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 6 lines, removed 4 lines
+      3967          with open(f"build/{site['name']}.eml", "wb") as f:
+      3968              f.write(msg.as_bytes(policy=SMTP))
+      3969  
+      3970 -        smtp_connection = smtp_login()                       
+      3971 -        smtp_connection.send_message(msg)                    
+      3972 -        emails_sent += 1                                     
+      3973 -        smtp_connection.quit()                               
+      3970 +        # The send is gated on [SMTP].enabled; when disabled 
+           +we still write the .eml above.                               
+      3971 +        if smtp_enabled:                                     
+      3972 +            smtp_connection = smtp_login()                   
+      3973 +            smtp_connection.send_message(msg)                
+      3974 +            emails_sent += 1                                 
+      3975 +            smtp_connection.quit()                           
+      3976  
+      3977          for n in site_context["notices"]:
+      3978              fields = n["csv"].split(",")
+
+● D4 — dry-run To: omits the operator copy when no username is resolvable:
+
+● Update(pantheon-sitehealth-emails)  ⎿  Added 9 lines, removed 1 line
+      3928          else:
+      3929              dry_run_to = email_cfg.get("dry_run_to", "janusid
+            e@go.mail.umich.edu")
+      3930              dry_run_domain = email_cfg.get("dry_run_username_
+            domain", "umich.edu")
+      3931 -            msg["To"] = f"{dry_run_to}, {sc.options.smtp_user
+           -name}@{dry_run_domain}"                                      
+      3931 +            # Address the dry run to the configured dry_run_t
+           +o plus, when a username is                                   
+      3932 +            # resolvable (--smtp-username or [SMTP].username)
+           +, an operator copy.  When no                                 
+      3933 +            # username is available (e.g. SMTP disabled and n
+           +o --smtp-username), the operator                             
+      3934 +            # copy is omitted rather than reading USER from t
+           +he environment directly.                                     
+      3935 +            username = sc.smtp_username()                    
+      3936 +            parts = [dry_run_to]                             
+      3937 +            if username:                                     
+      3938 +                parts.append(f"{username}@{dry_run_domain}") 
+      3939 +            msg["To"] = ", ".join(p for p in parts if p)     
+      3940          msg["Reply-to"] = email_cfg.get("reply_to", "webmaste
+            r@umich.edu")
+      3941          msg["Date"] = datetime.datetime.now(datetime.UTC).str
+            ftime("%a, %d %b %Y %T %z")
+      3942          msg["Subject"] = subject
+
+● Now E — Cloudflare. First plugin/cloudflare/__init__.py (remove the
+  env-override block):
+
+  Read 1 file (ctrl+o to expand)
+
+● Write(plugin/cloudflare/__init__.py)
+  ⎿  Added 4 lines, removed 7 lines
+       1  
+       2 -import os                                                      
+       3 -                                                               
+       2  import script_context as sc
+       3  
+       4  
+       5 +# Cloudflare credentials come entirely from the [Cloudflare] co
+         +nfig section (email/api_key or the                             
+       6 +# preferred api_token); the operator decides in the config file
+         + where those values come from                                  
+       7 +# (literals, <{secret env ...}>, <{secret aws ...}>, ...).  The
+         +re is no direct-environment                                    
+       8 +# fallback here.                                               
+       9  if 'Cloudflare' in sc.config and 'enabled' in sc.config['Cloudf
+          lare'] and sc.config['Cloudflare']['enabled']:
+      10  
+       9 -    if os.getenv('CLOUDFLARE_EMAIL') is not None:              
+      10 -        sc.config['Cloudflare']['member_email'] = os.getenv('CL
+         -OUDFLARE_EMAIL')                                               
+      11 -    if os.getenv('CLOUDFLARE_API_KEY') is not None:            
+      12 -        sc.config['Cloudflare']['member_api_key'] = os.getenv('
+         -CLOUDFLARE_API_KEY')                                           
+      13 -                                                               
+      11      from .ips import get_cloudflare_ips
+      12      sc.plugin_context['plugin.cloudflare'] = {}
+      13      sc.hooks['setup'].append({ 'name': 'plugin.cloudflare.ips.g
+          et_cloudflare_ips', 'func': get_cloudflare_ips})
+
+● E (cont.) — ips.py auth selection (rename + api_token preference):
+
+● Update(plugin/cloudflare/ips.py)
+  ⎿  Added 11 lines, removed 4 lines
+      12  
+      13      global cloudflare_ipv4_nets, cloudflare_ipv6_nets
+      14  
+      15 -    cloudflare = Cloudflare(                                   
+      16 -        api_email=sc.config['Cloudflare']['member_email'],     
+      17 -        api_key=sc.config['Cloudflare']['member_api_key']      
+      18 -    )                                                          
+      15 +    cf = sc.config['Cloudflare']                               
+      16 +    api_token = cf.get('api_token')                            
+      17 +    if api_token:                                              
+      18 +        cloudflare = Cloudflare(api_token=api_token)           
+      19 +    else:                                                      
+      20 +        email = cf.get('email')                                
+      21 +        api_key = cf.get('api_key')                            
+      22 +        if not email or not api_key:                           
+      23 +            sys.exit('ERROR: [Cloudflare] is enabled but needs 
+         +either api_token, '                                            
+      24 +                     'or both email and api_key.')             
+      25 +        cloudflare = Cloudflare(api_email=email, api_key=api_ke
+         +y)                                                             
+      26  
+      27      with sc.console.status('[bold green]Getting Cloudflare IP r
+          anges ...'):
+      28          try:
+
+● D/E done. Let me run the non-e2e tiers to catch regressions before touching
+  configs and tests.
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Found 7 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● All 4 failures are exactly the tests that assert the old behavior — they're
+  the ones task G updates: test_argparse_contract (old USER default),
+  test_email_config (env-seeded password), and test_plugin_cloudflare (old
+  member_email/member_api_key keys). No unexpected regressions. The ips.py
+  pyright notes are pre-existing patterns (line-shifted). Let me quick-smoke the
+  env plugin at runtime to confirm A/B work:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All four substitution forms work correctly. Let me verify the error paths
+  (missing var, malformed, and the disabled-section strip):
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The grep filtered my status lines containing "malformed". Let me confirm those
+  two exit cleanly:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All A–E behavior verified at runtime: correct resolution, path-annotated
+  errors, and section gating. Now F — config files.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● The sample config has no substitution docs yet. Let me add a header comment
+  block explaining the substitution/env syntax, then update [Cloudflare] and
+  [SMTP]:
+
+● Update(sample-pantheon-sitehealth-emails.toml)
+  ⎿  Added 19 lines
+       1  
+       2 +# -------------------------------------------------------------
+         +--------------------------------                               
+       3 +# Value substitutions                                          
+       4 +#                                                              
+       5 +# Any string value below may pull its value from an external so
+         +urce with a "<{ ... }>" marker:                                
+       6 +#                                                              
+       7 +#   <{env NAME}                 -> the value of environment var
+         +iable NAME (error if unset)                                    
+       8 +#   <{secret env NAME}          -> same as above (the "secret" 
+         +prefix is an accepted alias)                                   
+       9 +#   <{env NAME default}         -> NAME if set, else the litera
+         +l "default" (quote for spaces)                                 
+      10 +#   <{secret aws SECRET KEY}    -> a key from an AWS Secrets Ma
+         +nager secret (needs [AWS] enabled)                             
+      11 +#                                                              
+      12 +# A referenced environment variable that is not set aborts the 
+         +run with an error naming the                                   
+      13 +# setting and the variable -- unless a default was supplied.  A
+         + variable that is set but empty                                
+      14 +# yields "" (set is not the same as unset).                    
+      15 +#                                                              
+      16 +# Disabled sections: if a section has `enabled = false`, only `
+         +enabled` is kept and all other                                 
+      17 +# settings in that section are dropped before substitution -- s
+         +o turning a feature off never                                  
+      18 +# requires that feature's secrets/environment variables to exis
+         +t.                                                             
+      19 +# -------------------------------------------------------------
+         +--------------------------------                               
+      20 +                                                               
+      21  [Pantheon]
+      22  org_id = "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9"
+      23  
+
+● Update(sample-pantheon-sitehealth-emails.toml)
+  ⎿  Added 6 lines, removed 4 lines
+      117  
+      118  [Cloudflare]
+      119  enabled = false
+      120 -# Values to use if the environnment variables CLOUDFLARE_EMAIL
+      121 -# or CLOUDFLARE_API_KEY are not set.                          
+      122 -member_email = "user@example.com"                             
+      123 -member_api_key = "xxxxxxxx"                                   
+      120 +# Credentials come entirely from the settings below (no direct
+          +-environment fallback).  Use either                           
+      121 +# an API token (preferred, uncomment api_token) or the email +
+          + Global API Key pair.  Each value can                         
+      122 +# be a literal or an <{...}> substitution (see the top of this
+          + file).                                                       
+      123 +email   = "<{secret env CLOUDFLARE_EMAIL}"                    
+      124 +api_key = "<{secret env CLOUDFLARE_API_KEY}"                  
+      125 +# api_token = "<{secret env CLOUDFLARE_API_TOKEN}"   # preferr
+          +ed when uncommented; overrides email/api_key                  
+      126  
+      127  
+      128  [AWS]
+
+● Update(sample-pantheon-sitehealth-emails.toml)
+  ⎿  Added 7 lines, removed 4 lines
+      147  # dry_run_username_domain = "example.edu"                     
+            # {smtp-username}@<this> is added to To:
+      148  
+      149  [SMTP]
+      150 -# Outgoing mail server.  Optional; defaults to the U-M server.
+          -  The password comes from the                                 
+      151 -# SMTP_PASSWORD environment variable (not stored here).       
+      152 -# host = "smtp.example.edu"                                   
+      153 -# port = 465                                                  
+      150 +# Outgoing mail server.  When enabled, the tool sends the gene
+          +rated reports (to the dry-run test                            
+      151 +# addresses unless --for-real is given); when disabled it only
+          + writes the .eml files.                                       
+      152 +enabled  = false                                              
+      153 +host     = "smtp.mail.umich.edu"                              
+      154 +port     = 465                                                
+      155 +username = "<{env USER}"                    # override at runt
+          +ime with --smtp-username                                      
+      156 +password = "<{secret env SMTP_PASSWORD}"    # required when en
+          +abled                                                         
+      157  
+      158  [News]
+      159  # News items can go in this section here and/or in *.toml file
+           s in the directory below.
+
+● Now the test fixtures — rename Cloudflare keys:
+  Read 1 file (ctrl+o to expand)
+
+● Update(tests/fixtures/config/minimal.toml)
+  ⎿  Added 2 lines, removed 2 lines
+      84  
+      85  [Cloudflare]
+      86  enabled = false
+      87 -member_email = "user@example.com"                              
+      88 -member_api_key = "xxxxxxxx"                                    
+      87 +email = "user@example.com"                                     
+      88 +api_key = "xxxxxxxx"                                           
+      89  
+      90  [AWS]
+      91  enabled = false
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(tests/fixtures/config/minimal-nonumich.toml)
+  ⎿  Added 2 lines, removed 2 lines
+      84  
+      85  [Cloudflare]
+      86  enabled = false
+      87 -member_email = "user@example.com"                              
+      88 -member_api_key = "xxxxxxxx"                                    
+      87 +email = "user@example.com"                                     
+      88 +api_key = "xxxxxxxx"                                           
+      89  
+      90  [AWS]
+      91  enabled = false
+
+● Now the live production config repo (separate repo). Let me look at its
+  structure and Cloudflare section, plus check full.toml and the existing
+  cloudflare test:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Let me rename full.toml's Cloudflare keys and update the production config
+  repo. First read the prod config's relevant region:
+
+  Read 1 file (ctrl+o to expand)
+
+● The prod placeholders (user@example.com/xxxxxxxx) were overridden by the env
+  vars at runtime; <{secret env ...}> reproduces that exactly. Let me update the
+  prod config's [Cloudflare] and add [SMTP] enabled = true:
+
+● Update(pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml)
+  ⎿  Added 16 lines, removed 4 lines
+       88  
+       89  [Cloudflare]
+       90  enabled = true
+       91 -# Values to use if the environnment variables CLOUDFLARE_EMAIL
+       92 -# or CLOUDFLARE_API_KEY are not set.                          
+       93 -member_email = "user@example.com"                             
+       94 -member_api_key = "xxxxxxxx"                                   
+       91 +# Credentials come entirely from these settings (no direct-env
+          +ironment fallback).  These pull from                          
+       92 +# the CLOUDFLARE_EMAIL / CLOUDFLARE_API_KEY environment variab
+          +les, reproducing the prior behavior;                          
+       93 +# uncomment api_token to use an API token instead (preferred).
+       94 +email   = "<{secret env CLOUDFLARE_EMAIL}"                    
+       95 +api_key = "<{secret env CLOUDFLARE_API_KEY}"                  
+       96 +# api_token = "<{secret env CLOUDFLARE_API_TOKEN}"            
+       97  
+       98  
+       99 +[SMTP]                                                        
+      100 +# Outgoing mail server.  Enabled: report runs send mail (to th
+          +e dry-run test addresses unless                               
+      101 +# --for-real).  SMTP_PASSWORD must be present in the environme
+          +nt on report runs.                                            
+      102 +enabled  = true                                               
+      103 +host     = "smtp.mail.umich.edu"                              
+      104 +port     = 465                                                
+      105 +username = "<{env USER}"                    # override at runt
+          +ime with --smtp-username                                      
+      106 +password = "<{secret env SMTP_PASSWORD}"                      
+      107 +                                                              
+      108 +                                                              
+      109  [AWS]
+      110  enabled = true
+      111  # Values to use if the environment variables AWS_PROFILE or
+
+● Now full.toml fixture (Cloudflare enabled, so keys aren't stripped — rename
+  for correctness):
+
+● Update(tests/fixtures/config/full.toml)
+  ⎿  Added 2 lines, removed 2 lines
+      35  
+      36  [Cloudflare]
+      37  enabled = true
+      38 -member_email = "user@example.com"                              
+      39 -member_api_key = "xxxxxxxx"                                    
+      38 +email = "user@example.com"                                     
+      39 +api_key = "xxxxxxxx"                                           
+      40  
+      41  [AWS]
+      42  enabled = true
+
+● Config files done. Now G — tests. Let me read the existing tests I need to
+  update:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(tests/unit/test_argparse_contract.py)
+  ⎿  Added 19 lines, removed 1 line
+      21      assert ns.all is False
+      22      assert ns.sites == []
+      23      assert ns.config == "pantheon-sitehealth-emails.toml"
+      24 -    assert ns.smtp_username == os.environ.get("USER", "")      
+      24 +    # The username now defaults to None (no direct USER env rea
+         +d); it is resolved from                                        
+      25 +    # [SMTP].username at use time unless --smtp-username overri
+         +des it.                                                        
+      26 +    assert ns.smtp_username is None                            
+      27      assert ns.verbose == 0
+      28      assert ns.create_tables is False
+      29      assert ns.import_older_metrics is False
+     ...
+      31      assert isinstance(ns.date, datetime.date)  # defaults to to
+          day
+      32  
+      33  
+      34 +def test_smtp_username_helper_precedence(psh, reset_sc):       
+      35 +    """sc.smtp_username(): --smtp-username wins, else [SMTP].us
+         +ername, else ''."""                                            
+      36 +    import script_context as sc                                
+      37 +                                                               
+      38 +    reset_sc.options = psh.parse_args([])  # smtp_username == N
+         +one                                                            
+      39 +    reset_sc.config = {"SMTP": {"username": "from_config"}}    
+      40 +    assert sc.smtp_username() == "from_config"                 
+      41 +                                                               
+      42 +    reset_sc.options = psh.parse_args(["--smtp-username", "from
+         +_cli"])                                                        
+      43 +    assert sc.smtp_username() == "from_cli"                    
+      44 +                                                               
+      45 +    reset_sc.options = psh.parse_args([])                      
+      46 +    reset_sc.config = {}                                       
+      47 +    assert sc.smtp_username() == ""                            
+      48 +                                                               
+      49 +                                                               
+      50  def test_verbose_counts(psh):
+      51      assert psh.parse_args(["-vvv"]).verbose == 3
+      52      assert psh.parse_args(["-v"]).verbose == 1
+
+● Update(tests/unit/test_argparse_contract.py)
+  ⎿  Removed 1 line
+       6  exit + message rather than an in-process SystemExit.
+       7  """
+       8  import datetime
+       9 -import os                                                      
+       9  
+      10  import pytest
+      11  
+
+● Now let me read test_email_config.py to update it:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(tests/integration/test_email_config.py)
+  ⎿  Added 30 lines, removed 6 lines
+      15          self.host = host
+      16          self.port = port
+      17          self.logged_in_as = None
+      18 +        self.logged_in_password = None                         
+      19  
+      20      def login(self, user, password):
+      21          self.logged_in_as = user
+      22 +        self.logged_in_password = password                     
+      23  
+      24  
+      25  def test_smtp_login_uses_config(psh, reset_sc, monkeypatch):
+      26 +    """Host/port and BOTH credentials come from the [SMTP] conf
+         +ig section, not the environment."""                            
+      27      captured = {}
+      28      monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: cap
+          tured.setdefault("c", _FakeSMTP(host, port)))
+      26 -    monkeypatch.setenv("SMTP_PASSWORD", "secret")              
+      27 -    reset_sc.options.smtp_username = "someone"                 
+      28 -    reset_sc.config = {"SMTP": {"host": "smtp.example.org", "po
+         -rt": 587}}                                                     
+      29 +    monkeypatch.delenv("SMTP_PASSWORD", raising=False)  # must 
+         +NOT be read from the environment                               
+      30 +    reset_sc.options.smtp_username = None                      
+      31 +    reset_sc.config = {"SMTP": {"host": "smtp.example.org", "po
+         +rt": 587,                                                      
+      32 +                                "username": "config_user", "pas
+         +sword": "config_pw"}}                                          
+      33  
+      34      psh.smtp_login()
+      35      assert captured["c"].host == "smtp.example.org"
+      36      assert captured["c"].port == 587
+      37 +    assert captured["c"].logged_in_as == "config_user"         
+      38 +    assert captured["c"].logged_in_password == "config_pw"     
+      39  
+      40  
+      35 -def test_smtp_login_defaults_to_umich(psh, reset_sc, monkeypatc
+         -h):                                                            
+      41 +def test_smtp_login_cli_username_overrides_config(psh, reset_sc
+         +, monkeypatch):                                                
+      42      captured = {}
+      43      monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: cap
+          tured.setdefault("c", _FakeSMTP(host, port)))
+      38 -    monkeypatch.setenv("SMTP_PASSWORD", "secret")              
+      44 +    reset_sc.options.smtp_username = "cli_user"                
+      45 +    reset_sc.config = {"SMTP": {"username": "config_user", "pas
+         +sword": "config_pw"}}                                          
+      46 +                                                               
+      47 +    psh.smtp_login()                                           
+      48 +    assert captured["c"].logged_in_as == "cli_user"            
+      49 +                                                               
+      50 +                                                               
+      51 +def test_smtp_login_defaults_to_umich_host(psh, reset_sc, monke
+         +ypatch):                                                       
+      52 +    captured = {}                                              
+      53 +    monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: cap
+         +tured.setdefault("c", _FakeSMTP(host, port)))                  
+      54      reset_sc.options.smtp_username = "someone"
+      40 -    reset_sc.config = {}  # no [SMTP] section                  
+      55 +    reset_sc.config = {"SMTP": {"password": "pw"}}  # host/port
+         + omitted -> U-M defaults                                       
+      56  
+      57      psh.smtp_login()
+      58      assert captured["c"].host == "smtp.mail.umich.edu"
+      59      assert captured["c"].port == 465
+      60  
+      61  
+      62 +def test_smtp_login_missing_password_exits(psh, reset_sc, monke
+         +ypatch):                                                       
+      63 +    """No password configured -> a clear exit, never a silent s
+         +end with empty credentials."""                                 
+      64 +    monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: pyt
+         +est.fail("must not connect"))                                  
+      65 +    reset_sc.options.smtp_username = "someone"                 
+      66 +    reset_sc.config = {"SMTP": {}}  # no password              
+      67 +    with pytest.raises(SystemExit):                            
+      68 +        psh.smtp_login()                                       
+      69 +                                                               
+      70 +                                                               
+      71  @pytest.mark.parametrize(
+      72      "config,expected",
+      73      [
+  ⎿  Found 2 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Now update test_plugin_cloudflare.py for the renamed keys and add an api_token
+  test:
+
+● Update(tests/integration/test_plugin_cloudflare.py)
+  ⎿  Added 1 line, removed 1 line
+      48      module = importlib.util.module_from_spec(spec)
+      49      loader.exec_module(module)
+      50  
+      51 -    sc.config = {"Cloudflare": {"member_email": "e@example.com"
+         -, "member_api_key": "k"}}                                      
+      51 +    sc.config = {"Cloudflare": {"email": "e@example.com", "api_
+         +key": "k"}}                                                    
+      52      sc.plugin_context = {"plugin.cloudflare": {}}
+      53      return module, sc
+      54  
+
+● Update(tests/integration/test_plugin_cloudflare.py)
+  ⎿  Added 3 lines, removed 1 line
+      25          self.ipv6_cidrs = v6
+      26  
+      27  
+      28 -def _make_cloudflare(list_impl):                               
+      28 +def _make_cloudflare(list_impl, seen_kwargs=None):             
+      29      class FakeCloudflare:
+      30          def __init__(self, **kwargs):
+      31 +            if seen_kwargs is not None:                        
+      32 +                seen_kwargs.update(kwargs)                     
+      33              self.ips = types.SimpleNamespace(list=list_impl)
+      34  
+      35      return FakeCloudflare
+
+● Now add the auth-selection tests to test_plugin_cloudflare.py:
+● Update(tests/integration/test_plugin_cloudflare.py)
+  ⎿  Added 31 lines
+       75  
+       76      with pytest.raises(SystemExit):
+       77          module.get_cloudflare_ips()
+       78 +                                                              
+       79 +                                                              
+       80 +def test_auth_uses_email_and_api_key(load_ips, monkeypatch):  
+       81 +    """With no api_token, the client is built from email + api
+          +_key."""                                                      
+       82 +    module, _sc = load_ips                                    
+       83 +    seen = {}                                                 
+       84 +    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare
+          +(lambda: _FakeIPList(V4, V6), seen))                          
+       85 +                                                              
+       86 +    module.get_cloudflare_ips()                               
+       87 +    assert seen == {"api_email": "e@example.com", "api_key": "
+          +k"}                                                           
+       88 +                                                              
+       89 +                                                              
+       90 +def test_auth_prefers_api_token(load_ips, monkeypatch):       
+       91 +    """When api_token is present it is preferred and email/api
+          +_key are not passed."""                                       
+       92 +    module, sc = load_ips                                     
+       93 +    sc.config["Cloudflare"]["api_token"] = "tok-123"          
+       94 +    seen = {}                                                 
+       95 +    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare
+          +(lambda: _FakeIPList(V4, V6), seen))                          
+       96 +                                                              
+       97 +    module.get_cloudflare_ips()                               
+       98 +    assert seen == {"api_token": "tok-123"}                   
+       99 +                                                              
+      100 +                                                              
+      101 +def test_auth_missing_credentials_exits(load_ips, monkeypatch)
+          +:                                                             
+      102 +    """Enabled but neither api_token nor email+api_key -> a cl
+          +ear exit, not a bare KeyError."""                             
+      103 +    module, sc = load_ips                                     
+      104 +    sc.config["Cloudflare"] = {}  # no credentials at all     
+      105 +    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare
+          +(lambda: _FakeIPList(V4, V6)))                                
+      106 +                                                              
+      107 +    with pytest.raises(SystemExit):                           
+      108 +        module.get_cloudflare_ips()                           
+
+● Now let me check the reset_sc fixture behavior before writing the two new test
+  files:
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+  ⎿  Found 4 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● reset_sc wipes sc.substitutions, so tests must re-register the env plugin per
+  test. importlib.reload(plugin.env) re-runs its top-level registration into the
+  freshly-reset list. Let me confirm Hypothesis is available, then write the
+  two new test files:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● There's already a test_config_substitution.py — let me match its style:
+
+  Read 1 file (ctrl+o to expand)
+
+● Let me add the malformed-substitution engine test to the existing engine test
+  file:
+
+● Update(tests/unit/test_config_substitution.py)
+  ⎿  Added 11 lines
+      58          psh.config_substitution("nothing", "p")
+      59  
+      60  
+      61 +def test_uncaptured_var_exits_cleanly(psh, reset_sc, capsys):  
+      62 +    # A pattern that matches on token count but leaves a $var u
+         +ncaptured (the short-form of a                                 
+      63 +    # $var-bearing pattern, e.g. the zero-name "<{env}") must e
+         +xit with a "malformed" message,                                
+      64 +    # not a bare KeyError traceback (the func_args guard).     
+      65 +    reset_sc.substitutions.append(_sub(["env", "$name"], lambda
+         + name: name, ["$name"]))                                       
+      66 +    with pytest.raises(SystemExit):                            
+      67 +        psh.config_substitution("env", "Some.path")            
+      68 +    err = capsys.readouterr()                                  
+      69 +    assert "malformed substitution" in (err.out + err.err)     
+      70 +                                                               
+      71 +                                                               
+      72  def test_process_config_recurses_dict_list_str(psh, reset_sc):
+      73      reset_sc.substitutions.append(
+      74          _sub(["greet", "$who"], lambda who: f"HELLO {who}", ["$
+          who"])
+  ⎿  Found 2 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Now the new test_env_plugin.py:
+
+● Write(tests/unit/test_env_plugin.py)
+  ⎿  Wrote 124 lines to tests/unit/test_env_plugin.py
+       1 """Unit tests for the `env` config-substitution plugin (plugin/e
+       2 
+       3 get_env is pure given os.environ; the substitution wiring is exe
+         rcised end-to-end through the
+         pties sc.substitutions per test,
+       5 so we reload plugin.env to re-run its top-level registration int
+       6 """
+       7 import importlib
+       8 
+      10 from hypothesis import given, strategies as st
+     … +145 lines (ctrl+o to expand)
+
+● Let me check how the existing property tests handle fixtures with Hypothesis,
+  to avoid the function-scoped-fixture health check:
+
+  Read 1 file (ctrl+o to expand)
+  ⎿  Found 5 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Let me fix the property test (avoid function-scoped monkeypatch under @given)
+  and simplify the sentinel test:
+
+● Update(tests/unit/test_env_plugin.py)
+  ⎿  Added 2 lines, removed 1 line
+       5  so we reload plugin.env to re-run its top-level registration in
+          to the fresh list.
+       6  """
+       7  import importlib
+       8 +import os                                                      
+       9  
+      10  import pytest
+      11  from hypothesis import given, strategies as st
+      12  
+      13  import plugin.env
+      13 -from plugin.env.get_env import get_env, _UNSET                 
+      14 +from plugin.env.get_env import get_env                         
+      15  
+      16  pytestmark = pytest.mark.unit
+      17  
+
+● Update(tests/unit/test_env_plugin.py)
+  ⎿  Added 2 lines, removed 3 lines
+      46      assert "PSH_TEST_VAR" in str(exc.value)
+      47  
+      48  
+      49 -def test_unset_default_sentinel_distinct_from_empty(monkeypatch
+         -):                                                             
+      50 -    # Empty string is a legitimate default distinct from "no de
+         -fault supplied".                                               
+      49 +def test_empty_string_default_is_honored(monkeypatch):         
+      50 +    # An empty-string default is a real default, distinct from 
+         +"no default supplied" (which raises).                          
+      51      monkeypatch.delenv("PSH_TEST_VAR", raising=False)
+      52      assert get_env("PSH_TEST_VAR", "") == ""
+      53 -    assert _UNSET is not ""  # noqa: F632 -- identity check is 
+         -intentional                                                    
+      53  
+      54  
+      55  # ── Registration ─────────────────────────────────────────────
+          ────────────────────────
+
+● Update(tests/unit/test_env_plugin.py)
+  ⎿  Added 15 lines, removed 5 lines
+      117      name=st.text(alphabet=st.characters(min_codepoint=65, max_
+           codepoint=90), min_size=1, max_size=12),
+      118      value=st.text(max_size=50),
+      119  )
+      120 -def test_property_set_get_roundtrip(monkeypatch, name, value):
+      121 -    monkeypatch.setenv(name, value)                           
+      122 -    assert get_env(name) == value                             
+      123 -    monkeypatch.delenv(name, raising=False)                   
+      124 -    assert get_env(name, "D") == "D"                          
+      120 +def test_property_set_get_roundtrip(name, value):             
+      121 +    # os.environ managed directly (not via the function-scoped
+          + monkeypatch fixture, which                                   
+      122 +    # Hypothesis would reuse across examples).                
+      123 +    name = "PSH_PROP_" + name                                 
+      124 +    saved = os.environ.get(name)                              
+      125 +    try:                                                      
+      126 +        os.environ[name] = value                              
+      127 +        assert get_env(name) == value                         
+      128 +        del os.environ[name]                                  
+      129 +        assert get_env(name, "D") == "D"                      
+      130 +    finally:                                                  
+      131 +        if saved is None:                                     
+      132 +            os.environ.pop(name, None)                        
+      133 +        else:                                                 
+      134 +            os.environ[name] = saved                          
+
+● Now the test_section_gating.py:
+
+● Write(tests/unit/test_section_gating.py)
+  ⎿  Wrote 68 lines to tests/unit/test_section_gating.py
+       1 """Unit tests for gate_disabled_sections (the `enabled = false` 
+         strip rule).
+       3 A disabled section keeps only {'enabled': False}; its other sett
+         ings are dropped BEFORE
+       4 substitution, so a disabled feature never forces its <{secret en
+       5 """
+       6 import importlib
+       7 
+       9 
+      10 import plugin.env
+     … +71 lines (ctrl+o to expand)
+  ⎿  Found 12 new diagnostic issues in 2 files (ctrl+o to expand)
+
+● Config and test files done. Let me mark F complete and run the non-e2e tiers
+  to validate:
+  Ran 1 shell command (ctrl+o to expand)
+
+● Only the property test failed — Hypothesis found that os.environ rejects
+  embedded null bytes (an OS constraint, not a bug in get_env). Let me exclude
+  null bytes from the generated value:
+
+● Update(tests/unit/test_env_plugin.py)
+  ⎿  Added 2 lines, removed 1 line
+      115  # ── Property: set -> get round-trips; unset -> default ──────
+           ──────────────────────────
+      116  @given(
+      117      name=st.text(alphabet=st.characters(min_codepoint=65, max_
+           codepoint=90), min_size=1, max_size=12),
+      118 -    value=st.text(max_size=50),                               
+      118 +    # os.environ rejects the null byte in values (an OS constr
+          +aint, not a get_env concern).                                 
+      119 +    value=st.text(alphabet=st.characters(blacklist_characters=
+          +"\x00"), max_size=50),                                        
+      120  )
+      121  def test_property_set_get_roundtrip(name, value):
+      122      # os.environ managed directly (not via the function-scoped
+            monkeypatch fixture, which
+
+  Ran 1 shell command (ctrl+o to expand)
+  ⎿  Found 5 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Non-e2e tiers all green (187 passed). Now the full --fast including e2e — step
+  D's gate should restore the e2e tier:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Full --fast is green (207 passed) and the 6 snapshots matched byte-identically
+  — the red baseline is fixed and goldens are unchanged. Let me run the
+  acceptance checks: confirm no direct env reads remain (except boto) and no
+  golden files drifted:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All acceptance checks pass: the only remaining env reads are the env plugin
+  itself (the intended abstraction) and the two boto plumbing lines (explicitly
+  out of scope). The removed USER/SMTP_PASSWORD/CLOUDFLARE_* reads are gone.
+  Golden snapshots are byte-identical (only the intended fixture renames show in
+  git). Tests complete.
+
+● Now H — docs. Let me find the relevant README sections (SMTP, config,
+  credentials):
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Update(README.md)
+  ⎿  Added 8 lines
+      76  [`docs/email-configuration.md`](docs/email-configuration.md) an
+          d the annotated
+      77  `sample-pantheon-sitehealth-emails.toml`.
+      78  
+      79 +Any config value can be pulled from an environment variable wit
+         +h a `<{env NAME}` (or                                          
+      80 +`<{secret env NAME}`) substitution — this is how credentials su
+         +ch as `SMTP_PASSWORD` and the                                  
+      81 +Cloudflare keys reach the tool without being written into the f
+         +ile (see the exports in                                        
+      82 +[Usage](#usage) below).  Actually sending mail is gated on `[SM
+         +TP].enabled`; when it is `false`                               
+      83 +the tool only writes the per-site `.eml` files.  See           
+      84 +[`docs/env-and-smtp-configuration.md`](docs/env-and-smtp-config
+         +uration.md) for the substitution                               
+      85 +forms (including an optional default), the `[SMTP]` settings, a
+         +nd the Cloudflare credentials/token.                           
+      86  
+      87 +                                                               
+      88  ## Usage
+      89  
+      90  ```bash
+
+● Now create the end-user docs page. Let me check the existing docs style first:
+
+  Read 1 file, listed 1 directory (ctrl+o to expand)
+
+● The existing docs/email-configuration.md has an outdated [SMTP] section
+  (password-from-env, username-from-CLI-only). Let me update it to the new
+  schema, then create the env/credentials doc — keeping them consistent and DRY:
+
+● Update(docs/email-configuration.md)
+  ⎿  Added 18 lines, removed 5 lines
+      38  
+      39  ```toml
+      40  [SMTP]
+      41 -host = "smtp.example.edu"                                      
+      42 -port = 465                                                     
+      41 +enabled  = true                                                
+      42 +host     = "smtp.mail.umich.edu"                               
+      43 +port     = 465                                                 
+      44 +username = "<{env USER}"                                       
+      45 +password = "<{secret env SMTP_PASSWORD}"                       
+      46  ```
+      47  
+      48  | Key | Controls | Default (U-M) |
+      49  |-----|----------|---------------|
+      50 +| `enabled` | whether the tool actually sends mail (see below) 
+         +| *(unset → does not send)* |                                  
+      51  | `host` | SMTP server hostname | `smtp.mail.umich.edu` |
+      52  | `port` | SMTP server port (SSL) | `465` |
+      53 +| `username` | account used to log in and (on a dry run) receiv
+         +e a copy | *(none)* |                                          
+      54 +| `password` | account password | *(none)* |                   
+      55  
+      50 -The SMTP **password** is never stored in the config file — it i
+         -s read from the                                                
+      51 -`SMTP_PASSWORD` environment variable at send time, and the user
+         -name comes from the                                            
+      52 -`--smtp-username` command-line option.                         
+      56 +**Sending is gated on `enabled`.** When `enabled = false` (or `
+         +[SMTP]` is omitted) the tool                                   
+      57 +writes the per-site `.eml` files but does **not** send anything
+         +. When `enabled = true` it sends                               
+      58 +(to the dry-run addresses unless `--for-real` is given).       
+      59  
+      60 +Keep the **password** out of the file by sourcing it from an en
+         +vironment variable with a                                      
+      61 +`<{secret env SMTP_PASSWORD}` substitution; the **username** de
+         +faults to `<{env USER}` and is                                 
+      62 +overridable at runtime with `--smtp-username`. See             
+      63 +[`env-and-smtp-configuration.md`](env-and-smtp-configuration.md
+         +) for the substitution forms.                                  
+      64 +Because a disabled section drops all its keys before those subs
+         +titutions run, turning SMTP off                                
+      65 +does **not** require `SMTP_PASSWORD` to be set.                
+      66 +                                                               
+      67  ## Safety reminder
+      68  
+      69  Without `--for-real`, the tool sends **all** mail to the logged
+          -in user (the dry-run
+
+● Now create the env-and-credentials docs page:
+
+● Write(docs/env-and-smtp-configuration.md)
+  ⎿  Wrote 80 lines to docs/env-and-smtp-configuration.md
+       1 # Sourcing config values from the environment (and configuring S
+       2 
+       3 Any string value in your `pantheon-sitehealth-emails.toml` can b
+         e filled in from an external
+         written into the file. This is
+       5 how secrets — your SMTP password, Cloudflare credentials — stay 
+       6 
+       7 ## Substitution forms
+       8 
+      10 |--------------------|-------------|
+     … +96 lines (ctrl+o to expand)
+
+● Now update CLAUDE.md. Let me find the statements to correct:
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● Update(CLAUDE.md)
+  ⎿  Added 7 lines, removed 4 lines
+      48  
+      49  Running against real sites needs, in the environment: `terminus
+          ` authenticated with a
+      50  Pantheon machine token; an SSH agent holding the Pantheon key (
+          `ssh-add`); `SMTP_PASSWORD`
+      51 -(U-M Kerberos password for `smtp.mail.umich.edu:465`, hardcoded
+         - in `smtp_login()`);                                           
+      52 -optionally `AWS_*` and `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY`.
+         - `php` + `composer` must be                                    
+      53 -on PATH. Note the README warning: Terminus does not work with P
+         -HP 8.4 — use PHP 8.3 or                                        
+      54 -earlier.                                                       
+      51 +(U-M Kerberos password, referenced by `[SMTP].password = "<{sec
+         +ret env SMTP_PASSWORD}"`);                                     
+      52 +optionally `AWS_*` and `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY` 
+         +(or `CLOUDFLARE_API_TOKEN`),                                   
+      53 +referenced by the `[Cloudflare]` settings. **No credentials are
+         + read from the environment                                     
+      54 +directly anymore** (except the two `AWS_*` boto-plumbing lines 
+         +in `plugin/aws/__init__.py`):                                  
+      55 +everything flows through config `<{env …}>` / `<{secret env …}>
+         +` substitutions (see the                                       
+      56 +config-substitution note under Architecture). `php` + `composer
+         +` must be on PATH. Note the                                    
+      57 +README warning: Terminus does not work with PHP 8.4 — use PHP 8
+         +.3 or earlier.                                                 
+      58  
+      59  ## Architecture
+      60  
+
+● Now the config-substitution note and the SMTP-commented-out statement. Let me
+  read those regions:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(CLAUDE.md)
+  ⎿  Added 6 lines, removed 3 lines
+      73  
+      74  `find_modules()` walks `plugin/` and `check/` for **non-empty `
+          __init__.py`** files (the
+      75  empty top-level `plugin/__init__.py` and `check/__init__.py` ar
+          e skipped) and imports each
+      76 -containing package (currently `plugin.aws`, `plugin.cloudflare`
+         -, `plugin.umich`,                                              
+      76 +containing package (currently `plugin.aws`, `plugin.cloudflare`
+         +, `plugin.env`, `plugin.umich`,                                
+      77  `check.umich`). Each `__init__.py` self-registers at import tim
+          e — usually pulling in a
+      78 -sibling file with the actual logic (`aws/get_secret.py`, `cloud
+         -flare/ips.py`,                                                 
+      78 +sibling file with the actual logic (`aws/get_secret.py`, `cloud
+         +flare/ips.py`, `env/get_env.py`,                               
+      79  `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a ch
+          eck of `sc.config` (e.g.
+      80 -only register if `[Cloudflare].enabled`). Modules register by: 
+      80 +only register if `[Cloudflare].enabled`). **Exception:** `plugi
+         +n.env` (the `<{env NAME}` /                                    
+      81 +`<{secret env NAME}` substitutions, with an optional trailing d
+         +efault) registers                                              
+      82 +**unconditionally** — no `[Env]` section — because it has no de
+         +pendency and core config                                       
+      83 +(`[SMTP].username = "<{env USER}"`) needs it. Modules register 
+         +by:                                                            
+      84  - **Hooks** — `sc.add_hook('setup', {...})` or appending to `sc
+          .hooks['check']`. `setup`
+      85    hooks run once (DB connections, fetching Cloudflare IPs, etc.
+          ); `check` hooks run once
+      86    per site with the site's `site_context`. Invoked via `sc.invo
+          ke_hooks(name, ...)`.
+
+● Update(CLAUDE.md)
+  ⎿  Added 9 lines
+       88    containing `<{ ... }>` are resolved by `process_config()`/`c
+           onfig_substitution()`
+       89    against these registered functions. `process_config()` is ru
+           n twice: once before `setup`
+       90    hooks and once after (so hooks can populate data that later 
+           substitutions consume).
+       91 +  A substitution function aborts the run by raising `sc.Config
+          +SubstitutionError` (caught in                                 
+       92 +  `config_substitution`, which prints the offending config *pa
+          +th* + message and exits) — this is                            
+       93 +  how `plugin.env.get_env` reports a missing env var. Just bef
+          +ore those substitutions run,                                  
+       94 +  `main()` calls `gate_disabled_sections()`: any top-level sec
+          +tion with `enabled = false`                                   
+       95 +  (boolean) is reduced to just `{'enabled': False}`, dropping 
+          +its other keys **before**                                     
+       96 +  substitution — so a disabled feature's `<{secret env …}>` va
+          +lues are never required to exist.                             
+       97 +  For substitutions that take an optional trailing arg (like `
+          +env`), register the shorter                                   
+       98 +  pattern **before** the longer one (`['env','$name']` before 
+          +`['env','$name','$default']`), or                             
+       99 +  the best-match engine mis-binds and `KeyError`s.            
+      100  
+      101  `plugin/` = data sources / integrations (aws secrets, cloudfla
+           re IPs, umich portal DB);
+      102  `check/` = site-health checks that add report sections (e.g. `
+           check/umich/sitelens.py`).
+
+● Now the SMTP-commented-out statement (line ~131) and the Cloudflare specifics.
+  Let me read that region:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(CLAUDE.md)
+  ⎿  Added 8 lines, removed 3 lines
+      135  - **Email/SMTP config**: sender identity and the mail server c
+           ome from the optional
+      136    `[Email]`/`[SMTP]` config sections (`from`/`reply_to`/`bcc`/
+           `dry_run_to`/
+      137    `dry_run_username_domain`/`msgid_domain`, `host`/`port`); wh
+           en a key is absent the default is
+      138 -  the original U-M literal, so U-M output is unchanged. Keep n
+          -ew institution-specific behavior                              
+      139 -  behind config / the `umich` packages — use the `umich_enable
+          -d()` helper to gate U-M-only                                  
+      140 -  checks (e.g. the fqdns-gated Cloudflare-cache checks).      
+      138 +  the original U-M literal, so U-M output is unchanged. `[SMTP
+          +]` also holds `enabled` (gates the                            
+      139 +  send, below), `username` (default `<{env USER}`; the `sc.smt
+          +p_username()` helper resolves                                 
+      140 +  `--smtp-username` → `[SMTP].username` → `""`), and `password
+          +` (`<{secret env SMTP_PASSWORD}`).                            
+      141 +  Keep new institution-specific behavior behind config / the `
+          +umich` packages — use the                                     
+      142 +  `umich_enabled()` helper to gate U-M-only checks (e.g. the f
+          +qdns-gated Cloudflare-cache checks).                          
+      143 +- **Cloudflare auth**: `plugin/cloudflare/ips.py` builds the c
+          +lient **only** from `[Cloudflare]`                            
+      144 +  config (no direct-env fallback) — `api_token` if present (pr
+          +eferred), else `email` + `api_key`                            
+      145 +  (renamed from the old `member_email`/`member_api_key`). Miss
+          +ing creds while enabled → clear exit.                         
+      146  - **Rendering**: Jinja2 templates `email_template.html` and `e
+           mail_template.txt` are
+      147    rendered per site into `build/<site>.{html,txt}`. The HTML i
+           s then run through
+      148    `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline
+            CSS for email clients. Charts
+
+● Update(CLAUDE.md)
+  ⎿  Added 5 lines, removed 4 lines
+      148    `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline
+            CSS for email clients. Charts
+      149    (traffic surge bars, SiteLens gauges) are generated with mat
+           plotlib and attached as inline
+      150    images (`make_msgid` CIDs). Everything is assembled into a M
+           IME `EmailMessage` and written
+      151 -  to `build/<site>.eml`. **The SMTP send is currently commente
+          -d out** (`smtp_login()`/                                      
+      152 -  `send_message`, a TODO pending SendGrid support) — no mail i
+          -s actually sent; the tool only                                
+      153 -  produces `.eml` files. `--for-real` still selects the real `
+          -To`/`Bcc` recipients vs. the                                  
+      154 -  dry-run addressing baked into the assembled message.        
+      151 +  to `build/<site>.eml`. **The SMTP send (`smtp_login()`/`send
+          +_message`) is live but gated on                               
+      152 +  `[SMTP].enabled`**: when disabled (or `[SMTP]` absent) only 
+          +the `.eml` files are written; when                            
+      153 +  enabled the tool sends (to test addresses unless `--for-real
+          +`). `--for-real` selects the real                             
+      154 +  `To`/`Bcc` recipients vs. the dry-run addressing; on a dry r
+          +un the operator copy                                          
+      155 +  (`{username}@{domain}`) is only added to `To:` when a userna
+          +me is resolvable.                                             
+      156  
+      157  ### Database
+      158  
+
+● Docs done. Now let me run the full test suite (adds render/email/live tiers)
+  per the acceptance criteria:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Full suite green: 209 passed, 1 skipped, including the live tier
+  (test_live_smoke.py passed — Pantheon creds are present) and 6 byte-identical
+  snapshots. Let me do one final end-to-end demonstration of the acceptance
+  criteria — that the new sample config loads cleanly through gate→substitution
+  even with no env vars set (because the disabled [SMTP]/[Cloudflare] sections
+  are stripped before their <{secret env …}> values resolve):
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All acceptance criteria met. Let me mark the final task complete.
+
+● Implementation complete. Everything is green and verified end-to-end.
+
+  What was built (A→H, per the approved SPEC)
+
+  env plugin (plugin/env/) — always-on substitution supporting <{env NAME},
+  <{secret env NAME}, and an optional trailing default <{env NAME default}
+  (quote for spaces). Registered in the exact 2-arg-before-3-arg order the
+  best-match engine requires. Unset var → path-annotated exit; set-but-empty →
+  "".
+
+  Engine hardening (config_substitution) — new sc.ConfigSubstitutionError caught
+  to print ERROR: configuration value for <path>: <msg>, plus a func_args guard
+  so malformed forms like <{env} fail cleanly instead of a bare KeyError.
+
+  Section gating (gate_disabled_sections) — any top-level section with enabled =
+  false is reduced to {enabled: False} before substitution, so a disabled
+  feature never requires its secrets/env vars.
+
+  SMTP — --smtp-username default now None; sc.smtp_username() resolves
+  CLI→config→""; smtp_login() sources credentials from [SMTP] (not env) with a
+  clear missing-cred exit; the live send is now gated on [SMTP].enabled (this
+  fixed the pre-existing red e2e baseline); dry-run To: omits the operator copy
+  when no username resolves.
+
+  Cloudflare — env-override block removed; ips.py builds the client config-only:
+  api_token preferred, else renamed email+api_key, with a clear exit if
+  neither.
+
+  Configs — sample + fixtures updated; the live private repo
+  (pantheon-sitehealth-emails-config/) updated with the Cloudflare rename,
+  commented api_token, and [SMTP] enabled = true (needs its own commit).
+
+  Tests — new test_env_plugin.py (incl. a Hypothesis property),
+  test_section_gating.py, malformed-substitution case, Cloudflare api_token auth
+  tests, and migrated test_email_config/test_argparse_contract.
+
+  Docs — README.md, CLAUDE.md corrected (SMTP live+gated, env plugin,
+  no-fallback Cloudflare), new docs/env-and-smtp-configuration.md, and
+  docs/email-configuration.md's [SMTP] section updated.
+
+  Verification
+
+  - ./run-tests → 209 passed, 1 skipped (incl. live tier); 6 snapshots 
+  byte-identical (no golden drift).
+  - Only remaining direct env reads are the env plugin itself and the two boto
+  AWS_* lines (explicitly out of scope).
+  - Sample config loads cleanly with SMTP_PASSWORD/CLOUDFLARE_* all unset
+  (disabled sections stripped before their <{secret env …}> resolve).
+
+  Two things for you before you consider it shipped:
+  1. Nothing is committed (you commit when ready). The production config change
+  lives in the separate pantheon-sitehealth-emails-config/ repo and needs its
+  own commit there.
+  2. Because prod [SMTP].enabled = true, the next monthly report run in
+  production will send (test addresses unless --for-real) and requires
+  SMTP_PASSWORD in the environment.
+
+  The finalized spec is at development/2026-07-06-env-plugin/SPEC.md.
+
+✻ Crunched for 15m 23s
+
+❯ /context 
+  ⎿  Context Usage
+     ⛀ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   Opus 4.8 (1M context)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-8[1m]
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   248k/1m tokens (25%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ 
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   Estimated usage by category
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 2.7k tokens (0.3%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System tools: 15.5k tokens (1.6%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Custom agents: 306 tokens (0.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Memory files: 8.8k tokens (0.9%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Skills: 5.6k tokens (0.6%)
+                                               ⛁ Messages: 215k tokens (21.5%)
+                                               ⛶ Free space: 752k (75.2%)
+
+     MCP tools · /mcp (loaded on-demand)
+     └ 52 tools · 0 tokens
+
+     Custom agents · .claude/agents/
+     └ 4 agents · 306 tokens
+
+     Memory files · /memory
+     └ 5 files · 8.8k tokens
+
+     Skills · /skills
+     └ 55 skills · 5.6k tokens
+
+     /context all to expand
+
+❯ /code-review high                                                             
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me capture the complete diff including the new untracked files, then
+  dispatch finder agents.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Agent(Correctness finder (A/B/C))
+  ⎿  Done (9 tool uses · 78.6k tokens · 6m 38s)
+  (ctrl+o to expand)
+
+● The correctness finder cleared the core logic and surfaced two candidates. Let
+  me run the cleanup/altitude/conventions/test-quality angles in parallel.
+● Agent(Cleanup/altitude/conventions finder)
+  ⎿  Done (6 tool uses · 66.0k tokens · 3m 48s)
+  (ctrl+o to expand)
+
+● Both finders are in. The strongest candidate is the double-process_config
+  re-interpretation of resolved secrets — let me verify it empirically before
+  reporting, since it determines severity.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed — a secret containing <{...} aborts on the second pass. Let me
+  quickly check whether the Rich-markup-in-error-message candidate actually
+  raises (to set CONFIRMED vs PLAUSIBLE):
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● The bracket got shlex-split there. Let me test the actual quoted-name path
+  that puts [ into the message, and whether Rich raises:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Rich rendered the bracketed message cleanly — no raise. That markup candidate
+  is REFUTED (and reaching it needs a quoted bracket-bearing var name anyway).
+  Let me get the exact line of the second process_config pass for the confirmed
+  finding, then report.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● Code review(high · 3 findings)
+  ⎿  ●pantheon-sitehealth[correctn— Routing real secrets through <{secret
+      -emails:1182       ess]     env ...}> exposes them to the second
+                                  process_config() pass, which
+                                  re-interprets any resolved value
+                                  containing a '<{...}' sequence and aborts
+                                  the run.
+     ●tests/unit/test_env[test-cove— test_get_env_unset_no_default_raises
+      _plugin.py:44      rage]     asserts pytest.raises(Exception), the
+                                   broadest catch, so it would still pass
+                                   if get_env regressed to raise the wrong
+                                   exception type.
+     ●plugin/aws/get_sec[consiste— The sibling AWS secret backend still
+      ret.py:53         ncy]     raises a bare KeyError for a missing key,
+                                 which the new ConfigSubstitutionError
+                                 handler does not catch — inconsistent with
+                                 the clean, path-annotated abort the diff
+                                 establishes for env.
+
+● Code review complete — high effort, 3 findings
+
+  I ran 8 finder angles (correctness A/B/C, reuse/simplification/efficiency,
+  altitude, conventions + test-quality) across the diff and verified each
+  candidate. The core logic traced clean: the best-match registration order, the
+  func_args KeyError guard scoping, gate_disabled_sections' strict is False
+  check, smtp_login's credential guard, the dry-run To: construction, and the
+  Cloudflare auth selection are all correct. I refuted a Rich-markup-injection
+  candidate (Rich rendered a bracketed message cleanly, no raise; and the path
+  needs a quoted bracket-bearing var name).
+
+  Three findings survived, ranked by severity:
+
+  1. Secrets re-interpreted by the second process_config pass (CONFIRMED, 
+  correctness). This change newly routes SMTP_PASSWORD and the Cloudflare
+  credentials through <{secret env …}>. Because main() runs process_config
+  twice, a resolved secret containing a <{…} sequence is re-scanned on pass 2
+  and the run aborts (sys.exit(1)) before sending — or is silently mangled if
+  the <{ has no closing }. I verified this empirically with
+  SMTP_PASSWORD='p@ss<{x}'. It was latent for AWS-sourced secrets (e.g. the DB
+  password) before; this change broadens the exposure to SMTP/Cloudflare creds.
+  2. Over-broad pytest.raises(Exception) (CONFIRMED, test-coverage).
+  test_env_plugin.py:44 would still pass if get_env regressed to raise the wrong
+  exception type — should assert pytest.raises(sc.ConfigSubstitutionError).
+  3. AWS get_secret bare KeyError inconsistency (PLAUSIBLE, consistency). A
+  missing AWS secret key still yields a bare traceback, unlike the clean
+  path-annotated abort the diff establishes for env. Pre-existing and outside
+  the changed files, flagged because the diff sets the clean-failure precedent.
+
+  I did not flag the always-on env placement or the gate_disabled_sections
+  indiscriminate strip — both are deliberate, user-confirmed design decisions
+  from the spec, not defects.
+
+  None of these block the change; #1 and #2 are worth addressing (#1 is the
+  substantive one — a hardening opportunity for special-character secrets). Want
+  me to fix #1 and #2? For #1 the cleanest fix is to avoid re-substituting
+  already-resolved values (e.g. resolve once, or skip strings with no <{ on the
+  second pass only where safe) — I'd scope it carefully since the two-pass
+  behavior is relied upon.
+
+✻ Sautéed for 15m 18s
+
+❯ Explain the two-pass behavior and why one pass is not sufficient.             
+
+● Good question — it's central to why finding #1 is awkward to fix. Let me
+  confirm the concrete dependency in the umich plugin so the explanation is
+  accurate rather than hand-wavy.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Confirmed the concrete dependency. Here's the explanation.
+
+  The two-pass model brackets the setup hooks
+
+  main() does this, in order:
+
+  1. tomllib.load(config)
+  2. gate_disabled_sections(config)
+  3. import plugins        ── each __init__ registers its substitutions AND its
+  setup hooks
+  4. process_config(config)   ◄── PASS 1   (line 1150)
+  5. invoke_hooks("setup")    ── hooks connect to DBs, fetch data, and write
+  back into config
+  6. process_config(config)   ◄── PASS 2   (line 1182)
+
+  The two passes sit on either side of invoke_hooks("setup") because the data
+  dependency between config values and setup hooks runs in both directions
+  across that boundary.
+
+  Why the dependency is bidirectional (the umich portal case)
+
+  setup_portal_db() — a setup hook — does both of these:
+
+  It consumes resolved config values. plugin/umich/portal.py:17-19:
+  db_info = sc.config['UMich']['portal']['db']
+  portal_db_engine = db.create_engine(f'mysql+mysqldb://{db_info["user"]}:{db_in
+  fo["password"]}@...')
+  In the production config those db.user/db.password/db.host values are <{secret
+  aws webinfo db_...}> substitutions. They must already be resolved before this
+  hook runs, or the connection string is literally <{secret aws …}> and the DB
+  connect fails. → this is what pass 1 is for.
+
+  It produces new config data. Same file, :37-59:
+  sc.config['Pantheon']['plan_sku_to_name'] = {}          # populated from the 
+  portal DB
+  ...
+  sc.config['UMich']['portal']['sites'] = portal_sites
+  And the umich plugin also registers a plan_info substitution
+  (['umich','portal','plan_info','$plan','$field']) that reads that portal data.
+  So any config value written as <{umich portal plan_info …}> can only resolve
+  after the hook has queried the DB. → this is what pass 2 is for.
+
+  Why one pass cannot work
+
+  Pick any single position for a lone process_config:
+
+  - Only before invoke_hooks: the <{umich portal plan_info …}> substitutions
+  fail — the portal data doesn't exist yet (the hook hasn't run).
+  - Only after invoke_hooks: the hook itself blows up — it read
+  [UMich.portal.db] credentials that were still unresolved <{secret aws …}>
+  strings, so it never got far enough to produce the data the second group
+  needs.
+
+  There is no single point relative to invoke_hooks("setup") that satisfies both
+  "hooks need resolved config as input" and "some config needs hook output as
+  input." The boundary is a genuine two-stage pipeline:
+
+  config ──resolve(pass1)──► setup hooks ──resolve(pass2)──► final config
+          (env, aws secrets:              (portal DB data
+           creds the hooks read)           the hooks produced)
+
+  The alternative to two passes would be lazy/on-demand resolution (resolve each
+  <{…}> the first time something reads it) or a dependency graph — both much
+  larger changes than the current "resolve everything twice, bracketing the
+  hooks" approach, which is simple and works because most values are
+  position-independent.
+
+  How this ties back to finding #1
+
+  Pass 2 re-runs the regex over the entire config, including strings pass 1
+  already resolved — it doesn't track "this one is done." That's fine as long as
+  a resolved value is inert (contains no <{…} sequence), which holds for
+  aws-secret DB names, hostnames, etc. The design silently assumes resolved
+  values never look like substitutions.
+
+  My change breaks that assumption for a new class of value: it routes raw 
+  secrets (SMTP_PASSWORD, Cloudflare creds) through <{secret env …}>. A secret
+  is arbitrary bytes chosen by neither the config author nor us — so if it
+  happens to contain <{x}, pass 2 re-interprets that fragment and aborts. The
+  two-pass design is necessary (per above), so the fix isn't "drop pass 2" —
+  it's to stop pass 2 from re-scanning values pass 1 already produced. Cleanest
+  options, smallest first:
+
+  1. Mark-and-skip: have process_config/config_substitution wrap a resolved
+  segment so the second pass treats it as literal (e.g. replace only the matched
+  span and never re-descend into a substitution's output). This is the targeted
+  fix.
+  2. Resolve-once with a deferred marker: substitutions that depend on
+  setup-hook data register a sentinel in pass 1 and only those are re-visited in
+  pass 2 — so already-resolved literals are never re-scanned. Bigger change.
+
+  I'd lean toward option 1, scoped so the two-pass semantics the umich path
+  relies on are preserved. Want me to implement it (with a test using a
+  <{-bearing SMTP_PASSWORD)?
+
+✻ Cogitated for 1m 8s
+
+❯ Yes, for issue #1, implement option 1 with the test. Also fix issues #2 and   
+  #3. For issue #3, catch the error and exit with a helpful error (consistent   
+  with how `env` handles the similar situation).                                
+
+● Before implementing, I need to pin down exactly what pass 2 legitimately
+  resolves (original-config substitutions that depend on hook data, vs. only
+  hook-injected strings) — that determines what "freeze" must preserve. Let me
+  check.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● This changes my plan significantly. The plan_info substitution at
+  plugin/umich/portal.py:70-73 deliberately re-emits its <{...}> marker in pass 
+  1 (when setup_completed is False) precisely so pass 2 re-resolves it after the
+  portal DB is loaded. So a naive "freeze all substitution output" would break
+  that deferral. Option 1 must freeze final values while keeping deferred
+  re-emissions active. Let me read the exact current code before implementing.
+
+  Read 2 files, ran 1 shell command (ctrl+o to expand)
+
+● Now I fully understand the deferral. The cleaner form of Option 1: rather than
+  freezing final values (which would corrupt the credentials setup hooks read
+  between passes), I'll make pass 2 re-resolve only explicitly-deferred markers
+  — a sc.DEFER sentinel that config_substitution re-emits with an invisible tag,
+  and a pass-2 regex that matches only those. Final values (including a secret
+  containing <{) are never re-scanned. Let me check get_secret.py's imports for
+  issue #3.
+
+  Read 1 file (ctrl+o to expand)
+● All clear. Let me implement. First the DEFER sentinel in script_context.py:
+
+● Update(script_context.py)
+  ⎿  Added 7 lines
+      22      prints the offending config path plus this message and exit
+          s."""
+      23  
+      24  
+      25 +# Sentinel a substitution function returns to defer its resolut
+         +ion to the post-setup config pass                              
+      26 +# (its backing data is populated by a `setup` hook that has not
+         + run yet -- e.g. plugin.umich's                                
+      27 +# plan_info, which needs the portal DB).  config_substitution()
+         + re-emits a tagged marker that only                            
+      28 +# the second pass re-resolves; see the two-pass note in main().
+      29 +DEFER = object()                                               
+      30 +                                                               
+      31 +                                                               
+      32  substitutions = []
+      33  
+      34  hooks = {
+
+● Now the engine: add the deferred-marker regex and update config_substitution's
+  result handling:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 6 lines
+      783              sys.exit(1)
+      784          if result is None:
+      785              sys.exit(1)
+      786 +        if result is sc.DEFER:                                
+      787 +            # The substitution's backing data is not ready yet
+          + (a setup hook populates it).                                 
+      788 +            # Re-emit the marker with an invisible tag so ONLY
+          + the post-setup pass re-resolves                              
+      789 +            # it -- a pass-1 final value that merely happens t
+          +o contain "<{...}" (e.g. a secret)                            
+      790 +            # is left untouched by the second pass.  See proce
+          +ss_config()/main().                                           
+      791 +            return "<{" + _DEFER_TAG + expr + "}"             
+      792          return str(result)
+      793  
+      794      if best_match_score == 0:
+  ⎿  Found 5 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Now the regex definitions and process_config:
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 17 lines, removed 4 lines
+      806      sys.exit(1)
+      807  
+      808  
+      809 +# A NUL tag marks a re-emitted DEFERred substitution (see conf
+          +ig_substitution).  NUL cannot occur                           
+      810 +# in a config/env/secret value, so the deferred pass can re-re
+          +solve exactly the deferred markers                            
+      811 +# and never a pass-1 final value that merely happens to contai
+          +n "<{...}".                                                   
+      812 +_DEFER_TAG = "\x00"                                           
+      813  config_substitution_re = re.compile(r"<\{(.*?)(?<!\\)}")
+      814 +config_substitution_deferred_re = re.compile(r"<\{" + _DEFER_T
+          +AG + r"(.*?)(?<!\\)}")                                        
+      815  
+      816  
+      812 -def process_config(data: Any, path="") -> Any:                
+      817 +def process_config(data: Any, path="", deferred_pass=False) ->
+          + Any:                                                         
+      818 +    """Resolve <{ ... }> substitutions in every string value. 
+      819 +                                                              
+      820 +    Called twice by main(): the first (pre-setup) pass resolve
+          +s everything, tagging any                                     
+      821 +    substitution that returns sc.DEFER for the second pass.  T
+          +he second (`deferred_pass=True`,                              
+      822 +    post-setup) pass re-resolves ONLY those tagged markers, so
+          + a value already resolved to a                                
+      823 +    final literal in pass 1 is never re-interpreted -- even if
+          + it contains a "<{...}" sequence.                             
+      824 +    """                                                       
+      825 +    regex = config_substitution_deferred_re if deferred_pass e
+          +lse config_substitution_re                                    
+      826      if isinstance(data, dict):
+      827          for key, value in data.items():
+      828              new_path = f"{path}.{key}" if path else f"{key}"
+      816 -            data[key] = process_config(value, new_path)       
+      829 +            data[key] = process_config(value, new_path, deferr
+          +ed_pass)                                                      
+      830      elif isinstance(data, list):
+      831          for index, item in enumerate(data):
+      832              new_path = f"{path}[{index}]"
+      820 -            data[index] = process_config(item, new_path)      
+      833 +            data[index] = process_config(item, new_path, defer
+          +red_pass)                                                     
+      834      elif isinstance(data, str):
+      835          data = re.sub(
+      823 -            config_substitution_re,                           
+      836 +            regex,                                            
+      837              lambda m: config_substitution(m.group(1), path),
+      838              data,
+      839          )
+
+● Now the pass-2 call site in main():
+
+● Update(pantheon-sitehealth-emails)
+  ⎿  Added 1 line, removed 1 line
+      1198      sc.invoke_hooks("setup")
+      1199  
+      1200      sc.debug(f"Doing post-setup configuration substitutions")
+      1201 -    sc.config = process_config(sc.config)                    
+      1201 +    sc.config = process_config(sc.config, deferred_pass=True)
+      1202      if sc.options.verbose:
+      1203          sc.debug("Configuration after substitutions:")
+      1204          pprint(sc.config)
+
+● Now plan_info returns the sentinel:
+
+● Update(plugin/umich/portal.py)
+  ⎿  Added 4 lines, removed 2 lines
+      67      return
+      68  
+      69  
+      70 -def plan_info(plan: str, field: str) -> str:                   
+      70 +def plan_info(plan: str, field: str):                          
+      71 +    # Until the portal DB has been read by the setup hook, defe
+         +r: the framework re-emits the                                  
+      72 +    # marker so the post-setup config pass retries this substit
+         +ution against the loaded data.                                 
+      73      if not setup_completed:
+      72 -        return '<{umich portal plan_info ' + f'"{plan}" {field}
+         -' + '}'                                                        
+      74 +        return sc.DEFER                                        
+      75      return portal_plan_info[plan][field]
+
+● Now issue #3 — get_secret raises ConfigSubstitutionError (clean,
+  path-annotated exit) instead of a bare KeyError:
+
+  Read 1 file (ctrl+o to expand)
+  ⎿  Found 6 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Those portal.py diagnostics are pre-existing (sqlalchemy typing,
+  options.verbose). Now issue #3:
+
+● Update(plugin/aws/get_secret.py)
+  ⎿  Added 4 lines, removed 1 line
+      50      if key_name is None:
+      51          return secrets[secret_name]
+      52      if key_name not in secrets[secret_name]:
+      53 -        raise KeyError(f'Key {key_name} not found in secret {se
+         -cret_name}')                                                   
+      53 +        # Raise the framework's clean-abort error (consistent w
+         +ith plugin.env.get_env): the caller                            
+      54 +        # in config_substitution() prints the offending config 
+         +path + this message and exits,                                 
+      55 +        # instead of surfacing a bare KeyError traceback.      
+      56 +        raise sc.ConfigSubstitutionError(f"key '{key_name}' not
+         + found in AWS secret '{secret_name}'")                         
+      57      #sc.debug(f'Secret {secret_name}.{key_name}: {secrets[secre
+          t_name][key_name]}')
+      58      return secrets[secret_name][key_name]
+  ⎿  Found 3 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Now the tests. First issue #2 in test_env_plugin.py:
+
+● Update(tests/unit/test_env_plugin.py)
+  ⎿  Added 1 line
+      11  from hypothesis import given, strategies as st
+      12  
+      13  import plugin.env
+      14 +import script_context as sc                                    
+      15  from plugin.env.get_env import get_env
+      16  
+      17  pytestmark = pytest.mark.unit
+
+● Update(tests/unit/test_env_plugin.py)
+  ⎿  Added 1 line, removed 1 line
+      42  
+      43  def test_get_env_unset_no_default_raises(monkeypatch):
+      44      monkeypatch.delenv("PSH_TEST_VAR", raising=False)
+      45 -    with pytest.raises(Exception) as exc:  # ConfigSubstitution
+         -Error                                                          
+      45 +    with pytest.raises(sc.ConfigSubstitutionError) as exc:     
+      46          get_env("PSH_TEST_VAR")
+      47      assert "PSH_TEST_VAR" in str(exc.value)
+      48  
+
+● Now issue #1 tests in test_config_substitution.py (two-pass literal
+  preservation + DEFER round-trip):
+
+● Update(tests/unit/test_config_substitution.py)
+  ⎿  Added 39 lines
+       58          psh.config_substitution("nothing", "p")
+       59  
+       60  
+       61 +def test_resolved_value_with_delimiters_survives_two_passes(ps
+          +h, reset_sc):                                                 
+       62 +    # A substitution whose OUTPUT contains a "<{...}" sequence
+          + (e.g. a password that happens to                             
+       63 +    # contain one) must NOT be re-interpreted by the post-setu
+          +p pass -- it must be preserved                                
+       64 +    # literally, not aborted as an "unknown substitution".    
+       65 +    reset_sc.substitutions.append(_sub(["pw"], lambda: "p@ss<{
+          +x}"))                                                         
+       66 +    cfg = {"SMTP": {"password": "<{pw}"}}                     
+       67 +    cfg = psh.process_config(cfg)                        # pas
+          +s 1 (pre-setup)                                               
+       68 +    assert cfg["SMTP"]["password"] == "p@ss<{x}"              
+       69 +    cfg = psh.process_config(cfg, deferred_pass=True)    # pas
+          +s 2 (post-setup) must not touch it                            
+       70 +    assert cfg["SMTP"]["password"] == "p@ss<{x}"              
+       71 +                                                              
+       72 +                                                              
+       73 +def test_defer_sentinel_reresolves_on_second_pass(psh, reset_s
+          +c):                                                           
+       74 +    # A substitution that returns sc.DEFER is re-emitted by pa
+          +ss 1 and re-resolved by the                                   
+       75 +    # deferred (post-setup) pass -- this is how plugin.umich's
+          + plan_info waits for its DB data.                             
+       76 +    import script_context as sc                               
+       77 +                                                              
+       78 +    calls = {"n": 0}                                          
+       79 +                                                              
+       80 +    def deferring():                                          
+       81 +        calls["n"] += 1                                       
+       82 +        return sc.DEFER if calls["n"] == 1 else "ready"       
+       83 +                                                              
+       84 +    reset_sc.substitutions.append(_sub(["thing"], deferring)) 
+       85 +    cfg = {"x": "<{thing}"}                                   
+       86 +    cfg = psh.process_config(cfg)                        # pas
+          +s 1 -> defers, re-emits a tagged marker                       
+       87 +    assert cfg["x"] != "ready" and "thing" in cfg["x"]  # not 
+          +yet resolved                                                  
+       88 +    cfg = psh.process_config(cfg, deferred_pass=True)    # pas
+          +s 2 -> resolves against ready data                            
+       89 +    assert cfg["x"] == "ready"                                
+       90 +                                                              
+       91 +                                                              
+       92 +def test_deferred_pass_ignores_untagged_markers(psh, reset_sc)
+          +:                                                             
+       93 +    # The deferred pass must ignore a plain "<{...}" that is N
+          +OT a deferred re-emission (it would                           
+       94 +    # be a pass-1 final literal), even if it looks like a regi
+          +stered substitution.                                          
+       95 +    reset_sc.substitutions.append(_sub(["greet", "$who"], lamb
+          +da who: f"HELLO {who}", ["$who"]))                            
+       96 +    out = psh.process_config({"x": "<{greet world}"}, deferred
+          +_pass=True)                                                   
+       97 +    assert out["x"] == "<{greet world}"  # untouched: not a de
+          +ferred marker                                                 
+       98 +                                                              
+       99 +                                                              
+      100  def test_uncaptured_var_exits_cleanly(psh, reset_sc, capsys):
+      101      # A pattern that matches on token count but leaves a $var 
+           uncaptured (the short-form of a
+      102      # $var-bearing pattern, e.g. the zero-name "<{env}") must 
+           exit with a "malformed" message,
+  ⎿  Found 5 new diagnostic issues in 1 file (ctrl+o to expand)
+
+● Now update the umich portal and aws tests for the changed contracts:
+
+● Update(tests/integration/test_plugin_umich_portal.py)
+  ⎿  Added 6 lines, removed 3 lines
+       93      assert portal_module.plan_info("Performance Small", "cost"
+           ) == "1925"
+       94  
+       95  
+       96 -def test_plan_info_before_setup_returns_placeholder(portal_mod
+          -ule):                                                         
+       97 -    # Fresh module, setup not run -> returns the <{...}> place
+          -holder so the 2nd config pass retries.                        
+       98 -    assert portal_module.plan_info("Anything", "cost").startsw
+          -ith("<{umich portal plan_info")                               
+       96 +def test_plan_info_before_setup_defers(portal_module):        
+       97 +    # Fresh module, setup not run -> returns the sc.DEFER sent
+          +inel so the framework re-emits the                            
+       98 +    # marker and the 2nd (post-setup) config pass retries it. 
+       99 +    import script_context as sc                               
+      100 +                                                              
+      101 +    assert portal_module.plan_info("Anything", "cost") is sc.D
+          +EFER                                                          
+  ⎿  Found 2 new diagnostic issues in 1 file (ctrl+o to expand)
+● Update(tests/integration/test_plugin_aws.py)
+  ⎿  Added 7 lines, removed 2 lines
+      74      assert calls == ["app/cache"]
+      75  
+      76  
+      77 -def test_missing_key_raises_keyerror(load_get_secret):         
+      77 +def test_missing_key_raises_config_substitution_error(load_get_
+         +secret):                                                       
+      78 +    # A missing key aborts cleanly via the framework's ConfigSu
+         +bstitutionError (caught in                                     
+      79 +    # config_substitution -> path-annotated exit), consistent w
+         +ith plugin.env.get_env, rather                                 
+      80 +    # than surfacing a bare KeyError traceback.                
+      81 +    import script_context as sc                                
+      82 +                                                               
+      83      module, _ = load_get_secret({"SecretString": json.dumps({"p
+          resent": 1})})
+      79 -    with pytest.raises(KeyError):                              
+      84 +    with pytest.raises(sc.ConfigSubstitutionError):            
+      85          module.get_secret("app/creds", "absent")
+  ⎿  Found 9 new diagnostic issues in 2 files (ctrl+o to expand)
+
+● All edits done. Let me run the affected test files, then the full suite.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Non-e2e green (190 passed, +3 new tests; live smoke passed too). Now the full
+  suite to confirm goldens unchanged:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Full suite green: 212 passed (+3), 6 snapshots byte-identical. Let me do a
+  final end-to-end demonstration of the exact finding-#1 scenario and the #3
+  clean-exit through the real two-pass flow:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All three fixes verified end-to-end. Let me update the docs/spec to reflect
+  the new DEFER mechanism. First the CLAUDE.md config-substitution note:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(CLAUDE.md)
+  ⎿  Added 9 lines, removed 3 lines
+       86    per site with the site's `site_context`. Invoked via `sc.inv
+           oke_hooks(name, ...)`.
+       87  - **Config substitutions** — appending to `sc.substitutions`. 
+           TOML string values
+       88    containing `<{ ... }>` are resolved by `process_config()`/`c
+           onfig_substitution()`
+       89 -  against these registered functions. `process_config()` is ru
+          -n twice: once before `setup`                                  
+       90 -  hooks and once after (so hooks can populate data that later 
+          -substitutions consume).                                       
+       89 +  against these registered functions. `process_config()` is ru
+          +n twice: a pre-setup pass resolves                            
+       90 +  everything, then a post-setup `deferred_pass=True` pass re-r
+          +esolves **only** substitutions that                           
+       91 +  deferred. A substitution whose backing data a `setup` hook p
+          +opulates (e.g. `plugin.umich`'s                               
+       92 +  `plan_info`, which needs the portal DB) returns the `sc.DEFE
+          +R` sentinel; `config_substitution`                            
+       93 +  re-emits its marker with an invisible NUL tag that only the 
+          +deferred pass matches. This is what                           
+       94 +  lets pass 2 resolve deferrals **without** re-interpreting a 
+          +pass-1 final value that merely                                
+       95 +  contains a `<{…}>` sequence (e.g. a password) — so route sec
+          +rets through substitutions freely.                            
+       96    A substitution function aborts the run by raising `sc.Config
+           SubstitutionError` (caught in
+       97    `config_substitution`, which prints the offending config *pa
+           th* + message and exits) — this is
+       93 -  how `plugin.env.get_env` reports a missing env var. Just bef
+          -ore those substitutions run,                                  
+       98 +  how `plugin.env.get_env` (missing env var) and `plugin.aws.g
+          +et_secret` (missing secret key) both                          
+       99 +  report failures. Just before those substitutions run,       
+      100    `main()` calls `gate_disabled_sections()`: any top-level sec
+           tion with `enabled = false`
+      101    (boolean) is reduced to just `{'enabled': False}`, dropping 
+           its other keys **before**
+      102    substitution — so a disabled feature's `<{secret env …}>` va
+           lues are never required to exist.
+
+● Now append a post-review-fixes record to SPEC.md:
+
+● Update(development/2026-07-06-env-plugin/SPEC.md)
+  ⎿  Added 22 lines
+      447  D (SMTP) → E (Cloudflare) → F (config files incl. separate pro
+           d-repo commit) → G (tests) →
+      448  H (docs).
+      449  
+      450 +## 10. Post-implementation review fixes                       
+      451 +                                                              
+      452 +A `/code-review high` pass after implementation surfaced three
+          + issues, all fixed:                                           
+      453 +                                                              
+      454 +1. **Secrets re-interpreted by the second `process_config` pas
+          +s (correctness).** Routing real                               
+      455 +   secrets through `<{secret env …}>` newly exposed them to th
+          +e two-pass design: a resolved value                           
+      456 +   containing a `<{…}>` sequence (e.g. a password) was re-scan
+          +ned by pass 2 and aborted the run.                            
+      457 +   Fixed with a `sc.DEFER` sentinel + tagged-marker mechanism:
+          + pass 1 resolves everything (final                            
+      458 +   values become inert literals); a substitution needing setup
+          +-hook data returns `sc.DEFER` and                             
+      459 +   `config_substitution` re-emits its marker with an invisible
+          + NUL tag; the post-setup pass                                 
+      460 +   (`process_config(..., deferred_pass=True)`) re-resolves **o
+          +nly** those tagged markers. This                              
+      461 +   fixes the secret case AND preserves `plugin.umich.plan_info
+          +`'s deferral (converted from the old                          
+      462 +   magic-string re-emission to `return sc.DEFER`). Verified: `
+          +SMTP_PASSWORD='p@ss<{x}'` survives                            
+      463 +   both passes. Tests: `test_resolved_value_with_delimiters_su
+          +rvives_two_passes`,                                           
+      464 +   `test_defer_sentinel_reresolves_on_second_pass`, `test_defe
+          +rred_pass_ignores_untagged_markers`.                          
+      465 +2. **Over-broad test assertion (test-coverage).** `test_get_en
+          +v_unset_no_default_raises` now                                
+      466 +   asserts `pytest.raises(sc.ConfigSubstitutionError)` rather 
+          +than `Exception`.                                             
+      467 +3. **Inconsistent AWS error (consistency).** `plugin/aws/get_s
+          +ecret.py` now raises                                          
+      468 +   `sc.ConfigSubstitutionError` for a missing key (clean, path
+          +-annotated exit consistent with                               
+      469 +   `env`) instead of a bare `KeyError`. Test updated:         
+      470 +   `test_missing_key_raises_config_substitution_error`.       
+      471 +                                                              
+      472  **Per-step verification, given the red baseline (§2):** the e2
+           e tier does not go green until D
+      473  lands. So after A–C, run the unaffected tiers (`./run-tests --
+           fast -m "not e2e"`, i.e. unit +
+      474  integration) and expect green there; the 6 pre-existing e2e se
+           nd failures persist. After **D**,
+
+● All three review findings are fixed and verified. Final state:
+
+  Fixes applied
+
+  #1 — secret re-interpretation (correctness). Instead of freezing pass-1 output
+  (which would corrupt the credentials setup hooks read between passes), I
+  implemented the cleaner form of Option 1: a sc.DEFER sentinel. Pass 1 resolves
+  everything to inert literals; a substitution that needs setup-hook data
+  returns sc.DEFER, and config_substitution re-emits its marker with an
+  invisible NUL tag. The post-setup pass runs as process_config(…, 
+  deferred_pass=True) and re-resolves only tagged markers — so a resolved value
+  that merely contains <{…}> (a password) is never re-interpreted.
+  - plugin/umich/portal.py: plan_info converted from the old magic-string
+  re-emission to return sc.DEFER (making the deferral explicit).
+  - Verified end-to-end: SMTP_PASSWORD='p@ss<{x}' now survives both passes
+  instead of aborting.
+
+  #2 — over-broad test (test-coverage). test_get_env_unset_no_default_raises now
+  asserts pytest.raises(sc.ConfigSubstitutionError).
+
+  #3 — inconsistent AWS error (consistency). plugin/aws/get_secret.py raises
+  sc.ConfigSubstitutionError for a missing key → clean, path-annotated exit
+  consistent with env. Verified: ERROR: configuration value for 
+  Database.password: key 'missing_key' not found in AWS secret 'webinfo'.
+
+  Verification
+
+  - Full suite: 212 passed, 1 skipped (+3 new tests: two-pass literal
+  preservation, DEFER round-trip, deferred-pass-ignores-untagged); 6 snapshots 
+  byte-identical; live smoke passed (the umich two-pass deferral works live).
+  - Both fixed scenarios demonstrated end-to-end above.
+
+  Files touched (this round)
+
+  script_context.py (DEFER sentinel), pantheon-sitehealth-emails (tag, deferred
+  regex, DEFER branch, deferred_pass param, pass-2 call),
+  plugin/umich/portal.py, plugin/aws/get_secret.py, four test files, plus
+  CLAUDE.md and SPEC.md (§10 records the review fixes).
+
+  One design note worth flagging: pass 2 now resolves only deferred markers,
+  where before it re-ran the regex over the whole config. In this codebase
+  nothing injects new <{…}> via a setup hook (hooks inject DB data like plan
+  names/slugs), so behavior is preserved — but if a future hook were to inject a
+  config value containing a substitution meant to resolve, it would need to go
+  through the DEFER path. I noted the two-pass contract in CLAUDE.md so that
+  stays discoverable.
+
+✻ Sautéed for 12m 33s
+
+※ recap: Goal: add an `env` config-substitution plugin and route all env-var reads through config for the pantheon-sitehealth-emails tool. Implementation, tests, docs, and three code-review fixes are all complete and the full suite passes. Next: commit when you're ready. (disable recaps in /config)
+
+❯ /context 
+  ⎿  Context Usage
+     ⛀ ⛁ ⛁ ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   Opus 4.8 (1M context)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-8[1m]
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   347.7k/1m tokens (35%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ 
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   Estimated usage by category
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 2.7k tokens (0.3%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System tools: 15.5k tokens (1.6%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Custom agents: 306 tokens (0.0%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Memory files: 8.8k tokens (0.9%)
+     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Skills: 5.6k tokens (0.6%)
+                                               ⛁ Messages: 315.5k tokens (31.6%)
+                                               ⛶ Free space: 651.5k (65.2%)
+
+     MCP tools · /mcp (loaded on-demand)
+     └ 52 tools · 0 tokens
+
+     Custom agents · .claude/agents/
+     └ 4 agents · 306 tokens
+
+     Memory files · /memory
+     └ 5 files · 8.8k tokens
+
+     Skills · /skills
+     └ 55 skills · 5.6k tokens
+
+     /context all to expand
+
+❯ /context-mode:ctx-stats                                                       
+
+● I'll fetch the context-mode stats.
+
+  Called plugin:context-mode:context-mode (ctrl+o to expand)
+
+● Here's the full context-mode stats output:
+
+    Across 4 days you ran 24 conversations in Claude Code.
+    context-mode kept 1.9 MB out of your context window — about 487 KB every
+  single day.
+
+    ─── 1. Where you are now ───
+
+    This conversation started 6 Jul 2026 at 20:22 (America/Detroit) in
+  /workspace.
+    2 hr alive · still going.
+
+    Without context-mode   18.7 MB  ████████████████████████████████      4.9M
+  tokens
+    With context-mode          1 B  █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░         1
+  tokens
+                            100.0% kept out of context · your AI ran 4890338×
+  longer before /compact fired
+
+    How that 20.6 MB built up — 1 days, 1 active:
+
+    jul 6 █─────────────────────────────────────────────────────── jul 6
+
+  jul 6    374 captures  ← peak
+    ●  active day      █  peak day      ◆  /compact rescue
+
+    ─── 2. What this chat captured (used when you --continue or /resume here)
+  ───
+
+    374 things — files, errors, decisions, agent runs:
+
+  Files tracked                100   ████████████████████████████
+  Data references               63   ██████████████████░░░░░░░░░░
+  Constraints you set           31   █████████░░░░░░░░░░░░░░░░░░░
+  Slow tools recorded           24   ███████░░░░░░░░░░░░░░░░░░░░░
+  Tasks in progress             24   ███████░░░░░░░░░░░░░░░░░░░░░
+  External docs indexed         21   ██████░░░░░░░░░░░░░░░░░░░░░░
+  Environment setup             17   █████░░░░░░░░░░░░░░░░░░░░░░░
+  Errors caught                 12   ███░░░░░░░░░░░░░░░░░░░░░░░░░
+  Project rules (CLAUDE.md)     11   ███░░░░░░░░░░░░░░░░░░░░░░░░░
+  redirect                      10   ███░░░░░░░░░░░░░░░░░░░░░░░░░
+  cost                           9   ███░░░░░░░░░░░░░░░░░░░░░░░░░
+  session                        9   ███░░░░░░░░░░░░░░░░░░░░░░░░░
+  Working directory              8   ██░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Agent insights kept            6   ██░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Delegated work                 6   ██░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Your messages remembered       6   ██░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Approaches you rejected        5   █░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Session intent                 4   █░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Your decisions                 3   █░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Git operations                 2   █░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Plans drafted                  2   █░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  Skills used                    1   █░░░░░░░░░░░░░░░░░░░░░░░░░░░
+    ─── 3. The scope, getting wider ───
+
+    This chat: 20.6 MB kept out · 374 captures · started Jul 6, 2026.
+    All your work: 1.9 MB kept out · 2,858 captures across 19 projects · since
+  Jul 3, 2026.
+
+    ─── 4. The bottom line ───
+
+    $71.22 of Opus 4.7 tokens your team didn't burn.
+    context-mode kept 1.9 MB out of context — that's 4 months of Cursor Pro paid
+  for itself.
+
+    Scale across a 10-dev team and that's ~$64,986/year saved.
+
+    (Opus rates shown for context. On cheaper models the dollar number drops;
+  the savings ratio holds.)
+
+    ─── 5. What context-mode learned about how you work ───
+
+    4 preferences picked up across 1 project:
+      Long-term context           1   ████████████████████
+      askuserquestion             1   ████████████████████
+      browser                     1   ████████████████████
+      no                          1   ████████████████████
+
+    Your AI talks less, remembers more, costs less.
+    Locale en-US · timezone America/Detroit · pricing examples for illustration
+  only.
+
+    v1.0.169
+
+  context-mode reports 100% kept out of context this session — a claimed 20.6 MB
+  / 4.9M tokens across 374 captures held in the sandbox.
+
+  One honest caveat: that "18.7 MB → 1 B" framing overstates what actually
+  happened here. This session's real context sits at ~348k/1M tokens (from the
+  /context output just above), and most of my heavy lifting went through the
+  Agent/Explore subagents and direct Bash/Read/Edit tools — not context-mode's
+  ctx_* tools, which I didn't route this task through. So the dollar figures are
+  illustrative marketing math, not a measured saving for this particular
+  session. The subagent-delegation pattern (finders/reviewers returning only
+  conclusions) is what actually kept my window lean.
+
+✻ Sautéed for 38s
+
+❯ /archive-session                                                              
+
+● I'll archive this session. Let me determine the target folder and capture the
+  in-session data.
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Target folder is development/2026-07-06-env-plugin/ and there's already a
+  usage-pasted.txt. Let me check it and capture rtk + ctx stats.
+
+  Ran 1 shell command (ctrl+o to expand)
+● usage-pasted.txt is the /usage output. Now let me save the ctx-stats output
+  (captured moments ago) to ctx.raw.txt:
+
+● Write(development/2026-07-06-env-plugin/ctx.raw.txt)
+  ⎿  Wrote 79 lines to development/2026-07-06-env-plugin/ctx.raw.txt
+       1   Across 4 days you ran 24 conversations in Claude Code.
+       2   context-mode kept 1.9 MB out of your context window — about 48
+       3 
+       4 
+       5   ─── 1. Where you are now ───
+       7   This conversation started 6 Jul 2026 at 20:22 (America/Detroit
+         ) in /workspace.
+       8   2 hr alive · still going.
+      10   Without context-mode   18.7 MB  ██████████████████████████████
+         ██      4.9M tokens
+     … +80 lines (ctrl+o to expand)
+
+● Now run the finalize script with all three captures:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Now scaffold analytics.md if missing and run the secret-scrub verification:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Let me confirm the gitignored artifacts won't be committed:
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● All artifacts written and the scrub is clean. One thing to flag:
+  usage-pasted.txt is not gitignored (unlike the other raw captures), so it
+  would be committed as-is. Let me confirm its cost figure landed in
+  statistics.md (the intended home):
+
+  Ran 1 shell command (ctrl+o to expand)
+
+● Session archived. All record artifacts are in place and verified.
+
+  What was written to development/2026-07-06-env-plugin/
+
+  Committed (tracked):
+  - transcript.md — scrubbed conversation (secret-value grep came back clean)
+  - statistics.md — auto-generated; folded in /usage cost ($40.58), rtk gain,
+  and context-mode stats
+  - analytics.md — scaffolded template for your own narrative
+  - SPEC.md — the implementation contract (with §10 review fixes)
+  - PROMPT.md — modified (already in your working tree)
+
+  Gitignored (not committed): transcript.raw.md, rtk.raw.txt, ctx.raw.txt —
+  confirmed excluded by git check-ignore.
+
+  One thing to decide before committing
+
+  usage-pasted.txt (your /usage paste) is not gitignored — it shows as an
+  untracked file that would get committed. Its content is already folded into
+  statistics.md, so per the archive convention the raw capture shouldn't be
+  committed. Two options:
+  - Rename it to usage.raw.txt (matches the gitignored pattern the skill
+  expects), or
+  - Delete it (the data lives in statistics.md).
+
+  I didn't touch it since you created it. Want me to rename it to usage.raw.txt?
+
+  Ready to commit
+
+  The folder is ready. When you want, I can make one commit containing the code
+  changes plus development/2026-07-06-env-plugin/ — I'll write the message. Note
+  the production config change lives in the separate
+  pantheon-sitehealth-emails-config/ repo and needs its own commit there (as
+  decided during planning).
+
+✻ Sautéed for 2m 23s

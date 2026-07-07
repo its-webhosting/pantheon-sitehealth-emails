@@ -6,7 +6,6 @@ exercised through run_program, which stays inside the safety interlock and asser
 exit + message rather than an in-process SystemExit.
 """
 import datetime
-import os
 
 import pytest
 
@@ -21,12 +20,30 @@ def test_defaults(psh):
     assert ns.all is False
     assert ns.sites == []
     assert ns.config == "pantheon-sitehealth-emails.toml"
-    assert ns.smtp_username == os.environ.get("USER", "")
+    # The username now defaults to None (no direct USER env read); it is resolved from
+    # [SMTP].username at use time unless --smtp-username overrides it.
+    assert ns.smtp_username is None
     assert ns.verbose == 0
     assert ns.create_tables is False
     assert ns.import_older_metrics is False
     assert ns.for_real is False
     assert isinstance(ns.date, datetime.date)  # defaults to today
+
+
+def test_smtp_username_helper_precedence(psh, reset_sc):
+    """sc.smtp_username(): --smtp-username wins, else [SMTP].username, else ''."""
+    import script_context as sc
+
+    reset_sc.options = psh.parse_args([])  # smtp_username == None
+    reset_sc.config = {"SMTP": {"username": "from_config"}}
+    assert sc.smtp_username() == "from_config"
+
+    reset_sc.options = psh.parse_args(["--smtp-username", "from_cli"])
+    assert sc.smtp_username() == "from_cli"
+
+    reset_sc.options = psh.parse_args([])
+    reset_sc.config = {}
+    assert sc.smtp_username() == ""
 
 
 def test_verbose_counts(psh):

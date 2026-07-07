@@ -93,6 +93,9 @@ def test_setup_portal_db_overrides_config_and_populates(portal_module, reset_sc,
     assert portal_module.plan_info("Performance Small", "cost") == "1925"
 
 
-def test_plan_info_before_setup_returns_placeholder(portal_module):
-    # Fresh module, setup not run -> returns the <{...}> placeholder so the 2nd config pass retries.
-    assert portal_module.plan_info("Anything", "cost").startswith("<{umich portal plan_info")
+def test_plan_info_before_setup_defers(portal_module):
+    # Fresh module, setup not run -> returns the sc.DEFER sentinel so the framework re-emits the
+    # marker and the 2nd (post-setup) config pass retries it.
+    import script_context as sc
+
+    assert portal_module.plan_info("Anything", "cost") is sc.DEFER

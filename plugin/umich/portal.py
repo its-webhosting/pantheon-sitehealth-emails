@@ -67,7 +67,9 @@ def setup_portal_db():
     return
 
 
-def plan_info(plan: str, field: str) -> str:
+def plan_info(plan: str, field: str):
+    # Until the portal DB has been read by the setup hook, defer: the framework re-emits the
+    # marker so the post-setup config pass retries this substitution against the loaded data.
     if not setup_completed:
-        return '<{umich portal plan_info ' + f'"{plan}" {field}' + '}'
+        return sc.DEFER
     return portal_plan_info[plan][field]

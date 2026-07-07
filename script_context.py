@@ -15,6 +15,20 @@ news        = []  # list of news items to be displayed
 
 console = Console()
 
+
+class ConfigSubstitutionError(Exception):
+    """Raised by a config-substitution function (e.g. plugin.env.get_env) to abort the run
+    with a helpful, config-path-annotated message.  Caught in config_substitution(), which
+    prints the offending config path plus this message and exits."""
+
+
+# Sentinel a substitution function returns to defer its resolution to the post-setup config pass
+# (its backing data is populated by a `setup` hook that has not run yet -- e.g. plugin.umich's
+# plan_info, which needs the portal DB).  config_substitution() re-emits a tagged marker that only
+# the second pass re-resolves; see the two-pass note in main().
+DEFER = object()
+
+
 substitutions = []
 
 hooks = {
@@ -115,6 +129,17 @@ def msgid_domain() -> str:
     hard-code it.
     """
     return config.get('Email', {}).get('msgid_domain', 'webservices.umich.edu')
+
+
+def smtp_username() -> str:
+    """
+    The effective SMTP / dry-run username: the --smtp-username option if given, else
+    [SMTP].username (which is dropped when [SMTP] is disabled, per the section-gating rule),
+    else the empty string.  Used both for SMTP login and for the dry-run To: operator copy.
+    """
+    if options.smtp_username is not None:
+        return options.smtp_username
+    return config.get('SMTP', {}).get('username', '') or ''
 
 
 def add_news_item(news_item: dict, from_where: str = 'check') -> None:

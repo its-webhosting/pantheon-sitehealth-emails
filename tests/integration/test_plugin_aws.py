@@ -74,7 +74,12 @@ def test_secret_is_cached_after_first_fetch(load_get_secret):
     assert calls == ["app/cache"]
 
 
-def test_missing_key_raises_keyerror(load_get_secret):
+def test_missing_key_raises_config_substitution_error(load_get_secret):
+    # A missing key aborts cleanly via the framework's ConfigSubstitutionError (caught in
+    # config_substitution -> path-annotated exit), consistent with plugin.env.get_env, rather
+    # than surfacing a bare KeyError traceback.
+    import script_context as sc
+
     module, _ = load_get_secret({"SecretString": json.dumps({"present": 1})})
-    with pytest.raises(KeyError):
+    with pytest.raises(sc.ConfigSubstitutionError):
         module.get_secret("app/creds", "absent")

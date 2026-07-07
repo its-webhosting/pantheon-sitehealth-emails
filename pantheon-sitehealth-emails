@@ -201,8 +201,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--smtp-username",
         "-u",
         action="store",
-        default=os.environ.get("USER", ""),
-        help="username for logging into the SMTP server to send mail",
+        default=None,
+        help="username for logging into the SMTP server to send mail "
+        "(overrides [SMTP].username in the config file)",
     )
     args_parser.add_argument(
         "--create-tables",
@@ -759,13 +760,35 @@ def config_substitution(expr: str, path) -> str:
         pprint(best_match)
 
     if best_match_score == argc:
-        func_args = [best_match_args_map[arg] for arg in best_match["func_args"]]
+        # A malformed substitution can match on token count yet leave a $var uncaptured -- e.g.
+        # the zero-name forms "<{env}" / "<{secret env}", which score == argc with an empty
+        # args_map.  Guard the func_args build so that fails cleanly instead of with a bare
+        # KeyError traceback.
+        try:
+            func_args = [best_match_args_map[arg] for arg in best_match["func_args"]]
+        except KeyError:
+            sc.console.print(
+                f"[bold red]ERROR: configuration value for {path}: malformed substitution: {expr}"
+            )
+            sys.exit(1)
         if sc.options.verbose >= 2:
             sc.debug("args:")
             pprint(func_args)
-        result = best_match["func"](*func_args)
+        try:
+            result = best_match["func"](*func_args)
+        except sc.ConfigSubstitutionError as e:
+            sc.console.print(
+                f"[bold red]ERROR: configuration value for {path}: {e}"
+            )
+            sys.exit(1)
         if result is None:
             sys.exit(1)
+        if result is sc.DEFER:
+            # The substitution's backing data is not ready yet (a setup hook populates it).
+            # Re-emit the marker with an invisible tag so ONLY the post-setup pass re-resolves
+            # it -- a pass-1 final value that merely happens to contain "<{...}" (e.g. a secret)
+            # is left untouched by the second pass.  See process_config()/main().
+            return "<{" + _DEFER_TAG + expr + "}"
         return str(result)
 
     if best_match_score == 0:
@@ -783,25 +806,56 @@ def config_substitution(expr: str, path) -> str:
     sys.exit(1)
 
 
+# A NUL tag marks a re-emitted DEFERred substitution (see config_substitution).  NUL cannot occur
+# in a config/env/secret value, so the deferred pass can re-resolve exactly the deferred markers
+# and never a pass-1 final value that merely happens to contain "<{...}".
+_DEFER_TAG = "\x00"
 config_substitution_re = re.compile(r"<\{(.*?)(?<!\\)}")
+config_substitution_deferred_re = re.compile(r"<\{" + _DEFER_TAG + r"(.*?)(?<!\\)}")
 
 
-def process_config(data: Any, path="") -> Any:
+def process_config(data: Any, path="", deferred_pass=False) -> Any:
+    """Resolve <{ ... }> substitutions in every string value.
+
+    Called twice by main(): the first (pre-setup) pass resolves everything, tagging any
+    substitution that returns sc.DEFER for the second pass.  The second (`deferred_pass=True`,
+    post-setup) pass re-resolves ONLY those tagged markers, so a value already resolved to a
+    final literal in pass 1 is never re-interpreted -- even if it contains a "<{...}" sequence.
+    """
+    regex = config_substitution_deferred_re if deferred_pass else config_substitution_re
     if isinstance(data, dict):
         for key, value in data.items():
             new_path = f"{path}.{key}" if path else f"{key}"
-            data[key] = process_config(value, new_path)
+            data[key] = process_config(value, new_path, deferred_pass)
     elif isinstance(data, list):
         for index, item in enumerate(data):
             new_path = f"{path}[{index}]"
-            data[index] = process_config(item, new_path)
+            data[index] = process_config(item, new_path, deferred_pass)
     elif isinstance(data, str):
         data = re.sub(
-            config_substitution_re,
+            regex,
             lambda m: config_substitution(m.group(1), path),
             data,
         )
     return data
+
+
+def gate_disabled_sections(config: dict) -> dict:
+    """For every top-level section whose `enabled` is the boolean False, keep only
+    {'enabled': False} and drop the section's other settings.
+
+    Done BEFORE substitution resolution (process_config) so a disabled feature never forces its
+    `<{secret env ...}>` / `<{secret aws ...}>` values to exist -- turning a feature off must not
+    require its credentials to be present.  Sections without an `enabled` key, or whose `enabled`
+    is anything other than the boolean False (e.g. True, or the string "false"), are left
+    untouched.  Only top-level tables are considered; nested tables like [Pantheon.plan_info]
+    are unaffected.
+    """
+    for name, value in list(config.items()):
+        if isinstance(value, dict) and value.get("enabled") is False:
+            sc.debug(f"Section [{name}] is disabled; keeping only 'enabled', dropping other keys")
+            config[name] = {"enabled": False}
+    return config
 
 
 def find_modules(module_type: str) -> list[str]:
@@ -821,12 +875,18 @@ def find_modules(module_type: str) -> list[str]:
 
 
 def smtp_login() -> SMTP_SSL:
-    # TODO: get password from config file, from secret or prompt for it
     smtp_cfg = sc.config.get("SMTP", {})
     host = smtp_cfg.get("host", "smtp.mail.umich.edu")
     port = smtp_cfg.get("port", 465)
+    username = sc.smtp_username()
+    password = smtp_cfg.get("password")
+    if not username or not password:
+        sys.exit(
+            "SMTP is enabled but the username or password is not configured "
+            "(set [SMTP].username / [SMTP].password, or pass --smtp-username)."
+        )
     smtp_connection = SMTP_SSL(host, port=port)
-    smtp_connection.login(sc.options.smtp_username, os.environ["SMTP_PASSWORD"])
+    smtp_connection.login(username, password)
     return smtp_connection
 
 
@@ -1095,6 +1155,10 @@ def main() -> None:
     with open(sc.options.config, "rb") as f:
         sc.config = tomllib.load(f)
 
+    # Drop the non-`enabled` settings of any disabled section BEFORE substitution resolution,
+    # so a disabled feature's <{secret env ...}> values are never required to exist.
+    sc.config = gate_disabled_sections(sc.config)
+
     sc.debug(f"[bold magenta]=== Loading plugins:")
     for plugin_name in find_modules("plugin"):
         sc.debug(f"Loading plugin: {plugin_name}")
@@ -1134,7 +1198,7 @@ def main() -> None:
     sc.invoke_hooks("setup")
 
     sc.debug(f"Doing post-setup configuration substitutions")
-    sc.config = process_config(sc.config)
+    sc.config = process_config(sc.config, deferred_pass=True)
     if sc.options.verbose:
         sc.debug("Configuration after substitutions:")
         pprint(sc.config)
@@ -1172,9 +1236,6 @@ def main() -> None:
 
     with open("header-image.png", "rb") as img:
         wordmark_image = img.read()
-
-    if sc.options.smtp_username == "":
-        sys.exit("--smtp-username not specified and USER environment variable not set.")
 
     load_news_items()
     if sc.options.verbose:
@@ -1227,6 +1288,11 @@ def main() -> None:
     sc.debug(
         "Cloudflare is "
         + ("[bold green]enabled" if cloudflare_enabled else "[bold red]DISABLED")
+    )
+    smtp_enabled = bool(sc.config.get("SMTP", {}).get("enabled"))
+    sc.debug(
+        "SMTP sending is "
+        + ("[bold green]enabled" if smtp_enabled else "[bold red]DISABLED")
     )
     site_name_to_id = {site["name"]: site_id for (site_id, site) in sites.items()}
     sc.debug(site_name_to_id)
@@ -3881,7 +3947,15 @@ an additional pro-rated bill or credit in the following month.
         else:
             dry_run_to = email_cfg.get("dry_run_to", "januside@go.mail.umich.edu")
             dry_run_domain = email_cfg.get("dry_run_username_domain", "umich.edu")
-            msg["To"] = f"{dry_run_to}, {sc.options.smtp_username}@{dry_run_domain}"
+            # Address the dry run to the configured dry_run_to plus, when a username is
+            # resolvable (--smtp-username or [SMTP].username), an operator copy.  When no
+            # username is available (e.g. SMTP disabled and no --smtp-username), the operator
+            # copy is omitted rather than reading USER from the environment directly.
+            username = sc.smtp_username()
+            parts = [dry_run_to]
+            if username:
+                parts.append(f"{username}@{dry_run_domain}")
+            msg["To"] = ", ".join(p for p in parts if p)
         msg["Reply-to"] = email_cfg.get("reply_to", "webmaster@umich.edu")
         msg["Date"] = datetime.datetime.now(datetime.UTC).strftime("%a, %d %b %Y %T %z")
         msg["Subject"] = subject
@@ -3920,10 +3994,12 @@ an additional pro-rated bill or credit in the following month.
         with open(f"build/{site['name']}.eml", "wb") as f:
             f.write(msg.as_bytes(policy=SMTP))
 
-        smtp_connection = smtp_login()
-        smtp_connection.send_message(msg)
-        emails_sent += 1
-        smtp_connection.quit()
+        # The send is gated on [SMTP].enabled; when disabled we still write the .eml above.
+        if smtp_enabled:
+            smtp_connection = smtp_login()
+            smtp_connection.send_message(msg)
+            emails_sent += 1
+            smtp_connection.quit()
 
         for n in site_context["notices"]:
             fields = n["csv"].split(",")

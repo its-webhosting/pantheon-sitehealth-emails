@@ -84,8 +84,8 @@ name = "test.db"
 
 [Cloudflare]
 enabled = false
-member_email = "user@example.com"
-member_api_key = "xxxxxxxx"
+email = "user@example.com"
+api_key = "xxxxxxxx"
 
 [AWS]
 enabled = false

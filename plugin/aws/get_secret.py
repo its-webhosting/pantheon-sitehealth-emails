@@ -50,6 +50,9 @@ def get_secret(secret_name, key_name = None, region_name='', profile_name=''):
     if key_name is None:
         return secrets[secret_name]
     if key_name not in secrets[secret_name]:
-        raise KeyError(f'Key {key_name} not found in secret {secret_name}')
+        # Raise the framework's clean-abort error (consistent with plugin.env.get_env): the caller
+        # in config_substitution() prints the offending config path + this message and exits,
+        # instead of surfacing a bare KeyError traceback.
+        raise sc.ConfigSubstitutionError(f"key '{key_name}' not found in AWS secret '{secret_name}'")
     #sc.debug(f'Secret {secret_name}.{key_name}: {secrets[secret_name][key_name]}')
     return secrets[secret_name][key_name]

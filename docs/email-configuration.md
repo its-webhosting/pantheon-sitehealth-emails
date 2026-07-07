@@ -38,18 +38,31 @@ dry_run_username_domain = "example.edu"                   # {smtp-username}@<thi
 
 ```toml
 [SMTP]
-host = "smtp.example.edu"
-port = 465
+enabled  = true
+host     = "smtp.mail.umich.edu"
+port     = 465
+username = "<{env USER}"
+password = "<{secret env SMTP_PASSWORD}"
 ```
 
 | Key | Controls | Default (U-M) |
 |-----|----------|---------------|
+| `enabled` | whether the tool actually sends mail (see below) | *(unset → does not send)* |
 | `host` | SMTP server hostname | `smtp.mail.umich.edu` |
 | `port` | SMTP server port (SSL) | `465` |
+| `username` | account used to log in and (on a dry run) receive a copy | *(none)* |
+| `password` | account password | *(none)* |
 
-The SMTP **password** is never stored in the config file — it is read from the
-`SMTP_PASSWORD` environment variable at send time, and the username comes from the
-`--smtp-username` command-line option.
+**Sending is gated on `enabled`.** When `enabled = false` (or `[SMTP]` is omitted) the tool
+writes the per-site `.eml` files but does **not** send anything. When `enabled = true` it sends
+(to the dry-run addresses unless `--for-real` is given).
+
+Keep the **password** out of the file by sourcing it from an environment variable with a
+`<{secret env SMTP_PASSWORD}` substitution; the **username** defaults to `<{env USER}` and is
+overridable at runtime with `--smtp-username`. See
+[`env-and-smtp-configuration.md`](env-and-smtp-configuration.md) for the substitution forms.
+Because a disabled section drops all its keys before those substitutions run, turning SMTP off
+does **not** require `SMTP_PASSWORD` to be set.
 
 ## Safety reminder
 

@@ -1,15 +1,12 @@
 
-import os
-
 import script_context as sc
 
 
+# Cloudflare credentials come entirely from the [Cloudflare] config section (email/api_key or the
+# preferred api_token); the operator decides in the config file where those values come from
+# (literals, <{secret env ...}>, <{secret aws ...}>, ...).  There is no direct-environment
+# fallback here.
 if 'Cloudflare' in sc.config and 'enabled' in sc.config['Cloudflare'] and sc.config['Cloudflare']['enabled']:
-
-    if os.getenv('CLOUDFLARE_EMAIL') is not None:
-        sc.config['Cloudflare']['member_email'] = os.getenv('CLOUDFLARE_EMAIL')
-    if os.getenv('CLOUDFLARE_API_KEY') is not None:
-        sc.config['Cloudflare']['member_api_key'] = os.getenv('CLOUDFLARE_API_KEY')
 
     from .ips import get_cloudflare_ips
     sc.plugin_context['plugin.cloudflare'] = {}

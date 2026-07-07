@@ -76,6 +76,14 @@ Michigan defaults are used, so non-U-M deployments should set them — see
 [`docs/email-configuration.md`](docs/email-configuration.md) and the annotated
 `sample-pantheon-sitehealth-emails.toml`.
 
+Any config value can be pulled from an environment variable with a `<{env NAME}` (or
+`<{secret env NAME}`) substitution — this is how credentials such as `SMTP_PASSWORD` and the
+Cloudflare keys reach the tool without being written into the file (see the exports in
+[Usage](#usage) below).  Actually sending mail is gated on `[SMTP].enabled`; when it is `false`
+the tool only writes the per-site `.eml` files.  See
+[`docs/env-and-smtp-configuration.md`](docs/env-and-smtp-configuration.md) for the substitution
+forms (including an optional default), the `[SMTP]` settings, and the Cloudflare credentials/token.
+
 
 ## Usage
 

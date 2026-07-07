@@ -25,9 +25,11 @@ class _FakeIPList:
         self.ipv6_cidrs = v6
 
 
-def _make_cloudflare(list_impl):
+def _make_cloudflare(list_impl, seen_kwargs=None):
     class FakeCloudflare:
         def __init__(self, **kwargs):
+            if seen_kwargs is not None:
+                seen_kwargs.update(kwargs)
             self.ips = types.SimpleNamespace(list=list_impl)
 
     return FakeCloudflare
@@ -48,7 +50,7 @@ def load_ips(psh, monkeypatch):
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
 
-    sc.config = {"Cloudflare": {"member_email": "e@example.com", "member_api_key": "k"}}
+    sc.config = {"Cloudflare": {"email": "e@example.com", "api_key": "k"}}
     sc.plugin_context = {"plugin.cloudflare": {}}
     return module, sc
 
@@ -70,6 +72,37 @@ def test_client_failure_exits(load_ips, monkeypatch):
 
     module, _sc = load_ips
     monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(boom))
+
+    with pytest.raises(SystemExit):
+        module.get_cloudflare_ips()
+
+
+def test_auth_uses_email_and_api_key(load_ips, monkeypatch):
+    """With no api_token, the client is built from email + api_key."""
+    module, _sc = load_ips
+    seen = {}
+    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6), seen))
+
+    module.get_cloudflare_ips()
+    assert seen == {"api_email": "e@example.com", "api_key": "k"}
+
+
+def test_auth_prefers_api_token(load_ips, monkeypatch):
+    """When api_token is present it is preferred and email/api_key are not passed."""
+    module, sc = load_ips
+    sc.config["Cloudflare"]["api_token"] = "tok-123"
+    seen = {}
+    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6), seen))
+
+    module.get_cloudflare_ips()
+    assert seen == {"api_token": "tok-123"}
+
+
+def test_auth_missing_credentials_exits(load_ips, monkeypatch):
+    """Enabled but neither api_token nor email+api_key -> a clear exit, not a bare KeyError."""
+    module, sc = load_ips
+    sc.config["Cloudflare"] = {}  # no credentials at all
+    monkeypatch.setattr(module, "Cloudflare", _make_cloudflare(lambda: _FakeIPList(V4, V6)))
 
     with pytest.raises(SystemExit):
         module.get_cloudflare_ips()

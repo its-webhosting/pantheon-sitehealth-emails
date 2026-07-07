@@ -1,0 +1,54 @@
+
+ Session
+
+ Total cost:            $40.58
+ Total duration (API):  1h 10m 31s
+ Total duration (wall): 1h 43m 5s
+ Total code changes:    1458 lines added, 122 lines removed
+ Usage by model:
+     claude-haiku-4-5:  1.1k input, 28 output, 0 cache read, 0 cache write ($0.0012)
+      claude-opus-4-8:  94.4k input, 290.7k output, 40.4m cache read, 1.4m cache write ($40.58)
+
+ Current session
+ █████████████████                                  34% used
+ Resets 1:10am (America/Detroit)
+
+ Current week (all models)
+ ████████████▌                                      25% used
+ Resets Jul 7, 7pm (America/Detroit)
+
+ Current week (Fable)
+                                                    0% used
+
+ What's contributing to your limits usage?
+ Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+ Last 24h · these are independent characteristics of your usage, not a breakdown
+
+ 83% of your usage came from subagent-heavy sessions
+  Each subagent runs its own requests. Be deliberate about spawning them — and consider configuring a cheaper model for simpler subagents.
+
+ 54% of your usage was at >150k context
+  Longer sessions are more expensive even when cached. /compact mid-task, /clear when switching to new tasks.
+
+ Skills                  % of usage
+ /code-review                    7%
+ /context-mode:ctx-stats         6%
+ /context-mode:ctx-index         1%
+ /superpowers:brainstorming      1%
+
+Subagents               % of usage
+general-purpose                 4%
+Explore                         4%
+code-review                     3%
+superpowers:brainstorming       2%
+
+Plugins                 % of usage
+context-mode                    6%
+superpowers                     3%
+
+MCP servers             % of usage
+chrome-devtools                 2%
+codegraph                       1%
+plugin:context-mode:context…    1%
+
