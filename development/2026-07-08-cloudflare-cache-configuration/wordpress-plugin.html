@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html  lang="en" dir="ltr">
+  <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8" />
+<meta name="Generator" content="Drupal 11 (https://www.drupal.org)" />
+<meta name="MobileOptimized" content="width" />
+<meta name="HandheldFriendly" content="true" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/svg+xml" href="https://documentation.its.umich.edu/themes/bootstrap_docs/favicon.svg" />
+<link rel="icon" type="image/png" href="https://documentation.its.umich.edu/themes/bootstrap_docs/favicon.png" />
+<link rel="canonical" href="https://documentation.its.umich.edu/node/5114" />
+<link rel="shortlink" href="https://documentation.its.umich.edu/node/5114" />
+
+  <title>Installing the umich-cloudflare plugin for WordPress / ITS Documentation</title>
+  <link rel="stylesheet" media="all" href="/sites/default/files/css/css_Bgjyh1ClJAtc5x9vjy6f4UecNpP9Mhx_nyz3JiWNnbE.css?delta=0&amp;language=en&amp;theme=bootstrap_docs&amp;include=eJxNjEEKgDAMBD8UmifJVqMUWyNJivh7UUQ8zcIsg6mVbQjVmmH8MoWJEP7qoX-HMupGKIwyLFUzKmXV8DDsPBuaHGor-ekhjTNcqLsYT9Z31HTvJ-EXd-kxpg" />
+<link rel="stylesheet" media="all" href="https://cdn.jsdelivr.net/npm/entreprise7pro-bootstrap@3.4.8/dist/css/bootstrap.min.css" integrity="sha256-zL9fLm9PT7/fK/vb1O9aIIAdm/+bGtxmUm/M1NPTU7Y=" crossorigin="anonymous" />
+<link rel="stylesheet" media="all" href="https://cdn.jsdelivr.net/npm/@unicorn-fail/drupal-bootstrap-styles@0.0.2/dist/3.4.0/8.x-3.x/drupal-bootstrap.min.css" integrity="sha512-tGFFYdzcicBwsd5EPO92iUIytu9UkQR3tLMbORL9sfi/WswiHkA1O3ri9yHW+5dXk18Rd+pluMeDBrPKSwNCvw==" crossorigin="anonymous" />
+<link rel="stylesheet" media="all" href="/sites/default/files/css/css_wKwTx7FPdEGntsR3eVJzwa-ncWT-JxJgZjqyqF_2X1s.css?delta=3&amp;language=en&amp;theme=bootstrap_docs&amp;include=eJxNjEEKgDAMBD8UmifJVqMUWyNJivh7UUQ8zcIsg6mVbQjVmmH8MoWJEP7qoX-HMupGKIwyLFUzKmXV8DDsPBuaHGor-ekhjTNcqLsYT9Z31HTvJ-EXd-kxpg" />
+<style type="text/css">@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/greek/400/normal.woff2);unicode-range:U+0370-0377,U+037A-037F,U+0384-038A,U+038C,U+038E-03A1,U+03A3-03FF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic/400/normal.woff2);unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/greek-ext/400/normal.woff2);unicode-range:U+1F00-1FFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/latin/400/normal.woff2);unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/vietnamese/400/normal.woff2);unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/math/400/normal.woff2);unicode-range:U+0302-0303,U+0305,U+0307-0308,U+0310,U+0312,U+0315,U+031A,U+0326-0327,U+032C,U+032F-0330,U+0332-0333,U+0338,U+033A,U+0346,U+034D,U+0391-03A1,U+03A3-03A9,U+03B1-03C9,U+03D1,U+03D5-03D6,U+03F0-03F1,U+03F4-03F5,U+2016-2017,U+2034-2038,U+203C,U+2040,U+2043,U+2047,U+2050,U+2057,U+205F,U+2070-2071,U+2074-208E,U+2090-209C,U+20D0-20DC,U+20E1,U+20E5-20EF,U+2100-2112,U+2114-2115,U+2117-2121,U+2123-214F,U+2190,U+2192,U+2194-21AE,U+21B0-21E5,U+21F1-21F2,U+21F4-2211,U+2213-2214,U+2216-22FF,U+2308-230B,U+2310,U+2319,U+231C-2321,U+2336-237A,U+237C,U+2395,U+239B-23B7,U+23D0,U+23DC-23E1,U+2474-2475,U+25AF,U+25B3,U+25B7,U+25BD,U+25C1,U+25CA,U+25CC,U+25FB,U+266D-266F,U+27C0-27FF,U+2900-2AFF,U+2B0E-2B11,U+2B30-2B4C,U+2BFE,U+3030,U+FF5B,U+FF5D,U+1D400-1D7FF,U+1EE00-1EEFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/symbols/400/normal.woff2);unicode-range:U+0001-000C,U+000E-001F,U+007F-009F,U+20DD-20E0,U+20E2-20E4,U+2150-218F,U+2190,U+2192,U+2194-2199,U+21AF,U+21E6-21F0,U+21F3,U+2218-2219,U+2299,U+22C4-22C6,U+2300-243F,U+2440-244A,U+2460-24FF,U+25A0-27BF,U+2800-28FF,U+2921-2922,U+2981,U+29BF,U+29EB,U+2B00-2BFF,U+4DC0-4DFF,U+FFF9-FFFB,U+10140-1018E,U+10190-1019C,U+101A0,U+101D0-101FD,U+102E0-102FB,U+10E60-10E7E,U+1D2C0-1D2D3,U+1D2E0-1D37F,U+1F000-1F0FF,U+1F100-1F1AD,U+1F1E6-1F1FF,U+1F30D-1F30F,U+1F315,U+1F31C,U+1F31E,U+1F320-1F32C,U+1F336,U+1F378,U+1F37D,U+1F382,U+1F393-1F39F,U+1F3A7-1F3A8,U+1F3AC-1F3AF,U+1F3C2,U+1F3C4-1F3C6,U+1F3CA-1F3CE,U+1F3D4-1F3E0,U+1F3ED,U+1F3F1-1F3F3,U+1F3F5-1F3F7,U+1F408,U+1F415,U+1F41F,U+1F426,U+1F43F,U+1F441-1F442,U+1F444,U+1F446-1F449,U+1F44C-1F44E,U+1F453,U+1F46A,U+1F47D,U+1F4A3,U+1F4B0,U+1F4B3,U+1F4B9,U+1F4BB,U+1F4BF,U+1F4C8-1F4CB,U+1F4D6,U+1F4DA,U+1F4DF,U+1F4E3-1F4E6,U+1F4EA-1F4ED,U+1F4F7,U+1F4F9-1F4FB,U+1F4FD-1F4FE,U+1F503,U+1F507-1F50B,U+1F50D,U+1F512-1F513,U+1F53E-1F54A,U+1F54F-1F5FA,U+1F610,U+1F650-1F67F,U+1F687,U+1F68D,U+1F691,U+1F694,U+1F698,U+1F6AD,U+1F6B2,U+1F6B9-1F6BA,U+1F6BC,U+1F6C6-1F6CF,U+1F6D3-1F6D7,U+1F6E0-1F6EA,U+1F6F0-1F6F3,U+1F6F7-1F6FC,U+1F700-1F7FF,U+1F800-1F80B,U+1F810-1F847,U+1F850-1F859,U+1F860-1F887,U+1F890-1F8AD,U+1F8B0-1F8BB,U+1F8C0-1F8C1,U+1F900-1F90B,U+1F93B,U+1F946,U+1F984,U+1F996,U+1F9E9,U+1FA00-1FA6F,U+1FA70-1FA7C,U+1FA80-1FA89,U+1FA8F-1FAC6,U+1FACE-1FADC,U+1FADF-1FAE9,U+1FAF0-1FAF8,U+1FB00-1FBFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic-ext/400/normal.woff2);unicode-range:U+0460-052F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/latin-ext/400/normal.woff2);unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic/400/italic.woff2);unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/vietnamese/400/italic.woff2);unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/greek/400/italic.woff2);unicode-range:U+0370-0377,U+037A-037F,U+0384-038A,U+038C,U+038E-03A1,U+03A3-03FF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/latin/400/italic.woff2);unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/math/400/italic.woff2);unicode-range:U+0302-0303,U+0305,U+0307-0308,U+0310,U+0312,U+0315,U+031A,U+0326-0327,U+032C,U+032F-0330,U+0332-0333,U+0338,U+033A,U+0346,U+034D,U+0391-03A1,U+03A3-03A9,U+03B1-03C9,U+03D1,U+03D5-03D6,U+03F0-03F1,U+03F4-03F5,U+2016-2017,U+2034-2038,U+203C,U+2040,U+2043,U+2047,U+2050,U+2057,U+205F,U+2070-2071,U+2074-208E,U+2090-209C,U+20D0-20DC,U+20E1,U+20E5-20EF,U+2100-2112,U+2114-2115,U+2117-2121,U+2123-214F,U+2190,U+2192,U+2194-21AE,U+21B0-21E5,U+21F1-21F2,U+21F4-2211,U+2213-2214,U+2216-22FF,U+2308-230B,U+2310,U+2319,U+231C-2321,U+2336-237A,U+237C,U+2395,U+239B-23B7,U+23D0,U+23DC-23E1,U+2474-2475,U+25AF,U+25B3,U+25B7,U+25BD,U+25C1,U+25CA,U+25CC,U+25FB,U+266D-266F,U+27C0-27FF,U+2900-2AFF,U+2B0E-2B11,U+2B30-2B4C,U+2BFE,U+3030,U+FF5B,U+FF5D,U+1D400-1D7FF,U+1EE00-1EEFF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic-ext/400/italic.woff2);unicode-range:U+0460-052F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/greek-ext/400/italic.woff2);unicode-range:U+1F00-1FFF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/latin-ext/400/italic.woff2);unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:400;src:url(/cf-fonts/s/roboto/5.2.10/symbols/400/italic.woff2);unicode-range:U+0001-000C,U+000E-001F,U+007F-009F,U+20DD-20E0,U+20E2-20E4,U+2150-218F,U+2190,U+2192,U+2194-2199,U+21AF,U+21E6-21F0,U+21F3,U+2218-2219,U+2299,U+22C4-22C6,U+2300-243F,U+2440-244A,U+2460-24FF,U+25A0-27BF,U+2800-28FF,U+2921-2922,U+2981,U+29BF,U+29EB,U+2B00-2BFF,U+4DC0-4DFF,U+FFF9-FFFB,U+10140-1018E,U+10190-1019C,U+101A0,U+101D0-101FD,U+102E0-102FB,U+10E60-10E7E,U+1D2C0-1D2D3,U+1D2E0-1D37F,U+1F000-1F0FF,U+1F100-1F1AD,U+1F1E6-1F1FF,U+1F30D-1F30F,U+1F315,U+1F31C,U+1F31E,U+1F320-1F32C,U+1F336,U+1F378,U+1F37D,U+1F382,U+1F393-1F39F,U+1F3A7-1F3A8,U+1F3AC-1F3AF,U+1F3C2,U+1F3C4-1F3C6,U+1F3CA-1F3CE,U+1F3D4-1F3E0,U+1F3ED,U+1F3F1-1F3F3,U+1F3F5-1F3F7,U+1F408,U+1F415,U+1F41F,U+1F426,U+1F43F,U+1F441-1F442,U+1F444,U+1F446-1F449,U+1F44C-1F44E,U+1F453,U+1F46A,U+1F47D,U+1F4A3,U+1F4B0,U+1F4B3,U+1F4B9,U+1F4BB,U+1F4BF,U+1F4C8-1F4CB,U+1F4D6,U+1F4DA,U+1F4DF,U+1F4E3-1F4E6,U+1F4EA-1F4ED,U+1F4F7,U+1F4F9-1F4FB,U+1F4FD-1F4FE,U+1F503,U+1F507-1F50B,U+1F50D,U+1F512-1F513,U+1F53E-1F54A,U+1F54F-1F5FA,U+1F610,U+1F650-1F67F,U+1F687,U+1F68D,U+1F691,U+1F694,U+1F698,U+1F6AD,U+1F6B2,U+1F6B9-1F6BA,U+1F6BC,U+1F6C6-1F6CF,U+1F6D3-1F6D7,U+1F6E0-1F6EA,U+1F6F0-1F6F3,U+1F6F7-1F6FC,U+1F700-1F7FF,U+1F800-1F80B,U+1F810-1F847,U+1F850-1F859,U+1F860-1F887,U+1F890-1F8AD,U+1F8B0-1F8BB,U+1F8C0-1F8C1,U+1F900-1F90B,U+1F93B,U+1F946,U+1F984,U+1F996,U+1F9E9,U+1FA00-1FA6F,U+1FA70-1FA7C,U+1FA80-1FA89,U+1FA8F-1FAC6,U+1FACE-1FADC,U+1FADF-1FAE9,U+1FAF0-1FAF8,U+1FB00-1FBFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic/700/normal.woff2);unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/greek-ext/700/normal.woff2);unicode-range:U+1F00-1FFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/greek/700/normal.woff2);unicode-range:U+0370-0377,U+037A-037F,U+0384-038A,U+038C,U+038E-03A1,U+03A3-03FF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/latin/700/normal.woff2);unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic-ext/700/normal.woff2);unicode-range:U+0460-052F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/math/700/normal.woff2);unicode-range:U+0302-0303,U+0305,U+0307-0308,U+0310,U+0312,U+0315,U+031A,U+0326-0327,U+032C,U+032F-0330,U+0332-0333,U+0338,U+033A,U+0346,U+034D,U+0391-03A1,U+03A3-03A9,U+03B1-03C9,U+03D1,U+03D5-03D6,U+03F0-03F1,U+03F4-03F5,U+2016-2017,U+2034-2038,U+203C,U+2040,U+2043,U+2047,U+2050,U+2057,U+205F,U+2070-2071,U+2074-208E,U+2090-209C,U+20D0-20DC,U+20E1,U+20E5-20EF,U+2100-2112,U+2114-2115,U+2117-2121,U+2123-214F,U+2190,U+2192,U+2194-21AE,U+21B0-21E5,U+21F1-21F2,U+21F4-2211,U+2213-2214,U+2216-22FF,U+2308-230B,U+2310,U+2319,U+231C-2321,U+2336-237A,U+237C,U+2395,U+239B-23B7,U+23D0,U+23DC-23E1,U+2474-2475,U+25AF,U+25B3,U+25B7,U+25BD,U+25C1,U+25CA,U+25CC,U+25FB,U+266D-266F,U+27C0-27FF,U+2900-2AFF,U+2B0E-2B11,U+2B30-2B4C,U+2BFE,U+3030,U+FF5B,U+FF5D,U+1D400-1D7FF,U+1EE00-1EEFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/symbols/700/normal.woff2);unicode-range:U+0001-000C,U+000E-001F,U+007F-009F,U+20DD-20E0,U+20E2-20E4,U+2150-218F,U+2190,U+2192,U+2194-2199,U+21AF,U+21E6-21F0,U+21F3,U+2218-2219,U+2299,U+22C4-22C6,U+2300-243F,U+2440-244A,U+2460-24FF,U+25A0-27BF,U+2800-28FF,U+2921-2922,U+2981,U+29BF,U+29EB,U+2B00-2BFF,U+4DC0-4DFF,U+FFF9-FFFB,U+10140-1018E,U+10190-1019C,U+101A0,U+101D0-101FD,U+102E0-102FB,U+10E60-10E7E,U+1D2C0-1D2D3,U+1D2E0-1D37F,U+1F000-1F0FF,U+1F100-1F1AD,U+1F1E6-1F1FF,U+1F30D-1F30F,U+1F315,U+1F31C,U+1F31E,U+1F320-1F32C,U+1F336,U+1F378,U+1F37D,U+1F382,U+1F393-1F39F,U+1F3A7-1F3A8,U+1F3AC-1F3AF,U+1F3C2,U+1F3C4-1F3C6,U+1F3CA-1F3CE,U+1F3D4-1F3E0,U+1F3ED,U+1F3F1-1F3F3,U+1F3F5-1F3F7,U+1F408,U+1F415,U+1F41F,U+1F426,U+1F43F,U+1F441-1F442,U+1F444,U+1F446-1F449,U+1F44C-1F44E,U+1F453,U+1F46A,U+1F47D,U+1F4A3,U+1F4B0,U+1F4B3,U+1F4B9,U+1F4BB,U+1F4BF,U+1F4C8-1F4CB,U+1F4D6,U+1F4DA,U+1F4DF,U+1F4E3-1F4E6,U+1F4EA-1F4ED,U+1F4F7,U+1F4F9-1F4FB,U+1F4FD-1F4FE,U+1F503,U+1F507-1F50B,U+1F50D,U+1F512-1F513,U+1F53E-1F54A,U+1F54F-1F5FA,U+1F610,U+1F650-1F67F,U+1F687,U+1F68D,U+1F691,U+1F694,U+1F698,U+1F6AD,U+1F6B2,U+1F6B9-1F6BA,U+1F6BC,U+1F6C6-1F6CF,U+1F6D3-1F6D7,U+1F6E0-1F6EA,U+1F6F0-1F6F3,U+1F6F7-1F6FC,U+1F700-1F7FF,U+1F800-1F80B,U+1F810-1F847,U+1F850-1F859,U+1F860-1F887,U+1F890-1F8AD,U+1F8B0-1F8BB,U+1F8C0-1F8C1,U+1F900-1F90B,U+1F93B,U+1F946,U+1F984,U+1F996,U+1F9E9,U+1FA00-1FA6F,U+1FA70-1FA7C,U+1FA80-1FA89,U+1FA8F-1FAC6,U+1FACE-1FADC,U+1FADF-1FAE9,U+1FAF0-1FAF8,U+1FB00-1FBFF;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/vietnamese/700/normal.woff2);unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB;font-display:swap;}@font-face {font-family:Roboto;font-style:normal;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/latin-ext/700/normal.woff2);unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/latin-ext/700/italic.woff2);unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic-ext/700/italic.woff2);unicode-range:U+0460-052F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/greek/700/italic.woff2);unicode-range:U+0370-0377,U+037A-037F,U+0384-038A,U+038C,U+038E-03A1,U+03A3-03FF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/latin/700/italic.woff2);unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/greek-ext/700/italic.woff2);unicode-range:U+1F00-1FFF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/math/700/italic.woff2);unicode-range:U+0302-0303,U+0305,U+0307-0308,U+0310,U+0312,U+0315,U+031A,U+0326-0327,U+032C,U+032F-0330,U+0332-0333,U+0338,U+033A,U+0346,U+034D,U+0391-03A1,U+03A3-03A9,U+03B1-03C9,U+03D1,U+03D5-03D6,U+03F0-03F1,U+03F4-03F5,U+2016-2017,U+2034-2038,U+203C,U+2040,U+2043,U+2047,U+2050,U+2057,U+205F,U+2070-2071,U+2074-208E,U+2090-209C,U+20D0-20DC,U+20E1,U+20E5-20EF,U+2100-2112,U+2114-2115,U+2117-2121,U+2123-214F,U+2190,U+2192,U+2194-21AE,U+21B0-21E5,U+21F1-21F2,U+21F4-2211,U+2213-2214,U+2216-22FF,U+2308-230B,U+2310,U+2319,U+231C-2321,U+2336-237A,U+237C,U+2395,U+239B-23B7,U+23D0,U+23DC-23E1,U+2474-2475,U+25AF,U+25B3,U+25B7,U+25BD,U+25C1,U+25CA,U+25CC,U+25FB,U+266D-266F,U+27C0-27FF,U+2900-2AFF,U+2B0E-2B11,U+2B30-2B4C,U+2BFE,U+3030,U+FF5B,U+FF5D,U+1D400-1D7FF,U+1EE00-1EEFF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/symbols/700/italic.woff2);unicode-range:U+0001-000C,U+000E-001F,U+007F-009F,U+20DD-20E0,U+20E2-20E4,U+2150-218F,U+2190,U+2192,U+2194-2199,U+21AF,U+21E6-21F0,U+21F3,U+2218-2219,U+2299,U+22C4-22C6,U+2300-243F,U+2440-244A,U+2460-24FF,U+25A0-27BF,U+2800-28FF,U+2921-2922,U+2981,U+29BF,U+29EB,U+2B00-2BFF,U+4DC0-4DFF,U+FFF9-FFFB,U+10140-1018E,U+10190-1019C,U+101A0,U+101D0-101FD,U+102E0-102FB,U+10E60-10E7E,U+1D2C0-1D2D3,U+1D2E0-1D37F,U+1F000-1F0FF,U+1F100-1F1AD,U+1F1E6-1F1FF,U+1F30D-1F30F,U+1F315,U+1F31C,U+1F31E,U+1F320-1F32C,U+1F336,U+1F378,U+1F37D,U+1F382,U+1F393-1F39F,U+1F3A7-1F3A8,U+1F3AC-1F3AF,U+1F3C2,U+1F3C4-1F3C6,U+1F3CA-1F3CE,U+1F3D4-1F3E0,U+1F3ED,U+1F3F1-1F3F3,U+1F3F5-1F3F7,U+1F408,U+1F415,U+1F41F,U+1F426,U+1F43F,U+1F441-1F442,U+1F444,U+1F446-1F449,U+1F44C-1F44E,U+1F453,U+1F46A,U+1F47D,U+1F4A3,U+1F4B0,U+1F4B3,U+1F4B9,U+1F4BB,U+1F4BF,U+1F4C8-1F4CB,U+1F4D6,U+1F4DA,U+1F4DF,U+1F4E3-1F4E6,U+1F4EA-1F4ED,U+1F4F7,U+1F4F9-1F4FB,U+1F4FD-1F4FE,U+1F503,U+1F507-1F50B,U+1F50D,U+1F512-1F513,U+1F53E-1F54A,U+1F54F-1F5FA,U+1F610,U+1F650-1F67F,U+1F687,U+1F68D,U+1F691,U+1F694,U+1F698,U+1F6AD,U+1F6B2,U+1F6B9-1F6BA,U+1F6BC,U+1F6C6-1F6CF,U+1F6D3-1F6D7,U+1F6E0-1F6EA,U+1F6F0-1F6F3,U+1F6F7-1F6FC,U+1F700-1F7FF,U+1F800-1F80B,U+1F810-1F847,U+1F850-1F859,U+1F860-1F887,U+1F890-1F8AD,U+1F8B0-1F8BB,U+1F8C0-1F8C1,U+1F900-1F90B,U+1F93B,U+1F946,U+1F984,U+1F996,U+1F9E9,U+1FA00-1FA6F,U+1FA70-1FA7C,U+1FA80-1FA89,U+1FA8F-1FAC6,U+1FACE-1FADC,U+1FADF-1FAE9,U+1FAF0-1FAF8,U+1FB00-1FBFF;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/vietnamese/700/italic.woff2);unicode-range:U+0102-0103,U+0110-0111,U+0128-0129,U+0168-0169,U+01A0-01A1,U+01AF-01B0,U+0300-0301,U+0303-0304,U+0308-0309,U+0323,U+0329,U+1EA0-1EF9,U+20AB;font-display:swap;}@font-face {font-family:Roboto;font-style:italic;font-weight:700;src:url(/cf-fonts/s/roboto/5.2.10/cyrillic/700/italic.woff2);unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116;font-display:swap;}</style>
+
+  <script type="application/json" data-drupal-selector="drupal-settings-json">{"path":{"baseUrl":"\/","pathPrefix":"","currentPath":"node\/5114","currentPathIsAdmin":false,"isFront":false,"currentLanguage":"en"},"pluralDelimiter":"\u0003","suppressDeprecationErrors":true,"ajaxPageState":{"libraries":"eJxdT1sOwzAIuxBLzrCTRCRFGVsaokCr7fZbq_Wh_mBjjCXjMHINJlIidv9HZ53IPWSmDng2rKi7jZNUQPbIIReJWCCKmFrH5ncWWqfAle10bNLW8ENZIo0bJOnkhz41LA6T8Uy3wvUFWSQXCobZ59-47g6f-AY1NFbjpFvEoYB-1Gj0EZXg2pc0YaP7UhUmpb69L3xtqV92q3PI","theme":"bootstrap_docs","theme_token":null},"ajaxTrustedUrl":[],"gtag":{"tagId":"G-SX82NTM18R","consentMode":false,"otherIds":[],"events":[],"additionalConfigInfo":[]},"bootstrap":{"forms_has_error_value_toggle":1,"modal_animation":1,"modal_backdrop":"true","modal_focus_input":1,"modal_keyboard":1,"modal_select_text":1,"modal_show":1,"modal_size":"","popover_enabled":1,"popover_animation":1,"popover_auto_close":1,"popover_container":"body","popover_content":"","popover_delay":"0","popover_html":0,"popover_placement":"right","popover_selector":"","popover_title":"","popover_trigger":"click","tooltip_enabled":1,"tooltip_animation":1,"tooltip_container":"body","tooltip_delay":"0","tooltip_html":0,"tooltip_placement":"auto left","tooltip_selector":"","tooltip_trigger":"hover"},"statistics":{"data":{"nid":"5114"},"url":"\/modules\/contrib\/statistics\/statistics.php"},"toolbar":{"breakpoints":{"toolbar.narrow":"only screen and (min-width: 16.5em)","toolbar.standard":"only screen and (min-width: 38.125em)","toolbar.wide":"only screen and (min-width: 61em)"},"subtreesHash":"WZ5wgvsZzz_GcE4d-ZrXDVwFrqMtOJ8KtAcZKtd15p4"},"user":{"uid":"8134","permissionsHash":"da773f01716db6e39a1cfac54dfad832c2df376f9149c61e0cd46b1c4d4cb65b"}}</script>
+<script src="/sites/default/files/js/js_cFDc6i9Ok_sbAnu_GqE068PHYc0dyc2jH0XORtiZBi8.js?scope=header&amp;delta=0&amp;language=en&amp;theme=bootstrap_docs&amp;include=eJxdj1EOwjAMQy9U2jNwksrrohIoTZSGiePD0GBoP3H8olgy5jv37CJtgqVNoxtRvMhCFsAJnGuTCS1MIj7coOm3ZTXK3Nn_jir6-d3JGuysoYhRmu2haBHFeaFT434LVaQ2yo6a6nscfcQVzzAczsO5jG_ETsKxAo0CpfNa7wUJAllE"></script>
+<script src="/modules/contrib/google_tag/js/gtag.js?th3ywf"></script>
+
+  <link rel="apple-touch-icon-precomposed" href="/sites/all/themes/bootstrap_docs/images/touch-icon-iphone.png" />
+  <link rel="apple-touch-icon-precomposed" sizes="76x76" href="/sites/all/themes/bootstrap_docs/images/touch-icon-ipad.png" />
+  <link rel="apple-touch-icon-precomposed" sizes="120x120" href="/sites/all/themes/bootstrap_docs/images/touch-icon-iphone-retina.png" />
+  <link rel="apple-touch-icon-precomposed" sizes="152x152" href="/sites/all/themes/bootstrap_docs/images/touch-icon-ipad-retina.png" />
+</head>
+  <body class="toolbar-icon-11 toolbar-loading node-5114 not-front user-logged-in path-node page-node-type-page has-glyphicons">
+    <a href="#main-content" class="visually-hidden focusable skip-link">
+      Skip to main content
+    </a>
+    <div id="toolbar-administration" role="group" aria-label="Site administration toolbar" data-drupal-claro-processed-toolbar class="toolbar claro-toolbar">
+  <nav id="toolbar-bar" role="navigation" aria-label="Toolbar items" class="toolbar-bar clearfix">
+    <h2 class="visually-hidden">Toolbar items</h2>
+                <div class="home-toolbar-tab toolbar-tab">
+        <a href="/" class="toolbar-icon toolbar-icon-escape-admin toolbar-item" title="Return to site content" data-toolbar-escape-admin>Back to site</a>
+        <div>
+                      <nav class="toolbar-lining clearfix" role="navigation">
+          </nav>
+        </div>
+      </div>
+                <div class="toolbar-tab">
+        <a href="/admin" class="toolbar-icon toolbar-icon-menu trigger toolbar-item" title="Admin menu" data-drupal-subtrees="" id="toolbar-item-administration" data-toolbar-tray="toolbar-item-administration-tray" role="button" aria-pressed="false">Manage</a>
+        <div id="toolbar-item-administration-tray" data-toolbar-tray="toolbar-item-administration-tray" class="toolbar-tray">
+                      <nav class="toolbar-lining clearfix" role="navigation" aria-label="Administration menu">
+              <h3 class="toolbar-tray-name visually-hidden">Administration menu</h3>
+          <div class="toolbar-menu-administration">
+              <ul class="toolbar-menu claro-toolbar-menu">
+                    <li class="menu-item menu-item--expanded">
+        <a href="/" class="toolbar-icon toolbar-icon-admin-toolbar-tools-help" title="" data-drupal-link-system-path="&lt;front&gt;">Tools</a>
+                                <ul class="toolbar-menu">
+                    <li class="menu-item">
+        <a href="/admin/index" class="toolbar-icon toolbar-icon-system-admin-index" title="" data-drupal-link-system-path="admin/index">Index</a>
+              </li>
+                <li class="menu-item">
+        <a href="/user/logout?token=gzdugIiX4mdvrH6o1pKQa601FLuMFtGeclp0uFwVLbs" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksuser-logout" title="" data-drupal-link-system-path="user/logout">Logout</a>
+              </li>
+        </ul>
+  
+              </li>
+                <li class="menu-item menu-item--expanded">
+        <a href="/admin/content" title="Find and manage content." class="toolbar-icon toolbar-icon-system-admin-content" data-drupal-link-system-path="admin/content">Content</a>
+                                <ul class="toolbar-menu">
+                    <li class="menu-item menu-item--expanded">
+        <a href="/node/add" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksnode-add" title="" data-drupal-link-system-path="node/add">Add content</a>
+                                <ul class="toolbar-menu">
+                    <li class="menu-item">
+        <a href="/node/add/page" title="Use basic pages for your static content, such as an &#039;About us&#039; page." class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksnode-add-page" data-drupal-link-system-path="node/add/page">Basic page</a>
+              </li>
+                <li class="menu-item">
+        <a href="/node/add/book" title="Books have a built-in hierarchical navigation. Use for handbooks or tutorials." class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksnode-add-book" data-drupal-link-system-path="node/add/book">Book page</a>
+              </li>
+                <li class="menu-item">
+        <a href="/node/add/image" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksnode-add-image" title="" data-drupal-link-system-path="node/add/image">Image</a>
+              </li>
+        </ul>
+  
+              </li>
+        </ul>
+  
+              </li>
+                <li class="menu-item menu-item--expanded">
+        <a href="/admin/structure" title="Administer blocks, content types, menus, etc." class="toolbar-icon toolbar-icon-system-admin-structure" data-drupal-link-system-path="admin/structure">Structure</a>
+                                <ul class="toolbar-menu">
+                    <li class="menu-item menu-item--expanded">
+        <a href="/admin/structure/views" title="Manage customized lists of content." class="toolbar-icon toolbar-icon-entity-view-collection" data-drupal-link-system-path="admin/structure/views">Views</a>
+                                <ul class="toolbar-menu">
+                    <li class="menu-item">
+        <a href="/admin/structure/views/add" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-add" title="" data-drupal-link-system-path="admin/structure/views/add">Add view</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/2fa_subtags_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-2fa-subtags-json" title="" data-drupal-link-system-path="admin/structure/views/view/2fa_subtags_json">2FA subtags JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/admin_eresearch_documentation" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-admin-eresearch-documentation" title="" data-drupal-link-system-path="admin/structure/views/view/admin_eresearch_documentation">Admin eResearch Documentation</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/all_the_docs_" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-all-the-docs-" title="" data-drupal-link-system-path="admin/structure/views/view/all_the_docs_">All ITS Documentation</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/all_eresearch_documentation" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-all-eresearch-documentation" title="" data-drupal-link-system-path="admin/structure/views/view/all_eresearch_documentation">All eResearch Documentation</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/infra_no_tag" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-infra-no-tag" title="" data-drupal-link-system-path="admin/structure/views/view/infra_no_tag">Basic Pages without an its.umich Page Tag</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/box_page_group" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-box-page-group" title="" data-drupal-link-system-path="admin/structure/views/view/box_page_group">Box Page Group</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/box_at_u_m_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-box-at-u-m-json" title="" data-drupal-link-system-path="admin/structure/views/view/box_at_u_m_json">Box at U-M JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/container_service_docs" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-container-service-docs" title="" data-drupal-link-system-path="admin/structure/views/view/container_service_docs">Container Service docs</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/content" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-content" title="" data-drupal-link-system-path="admin/structure/views/view/content">Content</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/block_content" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-block-content" title="" data-drupal-link-system-path="admin/structure/views/view/block_content">Content blocks</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/desktop_backup_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-desktop-backup-json" title="" data-drupal-link-system-path="admin/structure/views/view/desktop_backup_json">Desktop Backup JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/digital_signage_basics" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-digital-signage-basics" title="" data-drupal-link-system-path="admin/structure/views/view/digital_signage_basics">Digital Signage Basics</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/clone_of_digital_signage_content" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-clone-of-digital-signage-content" title="" data-drupal-link-system-path="admin/structure/views/view/clone_of_digital_signage_content">Digital Signage Content</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/authmap" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-authmap" title="" data-drupal-link-system-path="admin/structure/views/view/authmap">External authentication links</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/feeds_feed" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-feeds-feed" title="" data-drupal-link-system-path="admin/structure/views/view/feeds_feed">Feeds</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/files" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-files" title="" data-drupal-link-system-path="admin/structure/views/view/files">Files</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/front_page_tag_buttons" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-front-page-tag-buttons" title="" data-drupal-link-system-path="admin/structure/views/view/front_page_tag_buttons">Front page tag buttons</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/frontpage" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-frontpage" title="" data-drupal-link-system-path="admin/structure/views/view/frontpage">Frontpage</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/google_page_group" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-google-page-group" title="" data-drupal-link-system-path="admin/structure/views/view/google_page_group">Google Page Group</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/google_at_u_m_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-google-at-u-m-json" title="" data-drupal-link-system-path="admin/structure/views/view/google_at_u_m_json">Google at U-M JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/its_umich_taxonomy_terms" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-its-umich-taxonomy-terms" title="" data-drupal-link-system-path="admin/structure/views/view/its_umich_taxonomy_terms">ITS.umich Taxonomy Terms</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/image_upload_url_block" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-image-upload-url-block" title="" data-drupal-link-system-path="admin/structure/views/view/image_upload_url_block">Image Upload URL Block</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/imaging_services_content" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-imaging-services-content" title="" data-drupal-link-system-path="admin/structure/views/view/imaging_services_content">Imaging Services Content</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/imaging_services_troubleshooting_guide" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-imaging-services-troubleshooting-guide" title="" data-drupal-link-system-path="admin/structure/views/view/imaging_services_troubleshooting_guide">Imaging Services: Troubleshooting Guide</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/mcommunity_directory_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-mcommunity-directory-json" title="" data-drupal-link-system-path="admin/structure/views/view/mcommunity_directory_json">MCommunity Directory JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/media" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-media" title="" data-drupal-link-system-path="admin/structure/views/view/media">Media</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/media_library" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-media-library" title="" data-drupal-link-system-path="admin/structure/views/view/media_library">Media library</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/midatabase_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-midatabase-json" title="" data-drupal-link-system-path="admin/structure/views/view/midatabase_json">MiDatabase JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/midesktop_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-midesktop-json" title="" data-drupal-link-system-path="admin/structure/views/view/midesktop_json">MiDesktop JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/miserver_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-miserver-json" title="" data-drupal-link-system-path="admin/structure/views/view/miserver_json">MiServer JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/mivideo_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-mivideo-json" title="" data-drupal-link-system-path="admin/structure/views/view/mivideo_json">MiVideo JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/most_viewed" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-most-viewed" title="" data-drupal-link-system-path="admin/structure/views/view/most_viewed">Most Viewed</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/oars_content" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-oars-content" title="" data-drupal-link-system-path="admin/structure/views/view/oars_content">OARS Content</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/user_admin_people" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-user-admin-people" title="" data-drupal-link-system-path="admin/structure/views/view/user_admin_people">People</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/content_recent" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-content-recent" title="" data-drupal-link-system-path="admin/structure/views/view/content_recent">Recent content</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/redirect" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-redirect" title="" data-drupal-link-system-path="admin/structure/views/view/redirect">Redirect</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/tags_and_sub_tags_v0_1" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-tags-and-sub-tags-v0-1" title="" data-drupal-link-system-path="admin/structure/views/view/tags_and_sub_tags_v0_1">Tags and Sub-Tags v0.1</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/taxonomy_term" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-taxonomy-term" title="" data-drupal-link-system-path="admin/structure/views/view/taxonomy_term">Taxonomy term</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/television_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-television-json" title="" data-drupal-link-system-path="admin/structure/views/view/television_json">Television JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/top_tags" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-top-tags" title="" data-drupal-link-system-path="admin/structure/views/view/top_tags">Top Tags</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/usefulness_report_test" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-usefulness-report-test" title="" data-drupal-link-system-path="admin/structure/views/view/usefulness_report_test">Usefulness Report Test</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/users_admin_view" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-users-admin-view" title="" data-drupal-link-system-path="admin/structure/views/view/users_admin_view">Users Admin View</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/vpn_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-vpn-json" title="" data-drupal-link-system-path="admin/structure/views/view/vpn_json">VPN JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/voicemail_json" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-voicemail-json" title="" data-drupal-link-system-path="admin/structure/views/view/voicemail_json">Voicemail JSON</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/watchdog" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-watchdog" title="" data-drupal-link-system-path="admin/structure/views/view/watchdog">Watchdog</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/who_s_new" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-who-s-new" title="" data-drupal-link-system-path="admin/structure/views/view/who_s_new">Who&#039;s new</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/who_s_online" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-who-s-online" title="" data-drupal-link-system-path="admin/structure/views/view/who_s_online">Who&#039;s online block</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/just_show_me_all_the_users" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-just-show-me-all-the-users" title="" data-drupal-link-system-path="admin/structure/views/view/just_show_me_all_the_users">just show me all the users</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/quick_test_ae" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-quick-test-ae" title="" data-drupal-link-system-path="admin/structure/views/view/quick_test_ae">quick test ae</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/zadmin_documentation_pages" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-zadmin-documentation-pages" title="" data-drupal-link-system-path="admin/structure/views/view/zadmin_documentation_pages">zAdmin Documentation Pages</a>
+              </li>
+                <li class="menu-item">
+        <a href="/admin/structure/views/view/zadmin_nids_by_tag" class="toolbar-icon toolbar-icon-admin-toolbar-tools-extra-linksviews-ui-zadmin-nids-by-tag" title="" data-drupal-link-system-path="admin/structure/views/view/zadmin_nids_by_tag">zAdmin nids by tag</a>
+              </li>
+        </ul>
+  
+              </li>
+        </ul>
+  
+              </li>
+        </ul>
+  
+
+</div>
+</nav>
+        </div>
+      </div>
+                <div class="toolbar-tab">
+        
+        <div>
+                      <nav class="toolbar-lining clearfix" role="navigation">
+          </nav>
+        </div>
+      </div>
+                <div class="toolbar-tab">
+        <a href="/user" class="toolbar-icon toolbar-icon-user trigger toolbar-item" title="My account" id="toolbar-item-user" data-toolbar-tray="toolbar-item-user-tray" role="button" aria-pressed="false">markmont</a>
+        <div id="toolbar-item-user-tray" data-toolbar-tray="toolbar-item-user-tray" class="toolbar-tray">
+                      <nav class="toolbar-lining clearfix" role="navigation" aria-label="User account actions">
+              <h3 class="toolbar-tray-name visually-hidden">User account actions</h3>
+          <ul class="toolbar-menu links"><li class="account"><a href="/user" title="User account">View profile</a></li><li class="account-edit"><a href="/user/8134/edit" title="Edit user account">Edit profile</a></li><li class="logout"><a href="/user/logout?token=gzdugIiX4mdvrH6o1pKQa601FLuMFtGeclp0uFwVLbs">Log out</a></li></ul></nav>
+        </div>
+      </div>
+      </nav>
+  
+</div>
+
+      <div class="dialog-off-canvas-main-canvas" data-off-canvas-main-canvas>
+                        <header class="navbar navbar-default container" id="navbar" role="banner">
+           <div class="container">
+                    <div class="navbar-header">
+                        <a href="/"><img class="service-logo" alt="ITS Documentation" src="/themes/bootstrap_docs/logo.png" /></a>
+                    </div>
+                    <nav role="navigation">
+                        <ul class="nav navbar-nav navbar-right">
+                            <li><a href="/search" title="Search ITS Documentation"><i class="icon glyphicon glyphicon-search" aria-hidden="true"></i></a></li>
+                        </ul>
+                    </nav>
+            </div>
+        </header>
+    
+    <div role="main" class="main-container container js-quickedit-main-content">
+        <div class="row">
+
+                        
+                                    <section class="col-sm-12">
+
+                                                                              <div class="region region-header">
+    <div data-drupal-messages-fallback class="hidden"></div>
+      <nav class="tabs" role="navigation" aria-label="Tabs">
+        <h2 class="visually-hidden">Primary tabs</h2>
+  <ul class="tabs--primary nav nav-tabs"><li class="active"><a href="/node/5114" data-drupal-link-system-path="node/5114">View</a></li>
+<li><a href="/node/5114/edit" data-drupal-link-system-path="node/5114/edit">Edit</a></li>
+<li><a href="/node/5114/revisions" data-drupal-link-system-path="node/5114/revisions">Revisions</a></li>
+</ul>
+
+    </nav>
+      <h1 class="page-header">
+<span>Installing the umich-cloudflare plugin for WordPress</span>
+</h1>
+
+
+  </div>
+
+                                    
+                                
+                                
+                                                    <a id="main-content"></a>
+                      <div class="region region-content">
+    <section id="block-bootstrap-docs-block-8" class="block block-block-content block-block-content8180c900-ddc3-40e9-bd76-17fe9a0b78c1 clearfix">
+  
+    
+
+      
+            <div class="field field--name-body field--type-text-with-summary field--label-hidden field--item"><script type="text/javascript" src="//script.crazyegg.com/pages/scripts/0054/2162.js?559369" async="async"></script>
+</div>
+      
+  </section>
+
+  <article>
+  
+    
+
+  <div>
+    
+            <div class="field field--name-body field--type-text-with-summary field--label-hidden field--item"><p>A Cloudflare plugin for WordPress is necessary to allow WordPress to:</p><ul><li>Tell Cloudflare what pages and assets to cache and what ones not to cache. This is done using HTTP caching headers.</li><li>Tell Cloudflare how long to cache different pages and assets. This is done using HTTP caching headers.</li><li>Tell Cloudflare when WordPress content has been modified so Cloudflare can serve the new version of the content to visitors instead of continuing to serve the old version.</li><li>Allow the WordPress administrator to tell Cloudflare to purge all content in its cache for the website so that visitors will get new (updated) content rather than old (cached) content.</li></ul><p>ITS supports the <a href="https://github.com/its-cloudflare/umich-cloudflare">umich-cloudflare</a> plugin for integrating WordPress with Cloudflare. This page documents how to install and configure the umich-cloudflare plugin.</p><ul><li>ITS does not support other WordPress plugins that can integrate with Cloudflare, but for information about them consult <a href="https://docs.google.com/document/d/1_PAaeWyUeKB3tLngdM8U3Y_iygXBVLmCa8dpJDE9b-w/edit#heading=h.w77dwbjmb02k">Other Cloudflare plugins for WordPress</a> below.</li><li>ITS recommends against using a WordPress website that is behind Cloudflare without a Cloudflare plugin, but if you want to do this, refer to the section <a href="https://docs.google.com/document/d/1_PAaeWyUeKB3tLngdM8U3Y_iygXBVLmCa8dpJDE9b-w/edit#heading=h.3v6u4adr092b">Using WordPress without a Cloudflare integration plugin</a> below.</li></ul><div class="alert alert-info"><strong>Note:</strong> Please ensure you are using the latest version of the umich-cloudflare plugin. You should use version 1.1.0 or newer.</div><h2>Get a Cloudflare API token</h2><p>Refer to the documentation <a href="https://documentation.its.umich.edu/node/4244">Create a Cloudflare API Token to use with a Cloudflare Content Management System module/plugin</a> for instructions on obtaining a Cloudflare API token that can be used with the umich-cloudflare WordPress plugin.</p><p>Cloudflare API tokens are usable for all websites in the Cloudflare zone for which the token was created. If you already have a Cloudflare API token for the zone your website is in, you can use that token for all websites in the zone.</p><h2>Install the umich-cloudflare plugin</h2><p>The umich-cloudflare plugin is not available through the worldwide <a href="https://wordpress.org/plugins/">WordPress Plugins Directory</a>. This means that <strong>you cannot install umich-cloudflare by searching for it under Plugins in your WordPress administrative dashboard.</strong> Instead, you will need to use one of the two special options below to install the umich-cloudflare plugin.&nbsp;&nbsp;</p><h3>Installation option 1: WP CLI</h3><p>If you have <a href="https://wp-cli.org">WP CLI</a> installed for your WordPress website, install and activate the latest release of the umich-cloudflare plugin using the following commands:</p><pre>DOWNLOAD_URL=$(curl -s \
+    "https://api.github.com/repos/its-cloudflare/umich-cloudflare/releases/latest" | \
+    jq -r '.assets[] | .browser_download_url')<br><br>wp plugin install --activate $DOWNLOAD_URL
+</pre><p>&nbsp;</p><h3>Installation option 2: Download then upload</h3><div class="alert alert-info"><strong>Note:</strong> If your site is hosted on AFS Virtual Web Hosting, you will need to have the <a href="https://wordpress.org/plugins/ssh-sftp-updater-support/">ssh-sftp-updater-support</a> plugin installed, activated, and configured in order to use this installation option. Please see ITS Knowledge Article #3148, <a href="https://teamdynamix.umich.edu/TDClient/30/Portal/KB/ArticleDet?ID=3148">Updating ITS Web Hosting WordPress Sites Within the WP Dashboard</a>, for more information.</div><ol><li>Download the plugin’s zip file to your local computer from <a href="https://github.com/its-cloudflare/umich-cloudflare/releases/latest">https://github.com/its-cloudflare/umich-cloudflare/releases/latest</a><br><br><strong>Important:</strong> Make sure you <em>do not</em> download the source code. The source code has to be built before it can be used on a site.<br><br>&nbsp;</li><li>Log in to your WordPress dashboard</li><li>Go to Plugins -&gt; Add New ➊. <em><strong>Do not search for the plugin.</strong></em> Instead, click the “Upload Plugin” button ➋:<img src="/sites/default/files/umich-cloudflare-plugin-add-plugins.png" width="1400" height="656"></li><li>Click the “Choose file” button<img src="/sites/default/files/umich-cloudflare-plugin-choose-file.png" width="1400" height="433"></li><li>In the file box, select the zip file that you downloaded for the plugin.</li><li>In your WordPress dashboard, click the “Install Now” button:</li><li>Click the “Activate Plugin” button:<br><img src="/sites/default/files/umich-cloudflare-plugin-activate-plugin.png" width="900" height="479"></li></ol><h2>Configure the umich-cloudflare plugin</h2><p>After the umich-cloudflare plugin is installed and activated, it will appear in the WordPress dashboard left-side menu and on the Installed Plugins page as “University of Michigan: Cloudflare Cache”. In the dashboard menu, under “Settings” it will appear as <span class="nobr">“U-M:</span> Cloudflare”.</p><ol><li><span class="nobr">U-M</span> Cloudflare Cache Settings<ol><li>From the WordPress administration dashboard, go to Settings -&gt; <span class="nobr">U-M</span> Cloudflare.<img src="/sites/default/files/umich-cloudflare-plugin-cache-settings.png" width="1400" height="822"></li></ol></li></ol><p>Configure the plugin using the following settings, adjusting TTL settings according to your own site needs:</p><table class="wide"><thead><tr><th scope="col">Setting Name</th><th scope="col">Setting Value</th></tr></thead><tbody><tr><td>API Key</td><td>{Cloudflare API Token}</td></tr><tr><td>Zone</td><td>(auto-filled after API Token entered above)</td></tr><tr><td>Default Page TTL</td><td>31536000 (should be the default value)</td></tr><tr><td>Default Browser TTL</td><td>300 (Default: 0)</td></tr><tr><td>Default Static TTL</td><td>31536000 (should be the default value)</td></tr></tbody></table><p>Press “Save Changes” when done.</p><p>WordPress should now be fully integrated with Cloudflare.</p><div class="alert alert-info"><strong>Note:</strong> If your site is hosted on Pantheon, you will also need to have the <a href="https://wordpress.org/plugins/pantheon-advanced-page-cache/">Pantheon Advanced Page Cache</a> plugin installed, activated, and configured in order to use this installation option. Please see the Pantheon documentation, <a href="https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin">Pantheon WordPress Cache Plugin Configuration</a>, for more information.</div><h2>Custom Integrations</h2><p>A number of examples of custom integrations are available in the README on the umich-cloudflare GitHub repository. The direct link to those examples can be found <a href="https://github.com/its-cloudflare/umich-cloudflare?tab=readme-ov-file#custom-integrations">here</a>.</p><h2>Resources</h2><ul><li><a href="https://github.com/its-cloudflare/umich-cloudflare?tab=readme-ov-file#readme">umich-cloudflare plugin documentation</a></li></ul><h2>Other Cloudflare plugins for WordPress</h2><p>WordPress plugin information as of August 2024. ITS cannot provide support or assistance for any of these plugins.</p><ul><li><a href="https://wordpress.org/plugins/cloudflare/">Official Cloudflare plugin</a><ul><li>Requires write access to Cloudflare domain settings. Any WordPress administrator can override the Cloudflare domain settings for all other websites in the Cloudflare domain.</li><li>Could be used with a <span class="nobr">U-M</span> Basic Cloudflare domain, especially if the domain has only one website. Should not be used for <span class="nobr">U-M</span> Self Service Cloudflare. Does not work with <span class="nobr">U-M</span> Turnkey Cloudflare.</li></ul></li><li><a href="https://wordpress.org/plugins/wp-cloudflare-page-cache/">Super Page Cache for Cloudflare</a><ul><li>Requires write access to Cloudflare domain settings. Any WordPress administrator can override the Cloudflare domain settings for all other websites in the Cloudflare domain.</li><li>Could be used with a <span class="nobr">U-M</span> Basic Cloudflare domain, especially if the domain has only one website. Should not be used for <span class="nobr">U-M</span> Self Service Cloudflare. Does not work with <span class="nobr">U-M</span> Turnkey Cloudflare.</li></ul></li><li><a href="https://docs.wp-rocket.me/category/1140-wp-rocket-add-ons">WP Rocket</a><ul><li>Does not support Cloudflare tokens. Requires a Global API Key, instead, which belongs to a particular user and gives all WordPress administrators the same permissions in Cloudflare that the user has. The website may break when that user changes jobs or leaves the university.</li><li>Requires write access to Cloudflare domain settings. Any WordPress administrator can override the Cloudflare domain settings for all other websites in the Cloudflare domain.</li><li>Using WP Rocket for regular WordPress caching is OK, but do not turn on Cloudflare integration.</li></ul></li><li><a href="https://documentation.its.umich.edu/node/4243#about">UMich Hummingbird plugin for WordPress</a><ul><li>Custom <span class="nobr">U-M</span> build of the Hummingbird plugin by ITS, based on the WPMU DEV Hummingbird plugin.</li><li>No longer supported by <span class="nobr">U-M</span> ITS, this plugin has been replaced by the umich-cloudflare plugin.</li><li>All sites still using the UMich Hummingbird plugin must replace it with the umich-cloudflare plugin as soon as possible, since the UMich version will no longer be updated with future releases.</li></ul></li></ul><h2>Using WordPress without a Cloudflare integration plugin</h2><p>WordPress can work with Cloudflare without any Cloudflare plugin for WordPress, but because the university has changed Cloudflare’s configuration to cache all pages, changes you make to website content will not be visible right away.</p><p>ITS recommends against not using a Cloudflare integration plugin, but if you need to run a WordPress website behind Cloudflare without one, there are two options:</p><ul><li>Configure the HTTP caching headers to only cache content for a short time, for example, 15 minutes. You can do this using a WordPress caching plugin that does not support Cloudflare integration, or you can configure your web server to do it.</li><li>Alternatively, Self Service and Basic customers can turn off the “UM default: Cache pages for non-logged-in users” cache rule for their Cloudflare domain. If you do this, Cloudflare will no longer protect any website in your Cloudflare domain against surges in traffic, and websites in that domain could become slow, show error messages to visitors, or go down entirely during high-traffic periods.</li></ul><p>For assistance or questions, contact <a href="/cdn-cgi/l/email-protection#daadbfb8b7bba9aebfa89aafb7b3b9b2f4bfbeaf"><span class="__cf_email__" data-cfemail="077062656a667473627547726a6e646f29626372">[email&#160;protected]</span></a>.</p></div>
+      
+  <div class="field field--name-field-last-updated field--type-datetime field--label-above">
+    <div class="field--label">Last Updated</div>
+              <div class="field--item">Thursday, June 25, 2026</div>
+          </div>
+
+  </div>
+      <footer>
+                
+  <div class="field field--name-field-doc-tags field--type-entity-reference field--label-above">
+    <div class="field--label">Tags</div>
+          <div class="field--items">
+              <div class="field--item"><a href="/cloudflare-1" hreflang="en">Cloudflare</a></div>
+              </div>
+      </div>
+            </footer>
+  
+</article>
+
+
+  </div>
+
+                            </section>
+
+                                </div>
+    </div>
+
+            <footer class="footer container" role="contentinfo">
+              <div class="region region-footer">
+    <section id="block-bootstrap-docs-block-1" class="block block-block-content block-block-contentb5ab4738-0829-420d-aa3c-4739cc418924 clearfix">
+  
+    
+
+      
+            <div class="field field--name-body field--type-text-with-summary field--label-hidden field--item"><div class="umich"><a href="https://umich.edu/">University of Michigan</a></div>
+
+<div class="links">
+<h2><a href="https://its.umich.edu/">Information and Technology Services</a></h2>
+<ul>
+<li><a href="https://its.umich.edu/about">About ITS</a></li>
+<li><a href="https://safecomputing.umich.edu/">Safe Computing</a></li>
+<li><a href="https://status.its.umich.edu/">ITS Service Status</a></li>
+<!--li><a href="https://its.umich.edu/web-strategy/">ITS Web Strategy</a></li-->
+<li><a href="https://its.umich.edu/about/work-at-its">Work at ITS</a></li>
+<!--li><a href="http://www.itcs.umich.edu/">General Computing</a></li>
+<li><a href="http://www.mais.umich.edu/">Research, Teaching and Administration</a></li>
+<li><a href="http://safecomputing.umich.edu/">Safe Computing</a></li>
+<li><a href="http://www.itcom.itcs.umich.edu/">Networking &amp; Telecommunications</a></li-->
+</ul>
+</div>
+
+<div class="links">
+<h2>Stay Connected</h2>
+<div class="socialmedia">
+<a href="https://x.com/umichTECH"><i class="fab fa-x-twitter" aria-hidden="true"></i><span class="sr-only">X</span></a>
+<a href="https://www.instagram.com/umichtech/"><i class="fab fa-instagram" aria-hidden="true"></i><span class="sr-only">Instagram</span></a>
+<a href="https://youtube.com/user/UMITSCommunications"><i class="fab fa-youtube" aria-hidden="true"></i><span class="sr-only">YouTube</span></a>
+<a href="https://www.linkedin.com/company/university-of-michigan-information-and-technology-services"><i class="fab fa-linkedin" aria-hidden="true"></i><span class="sr-only">LinkedIn</span></a>
+</div>
+<p><a href="https://its.umich.edu/help">Contact ITS</a></p>
+</div>
+
+<div class="links right">
+<ul>
+<li><a href="https://wolverineaccess.umich.edu/">Wolverine Access</a></li>
+<!--li><a href="https://its.umich.edu/remote-resource-guide">Remote Resource Guide</a></li-->
+<li><a href="https://it.umich.edu/">Office of the <span class="nobr">VPIT-CIO</span></a></li>
+<li><a href="https://umich.edu/about/privacy"><span class="nobr">U-M</span> Website Privacy Notice</a></li>
+</ul>
+</div>
+
+<!--div class="styleguide"><a href="https://its.umich.edu/web-strategy/beta/seamless-experience/visual-design/style-guide/">ITS Style Guide</a></div-->
+<!--div class="styleguide"><a href="https://its.umich.edu/web-strategy/">ITS Web Strategy</a></div-->
+<div class="copyright"><a href="https://regents.umich.edu/">&copy; <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>document.write(new Date().getFullYear())</script> The Regents of the University of Michigan</a></div></div>
+      
+  </section>
+
+<section id="block-bootstrap-docs-block-7" class="block block-block-content block-block-content19bb39f3-c0eb-4f0b-97b2-a9ef4322e0db clearfix">
+  
+    
+
+      
+            <div class="field field--name-body field--type-text-with-summary field--label-hidden field--item"><script>
+
+var headertext = [];
+var headers = document.querySelectorAll("thead");
+var tablebody = document.querySelectorAll("tbody");
+
+for (var i = 0; i < headers.length; i++) {
+	headertext[i]=[];
+	for (var j = 0, headrow; headrow = headers[i].rows[0].cells[j]; j++) {
+	  var current = headrow;
+	  headertext[i].push(current.textContent);
+	  }
+} 
+
+for (var h = 0, tbody; tbody = tablebody[h]; h++) {
+	for (var i = 0, row; row = tbody.rows[i]; i++) {
+	  for (var j = 0, col; col = row.cells[j]; j++) {
+	    col.setAttribute("data-th", headertext[h][j]);
+	  } 
+	}
+}
+
+</script></div>
+      
+  </section>
+
+<section id="block-bootstrap-docs-block-10" class="block block-block-content block-block-content61c045fa-f21c-4780-9a61-9de94ff133b2 clearfix">
+  
+    
+
+      
+            <div class="field field--name-body field--type-text-with-summary field--label-hidden field--item"><!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-SX82NTM18R"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-SX82NTM18R');
+</script></div>
+      
+  </section>
+
+
+  </div>
+
+        </footer>
+    
+  </div>
+
+    
+    <script src="/core/assets/vendor/jquery/jquery.min.js?v=4.0.0"></script>
+<script src="/sites/default/files/js/js_HXuD6Aj7RAfVnUT8-XJaRYp-Q5Jd1d9aq97U-1mMvtU.js?scope=footer&amp;delta=1&amp;language=en&amp;theme=bootstrap_docs&amp;include=eJxdj1EOwjAMQy9U2jNwksrrohIoTZSGiePD0GBoP3H8olgy5jv37CJtgqVNoxtRvMhCFsAJnGuTCS1MIj7coOm3ZTXK3Nn_jir6-d3JGuysoYhRmu2haBHFeaFT434LVaQ2yo6a6nscfcQVzzAczsO5jG_ETsKxAo0CpfNa7wUJAllE"></script>
+<script src="https://cdn.jsdelivr.net/npm/entreprise7pro-bootstrap@3.4.8/dist/js/bootstrap.min.js" integrity="sha256-3XV0ZwG+520tCQ6I0AOlrGAFpZioT/AyPuX0Zq2i8QY=" crossorigin="anonymous"></script>
+<script src="/sites/default/files/js/js_N5jFnzQeNiL3OWy34oEfGeF77WCWZQY0DdaPE0lBhBI.js?scope=footer&amp;delta=3&amp;language=en&amp;theme=bootstrap_docs&amp;include=eJxdj1EOwjAMQy9U2jNwksrrohIoTZSGiePD0GBoP3H8olgy5jv37CJtgqVNoxtRvMhCFsAJnGuTCS1MIj7coOm3ZTXK3Nn_jir6-d3JGuysoYhRmu2haBHFeaFT434LVaQ2yo6a6nscfcQVzzAczsO5jG_ETsKxAo0CpfNa7wUJAllE"></script>
+
+    <script type="text/javascript" src="//script.crazyegg.com/pages/scripts/0054/2162.js?7492573" async="async"></script>
+  </body>
+</html>

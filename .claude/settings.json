@@ -3,7 +3,8 @@
     "allow": [
       "mcp__codegraph",
       "mcp__chrome-devtools",
-      "mcp__plugin_context-mode_context-mode"
+      "mcp__plugin_context-mode_context-mode",
+      "mcp__plugin_context-mode_context-mode__ctx_batch_execute"
     ]
   },
   "hooks": {

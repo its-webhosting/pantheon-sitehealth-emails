@@ -170,5 +170,5 @@ RUN npm install -g playwright \
 COPY --chown=$USERNAME:$USERNAME terminus /home/$USERNAME/.terminus
 RUN /usr/local/bin/terminus self:plugin:install pantheon-systems/terminus-composer-plugin
 COPY --chown=$USERNAME:$USERNAME ssh /home/$USERNAME/.ssh
-RUN echo 'eval "$(ssh-agent -s)"' >> /home/$USERNAME/.bashrc
+RUN echo '#eval "$(ssh-agent -s)"' >> /home/$USERNAME/.bashrc
 

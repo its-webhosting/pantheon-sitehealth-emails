@@ -230,9 +230,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 ## TO DO
 
 * add SendGrid support as an additional option to SMTP
-  * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
-* add cf-cache-status, cache-control checks
-  * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 * finish implementing better secrets handling
     * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
     * SSH and key (ssh-agent for now, something else later?)
@@ -243,6 +240,8 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 * refactor the program to take the most advatage of the program's check framework,plugin framework, and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality under `./checks` and `./plugins` wherever it is appropriate. Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
 * Add ruff for linting+formatting, switch from "house styles" to best-practice/standard Python styles
 * update dependencies
+* Implement SMTP testing, GMail testing (see test harness prompt for requirements)
+* Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 * switch to Pantheon API where possible
 * parallelize where safe and possible, both within a single site (careful about data dependencies!) as well as handling a predefinied number of multiple sites in parallel (when run with `--all` or multiple sites explicitly specified)
 * add everything to its-webhosting/terraform-infra repo that should be there
