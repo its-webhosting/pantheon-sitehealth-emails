@@ -1,0 +1,57 @@
+ Session
+
+ Total cost:            $170.32
+ Total duration (API):  2h 54m 42s
+ Total duration (wall): 6h 23m 15s
+ Total code changes:    5056 lines added, 269 lines removed
+ Usage by model:
+      claude-opus-4-8:  40.5k input, 43.8k output, 1.2m cache read, 263.3k cache write ($3.72)
+     claude-haiku-4-5:  1.1k input, 38 output, 0 cache read, 0 cache write ($0.0013)
+       claude-fable-5:  213.6k input, 628.3k output, 80.5m cache read, 3.5m cache write ($166.60)
+
+ Current session
+ ██████████████████████████████████████████████████ 100% used
+ Resets 6pm (America/Detroit)
+
+ Current week (all models)
+ ██████████▌                                        21% used
+ Resets Jul 14, 7pm (America/Detroit)
+
+ Current week (Fable)
+ ████████████████▌                                  33% used
+ Resets Jul 14, 7pm (America/Detroit)
+
+ What's contributing to your limits usage?
+ Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+ Last 24h · these are independent characteristics of your usage, not a breakdown
+
+ 99% of your usage came from subagent-heavy sessions
+  Each subagent runs its own requests. Be deliberate about spawning them — and consider configuring a cheaper model for simpler subagents.
+
+ 69% of your usage was at >150k context
+  Longer sessions are more expensive even when cached. /compact mid-task, /clear when switching to new tasks.
+
+ 13% of your usage came from subagents under "code-review"
+  If this runs frequently, consider configuring its subagents with a cheaper model or tightening their prompts.
+
+ 13% of your usage came from MCP server "plugin:context-mode:context-mode"
+  MCP tool results stay in context for the rest of the session. /compact to flush them, or disable servers you don't need.
+
+
+ Skills                  % of usage
+ /context-mode:ctx-stats         5%
+ /code-review                    4%
+
+ Subagents               % of usage
+ code-review                    13%
+ general-purpose                10%
+ Explore                         2%
+ Plan                            1%
+
+ Plugins                 % of usage
+ context-mode                    5%
+
+ MCP servers             % of usage
+ plugin:context-mode:context…   13%
+

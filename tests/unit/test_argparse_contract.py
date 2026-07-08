@@ -27,7 +27,12 @@ def test_defaults(psh):
     assert ns.create_tables is False
     assert ns.import_older_metrics is False
     assert ns.for_real is False
+    assert ns.allow_any_source_ip is False
     assert isinstance(ns.date, datetime.date)  # defaults to today
+
+
+def test_allow_any_source_ip_flag(psh):
+    assert psh.parse_args(["--allow-any-source-ip"]).allow_any_source_ip is True
 
 
 def test_smtp_username_helper_precedence(psh, reset_sc):

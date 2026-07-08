@@ -144,6 +144,14 @@ missing, or stale and you are processing multiple sites). Force a refresh with
 `--update-cloudflare-fqdns`, or suppress the staleness refresh with `--no-update-cloudflare-fqdns`.
 See [docs/cloudflare-fqdns.md](docs/cloudflare-fqdns.md) for details.
 
+When `[Cloudflare.cachecheck]` is additionally enabled (opt-in), report runs also probe each
+site's proxied FQDNs over HTTPS and report cache-configuration problems (missing/short
+`Cache-Control`, cookies on public content, uncacheable `Cf-Cache-Status`, …) as a
+"Cloudflare caching" notice.  Before the site loop, the program verifies its own egress IP
+addresses appear in a configured Cloudflare IP list (skip with `--allow-any-source-ip`).
+The `cloudflare` extra installs the needed `httpx` and `beautifulsoup4` packages.
+See [docs/cloudflare-cachecheck.md](docs/cloudflare-cachecheck.md) for details.
+
 
 ## One-time per-institution setup
 

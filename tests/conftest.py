@@ -116,7 +116,7 @@ def reset_sc(psh):
     sc.options = psh.parse_args([])
     sc.config = {}
     sc.news = []
-    sc.hooks = {"setup": [], "check": []}
+    sc.hooks = {phase: [] for phase in sc.PHASES}
     sc.substitutions = []
     sc.plugin = {}
     sc.check = {}

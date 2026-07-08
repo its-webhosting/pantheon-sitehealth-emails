@@ -44,7 +44,8 @@ reports or sending mail; `--import-older-metrics` backfills Pantheon's weekly/mo
 aggregates (and is mutually exclusive with `--create-tables`); `-v`/`-vv`/`-vvv` increase
 verbosity (`--create-tables` forces `-vvv`). `--update-cloudflare-fqdns` /
 `--no-update-cloudflare-fqdns` (mutually exclusive) force / suppress the `fqdns.json` refresh
-(Cloudflare plugin; see the fqdns note under Architecture).
+(Cloudflare plugin; see the fqdns note under Architecture). `--allow-any-source-ip` skips the
+`[Cloudflare.cachecheck]` egress-IP allowlist test (see the cachecheck note under Architecture).
 
 ## Required runtime credentials / external tools
 
@@ -83,9 +84,17 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 `<{secret env NAME}` substitutions, with an optional trailing default) registers
 **unconditionally** — no `[Env]` section — because it has no dependency and core config
 (`[SMTP].username = "<{env USER}"`) needs it. Modules register by:
-- **Hooks** — `sc.add_hook('setup', {...})` or appending to `sc.hooks['check']`. `setup`
-  hooks run once (DB connections, fetching Cloudflare IPs, etc.); `check` hooks run once
-  per site with the site's `site_context`. Invoked via `sc.invoke_hooks(name, ...)`.
+- **Hooks** — `sc.add_hook('<phase>', {'name': …, 'func': …})`. Phases are the ordered
+  `sc.PHASES` tuple: `setup` (once per run — **including `--create-tables`**, which exits
+  later), then per site `site_pre` (rename of the old `check` seam), `site_post_traffic`,
+  `site_post_dns`, `site_post_gather`, `site_pre_render`. Each site phase receives the
+  `SiteContext`; the per-phase guaranteed keys are the data-contract table below. Bare
+  names not in `PHASES` are a **fatal error** in both `add_hook` and `invoke_hooks`;
+  dotted names (e.g. `setup.umich.portal`) are plugin-defined events, allowed and
+  invoked by whoever owns them. Gating: phases through `site_post_gather` run on
+  full-report and `--only-warn` paths; `site_pre_render` full-report only; `--update`/
+  `--import-older-metrics` never reach any site phase; a per-site fatal error (e.g.
+  domain:list failure) skips that site's remaining phases.
 - **Config substitutions** — appending to `sc.substitutions`. TOML string values
   containing `<{ ... }>` are resolved by `process_config()`/`config_substitution()`
   against these registered functions. `process_config()` is run twice: a pre-setup pass resolves
@@ -99,23 +108,47 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
   `config_substitution`, which prints the offending config *path* + message and exits) — this is
   how `plugin.env.get_env` (missing env var) and `plugin.aws.get_secret` (missing secret key) both
   report failures. Just before those substitutions run,
-  `main()` calls `gate_disabled_sections()`: any top-level section with `enabled = false`
-  (boolean) is reduced to just `{'enabled': False}`, dropping its other keys **before**
+  `main()` calls `gate_disabled_sections()`: any section **at any depth** with `enabled = false`
+  (boolean identity; nested tables like `[Cloudflare.cachecheck]` included, and a disabled
+  parent drops its children entirely) is reduced to just `{'enabled': False}`, dropping its
+  other keys **before**
   substitution — so a disabled feature's `<{secret env …}>` values are never required to exist.
   For substitutions that take an optional trailing arg (like `env`), register the shorter
   pattern **before** the longer one (`['env','$name']` before `['env','$name','$default']`), or
   the best-match engine mis-binds and `KeyError`s.
 
 `plugin/` = data sources / integrations (aws secrets, cloudflare IPs, umich portal DB);
-`check/` = site-health checks that add report sections (e.g. `check/umich/sitelens.py`).
+`check/` = site-health checks that add report sections (`check/umich/` — sitelens +
+`cloudflare_cms.py`, the relocated U-M CMS-integration checks at `site_post_gather`; and
+`check/cloudflare/` — the opt-in `[Cloudflare.cachecheck]` cache checks, egress-IP test at
+`setup` + per-FQDN HTTP checks at `site_post_dns`, see `docs/cloudflare-cachecheck.md`).
 To add a check or integration, create a new package dir with a non-empty `__init__.py`
-that self-registers — no central registry to edit.
+that self-registers — no central registry to edit. Check modules cannot import the
+dash-named main script; the helpers they need are exposed as `sc` attributes near the
+`cloudflare_enabled()` def (`sc.escape_url`, `sc.check_wordpress_plugin`,
+`sc.check_drupal_module`, `sc.umich_enabled`) — extend that block for new ones (tests
+monkeypatch these when loading check modules standalone). `check/cloudflare/httpseam.py`
+holds the ONE monkeypatchable HTTP seam (`fetch`/`sleep`) and `egress.py` its own `probe`
+seam — route any new outbound HTTP in that package through them to stay offline-testable.
 
 ### Per-site report pipeline (in `main()`)
 
 For each site: build a `site_context` dict (holds `notices`, `sections`, `attachments`,
-traffic data, plan info), run `check` hooks against it, gather Pantheon/WP/Drupal data,
-compute the plan recommendation from `[Pantheon.plan_info]` in the config, then render.
+traffic data, plan info), invoke the site phases (below) at their seams, gather
+Pantheon/WP/Drupal data, compute the plan recommendation from `[Pantheon.plan_info]` in
+the config, then render.
+
+**Normative per-phase data contract** — main() stuffs these `site_context` keys just
+before invoking each phase; hooks code against this table (keys always exist, empty/None
+when the source was disabled, malformed, or failed):
+
+| Phase | Guaranteed new keys (beyond `site`/`notices`/`sections`/`attachments`) |
+|---|---|
+| `site_pre` | — (fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
+| `site_post_traffic` | `traffic_rows`, `start_date`, `end_date` |
+| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (classification lists `[]` when `[Cloudflare]` disabled/DNS transient/malformed domains) |
+| `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version`/`drupal_version` (str; `"unknown"` — NOT None — when that framework's version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed |
+| `site_pre_render` | everything above (full-report path only; no consumer yet — the documented seam for future report-shaping hooks) |
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
   `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
@@ -129,7 +162,7 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
   `sc.news` (config-inline `[News.<x>]` sub-tables + `*.toml` files in `[News].folder` are both
   loaded by `load_news_items()`). Notice dicts carry their own bespoke `text`, so `add_notice`'s
   defaults are no-ops for them; every notice needs a `csv` key (`site,code,...`) — several report
-  paths read `n["csv"]`. Check hooks receive the `SiteContext` and call these methods directly
+  paths read `n["csv"]`. Site-phase hooks receive the `SiteContext` and call these methods directly
   (see `check/umich/sitelens.py`); tests build one with `sc.SiteContext({"name": ...})`.
 - **Terminus/WP/Drush wrappers**: `run_terminus()` is the low-level subprocess call (5-min
   timeout, returns `(stdout, stderr, fatal)`). `terminus()` wraps it for JSON with a
@@ -147,7 +180,7 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
   send, below), `username` (default `<{env USER}`; the `sc.smtp_username()` helper resolves
   `--smtp-username` → `[SMTP].username` → `""`), and `password` (`<{secret env SMTP_PASSWORD}`).
   Keep new institution-specific behavior behind config / the `umich` packages — use the
-  `umich_enabled()` helper to gate U-M-only checks (e.g. the fqdns-gated Cloudflare-cache checks).
+  `umich_enabled()` helper (also exposed as `sc.umich_enabled`) to gate U-M-only checks.
 - **Cloudflare auth + shared client**: the plugin builds **one** `Cloudflare` client from
   `[Cloudflare]` config (no direct-env fallback) — `api_token` if present (preferred), else
   `email` + `api_key` (renamed from the old `member_email`/`member_api_key`); missing creds while
@@ -178,6 +211,21 @@ compute the plan recommendation from `[Pantheon.plan_info]` in the config, then 
   `"plugin.cloudflare" in sc.plugin` (which is always True — every plugin package is imported
   regardless of `enabled`; that was a latent bug that would `KeyError` for a disabled adopter with
   custom domains).
+- **Cloudflare cache checks (`check/cloudflare/`, opt-in)**: gated on `[Cloudflare].enabled` AND
+  `[Cloudflare.cachecheck].enabled` (default false); when enabled, `account_id`+`list_name` are
+  required (fatal if missing) and all cachecheck values must be **pass-1-resolvable** (the egress
+  setup hook runs before the deferred substitution pass). Registers the egress-IP allowlist test
+  at `setup` (early-returns on `--update`/`--import-older-metrics`/`--create-tables`/
+  `--allow-any-source-ip` — the create-tables return is REQUIRED, setup hooks run on that path;
+  verifies BOTH IP families via the shared lazy SDK client + `client.rules.lists.*`, needs the
+  "Account Filter Lists: Read" scope, and the list must cover every family the host egresses on)
+  and the per-FQDN cache checks at `site_post_dns` (consumes `fqdns_behind_cloudflare` from the
+  data contract; RNG seeded `{site}:{report_date}` so re-runs test identical URLs; MISS-retry
+  2s/2s protocol only when headers say cacheable; cross-FQDN redirects drop the URL with NO
+  result item; invalid cert → item then insecure re-fetch continues the checks). Notice language
+  has U-M and generic variants selected via `sc.umich_enabled()`; consolidation merges FQDNs
+  whose findings differ only by URL; every notice's csv key is `cloudflare-cache`. See
+  `docs/cloudflare-cachecheck.md` and `development/2026-07-08-cloudflare-cache-configuration/`.
 - **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
@@ -272,15 +320,28 @@ Non-obvious things the harness relies on:
   (`tests/vendor/axe.min.js`) so it stays offline.
 - **The reusable (non-UMich) path had latent bugs** that production never hit because U-M always
   runs with the UMich plugin enabled. A pragmatic subset was addressed (P8): email/SMTP identity
-  moved to `[Email]`/`[SMTP]` config, and the fqdns-gated Cloudflare-cache checks are now behind
-  `umich_enabled()`. Still **not** yet relocated (deferred to the full de-monolith stage): the
+  moved to `[Email]`/`[SMTP]` config, and the fqdns-gated Cloudflare-cache checks are behind
+  `umich_enabled()`. The fqdns-gated U-M CMS-integration checks (umich-cloudflare plugin, the 4
+  Drupal Cloudflare modules) are now **relocated** to `check/umich/cloudflare_cms.py` at the
+  `site_post_gather` phase (the seam the named-phase system added). Still **not** yet relocated
+  (deferred to the full de-monolith stage): the
   large date-driven annual-billing notices, the `umich-oidc-login`/Hummingbird/Drupal user-agent
   checks, and the U-M branding hardcoded in `email_template.html` (its.umich.edu URLs,
   `webmaster@umich.edu`, `node/4705`) — the non-U-M golden asserts only the strings P8 removed, not
-  "no umich.edu anywhere". A clean relocation of the fqdns-gated checks into the `umich` package
-  needs a new post-gather per-site hook seam (the existing `check` hook fires before the plugin/DNS
-  data exists). When adding code, keep institution-specific logic behind config flags / the `umich`
-  plugin+check packages.
+  "no umich.edu anywhere". When adding code, keep institution-specific logic behind config flags /
+  the `umich` plugin+check packages.
+- **Cache-check tests.** The `check/cloudflare/` modules are loaded standalone (SourceFileLoader;
+  for modules with relative imports, a probe package with `__path__`/`submodule_search_locations`
+  is registered in `sys.modules` first — see `test_check_cloudflare_init.py`). Unit tier:
+  `test_cachecheck_headers.py` / `test_cachecheck_pages.py` / `test_cachecheck_consolidation.py`
+  (pure battery/extraction/consolidation + Hypothesis). Integration tier:
+  `test_hooks_phases.py` (phase registry), `test_check_cloudflare_init.py` (gating/import guard),
+  `test_check_cloudflare_egress.py` (`egress.probe` seam + fake lists client),
+  `test_check_cloudflare_cache.py` (`httpseam.fetch`/`sleep` seams, canned FetchResults),
+  `test_check_umich_cloudflare_cms.py` (relocation), and
+  `test_cachecheck_notice_render.py` (syrupy snapshots of the notice HTML/plaintext — refresh with
+  `--update-goldens`). The e2e goldens keep `[Cloudflare].enabled=false`, so the cache check must
+  never alter them.
 
 ## Development archive (`development/`)
 

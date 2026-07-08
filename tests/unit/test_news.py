@@ -45,6 +45,38 @@ def test_no_news_section_is_noop_not_crash(psh, reset_sc):
     assert reset_sc.news == []
 
 
+def test_disabled_inline_item_is_skipped(psh, reset_sc, tmp_path):
+    # enabled = false disables an item.  This also covers the recursive
+    # gate_disabled_sections() interaction: a gated [News.<x>] sub-table arrives here
+    # stripped to {'enabled': False}, which must NOT hit add_news_item's
+    # missing-"message" fatal.
+    reset_sc.config = {
+        "News": {
+            "kept": _item("Kept"),
+            "off": {"enabled": False},  # as stripped by gate_disabled_sections
+            "off2": {"enabled": False, "type": "info", "message": "Never shown"},
+        }
+    }
+    psh.load_news_items()
+    assert [n["message"] for n in reset_sc.news] == ["Kept"]
+
+
+def test_disabled_file_item_is_skipped(psh, reset_sc, tmp_path):
+    (tmp_path / "a.toml").write_text(
+        '[News.off]\nenabled = false\ntype = "info"\nmessage = "Never shown"\n'
+        '[News.kept]\ntype = "info"\nmessage = "Kept"\n'
+    )
+    reset_sc.config = {"News": {"folder": str(tmp_path)}}
+    psh.load_news_items()
+    assert [n["message"] for n in reset_sc.news] == ["Kept"]
+
+
+def test_enabled_true_item_is_kept(psh, reset_sc):
+    reset_sc.config = {"News": {"on": {"enabled": True, "type": "info", "message": "Shown"}}}
+    psh.load_news_items()
+    assert [n["message"] for n in reset_sc.news] == ["Shown"]
+
+
 def test_file_based_items_are_added(psh, reset_sc, tmp_path):
     (tmp_path / "a.toml").write_text(
         '[News.item]\ntype = "info"\nmessage = "From file"\n'

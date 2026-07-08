@@ -22,6 +22,11 @@ aws = [
 ]
 cloudflare = [
     "cloudflare",
+    # For the [Cloudflare.cachecheck] site cache checks (check/cloudflare/).  httpx was
+    # already a transitive dep of the cloudflare SDK; it and beautifulsoup4 are direct
+    # deps of ours now.
+    "httpx",
+    "beautifulsoup4",
 ]
 test = [
     "pytest",
@@ -29,6 +34,10 @@ test = [
     "hypothesis",
     "pytest-cov",
     "pytest-playwright",
+    # The check/cloudflare integration tests parse canned HTML with real bs4 and build
+    # canned responses around the httpx-based seam:
+    "httpx",
+    "beautifulsoup4",
 ]
 
 [build-system]

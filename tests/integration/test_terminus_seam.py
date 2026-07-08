@@ -49,9 +49,9 @@ def test_temp_db_roundtrips_a_traffic_row(temp_db):
     session.close()
 
 
-def test_check_hook_runs_against_a_site_context(psh, reset_sc):
+def test_site_pre_hook_runs_against_a_site_context(psh, reset_sc):
     sc = reset_sc
-    sc.add_hook("check", {"name": "probe", "func": lambda ctx: ctx["notices"].append("seen")})
+    sc.add_hook("site_pre", {"name": "probe", "func": lambda ctx: ctx["notices"].append("seen")})
     ctx = {"notices": []}
-    sc.invoke_hooks("check", ctx)
+    sc.invoke_hooks("site_pre", ctx)
     assert ctx["notices"] == ["seen"]

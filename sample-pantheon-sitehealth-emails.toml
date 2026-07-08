@@ -128,6 +128,28 @@ api_key = "<{secret env CLOUDFLARE_API_KEY}"
 # api_token = "<{secret env CLOUDFLARE_API_TOKEN}"   # preferred when uncommented; overrides email/api_key
 
 
+[Cloudflare.cachecheck]
+# Per-site Cloudflare cache-configuration checks (see docs/cloudflare-cachecheck.md).
+# Opt-in: requires [Cloudflare].enabled AND enabled = true here.  When enabled, account_id
+# and list_name are REQUIRED (fatal if missing): before any site checks run, the program
+# verifies its own external IP address (both IPv4 and IPv6, when available) appears in the
+# named Cloudflare list (IPs/CIDRs) in that account, so cache results are not skewed by
+# challenges applied to outside networks.  The credentials additionally need the
+# "Account Filter Lists: Read" scope for that account.  NOTE: the list must contain ranges
+# for EVERY IP family this host can egress on, or every report run exits fatally
+# (--allow-any-source-ip skips the egress test).  All values here must resolve in the first
+# substitution pass (same rule as the Cloudflare credentials above).
+enabled = false
+#account_id = "b6a4063d6fa89fba31cf8bf99540d7e5"   # the Cloudflare account holding the list
+#list_name  = "um_networks"                        # list of allow-listed IPs/CIDRs
+# Sent on every request made to sites so owners can identify this tool in their logs:
+#user_agent = "pantheon-sitehealth-emails (Linux; UMich WWS 0.1) webmaster@umich.edu"
+# Per-request timeout, seconds:
+#timeout = 5
+# The "Understanding your Cloudflare cache report" page linked from notices:
+#report_doc_url = "https://documentation.its.umich.edu/cloudflare-cache-report"
+
+
 [AWS]
 enabled = false
 # Values to use if the environment variables AWS_PROFILE or

@@ -59,6 +59,6 @@ def test_check_umich_disabled_import_does_not_crash(psh, reset_sc):
     spec = importlib.util.spec_from_loader("check_umich_probe", loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)  # pre-fix: TypeError from sc.console('...'); post-fix: fine
-    # The disabled (else) branch ran — it only prints — so no check hooks were registered
+    # The disabled (else) branch ran — it only prints — so no site_pre hooks were registered
     # (the enabled branch would have added three). This confirms the fixed path executed.
-    assert sc.hooks["check"] == []
+    assert sc.hooks["site_pre"] == []
