@@ -23,7 +23,21 @@ EXCLUDED_PATH_PREFIXES = (
     "/end_session", "/register", "/signup",
 )
 
+# Paths that are not part of the website's own content: excluded from BOTH page and asset
+# selection, since probing them tells the owner nothing about their site's caching.
+#   /cdn-cgi/     -- Cloudflare's reserved prefix (challenge platform, email-address
+#                    obfuscation, Rocket Loader, the RUM beacon, image resizing, Zaraz, ...).
+#   /.well-known/ -- protocol / infrastructure metadata (ACME cert challenges, security.txt,
+#                    apple-app-site-association, openid-configuration, ...), often non-HTML,
+#                    transient, or dynamically generated.
+# Matched as plain, case-sensitive prefixes.
+NON_WEBSITE_PATH_PREFIXES = ("/cdn-cgi/", "/.well-known/")
+
 MAX_PAGES = 3  # links sampled per page (PROMPT step 2e)
+
+
+def _non_website_path(path: str) -> bool:
+    return any(path.startswith(prefix) for prefix in NON_WEBSITE_PATH_PREFIXES)
 
 
 def _same_fqdn_https(url: str, fqdn: str):  # -> urllib.parse.SplitResult | None
@@ -71,7 +85,7 @@ def extract_page_links(html_text: str, fqdn: str, base_url: str) -> list:
             continue
         if split.path in ("", "/"):
             continue  # the main page (incl. fragment/anchor links), already tested
-        if _path_excluded(split.path):
+        if _path_excluded(split.path) or _non_website_path(split.path):
             continue
         links.add(absolute)
     return sorted(links)
@@ -95,7 +109,8 @@ def extract_assets(html_text: str, fqdn: str, base_url: str) -> dict:
         except ValueError:
             return
         absolute, _fragment = urllib.parse.urldefrag(absolute)
-        if _same_fqdn_https(absolute, fqdn) is not None:
+        split = _same_fqdn_https(absolute, fqdn)
+        if split is not None and not _non_website_path(split.path):
             assets[cls].add(absolute)
 
     for tag in soup.find_all("script", src=True):

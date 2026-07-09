@@ -27,6 +27,12 @@ config, nothing runs.
 3. For every page tested, up to **one JavaScript file, one CSS file, and one image**
    referenced by that page (same FQDN only).
 
+Pages **and** assets whose path starts with `/cdn-cgi/` or `/.well-known/` are never
+selected. `/cdn-cgi/` is Cloudflare's own prefix (challenge platform, email-address
+obfuscation, Rocket Loader, the RUM beacon); `/.well-known/` is protocol/infrastructure
+metadata (ACME challenges, `security.txt`, and the like). Neither is the website's own
+content, so probing them says nothing about the site's caching.
+
 URL selection is **deterministic per site per report date**: re-running the same report
 tests the same URLs (so problems can be reproduced), and the selection rotates from
 month to month.  Requests are sequential, send no cookies, use the configured

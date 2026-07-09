@@ -113,6 +113,23 @@ def test_malformed_href_skipped(pages):
     assert pages.extract_page_links(html, FQDN, BASE) == [f"https://{FQDN}/kept"]
 
 
+def test_non_website_links_excluded(pages):
+    # /cdn-cgi/ (Cloudflare-owned) and /.well-known/ (protocol/infra) are not the website;
+    # never probe them (page links).
+    html = _html(["/cdn-cgi/l/email-protection", "/cdn-cgi/challenge-platform/x", "/cdn-cgi/",
+                  "/.well-known/acme-challenge/tok", "/.well-known/security.txt", "/kept"])
+    assert pages.extract_page_links(html, FQDN, BASE) == [f"https://{FQDN}/kept"]
+
+
+def test_non_website_prefixes_are_prefixes_not_segment_markers(pages):
+    # Real pages that merely start with the same letters are NOT excluded (prefix match);
+    # note /.well-known/ has a leading dot, so /well-known-place does not match.
+    html = _html(["/cdn-cgi-report", "/cdn/thing", "/well-known-place"])
+    assert pages.extract_page_links(html, FQDN, BASE) == [
+        f"https://{FQDN}/cdn-cgi-report", f"https://{FQDN}/cdn/thing",
+        f"https://{FQDN}/well-known-place"]
+
+
 # ── selection ───────────────────────────────────────────────────────────────────────
 def test_choose_pages_caps_at_three_and_is_seed_deterministic(pages):
     links = [f"https://{FQDN}/p{i}" for i in range(10)]
@@ -150,6 +167,28 @@ def test_extract_assets_per_class(pages):
     assert assets == {
         "js": [f"https://{FQDN}/js/app.js"],
         "css": [f"https://{FQDN}/css/site.css", f"https://{FQDN}/css/upper.css"],
+        "img": [f"https://{FQDN}/img/logo.png"],
+    }
+
+
+def test_non_website_assets_excluded(pages):
+    # Assets under /cdn-cgi/ (Rocket Loader, email-decode, RUM beacon) and /.well-known/
+    # are not the website's, so they are never selected as assets to test.
+    html = f"""
+    <html><head>
+      <script src="/cdn-cgi/scripts/abc/rocket-loader.min.js"></script>
+      <script src="/js/app.js"></script>
+      <link rel="stylesheet" href="/cdn-cgi/styles/cf.css">
+      <link rel="stylesheet" href="/.well-known/whatever.css">
+    </head><body>
+      <img src="/cdn-cgi/images/trace">
+      <img src="/.well-known/apple-app-site-association">
+      <img src="/img/logo.png">
+    </body></html>
+    """
+    assert pages.extract_assets(html, FQDN, BASE) == {
+        "js": [f"https://{FQDN}/js/app.js"],
+        "css": [],
         "img": [f"https://{FQDN}/img/logo.png"],
     }
 
