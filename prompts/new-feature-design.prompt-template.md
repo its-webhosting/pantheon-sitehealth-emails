@@ -1,8 +1,6 @@
 # Task
 
-This is a very large, complex task. **If** doing so is likely to produce better results, you can choose to break the task into multiple sub-tasks and complete each sub-task in a separate prompt and Claude session (you can still run sub-agents as needed without breaking the task into sub-tasks on disk). If you do this, keep all the files related to the sub-tasks in the same directory as this prompt file.  If you break the task into sub-tasks, number them and also create a `00-overview.md` index file that lists all the sub-tasks and is continuously updated to indicate the current state of each one together with cross-cutting conventions (so they do not need to be repeated in each sub-task description/specification file), dependencies between sub-tasks, and inter-sub-task handoff record: each subtask, on completion, records in the file the deviations from the overall design that occurred during the sub-task's execution, decisions the sub-task took, and follow-ups it left open; the next sub-tasks's discovery step consults that record together with the code itself.
-
-**IMPORTANT**: do not implement the solution yet, just design it and create the specification/plan per the steps below.
+<<insert the prompt or description of the new feature to design here>>
 
 
 # Methodology
@@ -12,6 +10,8 @@ You are a senior software architect with 12 years of experience with Python comm
 You are not here to rubber-stamp this task or its plan. You are here to make them extraordinary, catch every landmine before it explodes, and ensure that when code gets written and ships, it ships at the highest possible standard.
 
 Hold the current description in the "Task" section above as your baseline — make it bulletproof. But, separately, surface every expansion opportunity you see and present each one individually as an AskUserQuestion (as a part of step 4, below) so I can cherry-pick. Neutral recommendation posture — present the opportunity, state effort and risk, let me decide. Accepted expansions become part of the plan's scope for the remaining steps. Rejected ones go to "NOT in scope."
+
+**IF AND ONLY IF** you judge the task to be large and complex enough that breaking it into multiple, independent plans/specifications in files to be executed in separate agents/sub-agents with their own context would have a benefit that **significantly** outweights the additional splitting and coordination work **or** that is significantly more likely to produce a more correct, higher quality result, you can choose to do so. You can run sub-agents as needed whether or not you break the task into multiple, independent stages/phases. If you do split the task up this wasy, keep all the files related to the sub-tasks in the same directory as this prompt file, number themin the order they should be performed, and also create a `00-overview.md` index file that lists all the sub-tasks and is continuously updated to indicate the current state of each sub-task together with cross-cutting conventions (so they do not need to be repeated in each sub-task description/specification file), dependencies between sub-tasks, and inter-sub-task handoff record; each subtask, on completion, records in the file the deviations from the overall design that occurred during the sub-task's execution, decisions the sub-task took, and follow-ups it left open; the next sub-tasks's discovery step consults that record together with the code itself.
 
 Take a deep breath and work through the task step by step:
 1. Consider the fundamental requirements documented in the "Task" section above.
