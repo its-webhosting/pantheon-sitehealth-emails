@@ -175,14 +175,18 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
         # Sorted so the string is order-independent: two FQDNs that set the same cookies in
         # a different header order still produce the same item and consolidate into one
         # notice (item_key folds params into the consolidation identity).
+        # cookie_count travels alongside the display string: a cookie *name* can contain a
+        # comma, so the notice must not recover the count by re-splitting `cookies`.
         cookies = ", ".join(sorted(names))
+        count = len(names)
         if cf_status is not None and cf_status.upper() == "BYPASS":
             # The BYPASS is *caused by* the cookie: replace the generic uncacheable item
             # with the specific explanation.
             items = [i for i in items if i["id"] != "cf-status-uncacheable"]
-            items.append(_item("set-cookie-bypass", kind, cookies=cookies))
+            items.append(_item("set-cookie-bypass", kind, cookies=cookies,
+                               cookie_count=count))
         else:
-            items.append(_item("set-cookie", kind, cookies=cookies))
+            items.append(_item("set-cookie", kind, cookies=cookies, cookie_count=count))
 
     return items
 

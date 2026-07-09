@@ -237,13 +237,13 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* add SendGrid support as an additional option to SMTP
+* add SendGrid API support as an alternative to SMTP
 * finish implementing better secrets handling
     * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
     * SSH and key (ssh-agent for now, something else later?)
     * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
-    * AWS credentials (set in environment for now)
+    * [ok] AWS credentials (set in environment for now)
 * rework everything from ~3,700 line script into a combination of checks (in the `checks` directory), plugins (where appropriate), and other Python files/packages
 * refactor the program to take the most advatage of the program's check framework,plugin framework, and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality under `./checks` and `./plugins` wherever it is appropriate. Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
 * Add ruff for linting+formatting, switch from "house styles" to best-practice/standard Python styles

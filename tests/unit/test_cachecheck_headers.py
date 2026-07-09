@@ -163,6 +163,16 @@ def test_set_cookie_records_names_not_values(hdrs):
     # Names only, no values, sorted (order-independent for consolidation):
     assert item["params"]["cookies"] == "csrftoken, sessionid"
     assert "SECRETVALUE" not in item["params"]["cookies"]
+    assert item["params"]["cookie_count"] == 2
+
+
+def test_cookie_count_is_structured_not_derived_from_the_display_string(hdrs):
+    # A malformed Set-Cookie can yield one cookie whose NAME contains a comma; the notice
+    # must not recover the count by re-splitting `cookies`.
+    item = _item(run(hdrs, {"cf-cache-status": "HIT", "cache-control": YEAR,
+                            "set-cookie": ["theme_a,theme_b"]}), "set-cookie")
+    assert item["params"]["cookies"] == "theme_a,theme_b"
+    assert item["params"]["cookie_count"] == 1
 
 
 def test_set_cookie_names_are_order_independent(hdrs):

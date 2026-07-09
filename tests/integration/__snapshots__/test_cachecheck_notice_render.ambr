@@ -3,14 +3,14 @@
   '''
   <p><strong>Cloudflare caching:</strong> some pages or files on <a href="https://www.example.edu/">www.example.edu</a>, <a href="https://www2.example.edu/">www2.example.edu</a> are not being cached by Cloudflare as effectively as they could be. Full caching protects your site from traffic spikes, lowers visitor counts that determine hosting costs, and makes pages load faster.</p>
   <ul>
-  <li>Cloudflare is bypassing its cache for this page <em>because</em> the site sets a cookie (<code>sessionid</code>) here. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://developers.cloudflare.com/cache/concepts/cache-responses/">About Cloudflare cache statuses</a> &middot; <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie">About the Set-Cookie header</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/">https://www.example.edu/</a> (page)</li>
-  <li><a href="https://www2.example.edu/">https://www2.example.edu/</a> (page)</li></ul></li>
-  <li>This page is only cached for 1 hour(s). Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/about">https://www.example.edu/about</a> (page)</li>
-  <li><a href="https://www2.example.edu/about">https://www2.example.edu/about</a> (page)</li></ul></li>
-  <li>This static asset's headers allow caching, but Cloudflare never served it from cache across three attempts — something (for example a <code>Vary</code> header or a cache rule) is preventing it from being stored. Please investigate with your web team. <a href="https://developers.cloudflare.com/cache/concepts/default-cache-behavior/">What Cloudflare caches by default</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li>
-  <li>The HTTPS certificate for this static asset failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li>
+  <li>Cloudflare is bypassing its cache for these pages <em>because</em> the site sets a cookie (<code>sessionid</code>) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://developers.cloudflare.com/cache/concepts/cache-responses/">About Cloudflare cache statuses</a> &middot; <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie">About the Set-Cookie header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/">https://www.example.edu/</a> (page)</li>
+  <li><a href="https://www2.example.edu/">https://www2.example.edu/</a> (page)</li></ul></li></ul></li>
+  <li>These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/about">https://www.example.edu/about</a> (page)</li>
+  <li><a href="https://www2.example.edu/about">https://www2.example.edu/about</a> (page)</li></ul></li></ul></li>
+  <li>These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts &mdash; something (for example a <code>Vary</code> header or a cache rule) is preventing them from being stored. Please investigate with your web team. <a href="https://developers.cloudflare.com/cache/concepts/default-cache-behavior/">What Cloudflare caches by default</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a> (static asset)</li>
+  <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li></ul></li>
+  <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
+  <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li></ul></li>
   </ul>
   '''
 # ---
@@ -21,28 +21,33 @@
   they could be. Full caching protects your site from traffic spikes, lowers
   visitor counts that determine hosting costs, and makes pages load faster.
   
-    * Cloudflare is bypassing its cache for this page _because_ the site sets a
-      cookie (`sessionid`) here. Configure your site not to set cookies for
+    * Cloudflare is bypassing its cache for these pages _because_ the site sets
+      a cookie (`sessionid`) on them. Configure your site not to set cookies for
       visitors who are not logged in, and caching will resume. [About Cloudflare
       cache statuses][3] · [About the Set-Cookie header][4]
-      * <https://www.example.edu/> (page)
-      * <https://www2.example.edu/> (page)
-    * This page is only cached for 1 hour(s). Increase the cache time to
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/> (page)
+        * <https://www2.example.edu/> (page)
+    * These pages are only cached for 1 hour. Increase the cache time to
       31536000 seconds (1 year) for the full cost-savings and performance
-      benefit. [About the Cache-Control header][5]
-      * <https://www.example.edu/about> (page)
-      * <https://www2.example.edu/about> (page)
-    * This static asset's headers allow caching, but Cloudflare never served it
-      from cache across three attempts — something (for example a `Vary` header
-      or a cache rule) is preventing it from being stored. Please investigate
-      with your web team. [What Cloudflare caches by default][6]
-      * <https://www.example.edu/js/app.js> (static asset)
-      * <https://www2.example.edu/js/app.js> (static asset)
-    * The HTTPS certificate for this static asset failed validation; browsers
+      benefit. Apply this to all pages site-wide — the ones listed below are
+      only what we sampled. [About the Cache-Control header][5]
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/about> (page)
+        * <https://www2.example.edu/about> (page)
+    * These static assets' headers allow caching, but Cloudflare never served
+      them from cache across three attempts — something (for example a `Vary`
+      header or a cache rule) is preventing them from being stored. Please
+      investigate with your web team. [What Cloudflare caches by default][6]
+      * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
+        * <https://www.example.edu/js/app.js> (static asset)
+        * <https://www2.example.edu/js/app.js> (static asset)
+    * The HTTPS certificate for these static assets failed validation; browsers
       will show visitors a security warning. Renew or fix the certificate.
       [Pantheon: custom certificates][7]
-      * <https://www.example.edu/img/logo.png> (static asset)
-      * <https://www2.example.edu/img/logo.png> (static asset)
+      * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
+        * <https://www.example.edu/img/logo.png> (static asset)
+        * <https://www2.example.edu/img/logo.png> (static asset)
   
      [1]: <https://www.example.edu/>
      [2]: <https://www2.example.edu/>
@@ -59,14 +64,14 @@
   '''
   <p><strong>Cloudflare caching:</strong> some pages or files on <a href="https://www.example.edu/">www.example.edu</a>, <a href="https://www2.example.edu/">www2.example.edu</a> are not being cached by Cloudflare as effectively as they could be. Full caching protects your site from traffic spikes, lowers visitor counts that determine hosting costs, and makes pages load faster.</p>
   <ul>
-  <li>Cloudflare is bypassing its cache for this page <em>because</em> the site sets a cookie (<code>sessionid</code>) here. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#set-cookie-bypass">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/5110#rule%25202">How login/session cookies affect U-M caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/">https://www.example.edu/</a> (page)</li>
-  <li><a href="https://www2.example.edu/">https://www2.example.edu/</a> (page)</li></ul></li>
-  <li>This page is only cached for 1 hour(s). Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/4241">Managing Cloudflare caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/about">https://www.example.edu/about</a> (page)</li>
-  <li><a href="https://www2.example.edu/about">https://www2.example.edu/about</a> (page)</li></ul></li>
-  <li>This static asset's headers allow caching, but Cloudflare never served it from cache across three attempts — something (for example a <code>Vary</code> header or a cache rule) is preventing it from being stored. Please investigate with your web team. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#miss-persistent">How to fix this</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li>
-  <li>The HTTPS certificate for this static asset failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert">How to fix this</a> &middot; <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li>
+  <li>Cloudflare is bypassing its cache for these pages <em>because</em> the site sets a cookie (<code>sessionid</code>) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#set-cookie-bypass">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/5110#rule%25202">How login/session cookies affect U-M caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/">https://www.example.edu/</a> (page)</li>
+  <li><a href="https://www2.example.edu/">https://www2.example.edu/</a> (page)</li></ul></li></ul></li>
+  <li>These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/4241">Managing Cloudflare caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/about">https://www.example.edu/about</a> (page)</li>
+  <li><a href="https://www2.example.edu/about">https://www2.example.edu/about</a> (page)</li></ul></li></ul></li>
+  <li>These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts &mdash; something (for example a <code>Vary</code> header or a cache rule) is preventing them from being stored. Please investigate with your web team. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#miss-persistent">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a> (static asset)</li>
+  <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li></ul></li>
+  <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert">How to fix this</a> &middot; <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
+  <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li></ul></li>
   </ul>
   '''
 # ---
@@ -74,18 +79,22 @@
   '''
   **Cloudflare caching:** some pages or files on [www.example.edu](<https://www.example.edu/>), [www2.example.edu](<https://www2.example.edu/>) are not being cached by Cloudflare as effectively as they could be. Full caching protects your site from traffic spikes, lowers visitor counts that determine hosting costs, and makes pages load faster.
   
-    * Cloudflare is bypassing its cache for this page _because_ the site sets a cookie (`sessionid`) here. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#set-cookie-bypass>) · [How login/session cookies affect U-M caching](<https://documentation.its.umich.edu/node/5110#rule%25202>) · [umich-cloudflare plugin documentation](<https://documentation.its.umich.edu/node/5114>)
-      * <https://www.example.edu/> (page)
-      * <https://www2.example.edu/> (page)
-    * This page is only cached for 1 hour(s). Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time>) · [Managing Cloudflare caching](<https://documentation.its.umich.edu/node/4241>) · [umich-cloudflare plugin documentation](<https://documentation.its.umich.edu/node/5114>)
-      * <https://www.example.edu/about> (page)
-      * <https://www2.example.edu/about> (page)
-    * This static asset's headers allow caching, but Cloudflare never served it from cache across three attempts — something (for example a `Vary` header or a cache rule) is preventing it from being stored. Please investigate with your web team. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#miss-persistent>)
-      * <https://www.example.edu/js/app.js> (static asset)
-      * <https://www2.example.edu/js/app.js> (static asset)
-    * The HTTPS certificate for this static asset failed validation; browsers will show visitors a security warning. Renew or fix the certificate. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert>) · [Pantheon: custom certificates](<https://docs.pantheon.io/guides/custom-certificates>)
-      * <https://www.example.edu/img/logo.png> (static asset)
-      * <https://www2.example.edu/img/logo.png> (static asset)
+    * Cloudflare is bypassing its cache for these pages _because_ the site sets a cookie (`sessionid`) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#set-cookie-bypass>) · [How login/session cookies affect U-M caching](<https://documentation.its.umich.edu/node/5110#rule%25202>) · [umich-cloudflare plugin documentation](<https://documentation.its.umich.edu/node/5114>)
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/> (page)
+        * <https://www2.example.edu/> (page)
+    * These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide — the ones listed below are only what we sampled. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time>) · [Managing Cloudflare caching](<https://documentation.its.umich.edu/node/4241>) · [umich-cloudflare plugin documentation](<https://documentation.its.umich.edu/node/5114>)
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/about> (page)
+        * <https://www2.example.edu/about> (page)
+    * These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts — something (for example a `Vary` header or a cache rule) is preventing them from being stored. Please investigate with your web team. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#miss-persistent>)
+      * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
+        * <https://www.example.edu/js/app.js> (static asset)
+        * <https://www2.example.edu/js/app.js> (static asset)
+    * The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert>) · [Pantheon: custom certificates](<https://docs.pantheon.io/guides/custom-certificates>)
+      * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
+        * <https://www.example.edu/img/logo.png> (static asset)
+        * <https://www2.example.edu/img/logo.png> (static asset)
   
   
   '''

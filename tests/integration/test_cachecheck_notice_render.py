@@ -35,6 +35,8 @@ def _item(item_id, url, kind="page", **params):
     # Production always attaches the cookie names to set-cookie items; mirror that.
     if item_id in ("set-cookie", "set-cookie-bypass") and "cookies" not in params:
         params["cookies"] = "sessionid"
+    if "cookies" in params and "cookie_count" not in params:
+        params["cookie_count"] = len(params["cookies"].split(", "))
     return {"id": item_id, "kind": kind, "url": url, "params": params}
 
 
@@ -53,7 +55,9 @@ def _build(psh, *, umich):
         SITE,
         {"www.example.edu": _representative_items("www.example.edu"),
          "www2.example.edu": _representative_items("www2.example.edu")},
-        umich=umich, doc_url=DOC, framework="wordpress")
+        umich=umich, doc_url=DOC, framework="wordpress",
+        sample_by_fqdn={"www.example.edu": {"pages": 3, "asset_pages": 3},
+                        "www2.example.edu": {"pages": 3, "asset_pages": 3}})
 
 
 @pytest.mark.parametrize("umich", [True, False], ids=["umich", "generic"])
@@ -87,7 +91,8 @@ def test_injection_via_remote_strings_is_escaped_everywhere(psh, reset_sc):
     out = notices.build_cache_notices(
         SITE, {"a.example.edu": [_item("request-failed", evil,
                                        reason="<script>alert(2)</script>")]},
-        umich=False, doc_url=DOC, framework="")
+        umich=False, doc_url=DOC, framework="",
+        sample_by_fqdn={"a.example.edu": {"pages": 3, "asset_pages": 3}})
     message = out[0]["message"]
     assert "<script>" not in message
     assert "alert(2)" not in message or "&lt;script&gt;" in message

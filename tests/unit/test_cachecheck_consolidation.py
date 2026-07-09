@@ -36,12 +36,20 @@ def _item(item_id, url, kind="page", **params):
     # synthetic items render the same way real ones do.
     if item_id in ("set-cookie", "set-cookie-bypass") and "cookies" not in params:
         params["cookies"] = "sessionid"
+    if "cookies" in params and "cookie_count" not in params:
+        params["cookie_count"] = len(params["cookies"].split(", "))
     return {"id": item_id, "kind": kind, "url": url, "params": params}
 
 
-def _build(notices, items_by_fqdn, *, umich=True, framework="wordpress"):
-    return notices.build_cache_notices(SITE, items_by_fqdn, umich=umich, doc_url=DOC,
-                                       framework=framework)
+def _sample(pages, asset_pages=None):
+    return {"pages": pages, "asset_pages": pages if asset_pages is None else asset_pages}
+
+
+def _build(notices, items_by_fqdn, *, umich=True, framework="wordpress", extra_pages=3,
+           asset_pages=None):
+    return notices.build_cache_notices(
+        SITE, items_by_fqdn, umich=umich, doc_url=DOC, framework=framework,
+        sample_by_fqdn={fqdn: _sample(extra_pages, asset_pages) for fqdn in items_by_fqdn})
 
 
 def test_identical_signatures_consolidate_into_one_notice(notices):
@@ -127,6 +135,284 @@ def test_duplicate_urls_listed_once_per_finding(notices):
     assert out[0]["message"].count("other.css") == 2
 
 
+def test_url_list_header_counts_extra_pages_and_pluralizes(notices):
+    def header(extra_pages):
+        out = _build(notices, {"a.example.edu": [
+            _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=extra_pages)
+        return out[0]["message"]
+
+    assert "URLs with this issue (checked main page plus 3 random pages linked from it)" \
+        in header(3)
+    assert "URLs with this issue (checked main page plus 1 random page linked from it)" \
+        in header(1)
+    assert "URLs with this issue (checked main page only)" in header(0)
+
+
+def _group_header(notices, sample_by_fqdn, urls_by_fqdn=None):
+    """One consolidated notice over two FQDNs with differing sample sizes."""
+    urls_by_fqdn = urls_by_fqdn or {f: ["/"] for f in sample_by_fqdn}
+    items = {fqdn: [_item("no-cache-control", f"https://{fqdn}{path}") for path in paths]
+             for fqdn, paths in urls_by_fqdn.items()}
+    out = notices.build_cache_notices(SITE, items, umich=False, doc_url=DOC, framework="",
+                                      sample_by_fqdn=sample_by_fqdn)
+    assert len(out) == 1  # identical signatures -> one notice
+    return out[0]["message"]
+
+
+def test_url_list_header_says_up_to_when_a_group_disagrees(notices):
+    # A group consolidates on item SIGNATURE, so its FQDNs can have sampled different
+    # numbers of pages.  Reducing them to one number cannot work: the URL list aggregates
+    # URLs from every FQDN, so a min renders a header that contradicts the list below it
+    # and a max asserts a sample size no single FQDN reached.  "up to N" is true of all.
+    message = _group_header(notices, {"a.example.edu": _sample(1),
+                                      "b.example.edu": _sample(3)})
+    assert "(checked main page plus up to 3 random pages linked from it)" in message
+
+
+def test_url_list_header_is_exact_when_a_group_agrees(notices):
+    message = _group_header(notices, {"a.example.edu": _sample(2),
+                                      "b.example.edu": _sample(2)})
+    assert "(checked main page plus 2 random pages linked from it)" in message
+    assert "up to" not in message
+
+
+def test_url_list_header_never_says_main_page_only_above_sub_page_urls(notices):
+    # The min() regression: b.example.edu is a bare landing page (0 extra pages) but
+    # a.example.edu found the same issue on three sampled sub-pages.  They consolidate,
+    # and the header must not claim "checked main page only" above a.example.edu's URLs.
+    message = _group_header(
+        notices,
+        {"a.example.edu": _sample(3), "b.example.edu": _sample(0)},
+        {"a.example.edu": ["/", "/about", "/news", "/contact"], "b.example.edu": ["/"]})
+    assert "/about" in message and "/news" in message
+    assert "checked main page only" not in message
+    assert "(checked main page plus up to 3 random pages linked from it)" in message
+
+
+def test_url_list_header_describes_the_items_own_kind(notices):
+    # extra_pages counts PAGES; assets are sampled per class from each checked page, so an
+    # asset item's header must not claim its URLs came from the sampled pages.
+    out = _build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/"),
+        _item("no-cache-control", "https://a.example.edu/app.js", kind="asset"),
+    ]}, extra_pages=2)
+    message = out[0]["message"]
+    assert "(checked main page plus 2 random pages linked from it)" in message
+    assert ("(checked static assets on the main page plus 2 random pages linked from it)"
+            in message)
+
+    only_main = _build(notices, {"a.example.edu": [
+        _item("cc-private", "https://a.example.edu/app.js", kind="asset")]},
+        extra_pages=0)[0]["message"]
+    assert "(checked static assets on the main page only)" in only_main
+
+
+def test_asset_header_uses_the_asset_page_count_not_the_page_count(notices):
+    # A picked page that timed out is a CHECKED page (it gets a result item) but is never
+    # mined for assets, so pages=1 while asset_pages=0.  The asset header must not claim
+    # assets were sampled from a page that was never opened for them.
+    out = _build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/"),
+        _item("no-cache-control", "https://a.example.edu/app.js", kind="asset"),
+    ]}, extra_pages=1, asset_pages=0)
+    message = out[0]["message"]
+    assert "(checked main page plus 1 random page linked from it)" in message
+    assert "(checked static assets on the main page only)" in message
+
+
+def test_url_list_is_a_child_of_its_header(notices):
+    # The header is an <li> whose child <ul> holds the URLs: that is the only construct
+    # that breaks the line in Outlook, keeps the plaintext indented under the finding, and
+    # associates the list with its caption for a screen reader.
+    message = _build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0]["message"]
+    assert "<br>" not in message
+    assert "display: block" not in message
+    header = "URLs with this issue (checked main page only)"
+    nested = (f'<li>{header}<ul style="list-style-type: none;">'
+              f'<li><a href="https://a.example.edu/">https://a.example.edu/</a> (page)</li>'
+              f'</ul></li>')
+    assert nested in message
+
+
+def test_plaintext_indents_the_header_under_its_finding(psh, reset_sc, notices):
+    # Regression for the <br> version, whose header rendered flush at column 0 -- to the
+    # LEFT of both its parent bullet and the URLs it introduced.
+    ctx = reset_sc.SiteContext({"name": SITE})
+    ctx.add_notice(dict(_build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0]))
+    lines = [l for l in ctx["notices"][0]["text"].splitlines() if l.strip()]
+    finding = next(l for l in lines if "does not send" in l)
+    header = next(l for l in lines if "URLs with this issue" in l)
+    url = next(l for l in lines if "a.example.edu/>" in l)
+
+    def indent(line):
+        return len(line) - len(line.lstrip())
+
+    assert indent(finding) < indent(header) < indent(url)
+
+
+def test_item_language_agrees_with_the_number_of_urls_listed(notices):
+    one = _build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/")]})[0]["message"]
+    assert "This page does not send" in one
+    assert "caching it for" in one
+
+    two = _build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/"),
+        _item("no-cache-control", "https://a.example.edu/about")]})[0]["message"]
+    assert "These pages do not send" in two
+    assert "caching them for" in two
+    assert "This page" not in two
+
+    assets = _build(notices, {"a.example.edu": [
+        _item("cc-private", "https://a.example.edu/a.js", kind="asset"),
+        _item("cc-private", "https://a.example.edu/b.js", kind="asset")]})[0]["message"]
+    assert "These static assets' <code>Cache-Control</code> headers contain" in assets
+
+
+def test_site_config_items_direct_the_owner_site_wide(notices):
+    # The listed URLs are only a sample, so items whose fix is a site-wide configuration
+    # change must say so rather than implying only those URLs are affected.
+    params_by_id = {"short-cache-time": {"seconds": 60}}
+    for item_id in ("no-cache-control", "no-max-age", "short-cache-time", "cc-private",
+                    "cc-no-cache", "cc-no-store", "cc-proxy-revalidate", "expires-short"):
+        one = _build(notices, {"a.example.edu": [
+            _item(item_id, "https://a.example.edu/", **params_by_id.get(item_id, {}))
+        ]})[0]["message"]
+        assert ("Apply this to all pages site-wide &mdash; the one listed below is only "
+                "what we sampled." in one), item_id
+
+        two = _build(notices, {"a.example.edu": [
+            _item(item_id, "https://a.example.edu/x.js", kind="asset",
+                  **params_by_id.get(item_id, {})),
+            _item(item_id, "https://a.example.edu/y.js", kind="asset",
+                  **params_by_id.get(item_id, {})),
+        ]})[0]["message"]
+        assert ("Apply this to all static assets site-wide &mdash; the ones listed below "
+                "are only what we sampled." in two), item_id
+
+
+def test_must_revalidate_umich_names_its_referent_and_trails_the_home_page_caveat(notices):
+    def message(count, kind="page"):
+        items = [_item("cc-must-revalidate", f"https://a.example.edu/p{i}", kind=kind)
+                 for i in range(count)]
+        return _build(notices, {"a.example.edu": items})[0]["message"]
+
+    # "remove it here" had no referent once a list of URLs sits below the sentence:
+    assert "remove it from this page." in message(1)
+    assert "remove it from these pages." in message(2)
+    assert "remove it from these static assets." in message(2, kind="asset")
+    assert "remove it here" not in message(1)
+
+    # The home-page caveat explains why the home page is NOT listed, so it follows the
+    # fix instruction instead of interrupting it.
+    one = message(1)
+    assert one.index("Configure your site to remove it") < one.index("On your home page")
+    assert "it is never reported there." in one
+
+    # The generic variant is untouched (no U-M home-page/alerts language):
+    generic = _build(notices, {"a.example.edu": [
+        _item("cc-must-revalidate", "https://a.example.edu/p")]}, umich=False)[0]["message"]
+    assert "home page" not in generic
+    assert "strict freshness requirement" in generic
+
+
+def test_location_specific_items_are_not_given_the_site_wide_direction(notices):
+    # cc-must-revalidate is deliberately about WHERE the directive appears (intentional on
+    # the home page), and the transport/status items are about the listed URLs themselves.
+    for item_id, params in (("cc-must-revalidate", {}), ("http-error", {"status": 404}),
+                            ("timeout", {"timeout": 5}), ("invalid-cert", {})):
+        message = _build(notices, {"a.example.edu": [
+            _item(item_id, "https://a.example.edu/p", **params)]})[0]["message"]
+        assert "site-wide" not in message, item_id
+
+
+def test_no_parenthesized_s_pluralization_in_owner_facing_text(notices):
+    for seconds, expected in ((3600, "1 hour"), (7200, "2 hours"), (60, "1 minute"),
+                              (120, "2 minutes"), (1, "1 second"), (30, "30 seconds")):
+        message = _build(notices, {"a.example.edu": [
+            _item("short-cache-time", "https://a.example.edu/", seconds=seconds)]})[0]["message"]
+        assert f"only cached for {expected}." in message
+        assert "(s)" not in message
+
+
+def test_cookie_phrase_agrees_with_the_number_of_cookies(notices):
+    one = _build(notices, {"a.example.edu": [
+        _item("set-cookie", "https://a.example.edu/", cookies="sessionid")]})[0]["message"]
+    assert "sets a cookie (<code>sessionid</code>)" in one
+    many = _build(notices, {"a.example.edu": [
+        _item("set-cookie", "https://a.example.edu/", cookies="a, b")]})[0]["message"]
+    assert "sets cookies (<code>a, b</code>)" in many
+
+    # The count comes from cookie_count, never from re-splitting the display string: a
+    # malformed Set-Cookie can yield ONE cookie whose name contains a comma.
+    comma = _build(notices, {"a.example.edu": [
+        _item("set-cookie", "https://a.example.edu/", cookies="theme_a,theme_b",
+              cookie_count=1)]})[0]["message"]
+    assert "sets a cookie (<code>theme_a,theme_b</code>)" in comma
+
+
+def test_timeout_and_redirect_counts_pluralize(notices):
+    one = _build(notices, {"a.example.edu": [
+        _item("timeout", "https://a.example.edu/", timeout=1)]})[0]["message"]
+    assert "did not respond within 1 second;" in one
+    many = _build(notices, {"a.example.edu": [
+        _item("timeout", "https://a.example.edu/", timeout=5)]})[0]["message"]
+    assert "did not respond within 5 seconds;" in many
+    redirects = _build(notices, {"a.example.edu": [
+        _item("too-many-redirects", "https://a.example.edu/", max_redirects=1)]})[0]["message"]
+    assert "more than 1 time &mdash;" in redirects
+
+
+def _all_item_messages(notices, **build_kwargs):
+    """Every item id rendered once, so encoding assertions cover the whole vocabulary."""
+    params_by_id = {
+        "http-error": {"status": 404}, "cf-status-uncacheable": {"status": "DYNAMIC"},
+        "short-cache-time": {"seconds": 60}, "timeout": {"timeout": 5},
+        "request-failed": {"reason": "connection refused"},
+        "too-many-redirects": {"max_redirects": 5},
+    }
+    for item_id in notices._CONSOLE:
+        item = _item(item_id, "https://a.example.edu/p", **params_by_id.get(item_id, {}))
+        yield item_id, item, _build(notices, {"a.example.edu": [item]}, **build_kwargs)[0]
+
+
+def test_notice_html_has_no_raw_non_ascii_characters(notices):
+    # An em dash emitted as a raw UTF-8 byte sequence is re-encoded as mojibake ("â€”") by
+    # any downstream consumer that mis-guesses the charset -- notably Emogrifier's libxml.
+    # Owner-facing HTML uses named entities so it survives regardless.
+    for umich in (True, False):
+        for item_id, _item_dict, notice in _all_item_messages(notices, umich=umich):
+            raw = [c for c in notice["message"] if ord(c) > 127]
+            assert not raw, f"{item_id} (umich={umich}): raw non-ASCII {raw}"
+
+
+def test_console_lines_are_pure_ascii(notices):
+    # The console's encoding is the terminal's, not ours: a non-UTF-8 locale turns a raw
+    # em dash into a UnicodeEncodeError or a '?'.  Entities would be nonsense here.
+    for item_id, item, _notice in _all_item_messages(notices):
+        line = notices.console_line(item)
+        assert line.isascii(), f"{item_id}: non-ASCII console line {line!r}"
+        assert "&mdash;" not in line  # entities belong in HTML, not on a terminal
+
+
+def test_plaintext_conversion_decodes_entities_for_screen_readers(psh, reset_sc, notices):
+    # The .txt alternative is what accessibility tooling reads: it must carry real
+    # characters, never the raw "&mdash;"/"&middot;" source entities.
+    for _item_id, _item_dict, notice in _all_item_messages(notices, umich=True):
+        ctx = reset_sc.SiteContext({"name": SITE})
+        ctx.add_notice(dict(notice))
+        text = ctx["notices"][0]["text"]
+        assert "&mdash;" not in text and "&middot;" not in text
+        assert "&amp;" not in text and "&lt;" not in text
+    # and the characters the entities stand for do arrive intact:
+    ctx = reset_sc.SiteContext({"name": SITE})
+    ctx.add_notice(dict(_build(notices, {"a.example.edu": [
+        _item("too-many-redirects", "https://a.example.edu/p", max_redirects=5)]})[0]))
+    assert "—" in ctx["notices"][0]["text"]  # em dash, decoded
+
+
 def test_remote_strings_are_escaped(notices):
     evil_url = 'https://a.example.edu/<script>alert(1)</script>'
     evil_reason = '<img src=x onerror=alert(1)>'
@@ -140,7 +426,7 @@ def test_remote_strings_are_escaped(notices):
 def test_console_line_includes_url_kind_and_problem(notices):
     line = notices.console_line(_item("cf-status-uncacheable", "https://a.example.edu/",
                                       status="DYNAMIC"))
-    assert line == "https://a.example.edu/ (page): Cf-Cache-Status DYNAMIC — not being cached"
+    assert line == "https://a.example.edu/ (page): Cf-Cache-Status DYNAMIC - not being cached"
     line = notices.console_line(_item("timeout", "https://a.example.edu/x.js", kind="asset",
                                       timeout=5))
     assert line == "https://a.example.edu/x.js (asset): no response within 5s"
@@ -177,7 +463,8 @@ def test_groups_partition_the_populated_fqdns(psh, assignment):
         for fqdn, item_ids in assignment.items()
     }
     out = notices.build_cache_notices(SITE, items_by_fqdn, umich=False, doc_url=DOC,
-                                      framework="")
+                                      framework="",
+                                      sample_by_fqdn={f: _sample(3) for f in items_by_fqdn})
     populated = {f for f, items in items_by_fqdn.items() if items}
     covered = []
     for n in out:

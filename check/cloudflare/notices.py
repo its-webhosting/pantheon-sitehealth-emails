@@ -13,6 +13,11 @@ framework-relevant items, D15); generic variants use public docs only and NEVER 
 doc_url (its default is a U-M URL).  `timeout`/`request-failed` generic variants are
 "steps only" (no natural public doc).  NEVER suggest disabling or bypassing caching.
 
+Owner-facing text always agrees in number: an item's sentence is written for the count of
+URLs listed beneath it ("This page ..." / "These pages ..."), counts are spelled out
+("1 hour" / "2 hours", never "2 hour(s)"), and each URL list is introduced by a header
+naming how many pages were sampled.
+
 Escaping: every remotely-derived string (URL, header value, error reason) passes through
 html.escape for display and sc.escape_url for hrefs -- notices are HTML shown to owners.
 """
@@ -50,8 +55,8 @@ _FRAMEWORK_RELEVANT = {"no-cache-control", "no-max-age", "short-cache-time",
 # ── Console lines (one line, technical, no doc links; printed as items occur) ───────
 _CONSOLE = {
     "http-error": "HTTP {status}, cannot check caching",
-    "cf-status-missing": "no Cf-Cache-Status header — response may not be served via Cloudflare",
-    "cf-status-uncacheable": "Cf-Cache-Status {status} — not being cached",
+    "cf-status-missing": "no Cf-Cache-Status header - response may not be served via Cloudflare",
+    "cf-status-uncacheable": "Cf-Cache-Status {status} - not being cached",
     "no-cache-control": "no Cache-Control header",
     "no-max-age": "Cache-Control has no max-age/s-maxage",
     "short-cache-time": "cache time {seconds}s < 3 days",
@@ -63,10 +68,10 @@ _CONSOLE = {
     "expires-short": "Expires < 3 days and no max-age",
     "set-cookie": "Set-Cookie on public content: {cookies}",
     "set-cookie-bypass": "Cf-Cache-Status BYPASS caused by Set-Cookie: {cookies}",
-    "miss-persistent": "still MISS after 3 attempts — cacheable but never cached",
+    "miss-persistent": "still MISS after 3 attempts - cacheable but never cached",
     "timeout": "no response within {timeout}s",
     "invalid-cert": "TLS certificate invalid",
-    "challenge": "Cloudflare challenge (cf-mitigated) — cannot check",
+    "challenge": "Cloudflare challenge (cf-mitigated) - cannot check",
     "request-failed": "request failed ({reason})",
     "too-many-redirects": "more than {max_redirects} redirects",
 }
@@ -82,14 +87,55 @@ def _a(url: str, text: str) -> str:
     return f'<a href="{sc.escape_url(url)}">{html.escape(text)}</a>'
 
 
+def _plural(count: int, singular: str) -> str:
+    """'1 hour' / '2 hours' -- owner-facing text never uses '(s)'."""
+    return f"{count} {singular if count == 1 else singular + 's'}"
+
+
+def _kind_noun(item: dict) -> str:
+    """The owner-facing word for an item's kind; the ONE place kinds are named."""
+    return "page" if item["kind"] == "page" else "static asset"
+
+
 def _human_seconds(seconds: int) -> str:
     if seconds >= 86400:
-        return f"{seconds // 86400} day(s)"
+        return _plural(seconds // 86400, "day")
     if seconds >= 3600:
-        return f"{seconds // 3600} hour(s)"
+        return _plural(seconds // 3600, "hour")
     if seconds >= 60:
-        return f"{seconds // 60} minute(s)"
-    return f"{seconds} second(s)"
+        return _plural(seconds // 60, "minute")
+    return _plural(seconds, "second")
+
+
+def _cookie_phrase(cookies: str, count: int) -> str:
+    """'a cookie (<code>sessionid</code>)' / 'cookies (<code>a, b</code>)'.  The count comes
+    from the item's `cookie_count` param, NOT from re-splitting the display string: a
+    malformed Set-Cookie can yield one cookie whose *name* contains a comma."""
+    lead = "cookies" if count > 1 else "a cookie"
+    return f"{lead} (<code>{html.escape(cookies)}</code>)"
+
+
+def _url_list_header(counts: list, kind: str) -> str:
+    """The line introducing an item's URL list: says what was checked, so an owner can see
+    that a short list is a sample, not an exhaustive audit of their site.
+
+    `counts` is the per-FQDN sample size for THIS item's kind, one entry per FQDN in the
+    consolidated group -- pages and static assets are sampled by different mechanisms, so
+    each kind describes its own sample.  A group consolidates on item signature, not on
+    how many pages each FQDN happened to have to sample, so the counts can differ; the
+    header then says "up to N", which is true of every FQDN listed.  Reducing them to one
+    number (a min or a max) cannot work: the URL list aggregates URLs from every FQDN in
+    the group, so a min can render "main page only" above a list of sub-page URLs, and a
+    max can assert a sample size no single FQDN reached.
+    """
+    scope = "static assets on the main page" if kind == "asset" else "main page"
+    biggest = max(counts) if counts else 0
+    if biggest <= 0:  # nothing beyond the main page anywhere in the group
+        return f"URLs with this issue (checked {scope} only)"
+    # "up to" only when the group's FQDNs actually disagree; an exact count is friendlier.
+    approximate = "up to " if len(set(counts)) > 1 else ""
+    return (f"URLs with this issue (checked {scope} plus "
+            f"{approximate}{_plural(biggest, 'random page')} linked from it)")
 
 
 def _cms_link(framework: str):  # -> str | None
@@ -101,82 +147,109 @@ def _cms_link(framework: str):  # -> str | None
     return None
 
 
-def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str) -> str:
+def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
+               count: int = 1) -> str:
     """One short, actionable sentence-or-two of HTML for a distinct item.  U-M variants
-    link {doc_url}#<id>; generic variants never do."""
+    link {doc_url}#<id>; generic variants never do.
+
+    `count` is how many URLs the notice lists under this item, so the sentence agrees in
+    number with the list beneath it ("This page ..." vs. "These pages ...")."""
     item_id = item["id"]
     p = item["params"]
-    kind = "page" if item["kind"] == "page" else "static asset"
+    many = count > 1
+    noun = _kind_noun(item)
+    nouns = noun + "s"
+    subject = f"These {nouns}" if many else f"This {noun}"          # "These pages"
+    object_ = f"these {nouns}" if many else f"this {noun}"          # "... for these pages"
+    possessive = f"These {nouns}'" if many else f"This {noun}'s"    # "These pages' headers"
+    it, its = ("them", "their") if many else ("it", "its")
+    is_, has_hdr = ("are", "headers have") if many else ("is", "header has")
+    contains_hdr = "headers contain" if many else "header contains"
     learn = _a(f"{doc_url}#{item_id}", "How to fix this") if umich else None
+    # Appended to items whose fix is a site-wide configuration change: the listed URLs are
+    # a sample, not the full extent of the problem, and owners read them as the extent.
+    sitewide = (f" Apply this to all {nouns} site-wide &mdash; the {'ones' if many else 'one'} "
+                f"listed below {'are' if many else 'is'} only what we sampled.")
 
     if item_id == "http-error":
-        text = (f"This {kind} returned an error (HTTP {int(p['status'])}), so its caching "
-                f"could not be checked. Fix the error, then the next report will check it.")
+        text = (f"{subject} returned an error (HTTP {int(p['status'])}), so {its} caching "
+                f"could not be checked. Fix the {'errors' if many else 'error'}, then the "
+                f"next report will check {it}.")
         links = [learn] if umich else [_a(MDN_STATUS, "About HTTP status codes")]
     elif item_id == "cf-status-missing":
-        text = (f"Cloudflare did not report a cache status for this {kind}; it may not be "
-                f"fully protected or accelerated by Cloudflare. Please investigate so your "
-                f"site gets Cloudflare's full protection, cost savings, and performance.")
+        text = (f"Cloudflare did not report a cache status for {object_}; "
+                f"{'they' if many else 'it'} may not be fully protected or accelerated by "
+                f"Cloudflare. Please investigate so your site gets Cloudflare's full "
+                f"protection, cost savings, and performance.")
         links = [learn] if umich else [_a(CF_CACHE_RESPONSES, "About Cloudflare cache statuses")]
     elif item_id == "cf-status-uncacheable":
         text = (f"Cloudflare reports cache status <code>{html.escape(str(p['status']))}</code>, "
-                f"meaning this {kind} is not served from Cloudflare's cache. Please "
+                f"meaning {object_} {is_} not served from Cloudflare's cache. Please "
                 f"investigate so your site gets Cloudflare's full protection, cost savings, "
                 f"and performance.")
         links = ([learn, _a(NODE_5110, "U-M managed Cloudflare cache rules")] if umich
                  else [_a(CF_CACHE_RESPONSES, "About Cloudflare cache statuses"),
                        _a(CF_DEFAULT_CACHE, "What Cloudflare caches by default")])
     elif item_id == "no-cache-control":
-        text = (f"This {kind} does not send a <code>Cache-Control</code> header, so caching "
-                f"is unpredictable. Configure your site to allow caching it for 31536000 "
-                f"seconds (1 year).")
+        text = (f"{subject} {'do' if many else 'does'} not send a <code>Cache-Control</code> "
+                f"header, so caching is unpredictable. Configure your site to allow caching "
+                f"{it} for 31536000 seconds (1 year)." + sitewide)
         links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "no-max-age":
-        text = (f"This {kind}'s <code>Cache-Control</code> header has no usable "
+        text = (f"{possessive} <code>Cache-Control</code> {has_hdr} no usable "
                 f"<code>max-age</code> or <code>s-maxage</code>. Configure your site to "
-                f"allow caching it for 31536000 seconds (1 year).")
+                f"allow caching {it} for 31536000 seconds (1 year)." + sitewide)
         links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "short-cache-time":
-        text = (f"This {kind} is only cached for {_human_seconds(int(p['seconds']))}. "
+        text = (f"{subject} {is_} only cached for {_human_seconds(int(p['seconds']))}. "
                 f"Increase the cache time to 31536000 seconds (1 year) for the full "
-                f"cost-savings and performance benefit.")
+                f"cost-savings and performance benefit." + sitewide)
         links = ([learn, _a(NODE_4241, "Managing Cloudflare caching")] if umich
                  else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")])
     elif item_id in ("cc-private", "cc-no-cache", "cc-no-store", "cc-proxy-revalidate"):
         directive = item_id[3:]
-        text = (f"This {kind}'s <code>Cache-Control</code> header contains "
-                f"<code>{directive}</code>, which prevents Cloudflare from caching it. "
-                f"Configure your site to remove <code>{directive}</code> from public content.")
+        text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
+                f"<code>{directive}</code>, which prevents Cloudflare from caching {it}. "
+                f"Configure your site to remove <code>{directive}</code> from public "
+                f"content." + sitewide)
         links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "cc-must-revalidate":
         if umich:
-            text = (f"This {kind}'s <code>Cache-Control</code> header contains "
-                    f"<code>must-revalidate</code>. On your home page that is intentional "
-                    f"(it makes emergency alerts appear promptly), but on other pages and "
-                    f"assets it defeats caching — configure your site to remove it here.")
+            # The battery never raises this item for the main page (see evaluate_headers),
+            # so the home-page caveat is context, not part of the fix: it trails the
+            # instruction rather than interrupting it.
+            text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
+                    f"<code>must-revalidate</code>, which defeats caching. Configure your "
+                    f"site to remove it from {object_}. (On your home page "
+                    f"<code>must-revalidate</code> is intentional &mdash; it makes emergency "
+                    f"alerts appear promptly &mdash; so it is never reported there.)")
             links = [learn]
         else:
-            text = (f"This {kind}'s <code>Cache-Control</code> header contains "
+            text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
                     f"<code>must-revalidate</code>, which forces revalidation and reduces "
-                    f"caching benefit. Remove it unless this specific {kind} has a strict "
-                    f"freshness requirement.")
+                    f"caching benefit. Remove it unless "
+                    f"{f'these specific {nouns} have' if many else f'this specific {noun} has'} "
+                    f"a strict freshness requirement.")
             links = [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "expires-short":
-        text = (f"This {kind} relies on a legacy <code>Expires</code> header that expires in "
-                f"under 3 days. Replace it with <code>Cache-Control: max-age=31536000</code> "
-                f"(1 year).")
+        text = (f"{subject} "
+                + (f"rely on legacy <code>Expires</code> headers that expire" if many
+                   else f"relies on a legacy <code>Expires</code> header that expires")
+                + f" in under 3 days. Replace {it} with "
+                f"<code>Cache-Control: max-age=31536000</code> (1 year)." + sitewide)
         links = [learn] if umich else [_a(MDN_EXPIRES, "About the Expires header")]
     elif item_id == "set-cookie":
-        text = (f"The site sets a cookie (<code>{html.escape(p['cookies'])}</code>) on this "
-                f"public {kind}, which prevents Cloudflare from caching it. Configure your "
-                f"site not to set cookies for visitors who are not logged in.")
+        text = (f"The site sets {_cookie_phrase(p['cookies'], p['cookie_count'])} on "
+                f"{f'these public {nouns}' if many else f'this public {noun}'}, which "
+                f"prevents Cloudflare from caching {it}. Configure your site not to set "
+                f"cookies for visitors who are not logged in.")
         links = ([learn, _a(NODE_5110_COOKIES, "How login/session cookies affect U-M caching")]
                  if umich
                  else [_a(PANTHEON_COOKIES, "Pantheon: working with cookies"),
                        _a(MDN_SET_COOKIE, "About the Set-Cookie header")])
     elif item_id == "set-cookie-bypass":
-        text = (f"Cloudflare is bypassing its cache for this {kind} <em>because</em> the "
-                f"site sets a cookie (<code>{html.escape(p['cookies'])}</code>) here. "
+        text = (f"Cloudflare is bypassing its cache for {object_} <em>because</em> the "
+                f"site sets {_cookie_phrase(p['cookies'], p['cookie_count'])} on {it}. "
                 f"Configure your site not to set cookies for visitors who are not logged "
                 f"in, and caching will resume.")
         links = ([learn, _a(NODE_5110_COOKIES, "How login/session cookies affect U-M caching")]
@@ -184,37 +257,39 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str) -> str:
                  else [_a(CF_CACHE_RESPONSES, "About Cloudflare cache statuses"),
                        _a(MDN_SET_COOKIE, "About the Set-Cookie header")])
     elif item_id == "miss-persistent":
-        text = (f"This {kind}'s headers allow caching, but Cloudflare never served it from "
-                f"cache across three attempts — something (for example a <code>Vary</code> "
-                f"header or a cache rule) is preventing it from being stored. Please "
+        text = (f"{possessive} headers allow caching, but Cloudflare never served {it} from "
+                f"cache across three attempts &mdash; something (for example a <code>Vary</code> "
+                f"header or a cache rule) is preventing {it} from being stored. Please "
                 f"investigate with your web team.")
         links = [learn] if umich else [_a(CF_DEFAULT_CACHE, "What Cloudflare caches by default")]
     elif item_id == "timeout":
-        text = (f"This {kind} did not respond within {int(p['timeout'])} seconds; visitors "
-                f"likely experience the same slowness. Ask your web team to investigate the "
-                f"site's performance and availability.")
+        text = (f"{subject} did not respond within {_plural(int(p['timeout']), 'second')}; "
+                f"visitors likely experience the same slowness. Ask your web team to "
+                f"investigate the site's performance and availability.")
         links = [learn] if umich else []  # generic: steps only, no natural public doc
     elif item_id == "invalid-cert":
-        text = (f"The HTTPS certificate for this {kind} failed validation; browsers will "
+        text = (f"The HTTPS certificate for {object_} failed validation; browsers will "
                 f"show visitors a security warning. Renew or fix the certificate.")
         links = ([learn, _a(PANTHEON_CERTS, "Pantheon: custom certificates")] if umich
                  else [_a(PANTHEON_CERTS, "Pantheon: custom certificates")])
     elif item_id == "challenge":
-        text = (f"Cloudflare presented a security challenge when we requested this {kind}, "
-                f"so its caching could not be checked. If this is unexpected for public "
+        text = (f"Cloudflare presented a security challenge when we requested {object_}, "
+                f"so {its} caching could not be checked. If this is unexpected for public "
                 f"content, review the site's security settings with your web team.")
         links = [learn] if umich else [_a(CF_CHALLENGES, "About Cloudflare challenges")]
     elif item_id == "request-failed":
-        text = (f"This {kind} could not be fetched ({html.escape(str(p['reason']))}); "
+        text = (f"{subject} could not be fetched ({html.escape(str(p['reason']))}); "
                 f"visitors may be affected. Ask your web team to check the server and DNS "
-                f"for this address.")
+                f"for {'these addresses' if many else 'this address'}.")
         links = [learn] if umich else []  # generic: steps only
     elif item_id == "too-many-redirects":
-        text = (f"This {kind} redirects more than {int(p['max_redirects'])} times — likely a "
-                f"redirect loop. Fix the site's redirect configuration.")
+        text = (f"{subject} {'redirect' if many else 'redirects'} more than "
+                f"{_plural(int(p['max_redirects']), 'time')} &mdash; likely "
+                f"{'redirect loops' if many else 'a redirect loop'}. Fix the site's "
+                f"redirect configuration.")
         links = [learn] if umich else [_a(MDN_REDIRECTIONS, "About HTTP redirections")]
     else:  # unknown id: fail loudly in tests, degrade readably in production
-        text = f"A problem was detected with this {kind}."
+        text = f"A problem was detected with {object_}."
         links = [learn] if umich else []
 
     if umich and item_id in _FRAMEWORK_RELEVANT:
@@ -232,9 +307,15 @@ def item_key(item: dict) -> tuple:
 
 
 def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
-                        doc_url: str, framework: str) -> list:
+                        doc_url: str, framework: str, sample_by_fqdn: dict) -> list:
     """One 'warning' notice per group of FQDNs whose items are identical except for the
-    URLs tested (PROMPT step 3).  Returns notice dicts ready for site_context.add_notice."""
+    URLs tested (PROMPT step 3).  Returns notice dicts ready for site_context.add_notice.
+
+    `sample_by_fqdn` maps FQDN -> {"pages": n, "asset_pages": n} (see cache._check_fqdn):
+    how many pages beyond the main page were checked there, and how many of those were
+    mined for assets.  Each item's URL-list header is built from the counts of its OWN
+    kind across the group's FQDNs -- see `_url_list_header` for why they are not reduced
+    to a single number here."""
     populated = {fqdn: items for fqdn, items in items_by_fqdn.items() if items}
     if not populated:
         return []
@@ -255,6 +336,10 @@ def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
                 seen.add(key)
                 distinct.append(item)
 
+        def sample_counts(kind: str, fqdns=fqdns) -> list:
+            key = "asset_pages" if kind == "asset" else "pages"
+            return [sample_by_fqdn.get(fqdn, {}).get(key, 0) for fqdn in fqdns]
+
         blocks = []
         for item in distinct:
             key = item_key(item)
@@ -264,13 +349,24 @@ def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
                 for match in populated[fqdn]:
                     if item_key(match) == key and match["url"] not in seen_urls:
                         seen_urls.add(match["url"])
-                        kind = "page" if match["kind"] == "page" else "static asset"
-                        url_lines.append(
-                            f'<li>{_a(match["url"], match["url"])} ({kind})</li>')
+                        url_lines.append(f'<li>{_a(match["url"], match["url"])} '
+                                         f'({_kind_noun(match)})</li>')
+            # An item's URLs are all of its own kind (kind is part of item_key), and pages
+            # and assets are sampled differently -- so the header describes this item's kind.
+            header = html.escape(_url_list_header(sample_counts(item["kind"]), item["kind"]))
+            # The header is an <li> whose child <ul> holds the URLs, rather than a <br> or a
+            # styled <span>.  Native list markup is the only construct that breaks the line
+            # in Outlook's Word engine (which honors no `display` value but `none`), keeps
+            # the header indented under its finding in the html2text plaintext copy, AND
+            # makes the URL list programmatically a child of its caption for a screen reader.
+            urls = ('<ul style="list-style-type: none;">' + "\n".join(url_lines) + "</ul>")
             blocks.append(
                 "<li>"
-                + _item_html(item, umich=umich, doc_url=doc_url, framework=framework)
-                + '<ul style="list-style-type: none;">' + "\n".join(url_lines) + "</ul>"
+                + _item_html(item, umich=umich, doc_url=doc_url, framework=framework,
+                             count=len(url_lines))
+                + '<ul style="list-style-type: none;">'
+                + f"<li>{header}{urls}</li>"
+                + "</ul>"
                 + "</li>")
 
         fqdn_links = ", ".join(_a(f"https://{f}/", f) for f in fqdns)

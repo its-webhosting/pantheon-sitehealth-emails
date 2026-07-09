@@ -207,6 +207,91 @@ def test_linked_pages_and_assets_are_tested(env):
     assert "short-cache-time" in ctx["notices"][0]["csv"]
 
 
+def test_url_list_header_reports_the_pages_actually_checked(env):
+    # One link is mined and checked, so the header the owner sees says "plus 1 random page".
+    page_url = f"https://{FQDN}/about"
+    env.fetch.add(MAIN, _resp(env, MAIN, html='<a href="/about">a</a>',
+                              **{"cache-control": None}))
+    env.fetch.add(page_url, _resp(env, page_url, **{"cache-control": None}))
+    ctx = _ctx(env)
+    env.cache.check_cloudflare_cache(ctx)
+    message = ctx["notices"][0]["message"]
+    assert "URLs with this issue (checked main page plus 1 random page linked from it)" \
+        in message
+
+
+def test_pages_dropped_as_cross_fqdn_redirects_are_not_counted_as_checked(env):
+    # The picked page is never cache-checked (no result item), so the header must not
+    # claim it was: the count falls back to "main page only".
+    page_url = f"https://{FQDN}/about"
+    env.fetch.add(MAIN, _resp(env, MAIN, html='<a href="/about">a</a>',
+                              **{"cache-control": None}))
+    env.fetch.add(page_url, _resp(env, page_url, error="cross_fqdn_redirect",
+                                  final="https://elsewhere.example.edu/about"))
+    ctx = _ctx(env)
+    env.cache.check_cloudflare_cache(ctx)
+    message = ctx["notices"][0]["message"]
+    assert "URLs with this issue (checked main page only)" in message
+    assert "random page" not in message
+
+
+def test_a_page_that_errors_is_still_counted_because_it_is_listed(env):
+    # A picked page that times out gets a result item and so appears in a URL list; the
+    # header's count must cover it.
+    page_url = f"https://{FQDN}/about"
+    env.fetch.add(MAIN, _resp(env, MAIN, html='<a href="/about">a</a>',
+                              **{"cache-control": None}))
+    env.fetch.add(page_url, _resp(env, page_url, error="timeout"))
+    ctx = _ctx(env)
+    env.cache.check_cloudflare_cache(ctx)
+    messages = " ".join(n["message"] for n in ctx["notices"])
+    assert "checked main page plus 1 random page linked from it" in messages
+    assert page_url in messages
+
+
+def test_a_cert_failure_that_then_redirects_off_fqdn_is_still_counted(env):
+    # _test_url emits invalid-cert BEFORE re-fetching insecurely; if that re-fetch
+    # redirects cross-FQDN the page still contributed a listed URL, so it must be counted.
+    page_url = f"https://{FQDN}/about"
+    env.fetch.add(MAIN, _resp(env, MAIN, html='<a href="/about">a</a>',
+                              **{"cache-control": None}))
+    env.fetch.add(page_url, _resp(env, page_url, error="cert"))
+    env.fetch.add(page_url, _resp(env, page_url, error="cross_fqdn_redirect",
+                                  final="https://elsewhere.example.edu/about"),
+                  verify=False)
+    ctx = _ctx(env)
+    env.cache.check_cloudflare_cache(ctx)
+    messages = " ".join(n["message"] for n in ctx["notices"])
+    assert page_url in messages  # listed under invalid-cert
+    assert "checked main page plus 1 random page linked from it" in messages
+    assert "checked main page only" not in messages
+
+
+def test_a_timed_out_page_counts_as_checked_but_not_as_an_asset_source(env):
+    # pages=1 (it has a result item and is listed) but asset_pages=0 (never mined).
+    page_url = f"https://{FQDN}/about"
+    asset_url = f"https://{FQDN}/js/app.js"
+    env.fetch.add(MAIN, _resp(env, MAIN,
+                              html='<a href="/about">a</a><script src="/js/app.js"></script>'))
+    env.fetch.add(page_url, _resp(env, page_url, error="timeout"))
+    env.fetch.add(asset_url, _resp(env, asset_url, **{"cache-control": None}))
+    ctx = _ctx(env)
+    env.cache.check_cloudflare_cache(ctx)
+    messages = " ".join(n["message"] for n in ctx["notices"])
+    assert "checked main page plus 1 random page linked from it" in messages   # the timeout
+    assert "checked static assets on the main page only" in messages           # not mined
+
+
+def test_asset_items_get_an_asset_scoped_header(env):
+    asset_url = f"https://{FQDN}/js/app.js"
+    env.fetch.add(MAIN, _resp(env, MAIN, html='<script src="/js/app.js"></script>'))
+    env.fetch.add(asset_url, _resp(env, asset_url, **{"cache-control": None}))
+    ctx = _ctx(env)
+    env.cache.check_cloudflare_cache(ctx)
+    message = ctx["notices"][0]["message"]
+    assert "(checked static assets on the main page only)" in message
+
+
 def test_identical_fqdns_consolidate_different_split(env):
     fqdn2 = "www2.example.edu"
     main2 = f"https://{fqdn2}/"

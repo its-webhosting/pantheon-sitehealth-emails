@@ -161,7 +161,22 @@ def _ok(result) -> bool:
             and result.status_code is not None and 200 <= result.status_code < 300)
 
 
-def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> list:
+def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> (list, dict):
+    """Returns the FQDN's result items and the sizes of the two SEPARATE samples the
+    notice's URL-list headers report to the owner:
+
+        "pages"       -- pages beyond the main page that were actually checked.  NOT the
+                         number selected: a pick dropped as a cross-FQDN redirect is never
+                         checked and yields no result item, so it must not be counted,
+                         while a pick that errors or returns non-2xx IS counted because it
+                         gets a result item and so appears in a URL list under the count.
+        "asset_pages" -- pages (beyond the main page) that were mined for assets.  Only
+                         pages with a usable body are mined, so this is <= "pages": a pick
+                         that timed out is a checked page but never yields an asset.
+
+    One number cannot serve both: an asset item's header would otherwise claim assets were
+    sampled from pages that were never opened for assets.
+    """
     items = []
     # One connection pool per FQDN: TLS handshakes are paid once per FQDN (per verify
     # mode) instead of once per URL; cookies are still never sent (the pool clears the
@@ -170,16 +185,26 @@ def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> list:
         main = _test_url(f"https://{fqdn}/", fqdn, cfg, items, is_main_page=True,
                          kind="page", status=status, pool=pool)
         if not _ok(main):
-            return items  # link/asset steps need a successful body; move on (PROMPT)
+            # link/asset steps need a successful body; move on (PROMPT)
+            return items, {"pages": 0, "asset_pages": 0}
 
         links = extract_page_links(main.text, fqdn, main.final_url)
         picks = choose_pages(links, rng)
         sc.debug(rich_escape(f"{fqdn}: {len(links)} candidate link(s); testing {picks or 'none'}"))
 
         pages = [main]
+        checked_pages = 0
         for url in picks:
+            before = len(items)
             result = _test_url(url, fqdn, cfg, items, is_main_page=False, kind="page",
                                status=status, pool=pool)
+            # A pick counts as checked when its battery ran OR it produced a result item
+            # (its URL is then listed under the header's count).  Testing for an item --
+            # rather than for `error != "cross_fqdn_redirect"` -- is what keeps the
+            # cert-then-cross-FQDN path counted: _test_url emits invalid-cert and only
+            # then re-fetches insecurely, and that re-fetch may redirect off the FQDN.
+            if _ok(result) or len(items) > before:
+                checked_pages += 1
             if _ok(result):
                 pages.append(result)
 
@@ -192,7 +217,7 @@ def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> list:
             for _cls, url in chosen:
                 _test_url(url, fqdn, cfg, items, is_main_page=False, kind="asset",
                           status=status, pool=pool)
-    return items
+    return items, {"pages": checked_pages, "asset_pages": len(pages) - 1}
 
 
 def check_cloudflare_cache(site_context) -> None:
@@ -214,11 +239,12 @@ def check_cloudflare_cache(site_context) -> None:
     rng = make_rng(site_context["site"]["name"], sc.options.date.isoformat())
 
     items_by_fqdn = {}
+    sample_by_fqdn = {}
 
     def run(status):
         for fqdn in sorted(fqdns):
             _step(status, f"testing {fqdn}")
-            items_by_fqdn[fqdn] = _check_fqdn(fqdn, cfg, rng, status)
+            items_by_fqdn[fqdn], sample_by_fqdn[fqdn] = _check_fqdn(fqdn, cfg, rng, status)
 
     if sc.options.verbose == 0:
         # Ephemeral progress; no other rich Live/status is active at site_post_dns (the
@@ -232,5 +258,6 @@ def check_cloudflare_cache(site_context) -> None:
             site_context["site"]["name"], items_by_fqdn,
             umich=sc.umich_enabled(),
             doc_url=cfg["report_doc_url"],
-            framework=site_context["site"].get("framework", "")):
+            framework=site_context["site"].get("framework", ""),
+            sample_by_fqdn=sample_by_fqdn):
         site_context.add_notice(notice)
