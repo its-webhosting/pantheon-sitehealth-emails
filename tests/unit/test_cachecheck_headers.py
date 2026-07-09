@@ -151,6 +151,71 @@ def test_bypass_without_cookie_keeps_status_item(hdrs):
     assert ids(run(hdrs, headers)) == ["cf-status-uncacheable"]
 
 
+def _item(items, item_id):
+    return next(i for i in items if i["id"] == item_id)
+
+
+def test_set_cookie_records_names_not_values(hdrs):
+    headers = {"cf-cache-status": "HIT", "cache-control": YEAR,
+               "set-cookie": ["sessionid=SECRETVALUE; Path=/; HttpOnly",
+                              "csrftoken=deadbeef"]}
+    item = _item(run(hdrs, headers), "set-cookie")
+    # Names only, no values, sorted (order-independent for consolidation):
+    assert item["params"]["cookies"] == "csrftoken, sessionid"
+    assert "SECRETVALUE" not in item["params"]["cookies"]
+
+
+def test_set_cookie_names_are_order_independent(hdrs):
+    # Same cookies in different header order must produce the same item so the two FQDNs
+    # consolidate into one notice rather than fragmenting.
+    a = _item(run(hdrs, {"cf-cache-status": "HIT", "cache-control": YEAR,
+                         "set-cookie": ["sessionid=1", "csrftoken=2"]}), "set-cookie")
+    b = _item(run(hdrs, {"cf-cache-status": "HIT", "cache-control": YEAR,
+                         "set-cookie": ["csrftoken=2", "sessionid=1"]}), "set-cookie")
+    assert a["params"]["cookies"] == b["params"]["cookies"] == "csrftoken, sessionid"
+
+
+def test_only_cloudflare_cookies_yields_no_finding(hdrs):
+    headers = {"cf-cache-status": "HIT", "cache-control": YEAR,
+               "set-cookie": ["__cf_bm=abc; Path=/", "_cfuvid=xyz"]}
+    assert ids(run(hdrs, headers)) == []
+
+
+def test_cloudflare_cookie_filter_is_case_insensitive(hdrs):
+    headers = {"cf-cache-status": "HIT", "cache-control": YEAR,
+               "set-cookie": ["__CF_BM=abc", "CF_Clearance=xyz"]}
+    assert ids(run(hdrs, headers)) == []
+
+
+def test_mixed_cookies_keep_only_website_names(hdrs):
+    headers = {"cf-cache-status": "HIT", "cache-control": YEAR,
+               "set-cookie": ["__cf_bm=abc", "sessionid=1", "cf_clearance=z"]}
+    item = _item(run(hdrs, headers), "set-cookie")
+    assert item["params"]["cookies"] == "sessionid"
+
+
+def test_bypass_caused_by_website_cookie_names_the_cookie(hdrs):
+    headers = {"cf-cache-status": "BYPASS", "cache-control": YEAR,
+               "set-cookie": ["__cf_bm=abc", "sessionid=1"]}
+    items = run(hdrs, headers)
+    assert ids(items) == ["set-cookie-bypass"]
+    assert _item(items, "set-cookie-bypass")["params"]["cookies"] == "sessionid"
+
+
+def test_bypass_with_only_cloudflare_cookies_keeps_status_item(hdrs):
+    headers = {"cf-cache-status": "BYPASS", "cache-control": YEAR,
+               "set-cookie": ["__cf_bm=abc"]}
+    assert ids(run(hdrs, headers)) == ["cf-status-uncacheable"]
+
+
+def test_cookie_names_helper(hdrs):
+    assert hdrs.cookie_names("sessionid=1; Path=/") == ["sessionid"]
+    assert hdrs.cookie_names(["a=1", "a=2", "b=3"]) == ["a", "b"]
+    assert hdrs.cookie_names(["__cf_bm=x", "__cflb=y"]) == []
+    assert hdrs.cookie_names(None) == []
+    assert hdrs.cookie_names("") == []
+
+
 # ── should_retry_miss ───────────────────────────────────────────────────────────────
 def test_retry_miss_matrix(hdrs):
     def check(headers, *, status=200, main=False):

@@ -32,6 +32,9 @@ def _notices_module(psh):
 
 
 def _item(item_id, url, kind="page", **params):
+    # Production always attaches the cookie names to set-cookie items; mirror that.
+    if item_id in ("set-cookie", "set-cookie-bypass") and "cookies" not in params:
+        params["cookies"] = "sessionid"
     return {"id": item_id, "kind": kind, "url": url, "params": params}
 
 

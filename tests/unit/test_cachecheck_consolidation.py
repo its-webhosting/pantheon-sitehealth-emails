@@ -32,6 +32,10 @@ def notices(psh):
 
 
 def _item(item_id, url, kind="page", **params):
+    # Production always attaches the cookie names to set-cookie items; mirror that so
+    # synthetic items render the same way real ones do.
+    if item_id in ("set-cookie", "set-cookie-bypass") and "cookies" not in params:
+        params["cookies"] = "sessionid"
     return {"id": item_id, "kind": kind, "url": url, "params": params}
 
 
@@ -148,6 +152,8 @@ def test_every_item_id_has_console_and_html_language(notices):
         "short-cache-time": {"seconds": 60}, "timeout": {"timeout": 5},
         "request-failed": {"reason": "connection refused"},
         "too-many-redirects": {"max_redirects": 5},
+        "set-cookie": {"cookies": "sessionid"},
+        "set-cookie-bypass": {"cookies": "sessionid"},
     }
     for item_id in notices._CONSOLE:
         item = _item(item_id, "https://a.example.edu/p", **params_by_id.get(item_id, {}))

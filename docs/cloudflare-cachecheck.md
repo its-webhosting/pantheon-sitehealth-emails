@@ -34,7 +34,12 @@ month to month.  Requests are sequential, send no cookies, use the configured
 FQDN (even apex↔www) drop that URL with a console note.
 
 Each response's `Cf-Cache-Status`, `Cache-Control`, `Expires`, and `Set-Cookie` headers
-are evaluated.  When a response is a cacheable `MISS`, it is re-requested up to twice
+are evaluated.  When a `Set-Cookie` is found, the cookie **names** (never their values)
+are recorded on the console and in the report finding.  Cookies set by Cloudflare itself
+(`__cf_bm`, `__cflb`, `cf_clearance`, `_cfuvid`, and the rest of the `CLOUDFLARE_COOKIES`
+list in `check/cloudflare/headers.py`, matched case-insensitively) are ignored — they do
+not affect origin caching — so a response whose only cookies are Cloudflare's produces no
+cookie finding.  When a response is a cacheable `MISS`, it is re-requested up to twice
 (2-second pauses) to distinguish "not cached *yet*" from "never caches"; only a
 persistent `MISS` is reported.  An invalid HTTPS certificate is reported and the checks
 then continue against the response anyway.  A `cf-mitigated: challenge` response is

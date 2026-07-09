@@ -39,6 +39,42 @@ _MISS_RETRY_BLOCKERS = {
 }
 
 
+# Cookies set by Cloudflare itself, not by the origin website.  They do not interfere with
+# Cloudflare caching, so they are ignored when checking for cookies on public content.
+# Compared case-insensitively (stored lowercased).
+CLOUDFLARE_COOKIES = frozenset({
+    "__cf_bm", "__cflb", "__cfseq", "cf_clearance", "cf_ob_info", "cf_use_ob",
+    "__cfwaitingroom", "__cfruid", "_cfuvid", "cf_chl_rc_i", "cf_chl_rc_ni",
+    "cf_chl_rc_m", "cf_authorization", "cf_binding", "cf_session", "cd_appsession",
+    "cf_device",
+})
+
+
+def cookie_names(set_cookie) -> list:
+    """The names (not the values) of the cookies in a response's Set-Cookie header, with
+    Cloudflare's own cookies (CLOUDFLARE_COOKIES) removed.  Accepts a single header string
+    or a list of them (httpx exposes multiple Set-Cookie headers as a list); returns the
+    remaining names in first-seen order, de-duplicated.  Never raises."""
+    if isinstance(set_cookie, str):
+        raw = [set_cookie]
+    elif isinstance(set_cookie, (list, tuple)):
+        raw = list(set_cookie)
+    else:
+        return []
+    names = []
+    for value in raw:
+        if not isinstance(value, str):
+            continue
+        # A Set-Cookie value is "name=value; attr; attr..."; the name is everything before
+        # the first '=' of the first ';'-delimited pair.
+        name = value.split(";", 1)[0].split("=", 1)[0].strip()
+        if not name or name.lower() in CLOUDFLARE_COOKIES:
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def parse_cache_control(value) -> dict:
     """Tolerant Cache-Control parser: lowercased directive names; int values where they
     parse, True for valueless directives, the raw string otherwise.  Never raises."""
@@ -132,14 +168,21 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
         if expires is not None and expires < now + timedelta(seconds=MIN_CACHE_SECONDS):
             items.append(_item("expires-short", kind))
 
-    if headers.get("set-cookie"):
+    # Only the website's own cookies matter: Cloudflare's cookies do not affect caching and
+    # are filtered out.  If nothing but Cloudflare cookies were set, there is no finding.
+    names = cookie_names(headers.get("set-cookie"))
+    if names:
+        # Sorted so the string is order-independent: two FQDNs that set the same cookies in
+        # a different header order still produce the same item and consolidate into one
+        # notice (item_key folds params into the consolidation identity).
+        cookies = ", ".join(sorted(names))
         if cf_status is not None and cf_status.upper() == "BYPASS":
             # The BYPASS is *caused by* the cookie: replace the generic uncacheable item
             # with the specific explanation.
             items = [i for i in items if i["id"] != "cf-status-uncacheable"]
-            items.append(_item("set-cookie-bypass", kind))
+            items.append(_item("set-cookie-bypass", kind, cookies=cookies))
         else:
-            items.append(_item("set-cookie", kind))
+            items.append(_item("set-cookie", kind, cookies=cookies))
 
     return items
 

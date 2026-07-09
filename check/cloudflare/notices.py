@@ -61,8 +61,8 @@ _CONSOLE = {
     "cc-proxy-revalidate": "Cache-Control contains proxy-revalidate",
     "cc-must-revalidate": "Cache-Control contains must-revalidate (non-main page)",
     "expires-short": "Expires < 3 days and no max-age",
-    "set-cookie": "Set-Cookie on public content",
-    "set-cookie-bypass": "Cf-Cache-Status BYPASS caused by Set-Cookie",
+    "set-cookie": "Set-Cookie on public content: {cookies}",
+    "set-cookie-bypass": "Cf-Cache-Status BYPASS caused by Set-Cookie: {cookies}",
     "miss-persistent": "still MISS after 3 attempts — cacheable but never cached",
     "timeout": "no response within {timeout}s",
     "invalid-cert": "TLS certificate invalid",
@@ -167,17 +167,18 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str) -> str:
                 f"(1 year).")
         links = [learn] if umich else [_a(MDN_EXPIRES, "About the Expires header")]
     elif item_id == "set-cookie":
-        text = (f"The site sets a cookie on this public {kind}, which prevents Cloudflare "
-                f"from caching it. Configure your site not to set cookies for visitors who "
-                f"are not logged in.")
+        text = (f"The site sets a cookie (<code>{html.escape(p['cookies'])}</code>) on this "
+                f"public {kind}, which prevents Cloudflare from caching it. Configure your "
+                f"site not to set cookies for visitors who are not logged in.")
         links = ([learn, _a(NODE_5110_COOKIES, "How login/session cookies affect U-M caching")]
                  if umich
                  else [_a(PANTHEON_COOKIES, "Pantheon: working with cookies"),
                        _a(MDN_SET_COOKIE, "About the Set-Cookie header")])
     elif item_id == "set-cookie-bypass":
         text = (f"Cloudflare is bypassing its cache for this {kind} <em>because</em> the "
-                f"site sets a cookie here. Configure your site not to set cookies for "
-                f"visitors who are not logged in, and caching will resume.")
+                f"site sets a cookie (<code>{html.escape(p['cookies'])}</code>) here. "
+                f"Configure your site not to set cookies for visitors who are not logged "
+                f"in, and caching will resume.")
         links = ([learn, _a(NODE_5110_COOKIES, "How login/session cookies affect U-M caching")]
                  if umich
                  else [_a(CF_CACHE_RESPONSES, "About Cloudflare cache statuses"),
