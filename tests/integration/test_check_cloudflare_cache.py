@@ -227,6 +227,30 @@ def test_identical_fqdns_consolidate_different_split(env):
     assert len(ctx2["notices"]) == 2
 
 
+def test_primary_domain_only_tests_primary_fqdn(env):
+    # A primary custom domain is set: only it is cache-checked; the other proxied FQDN
+    # is skipped entirely (no fetch, no notice for it).
+    fqdn2 = "www2.example.edu"
+    main2 = f"https://{fqdn2}/"
+    env.fetch.add(MAIN, _resp(env, MAIN, **{"cache-control": None}))
+    ctx = _ctx(env, fqdns=(FQDN, fqdn2))
+    ctx["primary_domain"] = [FQDN]
+    env.cache.check_cloudflare_cache(ctx)
+    assert [u for u, _ in env.fetch.calls] == [MAIN]  # main2 never fetched
+    assert ctx["notices"][0]["csv"] == f"{SITE},cloudflare-cache,{FQDN},no-cache-control"
+
+
+def test_primary_domain_not_behind_cloudflare_is_a_noop(env):
+    # Primary is set but is not itself proxied through Cloudflare (not in the behind-CF
+    # list): nothing is checked, and the other proxied FQDN is still skipped.
+    fqdn2 = "www2.example.edu"
+    ctx = _ctx(env, fqdns=(fqdn2,))
+    ctx["primary_domain"] = [FQDN]  # FQDN is not in fqdns_behind_cloudflare
+    env.cache.check_cloudflare_cache(ctx)
+    assert env.fetch.calls == []
+    assert ctx["notices"] == []
+
+
 def test_csv_contract(env):
     env.fetch.add(MAIN, _resp(env, MAIN, **{"cache-control": None}))
     ctx = _ctx(env)

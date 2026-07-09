@@ -14,6 +14,10 @@ config, nothing runs.
 - Per site, only FQDNs that are custom domains in the live environment, resolve in DNS,
   point at Cloudflare, and have a proxied record (the same classification the report
   already performs).  Sites with no such FQDNs are skipped silently.
+- **If the site has a primary custom domain set**, only that FQDN is cache-checked and
+  every other custom domain FQDN is skipped (visitors are redirected to the primary, so
+  it is the one that matters).  If the primary domain is not itself behind Cloudflare,
+  nothing is checked for that site.
 
 ## What is tested, per FQDN
 

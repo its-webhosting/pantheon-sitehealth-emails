@@ -200,6 +200,16 @@ def check_cloudflare_cache(site_context) -> None:
     fqdns = site_context.get("fqdns_behind_cloudflare") or []
     if not fqdns:
         return
+    # If the site has a primary custom domain set, that is the one FQDN visitors are
+    # redirected to, so cache-check only it and skip every other custom domain FQDN.
+    # (primary_domain is a 0-or-1 element list of custom-domain names; when the primary
+    # is not itself behind Cloudflare the intersection is empty and there is nothing to
+    # check.)
+    primary_domain = site_context.get("primary_domain") or []
+    if primary_domain:
+        fqdns = [f for f in fqdns if f in primary_domain]
+        if not fqdns:
+            return
     cfg = cachecheck_config()
     rng = make_rng(site_context["site"]["name"], sc.options.date.isoformat())
 
