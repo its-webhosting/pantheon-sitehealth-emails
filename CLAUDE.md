@@ -46,6 +46,8 @@ verbosity (`--create-tables` forces `-vvv`). `--update-cloudflare-fqdns` /
 `--no-update-cloudflare-fqdns` (mutually exclusive) force / suppress the `fqdns.json` refresh
 (Cloudflare plugin; see the fqdns note under Architecture). `--allow-any-source-ip` skips the
 `[Cloudflare.cachecheck]` egress-IP allowlist test (see the cachecheck note under Architecture).
+`--resume-from SITE_NAME` (requires `--all`) starts the sorted site loop at that site, inclusive
+— for resuming an interrupted `--all` run (see the resume note under Architecture).
 
 ## Required runtime credentials / external tools
 
@@ -226,6 +228,15 @@ when the source was disabled, malformed, or failed):
   has U-M and generic variants selected via `sc.umich_enabled()`; consolidation merges FQDNs
   whose findings differ only by URL; every notice's csv key is `cloudflare-cache`. See
   `docs/cloudflare-cachecheck.md` and `development/2026-07-08-cloudflare-cache-configuration/`.
+- **Resuming an interrupted `--all` run**: `--resume-from SITE_NAME` filters the already-sorted
+  site-name list **before** the loop (via the pure helper `sites_from_resume_point`, which raises
+  `ResumeSiteNotFoundError` on an unknown name → fatal), so skipped-over sites do zero work. It
+  requires `--all` (guard placed **before** the create-tables/sites-or-all chain in `main()`, or
+  that chain shadows the precise message). On a resumed run the two post-loop summary artifacts
+  accumulate instead of truncating: `-notices.csv` opens in `"a"` mode and `-results.json` goes
+  through `merge_prior_results()` (new wins on key collision; missing/malformed prior file →
+  warn + this run's results only). The old commented-out manual site-exclusion hack this
+  replaced is gone. See `docs/resuming-interrupted-runs.md`.
 - **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
@@ -298,8 +309,10 @@ Non-obvious things the harness relies on:
   importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
   `estimate_month_visits`, `plan_costs` (the cost model — DB-free via an injected
   `op_lookup(month)`), plus `load_news_items` (P2), `build_plan_over_time` (P10 — returns `[]` for
-  zero traffic; `main()` guards the empty case and skips the plan sections), and
-  `classify_hostname_dns` (P4 — separates transient DNS failures from "not in DNS"). The
+  zero traffic; `main()` guards the empty case and skips the plan sections),
+  `classify_hostname_dns` (P4 — separates transient DNS failures from "not in DNS"), and
+  `sites_from_resume_point`/`merge_prior_results` (the `--resume-from` logic, which cannot be
+  reached through the `--all`-banned subprocess interlock and so is only testable in-process). The
   extractions are behavior-preserving (goldens byte-identical).
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),

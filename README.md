@@ -138,6 +138,20 @@ On the first of every month, send the reports:
 # Move all of the bcc:'s of the email from Inbox to this new label.
 ```
 
+If an `--all` run dies partway through or you interrupt it, `--resume-from SITE_NAME` restarts
+the loop at that site, processing it and every site after it in the loop's sorted order:
+
+```bash
+./pantheon-sitehealth-emails --date 20240731 --all --resume-from its-wws-test1 --for-real
+```
+
+`--resume-from` requires `--all` (it is an error without it) and works with `--update`,
+`--only-warn`, and `--import-older-metrics` as well. Naming a site that is not in the
+organization is a fatal error before any site is processed. On a resumed run the two summary
+artifacts, `YYYYMMDD-notices.csv` and `YYYYMMDD-results.json`, are appended to and merged into
+rather than overwritten, so they accumulate across the original and resumed runs. See
+[docs/resuming-interrupted-runs.md](docs/resuming-interrupted-runs.md).
+
 When the `[Cloudflare]` section is enabled, the program fetches the set of Cloudflare-proxied
 FQDNs (`fqdns.json`) directly from the Cloudflare API and refreshes it automatically (when it is
 missing, or stale and you are processing multiple sites). Force a refresh with

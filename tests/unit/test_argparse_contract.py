@@ -28,7 +28,12 @@ def test_defaults(psh):
     assert ns.import_older_metrics is False
     assert ns.for_real is False
     assert ns.allow_any_source_ip is False
+    assert ns.resume_from is None
     assert isinstance(ns.date, datetime.date)  # defaults to today
+
+
+def test_resume_from_value(psh):
+    assert psh.parse_args(["--resume-from", "its-wws-test2"]).resume_from == "its-wws-test2"
 
 
 def test_allow_any_source_ip_flag(psh):
@@ -97,3 +102,14 @@ def test_requires_sites_or_all(program_runner, tmp_path):
     assert "must specify either at least one site or the --all option" in (
         proc.stdout + proc.stderr
     )
+
+
+def test_resume_from_requires_all(program_runner, tmp_path):
+    # No --all, so this stays clear of the interlock's forbidden flags.  The guard runs before
+    # the sites-or-all check, so the precise message wins over the generic one.
+    proc = program_runner(
+        ["--resume-from", "its-wws-test1", "--config", str(MINIMAL_CONFIG), "--date", "2026-03-31"],
+        cwd=tmp_path,
+    )
+    assert proc.returncode != 0
+    assert "can only be used together with --all" in (proc.stdout + proc.stderr)

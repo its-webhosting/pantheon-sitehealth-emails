@@ -166,6 +166,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="process all sites in the Pantheon organization",
     )
     args_parser.add_argument(
+        "--resume-from",
+        metavar="SITE_NAME",
+        action="store",
+        default=None,
+        help="with --all, start the site loop at SITE_NAME (processing it and every site "
+        "after it in sorted order); use to resume an --all run that died or was interrupted",
+    )
+    args_parser.add_argument(
         "--date",
         "-d",
         type=datetime.date.fromisoformat,
@@ -1177,6 +1185,48 @@ def classify_hostname_dns(
     return points_at_cloudflare, points_elsewhere, notices, transient
 
 
+class ResumeSiteNotFoundError(Exception):
+    """--resume-from named a site not present in the org site list."""
+
+
+def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:
+    """
+    Return the suffix of sorted_site_names starting at resume_from (inclusive).
+
+    sorted_site_names is the already-sorted list of org site names; resume_from is the
+    --resume-from value.  Raises ResumeSiteNotFoundError if resume_from is absent, so that a
+    typo becomes a fatal error rather than degrading into "silently skip every site".
+    """
+    try:
+        i = sorted_site_names.index(resume_from)
+    except ValueError:
+        raise ResumeSiteNotFoundError(resume_from)
+    return sorted_site_names[i:]
+
+
+def merge_prior_results(path: str, new_results: dict) -> dict:
+    """
+    Return the JSON dict already at path merged with new_results, which wins on key collision
+    (a site processed by the resumed run supersedes any earlier entry for it).
+
+    A missing file yields new_results alone.  A malformed existing file warns loudly and yields
+    new_results alone, rather than crashing at the very end of an otherwise-complete run.
+    """
+    merged = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                merged = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            sc.console.print(
+                f":warning: [bold yellow]--resume-from: could not read existing {path} "
+                f"({e}); writing only this run's results."
+            )
+            merged = {}
+    merged.update(new_results)
+    return merged
+
+
 def umich_enabled() -> bool:
     """
     True when the config enables the U-M plugin/check packages ([UMich].enabled).
@@ -1238,7 +1288,12 @@ def main() -> None:
         module = importlib.import_module(check_name)
         sc.check[check_name] = module
 
-    # Validate and process arguments
+    # Validate and process arguments.  The --resume-from guard comes first: the sites-or-all
+    # check below already exits for `--resume-from X` with no --all and no positional site, and
+    # would shadow this more precise message.
+    if sc.options.resume_from is not None and not sc.options.all:
+        sys.exit("--resume-from can only be used together with --all.")
+
     if sc.options.create_tables:
         if sc.options.import_older_metrics:
             sys.exit(
@@ -1369,7 +1424,24 @@ def main() -> None:
     site_name_to_id = {site["name"]: site_id for (site_id, site) in sites.items()}
     sc.debug(site_name_to_id)
 
-    for site_name in sorted(site_name_to_id.keys()):
+    # Sites are processed in sorted order, so --resume-from can drop the prefix of sites that
+    # an interrupted run already handled.  Filtering here (rather than `continue`ing inside the
+    # loop) means a skipped-over site does no work at all: no banner, no plan:info, no context.
+    site_names = sorted(site_name_to_id.keys())
+    if sc.options.resume_from is not None:
+        try:
+            site_names = sites_from_resume_point(site_names, sc.options.resume_from)
+        except ResumeSiteNotFoundError:
+            sys.exit(
+                f"--resume-from: site '{sc.options.resume_from}' was not found among the "
+                f"{len(site_names)} sites for org {sc.config['Pantheon']['org_id']}."
+            )
+        sc.console.print(
+            f"[bold magenta]=== Resuming from [bold]{sc.options.resume_from}[/bold] "
+            f"({len(site_names)} of {site_count} sites remaining)"
+        )
+
+    for site_name in site_names:
         site_id = site_name_to_id[site_name]
         site = sites[site_id]
         wp_smell = ""
@@ -1437,12 +1509,6 @@ def main() -> None:
         # portal / not-requested / Sandbox skips above).  notices/sections/attachments
         # accumulate into it through the pipeline below.
         site_context = sc.SiteContext(site)
-
-        # The following gets uncommented (with the list of site names to skip) if we have to resume
-        # this script after it gets interrupted partway through.
-        # if site_name in ('aaum-alumni-association', 'advance-advanceprogram'):
-        #     sc.console.print(f'[bold magenta]=== Skipping site {site_name} (on exclusion list)')
-        #     continue
 
         if site["frozen"] is not False:
             sc.console.print(
@@ -4119,16 +4185,25 @@ an additional pro-rated bill or credit in the following month.
     db_engine.dispose()
 
     if sc.options.all:
+        # On a resumed run these two on-disk summaries accumulate across the original and the
+        # resumed run instead of being truncated to just the resumed subset.  (The console-only
+        # totals printed here and below still cover only this run's sites.)
+        resuming = sc.options.resume_from is not None
         sc.console.print(
-            f"\n[bold green]Email sent for {emails_sent} of {site_count} sites.\n"
+            f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
+            + (f" (resumed from {sc.options.resume_from}).\n" if resuming else ".\n")
         )
         ymd = datetime.datetime.today().strftime("%Y%m%d")
-        with open(f"{ymd}-notices.csv", "w", encoding="utf-8") as f:
+        with open(f"{ymd}-notices.csv", "a" if resuming else "w", encoding="utf-8") as f:
             for n in all_warnings:
                 f.write(n + "\n")
 
-        with open(f"{ymd}-results.json", "w", encoding="utf-8") as f:
-            json.dump(site_results, f, indent=4)
+        results_path = f"{ymd}-results.json"
+        payload = (
+            merge_prior_results(results_path, site_results) if resuming else site_results
+        )
+        with open(results_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
     else:
         for n in all_warnings:
             sc.console.print(n)
