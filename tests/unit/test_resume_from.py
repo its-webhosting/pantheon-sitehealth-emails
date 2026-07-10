@@ -66,3 +66,16 @@ def test_merge_malformed_file_warns_and_keeps_new(psh, tmp_path, capsys):
     merged = psh.merge_prior_results(str(path), {"a": 1})
     assert merged == {"a": 1}
     assert "could not read existing" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("contents", ["[]", "null", '"a string"', "5"])
+def test_merge_valid_json_but_not_an_object_warns_and_keeps_new(
+    psh, tmp_path, capsys, contents
+):
+    """Valid JSON that isn't an object must not reach merged.update() and AttributeError."""
+    path = tmp_path / "20260709-results.json"
+    path.write_text(contents, encoding="utf-8")
+
+    merged = psh.merge_prior_results(str(path), {"a": 1})
+    assert merged == {"a": 1}
+    assert "could not read existing" in capsys.readouterr().out

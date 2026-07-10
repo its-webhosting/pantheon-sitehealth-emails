@@ -113,3 +113,14 @@ def test_resume_from_requires_all(program_runner, tmp_path):
     )
     assert proc.returncode != 0
     assert "can only be used together with --all" in (proc.stdout + proc.stderr)
+
+
+def test_resume_from_and_create_tables_are_mutually_exclusive(program_runner, tmp_path):
+    # --create-tables never runs the site loop, so --resume-from on it must be rejected rather
+    # than silently dropped.  The guard exits before create-tables touches the database.
+    proc = program_runner(
+        ["--create-tables", "--resume-from", "its-wws-test1", "--config", str(MINIMAL_CONFIG)],
+        cwd=tmp_path,
+    )
+    assert proc.returncode != 0
+    assert "mutually exclusive" in (proc.stdout + proc.stderr)

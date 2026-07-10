@@ -1,0 +1,59 @@
+Session
+
+Total cost:            $73.19
+Total duration (API):  2h 17m 15s
+Total duration (wall): 1d 3h 29m
+Total code changes:    1476 lines added, 247 lines removed
+Usage by model:
+    claude-haiku-4-5:  2.9k input, 106 output, 0 cache read, 0 cache write ($0.0034)
+     claude-opus-4-8:  617.3k input, 502.8k output, 58.3m cache read, 3.7m cache write ($73.19)
+
+   Current session
+   ██████████                                         20% used
+   Resets 2pm (America/Detroit)
+
+   Current week (all models)
+   █                                                  2% used
+   Resets Jul 14, 7pm (America/Detroit)
+
+   Current week (Fable)
+                                                      0% used
+
+   What's contributing to your limits usage?
+   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+Last 24h · these are independent characteristics of your usage, not a breakdown
+
+87% of your usage came from subagent-heavy sessions
+ Each subagent runs its own requests. Be deliberate about spawning them — and consider configuring a cheaper model for simpler subagents.
+
+15% of your usage was at >150k context
+ Longer sessions are more expensive even when cached. /compact mid-task, /clear when switching to new tasks.
+
+35% of your usage came from subagents under "code-review"
+ If this runs frequently, consider configuring its subagents with a cheaper model or tightening their prompts.
+
+13% of your usage came from /superpowers:executing-plans
+ Heavy skills can be scoped down or run with a cheaper model via skill frontmatter.
+
+13% of your usage came from plugin "superpowers"
+ Review what this plugin contributes — its agents, skills, and MCP tools all count toward your limit.
+
+
+Skills                  % of usage
+/superpowers:executing-plans   13%
+/context-mode:ctx-index         7%
+/code-review                    5%
+/archive-session                4%
+/context-mode:ctx-stats         2%
+
+Subagents               % of usage
+code-review                    35%
+
+Plugins                 % of usage
+superpowers                    13%
+context-mode                    9%
+
+MCP servers             % of usage
+plugin:context-mode:context…    8%
+

@@ -44,6 +44,13 @@ the full report run, `--update`, `--only-warn`, and `--import-older-metrics`. It
 --resume-from can only be used together with --all.
 ```
 
+`--create-tables` never reaches the site loop, so combining it with `--resume-from` is also an
+error rather than a silently ignored flag:
+
+```
+The --resume-from and --create-tables options are mutually exclusive.
+```
+
 Naming a site that is not in the organization is also a fatal error, raised before any site is
 processed, so a typo can never quietly skip the entire run:
 

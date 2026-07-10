@@ -1211,13 +1211,18 @@ def merge_prior_results(path: str, new_results: dict) -> dict:
 
     A missing file yields new_results alone.  A malformed existing file warns loudly and yields
     new_results alone, rather than crashing at the very end of an otherwise-complete run.
+    "Malformed" covers valid JSON that is not an object (a hand-edited `[]` or `null`) as well as
+    unparseable or unreadable content: both would otherwise blow up on merged.update() below.
     """
     merged = {}
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
                 merged = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
+            if not isinstance(merged, dict):
+                raise ValueError(f"expected a JSON object, found {type(merged).__name__}")
+        # json.JSONDecodeError is a ValueError, so this catches an unparseable file too.
+        except (ValueError, OSError) as e:
             sc.console.print(
                 f":warning: [bold yellow]--resume-from: could not read existing {path} "
                 f"({e}); writing only this run's results."
@@ -1288,11 +1293,17 @@ def main() -> None:
         module = importlib.import_module(check_name)
         sc.check[check_name] = module
 
-    # Validate and process arguments.  The --resume-from guard comes first: the sites-or-all
-    # check below already exits for `--resume-from X` with no --all and no positional site, and
-    # would shadow this more precise message.
-    if sc.options.resume_from is not None and not sc.options.all:
-        sys.exit("--resume-from can only be used together with --all.")
+    # Validate and process arguments.  The --resume-from guards come first: the create-tables and
+    # sites-or-all checks below both exit before they would be reached, shadowing these more
+    # precise messages.  --create-tables never runs the site loop, so a --resume-from on it would
+    # be silently dropped; reject it instead.
+    if sc.options.resume_from is not None:
+        if sc.options.create_tables:
+            sys.exit(
+                "The --resume-from and --create-tables options are mutually exclusive."
+            )
+        if not sc.options.all:
+            sys.exit("--resume-from can only be used together with --all.")
 
     if sc.options.create_tables:
         if sc.options.import_older_metrics:

@@ -231,8 +231,8 @@ when the source was disabled, malformed, or failed):
 - **Resuming an interrupted `--all` run**: `--resume-from SITE_NAME` filters the already-sorted
   site-name list **before** the loop (via the pure helper `sites_from_resume_point`, which raises
   `ResumeSiteNotFoundError` on an unknown name → fatal), so skipped-over sites do zero work. It
-  requires `--all` (guard placed **before** the create-tables/sites-or-all chain in `main()`, or
-  that chain shadows the precise message). On a resumed run the two post-loop summary artifacts
+  requires `--all` and is mutually exclusive with `--create-tables` (guards placed **before** the
+  create-tables/sites-or-all chain in `main()`, or that chain shadows the precise messages). On a resumed run the two post-loop summary artifacts
   accumulate instead of truncating: `-notices.csv` opens in `"a"` mode and `-results.json` goes
   through `merge_prior_results()` (new wins on key collision; missing/malformed prior file →
   warn + this run's results only). The old commented-out manual site-exclusion hack this
