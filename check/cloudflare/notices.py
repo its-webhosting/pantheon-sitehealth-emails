@@ -308,8 +308,9 @@ def item_key(item: dict) -> tuple:
 
 def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
                         doc_url: str, framework: str, sample_by_fqdn: dict) -> list:
-    """One 'warning' notice per group of FQDNs whose items are identical except for the
-    URLs tested (PROMPT step 3).  Returns notice dicts ready for site_context.add_notice.
+    """One notice (type 'info', magnifying-glass icon) per group of FQDNs whose items are
+    identical except for the URLs tested (PROMPT step 3).  Returns notice dicts ready for
+    site_context.add_notice.
 
     `sample_by_fqdn` maps FQDN -> {"pages": n, "asset_pages": n} (see cache._check_fqdn):
     how many pages beyond the main page were checked there, and how many of those were
@@ -372,7 +373,7 @@ def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
         fqdn_links = ", ".join(_a(f"https://{f}/", f) for f in fqdns)
         ids = sorted({i["id"] for i in distinct})
         notices.append({
-            "type": "warning",
+            "type": "info",  # info -> magnifying-glass icon (see script_context.icon)
             "csv": f"{site_name},cloudflare-cache,{'+'.join(fqdns)},{'+'.join(ids)}",
             "short": "improve Cloudflare caching",
             "message": (

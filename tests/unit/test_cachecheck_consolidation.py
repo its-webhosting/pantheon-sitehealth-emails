@@ -59,7 +59,7 @@ def test_identical_signatures_consolidate_into_one_notice(notices):
     })
     assert len(out) == 1
     n = out[0]
-    assert n["type"] == "warning"
+    assert n["type"] == "info"
     assert n["csv"] == f"{SITE},cloudflare-cache,a.example.edu+b.example.edu,no-cache-control"
     assert "https://a.example.edu/" in n["message"]
     assert "https://b.example.edu/" in n["message"]

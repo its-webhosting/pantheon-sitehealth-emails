@@ -67,7 +67,8 @@ def test_notice_message_and_text_snapshot(psh, reset_sc, snapshot, umich):
     ctx = reset_sc.SiteContext({"name": SITE})
     ctx.add_notice(dict(out[0]))
     notice = ctx["notices"][0]
-    assert notice["icon"]  # add_notice filled in the warning icon
+    assert notice["type"] == "info"
+    assert notice["icon"] == "&#x1F50E;"  # magnifying glass, from the info type default
     assert notice["message"] == snapshot
     assert notice["text"] == snapshot  # html2text plaintext derived from the HTML
 
