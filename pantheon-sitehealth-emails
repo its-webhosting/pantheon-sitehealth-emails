@@ -1724,8 +1724,7 @@ and to find out what went wrong:
         # Query Pantheon for the site's domains
         # TODO: check domains for site
         #   - In Cloudflare, do they all point at the correct Pantheon IPs?
-        #   - If not in Cloudflare and are not DNS zone apexes, are they CNAMES (not A / AAAA) to live-${site_name}.pantheonsite.io?
-        #   - Take into account CNAME chaining for these checks
+        #   - If not in Cloudflare, are they all A / AAAA records?  We need to get rid of CNAMEs to live-${site_name}.pantheonsite.io.
         domains, errors, fatal = terminus("domain:list", live_site)
         if fatal or domains is None:
             sc.console.print(
@@ -3099,7 +3098,6 @@ remove PHP {new_php} sometime after September 30, 2026.
             )
 
         # TODO: Warn if no Autopilot
-        # TODO: check DNS and warn if the site is using Cloudflare IPs but is not a zone apex
 
         # TODO: instead of continuing here, proceed below to calculate plan recommendations, skipping the graph and email
         if sc.options.only_warn:
