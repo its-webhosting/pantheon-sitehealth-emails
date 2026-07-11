@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10
 **Status:** Approved (brainstorming complete); implementation plan at
-`docs/superpowers/plans/2026-07-10-modular-dns-checks.md`.
+`development/2026-07-10-modular-dns-checks/PLAN.md`.
 **Standards:** Written to the bar in `prompts/new-feature-standards.md`.
 
 ## 1. Goal

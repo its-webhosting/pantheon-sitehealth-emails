@@ -4,7 +4,7 @@
 
 **Goal:** Move site-level DNS resolution + notices out of the `pantheon-sitehealth-emails` core script into a pure engine module (`dns_classify.py`) and a `check/dns/` package, fixing two latent bugs and gating U-M wording — with byte-identical goldens.
 
-**Architecture:** Core fetches `domain:list`, calls `dns_classify.classify_domains()` to produce the `site_post_dns` contract facts, stuffs them onto the `SiteContext`, then fires `site_post_dns`. The new `check/dns` hook consumes those facts and emits the DNS-resolution notices. See the design/spec: `docs/superpowers/specs/2026-07-10-modular-dns-checks-design.md`.
+**Architecture:** Core fetches `domain:list`, calls `dns_classify.classify_domains()` to produce the `site_post_dns` contract facts, stuffs them onto the `SiteContext`, then fires `site_post_dns`. The new `check/dns` hook consumes those facts and emits the DNS-resolution notices. See the design/spec: `development/2026-07-10-modular-dns-checks/SPEC.md`.
 
 **Tech Stack:** Python 3, `dnspython` (`dns.resolver`), the project's self-registering `check/` framework + `sc.PHASES` hooks, pytest (`./run-tests`), Hypothesis.
 

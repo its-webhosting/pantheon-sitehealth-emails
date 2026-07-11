@@ -101,7 +101,7 @@ def test_transient_excluded_from_not_in_dns_and_cf(psh, reset_sc, monkeypatch):
         domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
     assert facts.dns_transient == ["t.example.org"]
     assert facts.not_in_dns == []                       # P4: transient != not-in-dns
-    assert facts.fqdns_not_behind_cloudflare == []      # classification skipped on transient
+    assert facts.fqdns_not_behind_cloudflare == []      # nothing resolved -> no CF classification
 
 
 def test_bug1_zone_conflict_list_populated_when_all_behind_cloudflare(psh, reset_sc, monkeypatch):
@@ -115,6 +115,65 @@ def test_bug1_zone_conflict_list_populated_when_all_behind_cloudflare(psh, reset
     assert facts.fqdns_not_behind_cloudflare == []
     assert facts.fqdns_behind_cloudflare == ["w.example.org"]
     assert facts.proxied_in_multiple_zones == ["w.example.org"]
+
+
+def test_not_in_dns_host_skips_cloudflare_checks(psh, reset_sc, monkeypatch):
+    # A definitively-absent FQDN (NXDOMAIN both families) is an alert only; DNS points nowhere,
+    # so it is NOT also flagged "not behind Cloudflare".
+    monkeypatch.setattr(dns_classify, "resolve", _resolver({"gone.example.org": "missing"}))
+    domains = _domains({"gone.example.org": ("custom", True)})
+    facts = dns_classify.classify_domains(
+        domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
+    assert facts.not_in_dns == ["gone.example.org"]
+    assert facts.fqdns_not_behind_cloudflare == []        # not double-flagged
+    assert facts.behind_cloudflare_not_proxied == []
+    assert facts.dns_transient == []
+
+
+def test_cf_record_runs_cloudflare_checks_despite_transient_sibling(psh, reset_sc, monkeypatch):
+    # Any record pointing at Cloudflare -> run the CF checks even though the AAAA lookup was
+    # transient; do not downgrade the host to "unknown / retry".
+    def fake(hostname, rrtype):
+        if rrtype == "A":
+            return [_RData("104.16.0.1")]         # Cloudflare
+        raise dns.resolver.Timeout()              # AAAA transient
+    monkeypatch.setattr(dns_classify, "resolve", fake)
+    domains = _domains({"w.example.org": ("custom", True)})
+    facts = dns_classify.classify_domains(
+        domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
+    assert facts.behind_cloudflare_not_proxied == ["w.example.org"]   # CF checks ran
+    assert facts.dns_transient == []                                  # we resolved; not "unknown"
+    assert facts.not_in_dns == []
+
+
+def test_elsewhere_record_classified_despite_transient_sibling(psh, reset_sc, monkeypatch):
+    # A definitive non-CF address yields "not behind Cloudflare" even if a sibling lookup timed out.
+    def fake(hostname, rrtype):
+        if rrtype == "A":
+            return [_RData("203.0.113.5")]        # non-Cloudflare
+        raise dns.resolver.Timeout()              # AAAA transient
+    monkeypatch.setattr(dns_classify, "resolve", fake)
+    domains = _domains({"e.example.org": ("custom", True)})
+    facts = dns_classify.classify_domains(
+        domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
+    assert facts.fqdns_not_behind_cloudflare == ["e.example.org"]
+    assert facts.dns_transient == []
+    assert facts.not_in_dns == []
+
+
+def test_malformed_domain_entry_is_skipped_not_crashing(psh, reset_sc, monkeypatch):
+    # A domain entry missing keys, or whose value is not a dict, must be skipped, never KeyError.
+    monkeypatch.setattr(dns_classify, "resolve", _resolver({"ok.example.org": "elsewhere"}))
+    domains = {
+        "ok.example.org": {"id": "ok.example.org", "type": "custom", "primary": True},
+        "broken.example.org": {"id": "broken.example.org"},   # missing type/primary
+        "no-id.example.org": {"type": "custom"},              # missing id
+        "not-a-dict.example.org": "oops",                     # value not a dict
+    }
+    facts = dns_classify.classify_domains(              # must not raise
+        domains, False, [], [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
+    assert facts.main_fqdn == "ok.example.org"
+    assert "ok.example.org" in facts.custom_domains
 
 
 def test_non_dict_domains_returns_empty_facts(psh, reset_sc):

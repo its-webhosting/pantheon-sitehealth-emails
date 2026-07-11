@@ -1,7 +1,7 @@
 """Site-level DNS engine: A/AAAA resolution + Cloudflare classification.
 
 Pure data producer for the site_post_dns contract (see CLAUDE.md and
-docs/superpowers/specs/2026-07-10-modular-dns-checks-design.md).  Imports only sc +
+development/2026-07-10-modular-dns-checks/SPEC.md).  Imports only sc +
 stdlib + dnspython; NEVER the dash-named core script.  Presentation (notices) lives in
 check/dns/, not here.  Named dns_classify (not dns) to avoid shadowing dnspython's `dns`.
 """
@@ -84,10 +84,20 @@ def classify_domains(
 ) -> DnsFacts:
     """Iterate the terminus domain:list result and produce the site_post_dns contract facts.
 
-    Non-dict `domains` -> all-empty DnsFacts (preserves the core's isinstance guard).  Console
-    prints are observability only (not captured by goldens).  Cloudflare classification is
-    skipped for a host whose lookup was transient (P4), so a config that never changed is not
-    reported as "not behind Cloudflare".
+    Non-dict `domains` -> all-empty DnsFacts (preserves the core's isinstance guard); a
+    malformed domain entry (missing keys) is skipped, not fatal.  Console prints are
+    observability only (not captured by goldens).
+
+    Classification is driven by the addresses that resolved DEFINITIVELY:
+
+        resolved nothing ── transient only (Timeout/NoNameservers) ─▶ dns_transient (unknown;
+        (0 CF, 0 elsewhere)  │                                        retry) -- NO alert, NO CF checks
+                             └─ definitive (NXDOMAIN/NoAnswer) ──────▶ not_in_dns (alert) -- points
+                                                                       nowhere, so NO CF checks
+        resolved >=1 address ─▶ classify on those.  A transient sibling lookup does NOT block
+                                this: if any record points at Cloudflare the CF proxy/zone checks
+                                still run, and a definitive non-CF address still yields
+                                'not behind Cloudflare'.  No transient notice (we did check).
     """
     main_fqdn = ""
     not_in_dns = []
@@ -102,29 +112,37 @@ def classify_domains(
     if isinstance(domains, dict):
         for d in domains.keys():
             domain = domains[d]
-            if domain["type"] == "platform":
+            # .get(): a malformed domain entry (missing keys) is skipped, never a KeyError.
+            if not isinstance(domain, dict) or domain.get("type") == "platform":
                 continue
-            hostname = domain["id"]
-            if not fqdn_re.match(hostname):
+            hostname = domain.get("id")
+            if not hostname or not fqdn_re.match(hostname):
                 # rich_escape the un-validated hostname: it failed fqdn_re, so it is arbitrary
                 # and a bracket sequence would otherwise be parsed as rich markup (matches the
                 # rich_escape convention in check/cloudflare/cache.py). Console-only.
-                sc.console.log(f"[bold red]ERROR: Invalid domain: {rich_escape(hostname)}")
+                sc.console.log(f"[bold red]ERROR: Invalid domain: {rich_escape(str(hostname))}")
                 continue
-            if domain["primary"] or main_fqdn == "":
+            if domain.get("primary") or main_fqdn == "":
                 main_fqdn = hostname
 
             points_at_cf, points_elsewhere, transient = classify_hostname_dns(
                 hostname, cloudflare_enabled, cf_v4_nets, cf_v6_nets)
-            if transient:
-                dns_transient.append(hostname)
 
-            if points_at_cf == 0 and points_elsewhere == 0 and not transient:
-                sc.console.print(
-                    f":exclamation: [bold red] ATTENTION: {hostname} is not in DNS")
-                not_in_dns.append(hostname)
+            if points_at_cf == 0 and points_elsewhere == 0:
+                # Nothing resolved.  A transient failure is "unknown -> retry" (P4); a definitive
+                # empty (NXDOMAIN/NoAnswer) is "not in DNS" -> alert.  Either way the FQDN points
+                # nowhere, so we do NOT run the Cloudflare checks.
+                if transient:
+                    dns_transient.append(hostname)
+                else:
+                    sc.console.print(
+                        f":exclamation: [bold red] ATTENTION: {hostname} is not in DNS")
+                    not_in_dns.append(hostname)
+                continue
 
-            if cloudflare_enabled and not transient:
+            # At least one address resolved definitively; classify on those.  A transient sibling
+            # lookup does NOT block this -- if any record points at Cloudflare, the CF checks run.
+            if cloudflare_enabled:
                 if points_at_cf == 0 or points_elsewhere != 0:
                     sc.console.print(
                         f":exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare")
@@ -143,8 +161,9 @@ def classify_domains(
                                 "through more than one Cloudflare zone")
                             proxied_in_multiple_zones.append(hostname)
 
-        custom_domains = [d for d in domains.keys() if domains[d]["type"] == "custom"]
-        primary_domain = [d for d in custom_domains if domains[d]["primary"]]
+        custom_domains = [d for d in domains.keys()
+                          if isinstance(domains[d], dict) and domains[d].get("type") == "custom"]
+        primary_domain = [d for d in custom_domains if domains[d].get("primary")]
 
     return DnsFacts(
         custom_domains, primary_domain, main_fqdn, not_in_dns, fqdns_behind_cloudflare,

@@ -3,7 +3,7 @@
 Registers unconditionally: DNS checks are not disable-able.  The three Cloudflare notices
 self-gate on sc.cloudflare_enabled(); U-M wording is chosen via sc.umich_enabled().  The
 resolution FACTS are produced by dns_classify.classify_domains() in core before the phase
-fires (see docs/superpowers/specs/2026-07-10-modular-dns-checks-design.md).
+fires (see development/2026-07-10-modular-dns-checks/SPEC.md).
 """
 import script_context as sc
 

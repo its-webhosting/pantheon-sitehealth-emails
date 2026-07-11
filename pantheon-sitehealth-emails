@@ -1665,17 +1665,17 @@ and to find out what went wrong:
             sc.debug(f"=== Domains for {site['name']}:")
             pprint(domains)
         site_url = ""
+        # Resolve the Cloudflare gate and its plugin_context bag once (the bag's net/proxied
+        # keys exist only when [Cloudflare] is enabled).
+        cf_on = cloudflare_enabled()
+        cf_ctx = sc.plugin_context["plugin.cloudflare"] if cf_on else {}
         facts = dns_classify.classify_domains(
             domains,
-            cloudflare_enabled(),
-            sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv4_nets"]
-            if cloudflare_enabled() else [],
-            sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv6_nets"]
-            if cloudflare_enabled() else [],
-            sc.plugin_context["plugin.cloudflare"]["proxied_fqdns"]
-            if cloudflare_enabled() else {},
-            sc.plugin_context["plugin.cloudflare"].get("fqdn_zone_conflicts", {})
-            if cloudflare_enabled() else {},
+            cf_on,
+            cf_ctx["cloudflare_ipv4_nets"] if cf_on else [],
+            cf_ctx["cloudflare_ipv6_nets"] if cf_on else [],
+            cf_ctx["proxied_fqdns"] if cf_on else {},
+            cf_ctx.get("fqdn_zone_conflicts", {}) if cf_on else {},
             fqdn_re,
         )
         main_fqdn = facts.main_fqdn
