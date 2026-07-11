@@ -158,3 +158,23 @@ def test_property_transient_never_in_not_in_dns(psh, reset_sc, monkeypatch, host
     facts = dns_classify.classify_domains(
         domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
     assert set(facts.dns_transient).isdisjoint(facts.not_in_dns)
+
+
+def test_elsewhere_host_lands_in_fqdns_not_behind_cloudflare(psh, reset_sc, monkeypatch):
+    monkeypatch.setattr(dns_classify, "resolve", _resolver({"e.example.org": "elsewhere"}))
+    domains = _domains({"e.example.org": ("custom", True)})
+    facts = dns_classify.classify_domains(
+        domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
+    assert facts.fqdns_not_behind_cloudflare == ["e.example.org"]
+    assert facts.fqdns_behind_cloudflare == []
+    assert facts.behind_cloudflare_not_proxied == []
+
+
+def test_cf_host_absent_from_proxied_lands_in_behind_cloudflare_not_proxied(psh, reset_sc, monkeypatch):
+    monkeypatch.setattr(dns_classify, "resolve", _resolver({"c.example.org": "cf"}))
+    domains = _domains({"c.example.org": ("custom", True)})
+    facts = dns_classify.classify_domains(
+        domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
+    assert facts.behind_cloudflare_not_proxied == ["c.example.org"]
+    assert facts.fqdns_behind_cloudflare == []
+    assert facts.fqdns_not_behind_cloudflare == []
