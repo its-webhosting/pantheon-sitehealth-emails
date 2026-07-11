@@ -66,7 +66,12 @@ README warning: Terminus does not work with PHP 8.4 — use PHP 8.3 or earlier.
 ### Single-module core + `script_context` shared state
 
 Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-Cross-cutting state and helpers live in **`script_context.py`** (imported everywhere as
+The one carved-out exception is **`dns_classify.py`**, the DNS engine: it resolves each
+domain's A/AAAA records and classifies them against the Cloudflare IP ranges
+(`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
+those facts into the `site_post_dns` data-contract keys (below). It is a pure data producer —
+presentation (notices) lives in `check/dns/`, not here. Cross-cutting state and helpers live
+in **`script_context.py`** (imported everywhere as
 `sc`): `sc.options` (parsed argv), `sc.config` (parsed TOML), `sc.plugin`/`sc.check`
 (loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.substitutions`, and
 helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_news_item()` (notice-adding is now a
@@ -79,7 +84,7 @@ available to every function at call time.
 `find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
 containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
-`check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
+`check.dns`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
 sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`, `env/get_env.py`,
 `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
 only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{env NAME}` /
@@ -124,11 +129,14 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 `cloudflare_cms.py`, the relocated U-M CMS-integration checks at `site_post_gather`; and
 `check/cloudflare/` — the opt-in `[Cloudflare.cachecheck]` cache checks, egress-IP test at
 `setup` + per-FQDN HTTP checks at `site_post_dns`, see `docs/cloudflare-cachecheck.md`).
+DNS-resolution notices live in `check/dns/` (`notices.py` builders + the `site_post_dns`
+`hook.py`), fed by the `dns_classify.py` engine; `no-domains`/`no-primary-domain` remain in
+core.
 To add a check or integration, create a new package dir with a non-empty `__init__.py`
 that self-registers — no central registry to edit. Check modules cannot import the
 dash-named main script; the helpers they need are exposed as `sc` attributes near the
 `cloudflare_enabled()` def (`sc.escape_url`, `sc.check_wordpress_plugin`,
-`sc.check_drupal_module`, `sc.umich_enabled`) — extend that block for new ones (tests
+`sc.check_drupal_module`, `sc.umich_enabled`, `sc.cloudflare_enabled`) — extend that block for new ones (tests
 monkeypatch these when loading check modules standalone). `check/cloudflare/httpseam.py`
 holds the ONE monkeypatchable HTTP seam (`fetch`/`sleep`) and `egress.py` its own `probe`
 seam — route any new outbound HTTP in that package through them to stay offline-testable.
@@ -148,7 +156,7 @@ when the source was disabled, malformed, or failed):
 |---|---|
 | `site_pre` | — (fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
 | `site_post_traffic` | `traffic_rows`, `start_date`, `end_date` |
-| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (classification lists `[]` when `[Cloudflare]` disabled/DNS transient/malformed domains) |
+| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (classification lists `[]` when `[Cloudflare]` disabled/DNS transient/malformed domains; produced by `dns_classify.classify_domains()` and published via `stuff_dns_contract()`) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version`/`drupal_version` (str; `"unknown"` — NOT None — when that framework's version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed |
 | `site_pre_render` | everything above (full-report path only; no consumer yet — the documented seam for future report-shaping hooks) |
 
