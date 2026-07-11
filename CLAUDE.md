@@ -276,8 +276,6 @@ tool stays reusable by other institutions.
 
 ## Conventions & gotchas
 
-- The core script is deliberately one big file; match that style rather than splitting it,
-  and put institution- or integration-specific code in `plugin/`/`check/` packages.
 - Generated artifacts land in `build/` (git-ignored); `database.db`, `fqdns.json`, and the
   `.eml`/`.html`/`.txt` outputs are working data, not source. `fqdns.json` is now **program-
   generated** by the cloudflare plugin (was produced by a standalone script); it is git-ignored
