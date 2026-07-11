@@ -18,7 +18,6 @@ import glob
 import html
 import importlib
 import io
-import ipaddress
 import json
 import os
 import re
@@ -35,7 +34,6 @@ from email.utils import make_msgid
 from smtplib import SMTP_SSL
 from typing import Any
 
-import dns.resolver
 import matplotlib
 import matplotlib.dates as mdates
 import matplotlib.patheffects as path_effects
@@ -61,6 +59,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
+import dns_classify
 import script_context as sc
 
 traffic_table_columns = [
@@ -1115,76 +1114,6 @@ def build_plan_over_time(plan_on_day: dict, plot_right_date) -> list:
     return plan_over_time
 
 
-def classify_hostname_dns(
-    hostname: str,
-    site_name: str,
-    cloudflare_enabled: bool,
-    cf_v4_nets: list,
-    cf_v6_nets: list,
-) -> (int, int, list, bool):
-    """
-    Resolve hostname's A and AAAA records and classify each address as pointing at
-    Cloudflare or elsewhere.
-
-    Returns (points_at_cloudflare, points_elsewhere, notices, transient):
-      * points_* count resolved addresses inside / outside the Cloudflare ranges.
-      * notices is a list of `warning` notice dicts for *transient* resolver failures
-        (Timeout / NoNameservers).  A transient failure is distinct from a genuinely
-        unregistered hostname and must NOT be reported as "not in DNS" (P4) -- before this,
-        a resolver timeout looked identical to a missing domain and only printed to console.
-      * transient is True if any lookup hit a transient error.
-    Definitive failures (NXDOMAIN / NoAnswer) are left to the caller's aggregated
-    "not in DNS" notice (both counts stay 0 and transient stays False).
-    """
-    points_at_cloudflare = 0
-    points_elsewhere = 0
-    notices = []
-    transient = False
-
-    for rrtype, nets in (("A", cf_v4_nets), ("AAAA", cf_v6_nets)):
-        try:
-            answer = dns.resolver.resolve(hostname, rrtype)
-            for rdata in answer:
-                address = ipaddress.ip_address(rdata.address)
-                if cloudflare_enabled and any(address in net for net in nets):
-                    points_at_cloudflare += 1
-                    sc.console.print(
-                        f"{hostname} has [green]Cloudflare IP address {rdata.address}[/green]"
-                    )
-                else:
-                    points_elsewhere += 1
-                    sc.console.print(
-                        f"{hostname} has IP address [red]{rdata.address}[/red]"
-                    )
-        except dns.resolver.NoAnswer:
-            sc.console.print(f"No {rrtype} record for {hostname}", style="red")
-        except dns.resolver.NXDOMAIN:
-            sc.console.print(f"NXDOMAIN for {hostname} ({rrtype})", style="red")
-        except (dns.resolver.NoNameservers, dns.resolver.Timeout) as e:
-            transient = True
-            sc.console.print(
-                f"Transient DNS error resolving {hostname} ({rrtype}): {type(e).__name__}",
-                style="red",
-            )
-
-    if transient:
-        notices.append(
-            {
-                "type": "warning",
-                "csv": f"{site_name},dns-lookup-failed,{hostname}",
-                "short": "DNS lookup failed (transient)",
-                "message": (
-                    f"<p>The DNS lookup for <strong>{hostname}</strong> failed with a "
-                    f"transient resolver error, so its DNS status could not be checked. This "
-                    f"does not necessarily mean the domain is misconfigured &mdash; re-run "
-                    f"the report to retry.</p>"
-                ),
-            }
-        )
-
-    return points_at_cloudflare, points_elsewhere, notices, transient
-
-
 class ResumeSiteNotFoundError(Exception):
     """--resume-from named a site not present in the org site list."""
 
@@ -1736,92 +1665,24 @@ and to find out what went wrong:
             sc.debug(f"=== Domains for {site['name']}:")
             pprint(domains)
         site_url = ""
-        main_fqdn = ""
-        fqdns_not_behind_cloudflare = []
-        fqdns_behind_cloudflare = []
-        not_in_dns = []
-        behind_cloudflare_not_proxied = []
-        proxied_in_multiple_zones = []
-        # Initialized here (not just inside the isinstance block below) so the site_post_dns
-        # data-contract keys always exist, even on malformed domain data:
-        custom_domains = []
-        primary_domain = []
-        dns_transient_fqdns = []  # hostnames whose DNS lookup hit a transient failure
+        facts = dns_classify.classify_domains(
+            domains,
+            cloudflare_enabled(),
+            sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv4_nets"]
+            if cloudflare_enabled() else [],
+            sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv6_nets"]
+            if cloudflare_enabled() else [],
+            sc.plugin_context["plugin.cloudflare"]["proxied_fqdns"]
+            if cloudflare_enabled() else {},
+            sc.plugin_context["plugin.cloudflare"].get("fqdn_zone_conflicts", {})
+            if cloudflare_enabled() else {},
+            fqdn_re,
+        )
+        main_fqdn = facts.main_fqdn
+        custom_domains = facts.custom_domains
+        primary_domain = facts.primary_domain
+        fqdns_not_behind_cloudflare = facts.fqdns_not_behind_cloudflare  # used by favicon check
         if isinstance(domains, dict):
-            for d in domains.keys():
-                domain = domains[d]
-                if domain["type"] == "platform":
-                    continue
-                hostname = domain["id"]
-                if not fqdn_re.match(hostname):
-                    sc.console.log(
-                        f"[bold red]ERROR: Invalid domain for {site['name']}: {hostname}"
-                    )
-                    continue
-                if domain["primary"] or main_fqdn == "":
-                    main_fqdn = hostname
-                (
-                    dns_points_at_cloudflare,
-                    dns_points_elsewhere,
-                    dns_notices,
-                    dns_transient,
-                ) = classify_hostname_dns(
-                    hostname,
-                    site["name"],
-                    cloudflare_enabled(),
-                    sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv4_nets"]
-                    if cloudflare_enabled()
-                    else [],
-                    sc.plugin_context["plugin.cloudflare"]["cloudflare_ipv6_nets"]
-                    if cloudflare_enabled()
-                    else [],
-                )
-                for n in dns_notices:
-                    site_context.add_notice(n)
-                if dns_transient:
-                    dns_transient_fqdns.append(hostname)
-
-                if (
-                    dns_points_at_cloudflare == 0
-                    and dns_points_elsewhere == 0
-                    and not dns_transient
-                ):
-                    sc.console.print(
-                        f":exclamation: [bold red] ATTENTION: {hostname} is not in DNS"
-                    )
-                    not_in_dns.append(hostname)
-                # Skip the Cloudflare classification on a transient resolver failure: with
-                # 0/0 counts it would otherwise report "not behind Cloudflare" for a host
-                # whose config never changed, contradicting the transient notice (P4).
-                if cloudflare_enabled() and not dns_transient:
-                    if dns_points_at_cloudflare == 0 or dns_points_elsewhere != 0:
-                        sc.console.print(
-                            f":exclamation: [bold red] ATTENTION: {hostname} is not behind Cloudflare"
-                        )
-                        fqdns_not_behind_cloudflare.append(hostname)
-                    if dns_points_at_cloudflare > 0:
-                        if hostname not in sc.plugin_context["plugin.cloudflare"]["proxied_fqdns"]:
-                            sc.console.print(
-                                f":exclamation: [bold red] ATTENTION: {hostname} is behind Cloudflare but not proxied"
-                            )
-                            behind_cloudflare_not_proxied.append(hostname)
-                        else:
-                            fqdns_behind_cloudflare.append(hostname)
-                            # Warn if this proxied domain lives in more than one Cloudflare zone
-                            # (only known on a fresh fetch; the file keeps a single zone_id).
-                            if hostname in sc.plugin_context["plugin.cloudflare"].get(
-                                "fqdn_zone_conflicts", {}
-                            ):
-                                sc.console.print(
-                                    f":exclamation: [bold red] ATTENTION: {hostname} is proxied "
-                                    "through more than one Cloudflare zone"
-                                )
-                                proxied_in_multiple_zones.append(hostname)
-
-            custom_domains = [
-                d for d in domains.keys() if domains[d]["type"] == "custom"
-            ]
-            primary_domain = [d for d in custom_domains if domains[d]["primary"]]
             if len(custom_domains) == 0:
                 site_context.add_notice(
                     {
@@ -1903,19 +1764,10 @@ and to find out what went wrong:
                         }
                     )
 
-        # Per-phase data contract (see CLAUDE.md): everything the domain loop computed is
-        # guaranteed present from site_post_dns onward (empty lists when [Cloudflare] is
-        # disabled, DNS was transient, or the domain data was malformed).
-        site_context["domains"] = domains
-        site_context["custom_domains"] = custom_domains
-        site_context["primary_domain"] = primary_domain
-        site_context["main_fqdn"] = main_fqdn
-        site_context["fqdns_behind_cloudflare"] = fqdns_behind_cloudflare
-        site_context["fqdns_not_behind_cloudflare"] = fqdns_not_behind_cloudflare
-        site_context["not_in_dns"] = not_in_dns
-        site_context["behind_cloudflare_not_proxied"] = behind_cloudflare_not_proxied
-        site_context["proxied_in_multiple_zones"] = proxied_in_multiple_zones
-        site_context["dns_transient"] = dns_transient_fqdns
+        # Per-phase data contract (see CLAUDE.md): publish the DnsFacts via the pure helper
+        # (unit-tested against value-swaps in test_dns_classify.py), then fire the phase. The
+        # check.dns hook consumes these keys to emit the DNS-resolution notices.
+        dns_classify.stuff_dns_contract(site_context, domains, facts)
         sc.invoke_hooks("site_post_dns", site_context)
 
         if main_fqdn != "":
@@ -1945,119 +1797,6 @@ and to find out what went wrong:
 
         sc.debug(f"Main domain for {site['name']}: {main_fqdn}")
         sc.debug(f"Site URL for {site['name']}:    {site_url}")
-
-        if len(fqdns_not_behind_cloudflare) > 0:
-            site_context.add_notice(
-                {
-                    "type": "warning",
-                    "icon": "&#x26A0;",  # warning sign
-                    "csv": f"{site['name']},not-behind-cloudflare,"
-                    + ",".join(fqdns_not_behind_cloudflare),
-                    "short": "put domains behind Cloudflare",
-                    "message": f"""
-<p>ITS strongly recommends you put the following domains behind Cloudflare to reduce Pantheon traffic and improve
-security.  Please refer to the <a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">
-Cloudflare at U-M documentation</a>.</p>
-<ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in fqdns_not_behind_cloudflare])}
-</ul>
-""",
-                    "text": f"""
-ITS strongly recommends you put the following domains behind
-Cloudflare to reduce Pantheon traffic and improve security.
-Please refer to the Cloudflare at U-M documentation
-<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>
-
-{"\n".join([f"  * {n}" for n in fqdns_not_behind_cloudflare])}
-
-""",
-                }
-            )
-
-            if len(behind_cloudflare_not_proxied) > 0:
-                site_context.add_notice(
-                    {
-                        "type": "warning",
-                        "icon": "&#x26A0;",  # warning sign
-                        "csv": f"{site['name']},behind-cloudflare-not-proxied,"
-                        + ",".join(behind_cloudflare_not_proxied),
-                        "short": "turn on Cloudflare proxying for domains",
-                        "message": f"""
-<p>The following domains point to Cloudflare but are not benefitting from Cloudflare's caching and security
-features because proxying for these FQDNs is turned off in Cloudflare.  Please follow steps 3 and 4 of the
-<a href="https://documentation.its.umich.edu/node/4237">U-M Cloudflare: Website Migration Steps</a> to ensure
-the site is configured to work with Cloudflare and to turn on proxying.<p>
-<ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in behind_cloudflare_not_proxied])}
-</ul>
-""",
-                        "text": f"""
-The following domains point to Cloudflare but are not benefitting from
-Cloudflare's caching and security features because proxying for these
-FQDNs is turned off in Cloudflare.
-
-Please follow steps 3 and 4 of the U-M Cloudflare: Website Migration
-Steps <"https://documentation.its.umich.edu/node/4237> to ensure the
-site is configured to work with Cloudflare and to turn on proxying.
-
-{"\n".join([f"  * {n}" for n in fqdns_not_behind_cloudflare])}
-
-""",
-                    }
-                )
-
-            if len(proxied_in_multiple_zones) > 0:
-                site_context.add_notice(
-                    {
-                        "type": "warning",
-                        "icon": "&#x26A0;",  # warning sign
-                        "csv": f"{site['name']},proxied-in-multiple-cloudflare-zones,"
-                        + ",".join(proxied_in_multiple_zones),
-                        "short": "domain in multiple Cloudflare zones",
-                        "message": f"""
-<p>The following domains are configured (proxied) in more than one Cloudflare zone.  Serving a domain
-from multiple zones can cause inconsistent caching, TLS, and security settings.  Please consolidate
-each domain into a single Cloudflare zone.</p>
-<ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in proxied_in_multiple_zones])}
-</ul>
-""",
-                        "text": f"""
-The following domains are configured (proxied) in more than one
-Cloudflare zone.  Serving a domain from multiple zones can cause
-inconsistent caching, TLS, and security settings.  Please consolidate
-each domain into a single Cloudflare zone.
-
-{"\n".join([f"  * {n}" for n in proxied_in_multiple_zones])}
-
-""",
-                    }
-                )
-
-        if len(not_in_dns) > 0:
-            site_context.add_notice(
-                {
-                    "type": "alert",
-                    "icon": "&#x1F6A8;",  # police car light
-                    "csv": f"{site['name']},not-in-dns," + ",".join(not_in_dns),
-                    "short": "add domains to DNS",
-                    "message": f"""
-<p><strong>{site["name"]}</strong> has domains that are not in DNS.  Please either remove these domains from
-the Pantheon live environment for <strong>{site["name"]}</strong>, or add them to DNS.</p>
-<ul style="list-style-type: none;">
-{"\n".join([f'<li><a href="https://{escape_url(n)}/">{html.escape(n)}</a></li>' for n in not_in_dns])}
-</ul>
-""",
-                    "text": f"""
-{site["name"]} has domains that are not in DNS.  Please either
-remove these domains from the Pantheon live environment for
-{site["name"]}, or add them to DNS.
-
-{"\n".join([f"  * {n}" for n in not_in_dns])}
-
-""",
-                }
-            )
 
         # Check the site's plugins/modules
 
