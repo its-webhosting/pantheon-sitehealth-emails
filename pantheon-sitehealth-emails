@@ -1266,6 +1266,7 @@ sc.escape_url = escape_url
 sc.check_wordpress_plugin = check_wordpress_plugin
 sc.check_drupal_module = check_drupal_module
 sc.umich_enabled = umich_enabled
+sc.cloudflare_enabled = cloudflare_enabled
 
 
 def main() -> None:

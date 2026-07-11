@@ -5,4 +5,9 @@ self-gate on sc.cloudflare_enabled(); U-M wording is chosen via sc.umich_enabled
 resolution FACTS are produced by dns_classify.classify_domains() in core before the phase
 fires (see docs/superpowers/specs/2026-07-10-modular-dns-checks-design.md).
 """
-import script_context as sc  # noqa: F401  (hook registration added in Task 4)
+import script_context as sc
+
+from .hook import emit_dns_notices
+
+sc.add_hook('site_post_dns', {'name': 'check.dns.hook.emit_dns_notices',
+                              'func': emit_dns_notices})
