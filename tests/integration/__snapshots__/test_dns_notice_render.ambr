@@ -1,0 +1,167 @@
+# serializer version: 1
+# name: test_multiple_zones_render
+  dict({
+    'csv': 's,proxied-in-multiple-cloudflare-zones,a.example.org,b.example.org',
+    'message': '''
+      <p>The following domains are configured (proxied) in more than one Cloudflare zone.  Serving a domain from multiple zones can cause inconsistent caching, TLS, and security settings.  Please consolidate each domain into a single Cloudflare zone.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'domain in multiple Cloudflare zones',
+    'text': '''
+      The following domains are configured (proxied) in more than one
+      Cloudflare zone.  Serving a domain from multiple zones can cause
+      inconsistent caching, TLS, and security settings.  Please consolidate
+      each domain into a single Cloudflare zone.
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'warning',
+  })
+# ---
+# name: test_not_behind_cloudflare_render[generic]
+  dict({
+    'csv': 's,not-behind-cloudflare,a.example.org,b.example.org',
+    'message': '''
+      <p>We strongly recommend you put the following domains behind Cloudflare to reduce origin traffic and improve security.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'put domains behind Cloudflare',
+    'text': '''
+      We strongly recommend you put the following domains behind Cloudflare
+      to reduce origin traffic and improve security.
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'warning',
+  })
+# ---
+# name: test_not_behind_cloudflare_render[umich]
+  dict({
+    'csv': 's,not-behind-cloudflare,a.example.org,b.example.org',
+    'message': '''
+      <p>ITS strongly recommends you put the following domains behind Cloudflare to reduce Pantheon traffic and improve security.  Please refer to the <a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Cloudflare at U-M documentation</a>.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'put domains behind Cloudflare',
+    'text': '''
+      ITS strongly recommends you put the following domains behind
+      Cloudflare to reduce Pantheon traffic and improve security.
+      Please refer to the Cloudflare at U-M documentation
+      <https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'warning',
+  })
+# ---
+# name: test_not_in_dns_render
+  dict({
+    'csv': 's,not-in-dns,a.example.org,b.example.org',
+    'message': '''
+      <p><strong>s</strong> has domains that are not in DNS.  Please either remove these domains from the Pantheon live environment for <strong>s</strong>, or add them to DNS.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'add domains to DNS',
+    'text': '''
+      s has domains that are not in DNS.  Please either
+      remove these domains from the Pantheon live environment for
+      s, or add them to DNS.
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'alert',
+  })
+# ---
+# name: test_not_proxied_render[generic]
+  dict({
+    'csv': 's,behind-cloudflare-not-proxied,a.example.org,b.example.org',
+    'message': '''
+      <p>The following domains point to Cloudflare but are not benefitting from Cloudflare's caching and security features because proxying (the orange cloud) is turned off for these DNS records.  Turn on proxying for these records in your Cloudflare dashboard.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'turn on Cloudflare proxying for domains',
+    'text': '''
+      The following domains point to Cloudflare but are not benefitting from
+      Cloudflare's caching and security features because proxying (the orange
+      cloud) is turned off for these DNS records.  Turn on proxying for these
+      records in your Cloudflare dashboard.
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'warning',
+  })
+# ---
+# name: test_not_proxied_render[umich]
+  dict({
+    'csv': 's,behind-cloudflare-not-proxied,a.example.org,b.example.org',
+    'message': '''
+      <p>The following domains point to Cloudflare but are not benefitting from Cloudflare's caching and security features because proxying for these FQDNs is turned off in Cloudflare.  Please follow steps 3 and 4 of the <a href="https://documentation.its.umich.edu/node/4237">U-M Cloudflare: Website Migration Steps</a> to ensure the site is configured to work with Cloudflare and to turn on proxying.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'turn on Cloudflare proxying for domains',
+    'text': '''
+      The following domains point to Cloudflare but are not benefitting from
+      Cloudflare's caching and security features because proxying for these
+      FQDNs is turned off in Cloudflare.
+      
+      Please follow steps 3 and 4 of the U-M Cloudflare: Website Migration
+      Steps <https://documentation.its.umich.edu/node/4237> to ensure the
+      site is configured to work with Cloudflare and to turn on proxying.
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'warning',
+  })
+# ---
+# name: test_transient_render
+  dict({
+    'csv': 's,dns-lookup-failed,a.example.org,b.example.org',
+    'message': '''
+      <p>The DNS lookup for the following domains failed with a transient resolver error, so their DNS status could not be checked. This does not necessarily mean they are misconfigured &mdash; re-run the report to retry.</p>
+      <ul style="list-style-type: none;">
+      <li><a href="https://a.example.org/">a.example.org</a></li>
+      <li><a href="https://b.example.org/">b.example.org</a></li>
+      </ul>
+    ''',
+    'short': 'DNS lookup failed (transient)',
+    'text': '''
+      The DNS lookup for the following domains failed with a transient resolver error,
+      so their DNS status could not be checked. Re-run the report to retry.
+      
+        * a.example.org
+        * b.example.org
+  
+    ''',
+    'type': 'warning',
+  })
+# ---
