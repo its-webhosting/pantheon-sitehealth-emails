@@ -7,9 +7,12 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def notices(psh, reset_sc):
+def notices(psh, reset_sc, monkeypatch):
     # Load check/dns/notices.py standalone (it only needs sc.escape_url).
-    reset_sc.escape_url = lambda u: u
+    # Use monkeypatch (not direct assignment) so sc.escape_url is RESTORED after each test:
+    # reset_sc does not track escape_url, so a leaked identity stub would pollute other suites
+    # (e.g. check/cloudflare's escaping tests).
+    monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
     path = Path(psh.__file__).parent / "check" / "dns" / "notices.py"
     spec = importlib.util.spec_from_file_location("dns_notices_probe", str(path))
     mod = importlib.util.module_from_spec(spec)

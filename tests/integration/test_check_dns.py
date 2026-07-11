@@ -38,9 +38,9 @@ def test_registers_unconditionally(psh, reset_sc, monkeypatch):
 
 
 def test_emits_universal_notices(psh, reset_sc, monkeypatch):
-    reset_sc.cloudflare_enabled = lambda: False
-    reset_sc.umich_enabled = lambda: False
-    reset_sc.escape_url = lambda u: u
+    monkeypatch.setattr(reset_sc, "cloudflare_enabled", lambda: False)
+    monkeypatch.setattr(reset_sc, "umich_enabled", lambda: False)
+    monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
     mod = _load_init(psh, monkeypatch)
     ctx = _facts(reset_sc, not_in_dns=["x.example.org"], dns_transient=["t.example.org"])
     mod.hook.emit_dns_notices(ctx)
@@ -50,9 +50,9 @@ def test_emits_universal_notices(psh, reset_sc, monkeypatch):
 
 
 def test_cloudflare_notices_gated_off_when_disabled(psh, reset_sc, monkeypatch):
-    reset_sc.cloudflare_enabled = lambda: False
-    reset_sc.umich_enabled = lambda: False
-    reset_sc.escape_url = lambda u: u
+    monkeypatch.setattr(reset_sc, "cloudflare_enabled", lambda: False)
+    monkeypatch.setattr(reset_sc, "umich_enabled", lambda: False)
+    monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
     mod = _load_init(psh, monkeypatch)
     ctx = _facts(reset_sc, fqdns_not_behind_cloudflare=["a.example.org"],
                  behind_cloudflare_not_proxied=["b.example.org"],
@@ -64,9 +64,9 @@ def test_cloudflare_notices_gated_off_when_disabled(psh, reset_sc, monkeypatch):
 def test_bug1_notices_independent(psh, reset_sc, monkeypatch):
     # Fully behind Cloudflare (fqdns_not_behind_cloudflare empty) but a zone conflict + a
     # not-proxied host: both notices MUST still fire (old code nested them and suppressed them).
-    reset_sc.cloudflare_enabled = lambda: True
-    reset_sc.umich_enabled = lambda: False
-    reset_sc.escape_url = lambda u: u
+    monkeypatch.setattr(reset_sc, "cloudflare_enabled", lambda: True)
+    monkeypatch.setattr(reset_sc, "umich_enabled", lambda: False)
+    monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
     mod = _load_init(psh, monkeypatch)
     ctx = _facts(reset_sc, fqdns_not_behind_cloudflare=[],
                  behind_cloudflare_not_proxied=["np.example.org"],
@@ -80,9 +80,9 @@ def test_bug1_notices_independent(psh, reset_sc, monkeypatch):
 def test_transient_emitted_before_cloudflare_warnings(psh, reset_sc, monkeypatch):
     # Subject-line stability (design §7 note b): transient must precede the Cloudflare warnings
     # so a warning-only site keeps its "DNS lookup failed (transient)" email subject.
-    reset_sc.cloudflare_enabled = lambda: True
-    reset_sc.umich_enabled = lambda: False
-    reset_sc.escape_url = lambda u: u
+    monkeypatch.setattr(reset_sc, "cloudflare_enabled", lambda: True)
+    monkeypatch.setattr(reset_sc, "umich_enabled", lambda: False)
+    monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
     mod = _load_init(psh, monkeypatch)
     ctx = _facts(reset_sc, dns_transient=["t.example.org"],
                  fqdns_not_behind_cloudflare=["a.example.org"])

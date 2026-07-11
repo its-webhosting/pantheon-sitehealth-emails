@@ -7,8 +7,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def dns_notices(psh, reset_sc):
-    reset_sc.escape_url = lambda u: u
+def dns_notices(psh, reset_sc, monkeypatch):
+    # monkeypatch so sc.escape_url is restored after each test (reset_sc does not track it;
+    # a leaked identity stub would pollute other suites' escaping tests).
+    monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
     path = Path(psh.__file__).parent / "check" / "dns" / "notices.py"
     spec = importlib.util.spec_from_file_location("dns_notices_render_probe", str(path))
     mod = importlib.util.module_from_spec(spec)
