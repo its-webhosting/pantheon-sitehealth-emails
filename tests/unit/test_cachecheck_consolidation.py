@@ -454,6 +454,15 @@ def test_console_line_includes_url_kind_and_problem(notices):
     assert line == "https://a.example.edu/x.js (asset): no response within 5s"
 
 
+def test_console_line_renders_either_revalidate_directive(notices):
+    # {directive} is a placeholder precisely because cc-must-revalidate can carry either
+    # directive the rule detects -- must-revalidate is covered elsewhere; this pins the
+    # other one so a format-string typo affecting only proxy-revalidate isn't invisible.
+    line = notices.console_line(_item("cc-must-revalidate", "https://a.example.edu/",
+                                      directive="proxy-revalidate"))
+    assert line == "https://a.example.edu/ (page): Cache-Control contains proxy-revalidate"
+
+
 def test_every_item_id_has_console_and_html_language(notices):
     params_by_id = {
         "http-error": {"status": 404}, "cf-status-uncacheable": {"status": "DYNAMIC"},

@@ -12,13 +12,15 @@ Battery decision flow (see SPEC §8.6):
 
     status not 2xx ──▶ http-error, STOP (nothing else evaluated)
     Cf-Cache-Status ──▶ missing / not-acceptable items
-    Cache-Control  ──▶ absent → no-cache-control, skip rest of CC rules
-                       no parseable max-age/s-maxage → no-max-age, skip rest
-                       < 3 days → short-cache-time
-                       private/no-cache/no-store → one item each
-                       must-revalidate/proxy-revalidate → one cc-must-revalidate item naming
-                       the directive seen, on every page and asset, but suppressed when the
-                       response is already uncacheable (private/no-cache/no-store)
+    Cache-Control  ──▶ absent → no-cache-control, skip max-age-dependent rules below
+                       no parseable max-age/s-maxage → no-max-age, skip max-age-dependent
+                       rules below
+                       max-age/s-maxage parses ──▶ < 3 days → short-cache-time
+                                                    private/no-cache/no-store → one item each
+                       must-revalidate/proxy-revalidate ──▶ evaluated REGARDLESS of max-age
+                       (even when unparseable): one cc-must-revalidate item naming the
+                       directive seen, on every page and asset, but suppressed when the
+                       response is already uncacheable (private/no-cache/no-store present)
     Expires        ──▶ only when CC absent or without parseable max-age/s-maxage
     Set-Cookie     ──▶ set-cookie, or set-cookie-bypass REPLACING the BYPASS status item
 """
@@ -161,7 +163,7 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
     else:
         if seconds < MIN_CACHE_SECONDS:
             items.append(_item("short-cache-time", kind, seconds=seconds))
-        for directive in ("private", "no-cache", "no-store"):   # proxy-revalidate removed
+        for directive in ("private", "no-cache", "no-store"):
             if directive in cc:
                 items.append(_item(f"cc-{directive}", kind))
 
