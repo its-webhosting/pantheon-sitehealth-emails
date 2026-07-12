@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "domain:dns",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "domain:dns",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "[{\"domain\": \"cdn-change.example.edu\", \"type\": \"A\", \"value\": \"23.185.0.4\", \"detected_value\": \"\", \"status\": \"action_required\", \"status_message\": \"Add this required record\"}, {\"domain\": \"cdn-change.example.edu\", \"type\": \"AAAA\", \"value\": \"2620:12a:8000::4\", \"detected_value\": \"\", \"status\": \"action_required\", \"status_message\": \"Add this required record\"}, {\"domain\": \"cdn-change.example.edu\", \"type\": \"AAAA\", \"value\": \"2620:12a:8001::4\", \"detected_value\": \"\", \"status\": \"action_required\", \"status_message\": \"Add this required record\"}, {\"domain\": \"cdn-change.example.edu\", \"type\": \"CNAME\", \"value\": \"\", \"detected_value\": \"live-its-wws-test1.pantheonsite.io\", \"status\": \"action_required\", \"status_message\": \"Remove this detected record\"}]",
+  "stderr": "",
+  "recorded": "2026-07-12",
+  "_scrubbed": "synthetic: Pantheon required records for the golden custom domain (tests/e2e/test_golden_cdn_change.py)"
+}

@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "org:site:list",
+    "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "org:site:list",
+    "23c7208e-5f2a-4388-9fc4-5c3a038ef8b9",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\"9cf2c790-c7b8-4f2f-a6f1-27385b8f958e\": {\"name\": \"its-wws-test1\", \"id\": \"9cf2c790-c7b8-4f2f-a6f1-27385b8f958e\", \"plan_name\": \"Performance Small\", \"framework\": \"wordpress\", \"owner\": \"208cd53b-f09c-49b3-9f8e-91fc603082a7\", \"created\": 1693852012, \"tags\": \"Content Publisher\", \"frozen\": false}}",
+  "stderr": "",
+  "recorded": "2026-07-04",
+  "_scrubbed": "trimmed to its-wws-test1 only (org list contained all customer sites)"
+}

@@ -217,12 +217,15 @@ def seed_traffic(db_path, *, site_id=E2E_SITE_ID, year=2026, month=3,
         con.close()
 
 
-def build_rendered_report(work, *, site=E2E_SITE, site_id=E2E_SITE_ID, fixtures_dir=None):
+def build_rendered_report(work, *, site=E2E_SITE, site_id=E2E_SITE_ID, fixtures_dir=None,
+                          extra_env=None):
     """Run the full offline shim-backed pipeline in `work`; return the CompletedProcess.
 
     Creates the schema, seeds deterministic traffic, then renders the report.  Raises
     ForbiddenFlagError via run_program if a forbidden flag ever slips in.  `site`/`site_id`/
     `fixtures_dir` select the site to render and which recorded fixtures to replay.
+    `extra_env` is forwarded to the render subprocess (the CDN-change golden uses it to put
+    tests/shims/dnsshim on PYTHONPATH, which shims DNS in that subprocess).
     """
     # --create-tables exits non-zero by design (sys.exit("Tables created.")); just ensure
     # the schema file appears.
@@ -244,6 +247,7 @@ def build_rendered_report(work, *, site=E2E_SITE, site_id=E2E_SITE_ID, fixtures_
         ],
         cwd=work,
         fixtures_dir=fixtures_dir,
+        extra_env=extra_env,
     )
 
 
