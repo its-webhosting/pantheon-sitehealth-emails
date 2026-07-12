@@ -249,6 +249,45 @@ def test_resolve_converts_a_malformed_name_into_a_named_exception(psh, reset_sc)
         dns_classify.resolve("x" * 70 + ".example.org", "A")
 
 
+def test_resolve_converts_a_struct_error_from_an_out_of_range_byte_escape(psh, reset_sc):
+    # A REAL dnspython gap, verified by execution: "\300.com" is a byte-escape sequence whose
+    # value (300) is out of range for struct.pack("!B", ...) inside dns.name.from_text -- it
+    # raises the stdlib struct.error, which is NOT a dns.exception.DNSException at all, so it
+    # was NOT covered by the (SyntaxError, NameTooLong) except clause.  This is reachable through
+    # an ordinary hostname string -- no monkeypatching -- e.g. via a Cloudflare `origins` value,
+    # which is arbitrary remote content not gated by fqdn_re.
+    import dns_classify
+    with pytest.raises(dns_classify.MalformedNameError):
+        dns_classify.resolve("\\300.com", "CNAME")
+
+
+def test_resolve_converts_a_real_idna_exception(psh, reset_sc, monkeypatch):
+    # dns.name.IDNAException derives from dns.exception.DNSException but NOT from SyntaxError, so
+    # it also escaped the old except clause.  It is raised by IDNACodec.decode() on an "xn--"
+    # label whose punycode tail fails to decode -- a real, non-fabricated raise, confirmed by
+    # calling the actual dnspython codec below -- but that decode() path is never reached by
+    # dns.resolver.resolve(hostname, rrtype) for any hostname string (encoding a query name never
+    # calls decode(); verified empirically against dnspython 2.8.0, which is what is pinned here).
+    # So the underlying dns.resolver.resolve is monkeypatched to raise the SAME real exception
+    # instance, to prove resolve()'s except clause converts it -- the fix guards a real dnspython
+    # exception class, even though nothing in this codebase's call pattern can trigger it today.
+    import dns.name
+    import dns_classify
+
+    real_exc = None
+    try:
+        dns.name.IDNA_2003_Practical.decode(b"xn--0")   # real raise, not hand-constructed
+        pytest.fail("expected dns.name.IDNAException")
+    except dns.name.IDNAException as e:
+        real_exc = e   # exception-clause names are cleared on block exit -- rebind explicitly
+
+    def boom(hostname, rrtype):
+        raise real_exc
+    monkeypatch.setattr(dns.resolver, "resolve", boom)
+    with pytest.raises(dns_classify.MalformedNameError):
+        dns_classify.resolve("xn--0.example.org", "A")
+
+
 def test_classify_hostname_dns_survives_a_malformed_name(psh, reset_sc, monkeypatch):
     # The caller must NOT see the exception: a bad domain id skips that host, it does not kill
     # the run.  A name that cannot exist in DNS is definitively unresolvable -> (0, 0, False),

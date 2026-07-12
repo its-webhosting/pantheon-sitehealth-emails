@@ -6,6 +6,7 @@ stdlib + dnspython; NEVER the dash-named core script.  Presentation (notices) li
 check/dns/, not here.  Named dns_classify (not dns) to avoid shadowing dnspython's `dns`.
 """
 import ipaddress
+import struct
 from typing import NamedTuple
 
 import dns.exception
@@ -20,11 +21,17 @@ class MalformedNameError(Exception):
     """`hostname` is not a syntactically valid DNS name.
 
     dnspython raises dns.name.EmptyLabel / LabelTooLong / BadEscape (all dns.exception.
-    SyntaxError) and dns.name.NameTooLong (a dns.exception.FormError) for these.  None derive
-    from dns.resolver.*, so no resolver-exception handler catches them -- and the per-site loop
-    in the main script has no try/except, so an escaped one aborts the entire run (a single
-    malformed Pantheon domain id would take down an --all run).  resolve() converts them here,
-    ONCE, at the single DNS seam, so no caller can forget them.
+    SyntaxError) and dns.name.NameTooLong (a dns.exception.FormError) for these.  Two more
+    escape that class hierarchy: dns.name.IDNAException derives from dns.exception.DNSException
+    but NOT from SyntaxError (raised by IDNACodec.decode() on an "xn--" label whose punycode
+    tail doesn't decode); and a byte-escape sequence out of range (e.g. the literal text
+    "\\300.com", verified live) makes dns.name.from_text's own struct.pack("!B", ...) raise the
+    stdlib struct.error -- not a DNSException at all.  None of the four derive from
+    dns.resolver.*, so no resolver-exception handler catches them -- and the per-site loop in
+    the main script has no try/except, so an escaped one aborts the entire run (a single
+    malformed Pantheon domain id -- or, for the CNAME-chain walk, a malformed name from an
+    arbitrary Cloudflare `origins` string -- would take down an --all run).  resolve() converts
+    them here, ONCE, at the single DNS seam, so no caller can forget them.
     """
 
 
@@ -37,7 +44,8 @@ def resolve(hostname: str, rrtype: str):
     """
     try:
         return dns.resolver.resolve(hostname, rrtype)
-    except (dns.exception.SyntaxError, dns.name.NameTooLong) as e:
+    except (dns.exception.SyntaxError, dns.name.NameTooLong, dns.name.IDNAException,
+            struct.error) as e:
         raise MalformedNameError(f"{hostname}: {type(e).__name__}") from e
 
 

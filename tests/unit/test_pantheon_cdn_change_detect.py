@@ -149,6 +149,32 @@ def test_finding_without_records_still_reported(detect, monkeypatch):
     assert findings[0].a == [] and findings[0].aaaa == [] and findings[0].cname == []
 
 
+def test_absent_fqdn_in_successful_answer_warns_operator(detect, reset_sc, monkeypatch):
+    # The call SUCCEEDED (Pantheon answered for at least one domain) but has no row for THIS
+    # candidate.  The owner is about to be emailed "unavailable" -- the operator must be told,
+    # or a "contact us" email goes out with nobody the wiser.
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {"other.example.org": (["1.2.3.4"], [], [])})
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert findings[0].a == [] and findings[0].aaaa == [] and findings[0].cname == []
+    out = console.export_text()
+    assert "no required records" in out and "occb.bus.umich.edu" in out
+
+
+def test_total_call_failure_does_not_duplicate_the_attention(detect, reset_sc, monkeypatch):
+    # A total domain:dns failure already prints its own ATTENTION inside
+    # pantheon.required_records (mocked away here); find_findings must NOT print a second,
+    # per-domain ATTENTION on top of it -- that would be noise.
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {})
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert findings[0].a == [] and findings[0].aaaa == [] and findings[0].cname == []
+    out = console.export_text()
+    assert "no required records" not in out
+
+
 def test_is_safe_domain_id(detect):
     # F13 is a CSV-integrity guard.  fqdn_re REJECTS a comma (that is the one that matters), but
     # it ACCEPTS a..b and a trailing newline -- hence the explicit control-character reject.
