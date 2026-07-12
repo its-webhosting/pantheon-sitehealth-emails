@@ -1,0 +1,184 @@
+import re
+
+import dns.resolver
+import pytest
+
+from helpers.checkload import load_check_module
+from helpers.dnsfake import patch_resolve, recording_console
+
+pytestmark = pytest.mark.unit
+
+FQDN_RE = re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.IGNORECASE)   # core's regex (:89)
+
+OCCB_ZONE = {("occb.bus.umich.edu", "CNAME"): ["live-bus-occb.pantheonsite.io."]}
+BACKSTAGE_ZONE = {
+    ("backstage.its.umich.edu", "CNAME"): ["backstage.its.umich.edu.cdn.cloudflare.net."],
+}
+BACKSTAGE_PROXIED = {
+    "backstage.its.umich.edu": {
+        "zone_id": "1f39", "origins": ["live-its-backstage.pantheonsite.io"]},
+}
+
+
+@pytest.fixture
+def detect(psh, reset_sc, request, monkeypatch):
+    monkeypatch.setattr(reset_sc, "fqdn_re", FQDN_RE)
+    return load_check_module(
+        psh, "pantheon_cdn_change", "detect", "pcc_detect_probe", request)
+
+
+def _pantheon_says(detect, monkeypatch, mapping, calls=None):
+    """Patch pantheon.required_records on the module `detect` actually imported.
+
+    `mapping` is {fqdn: (a, aaaa, cname)}.
+    """
+    def _required(site_id, site_name=""):
+        if calls is not None:
+            calls.append(site_id)
+        return {fqdn: detect.pantheon.Required(a, aaaa, cname)
+                for fqdn, (a, aaaa, cname) in mapping.items()}
+    monkeypatch.setattr(detect.pantheon, "required_records", _required)
+
+
+def test_dns_only_finding(detect, monkeypatch):
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {
+        "occb.bus.umich.edu": (["23.185.0.4"], ["2620:12a:8000::4", "2620:12a:8001::4"], [])})
+    assert detect.find_findings(
+        "uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True) == [
+            detect.Finding("occb.bus.umich.edu", "dns", "live-bus-occb.pantheonsite.io",
+                           ["23.185.0.4"], ["2620:12a:8000::4", "2620:12a:8001::4"], [])]
+
+
+def test_cloudflare_only_finding(detect, monkeypatch):
+    patch_resolve(monkeypatch, BACKSTAGE_ZONE)
+    _pantheon_says(detect, monkeypatch, {
+        "backstage.its.umich.edu": (["23.185.0.2"], ["2620:12a:8000::2"], [])})
+    findings = detect.find_findings(
+        "uuid", "its-backstage", ["backstage.its.umich.edu"], BACKSTAGE_PROXIED, True)
+    assert findings[0].where == "cloudflare"
+    assert findings[0].a == ["23.185.0.2"]         # Pantheon's answer, not a resolved target
+
+
+def test_both_sources_same_target_is_one_row(detect, monkeypatch):
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {"occb.bus.umich.edu": (["23.185.0.4"], [], [])})
+    proxied = {"occb.bus.umich.edu": {"origins": ["live-bus-occb.pantheonsite.io"]}}
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], proxied, True)
+    assert len(findings) == 1
+    assert findings[0].where == "both"
+
+
+def test_split_targets_warn_but_emit_one_row(detect, reset_sc, monkeypatch):
+    # F11: the two sources reach DIFFERENT legacy names.  Pantheon's per-domain answer is correct
+    # for BOTH records, so it is one row -- but the disagreement is an operator signal.
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, {("x.example.org", "CNAME"): ["live-aaa.pantheonsite.io."]})
+    _pantheon_says(detect, monkeypatch, {"x.example.org": (["23.185.0.9"], [], [])})
+    proxied = {"x.example.org": {"origins": ["live-bbb.pantheonsite.io"]}}
+    findings = detect.find_findings("uuid", "s", ["x.example.org"], proxied, True)
+    assert len(findings) == 1
+    assert findings[0].where == "both"
+    assert findings[0].a == ["23.185.0.9"]        # Pantheon's, NOT live-aaa's or live-bbb's
+    out = console.export_text()
+    assert "DIFFERENT" in out and "live-aaa" in out and "live-bbb" in out
+
+
+def test_cname_only_finding_warns(detect, reset_sc, monkeypatch):
+    # F14: Pantheon answers with a CNAME and no A/AAAA (an already-migrated site).  The finding
+    # carries the CNAME, and the operator is told -- it must NOT look like a failed lookup.
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch,
+                   {"occb.bus.umich.edu": ([], [], ["fe.cfp2c.edge.pantheon.io"])})
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert findings[0].cname == ["fe.cfp2c.edge.pantheon.io"]
+    assert findings[0].a == [] and findings[0].aaaa == []
+    out = console.export_text()
+    assert "no A/AAAA" in out and "fe.cfp2c.edge.pantheon.io" in out
+
+
+def test_clean_site_makes_no_pantheon_call(detect, monkeypatch):
+    # The domain:dns call is LAZY: a clean site must cost nothing on an --all run.
+    calls = []
+    patch_resolve(monkeypatch, BACKSTAGE_ZONE)
+    _pantheon_says(detect, monkeypatch, {}, calls=calls)
+    assert detect.find_findings(
+        "uuid", "its-backstage", ["backstage.its.umich.edu"], {}, True) == []
+    assert calls == []
+
+
+def test_cloudflare_disabled_skips_source_two(detect, monkeypatch):
+    patch_resolve(monkeypatch, BACKSTAGE_ZONE)
+    _pantheon_says(detect, monkeypatch, {})
+    assert detect.find_findings(
+        "uuid", "its-backstage", ["backstage.its.umich.edu"], BACKSTAGE_PROXIED, False) == []
+
+
+def test_transient_dns_is_never_a_finding(detect, monkeypatch):
+    patch_resolve(monkeypatch, {("a.example.org", "CNAME"): dns.resolver.Timeout()})
+    _pantheon_says(detect, monkeypatch, {})
+    assert detect.find_findings("uuid", "s", ["a.example.org"], {}, True) == []
+
+
+def test_legacy_array_form_of_fqdns_json(detect, monkeypatch):
+    patch_resolve(monkeypatch, BACKSTAGE_ZONE)
+    _pantheon_says(detect, monkeypatch, {"backstage.its.umich.edu": (["23.185.0.2"], [], [])})
+    proxied = {"backstage.its.umich.edu": ["live-its-backstage.pantheonsite.io"]}   # old format
+    assert detect.find_findings(
+        "uuid", "its-backstage", ["backstage.its.umich.edu"], proxied,
+        True)[0].where == "cloudflare"
+
+
+def test_ip_origin_is_skipped_without_a_query(detect, monkeypatch):
+    calls = []
+    patch_resolve(monkeypatch, BACKSTAGE_ZONE, calls)
+    _pantheon_says(detect, monkeypatch, {})
+    proxied = {"backstage.its.umich.edu": {"origins": ["23.185.0.2", "2620:12a:8000::2"]}}
+    assert detect.find_findings(
+        "uuid", "its-backstage", ["backstage.its.umich.edu"], proxied, True) == []
+    assert ("23.185.0.2", "CNAME") not in calls    # an IP literal is never resolved
+
+
+def test_finding_without_records_still_reported(detect, monkeypatch):
+    # F4: domain:dns failed (or has no row for this FQDN).  The CNAME still has to be fixed.
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {})
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert findings[0].where == "dns"
+    assert findings[0].a == [] and findings[0].aaaa == [] and findings[0].cname == []
+
+
+def test_is_safe_domain_id(detect):
+    # F13 is a CSV-integrity guard.  fqdn_re REJECTS a comma (that is the one that matters), but
+    # it ACCEPTS a..b and a trailing newline -- hence the explicit control-character reject.
+    assert detect.is_safe_domain_id("occb.bus.umich.edu") is True
+    assert detect.is_safe_domain_id("has,comma.example.org") is False
+    assert detect.is_safe_domain_id("trailing.newline.example.org\n") is False
+    assert detect.is_safe_domain_id("with space.example.org") is False
+
+
+def test_invalid_domain_id_skipped(detect, monkeypatch):
+    # A comma in a domain id would shift every column of -notices.csv (no escaping there).
+    calls = []
+    patch_resolve(monkeypatch, {}, calls)
+    _pantheon_says(detect, monkeypatch, {})
+    assert detect.find_findings(
+        "uuid", "s", ["has,comma.example.org", "bad.example.org\n"], {}, True) == []
+    assert calls == []            # never even resolved
+
+
+def test_order_follows_custom_domains(detect, monkeypatch):
+    zone = dict(OCCB_ZONE)
+    zone[("aaa.bus.umich.edu", "CNAME")] = ["live-bus-occb.pantheonsite.io."]
+    patch_resolve(monkeypatch, zone)
+    _pantheon_says(detect, monkeypatch, {})
+    findings = detect.find_findings(
+        "uuid", "bus-occb", ["occb.bus.umich.edu", "aaa.bus.umich.edu"], {}, True)
+    assert [f.fqdn for f in findings] == ["occb.bus.umich.edu", "aaa.bus.umich.edu"]
+
+
+def test_no_custom_domains(detect, monkeypatch):
+    patch_resolve(monkeypatch, {})
+    _pantheon_says(detect, monkeypatch, {})
+    assert detect.find_findings("uuid", "s", [], {}, True) == []
