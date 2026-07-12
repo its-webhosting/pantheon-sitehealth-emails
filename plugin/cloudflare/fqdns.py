@@ -16,8 +16,9 @@ import script_context as sc
 #
 # `fqdns.json` maps every Cloudflare-*proxied* website FQDN to the zone it lives in and its DNS
 # origins:  { "<fqdn>": { "zone_id": "<uuid>", "origins": [ "<ip-or-cname>", ... ] }, ... }
-# The main program consumes only the KEYS (a membership test: "is this hostname proxied?"); the
-# zone_id is stored for a near-future feature and is not read yet.
+# The per-site loop consumes the KEYS (a membership test: "is this hostname proxied?"), and
+# check/pantheon_cdn_change consumes the ORIGINS (to find CNAMEs to the legacy Pantheon GCDN --
+# invisible in public DNS for a proxied FQDN).  zone_id is stored but not read yet.
 #
 # The whole flow runs ONCE in a setup hook, before the per-site loop:
 #   decide whether to refresh -> (maybe) fetch from Cloudflare + write fqdns.json -> load it into
@@ -219,7 +220,9 @@ def update_and_load_proxied_fqdns() -> None:
         # traffic-only / create-tables run, which never reads it).
         if not does_not_consume and exists and age_seconds > STALE_SECONDS:
             sc.console.print(
-                f":exclamation: [bold red] ATTENTION: {FQDNS_FILE} is more than a day old!"
+                f":exclamation: [bold red] ATTENTION: {FQDNS_FILE} is more than a day old; "
+                "Cloudflare-side CNAME checks may be answering from stale data -- run "
+                "--update-cloudflare-fqdns for current data"
             )
         proxied = _load_existing(FQDNS_FILE)
 

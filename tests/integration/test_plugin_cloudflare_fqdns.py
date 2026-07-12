@@ -305,3 +305,25 @@ def test_hook_traffic_only_suppresses_stale_warning(fqdns, psh, monkeypatch, tmp
 
     assert client.calls["accounts"] == 0
     assert "more than a day old" not in sc.console.export_text()
+
+
+def test_stale_warning_names_the_consequence(fqdns, psh, monkeypatch, tmp_path):
+    # A single-site run does NOT refresh a stale fqdns.json, so the Cloudflare half of the
+    # CDN-change check may answer from stale data.  The operator must be told what to do.
+    module, sc, _cf = fqdns
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "fqdns.json").write_text(
+        json.dumps({"x.edu": {"zone_id": "z", "origins": ["live-x.pantheonsite.io"]}}))
+    stale = time.time() - 2 * 24 * 3600
+    os.utime(tmp_path / "fqdns.json", (stale, stale))
+    client = _client_with_one_fqdn()
+    sc.config = {"Cloudflare": {"enabled": True}}
+    sc.plugin_context = {"plugin.cloudflare": {"get_client": lambda: client}}
+    sc.options = psh.parse_args(["its-wws-test1"])          # single site -> no refresh
+
+    module.update_and_load_proxied_fqdns()
+
+    out = sc.console.export_text()
+    assert client.calls["accounts"] == 0                    # confirms: it did NOT refresh
+    assert "more than a day old" in out
+    assert "--update-cloudflare-fqdns" in out
