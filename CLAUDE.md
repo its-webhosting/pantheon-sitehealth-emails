@@ -36,8 +36,10 @@ composer install                          # installs the PHP Emogrifier CSS inli
 ./pantheon-sitehealth-emails --help
 ```
 
-Key flags: `--all` vs. an explicit `SITE` list are mutually exclusive (one is required
-unless `--create-tables`). Without `--for-real`, mail is addressed to the logged-in user,
+Key flags (the parser sets `allow_abbrev=False`, so no `--for` → `--for-real` foot-gun):
+`--all` vs. an explicit `SITE` list are mutually exclusive (one is required
+unless `--create-tables`); `--config`/`-c` picks the TOML file (default
+`pantheon-sitehealth-emails.toml`). Without `--for-real`, mail is addressed to the logged-in user,
 not to owners — this is the primary safety mechanism, always dry-run first. `--update`
 only refreshes traffic data; `--only-warn` checks sites for warnings without generating
 reports or sending mail; `--import-older-metrics` backfills Pantheon's weekly/monthly
@@ -55,10 +57,13 @@ Running against real sites needs, in the environment: `terminus` authenticated w
 Pantheon machine token; an SSH agent holding the Pantheon key (`ssh-add`); `SMTP_PASSWORD`
 (U-M Kerberos password, referenced by `[SMTP].password = "<{secret env SMTP_PASSWORD}"`);
 optionally `AWS_*` and `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY` (or `CLOUDFLARE_API_TOKEN`),
-referenced by the `[Cloudflare]` settings. **No credentials are read from the environment
-directly anymore** (except the two `AWS_*` boto-plumbing lines in `plugin/aws/__init__.py`):
-everything flows through config `<{env …}>` / `<{secret env …}>` substitutions (see the
-config-substitution note under Architecture). `php` + `composer` must be on PATH. Note the
+referenced by the `[Cloudflare]` settings. **Credentials are never read from the environment
+by feature code**: everything flows through config `<{env …}>` / `<{secret env …}>`
+substitutions (see the config-substitution note under Architecture). The only direct
+`os.environ` touches are `plugin/env/get_env.py` (which *is* the `<{env}` engine) and the
+`AWS_PROFILE`/`AWS_DEFAULT_REGION` boto plumbing in `plugin/aws/__init__.py` — don't add more.
+See `docs/env-and-smtp-configuration.md` and `docs/email-configuration.md`.
+`php` + `composer` must be on PATH. Note the
 README warning: Terminus does not work with PHP 8.4 — use PHP 8.3 or earlier.
 
 ## Architecture
@@ -84,7 +89,7 @@ available to every function at call time.
 `find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
 containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
-`check.dns`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
+`check.cloudflare`, `check.dns`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
 sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`, `env/get_env.py`,
 `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
 only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{env NAME}` /
@@ -215,12 +220,13 @@ when the source was disabled, malformed, or failed):
   unused now. Refresh rules (see `docs/cloudflare-fqdns.md`): update if the file is missing, or
   stale (>24h) + processing multiple sites + not `--no-update-cloudflare-fqdns`, or
   `--update-cloudflare-fqdns` (forces; requires `[Cloudflare]` enabled). `--update` /
-  `--import-older-metrics` skip the refresh (they never consume fqdns). Any fetch error is fatal;
-  **zero zones is fatal** (likely a DNS:Read scope problem).
-- **`cloudflare_enabled` is read from config**, `bool(sc.config["Cloudflare"]["enabled"])`, **not**
+  `--import-older-metrics` / `--create-tables` skip the refresh entirely (they never consume
+  fqdns — the missing-file rule does not override this). Any fetch error is fatal;
+  **zero zones is fatal** (likely a DNS:Read scope problem), while zero FQDNs only warns.
+- **`cloudflare_enabled` is read from config**, `bool(sc.config.get("Cloudflare", {}).get("enabled"))`
+  (`.get` chains — a missing `[Cloudflare]` section must not `KeyError`), **not**
   `"plugin.cloudflare" in sc.plugin` (which is always True — every plugin package is imported
-  regardless of `enabled`; that was a latent bug that would `KeyError` for a disabled adopter with
-  custom domains).
+  regardless of `enabled`).
 - **Cloudflare cache checks (`check/cloudflare/`, opt-in)**: gated on `[Cloudflare].enabled` AND
   `[Cloudflare.cachecheck].enabled` (default false); when enabled, `account_id`+`list_name` are
   required (fatal if missing) and all cachecheck values must be **pass-1-resolvable** (the egress
@@ -247,7 +253,10 @@ when the source was disabled, malformed, or failed):
   replaced is gone. See `docs/resuming-interrupted-runs.md`.
 - **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
-  `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients. Charts
+  `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients →
+  `build/<site>-inline.html`, and a regex pass then appends `!important` to every inlined CSS
+  declaration → `build/<site>-inline2.html`, which is the HTML actually attached to the
+  message (not `-inline.html`). Charts
   (traffic surge bars, SiteLens gauges) are generated with matplotlib and attached as inline
   images (`make_msgid` CIDs). Everything is assembled into a MIME `EmailMessage` and written
   to `build/<site>.eml`. **The SMTP send (`smtp_login()`/`send_message`) is live but gated on
@@ -260,7 +269,10 @@ when the source was disabled, malformed, or failed):
 
 SQLAlchemy declarative models `PantheonTraffic` and `PantheonOverageProtection` (see class
 defs near the top of the script). Backend is chosen by the `[Database]` TOML section:
-`sqlite` (default, `database.db` in repo) or `mysql`. `--create-tables` creates the schema;
+`type` is `sqlite` or `mysql` (anything else exits). Both `type` and `name` are read
+**unconditionally** — a `[Database]` section without them is a `KeyError`, not a default; the
+`sqlite`/`database.db` "default" lives in the sample config, not the code.
+`--create-tables` creates the schema;
 new traffic rows are inserted while existing ones are skipped, not updated (`ON CONFLICT DO
 NOTHING` on sqlite via the `sqlite_insert` import, `INSERT IGNORE` on mysql).
 
@@ -291,7 +303,9 @@ There is a pytest harness under `tests/` (built 2026-07; design in
 `development/2026-07-04-test-harness/SPEC.md`). Run it with `./run-tests` (wrapper over
 pytest): `./run-tests --fast` is the offline inner loop; `./run-tests` adds the live tier;
 `--llm` gives terse machine-parseable output; `--coverage`, `--update-goldens`, and
-`--record` do what they say. Tiers are pytest marks: `unit`, `integration`, `e2e`, `live`,
+`--record` do what they say. Any other argument is passed straight through to pytest.
+`--record` short-circuits to `tests/tools/record.py` and forwards **no** arguments — for Drupal
+fixtures call `python tests/tools/record.py --drupal` directly. Tiers are pytest marks: `unit`, `integration`, `e2e`, `live`,
 `render`, `email`, `slow`. **When you change the program, add/adjust the appropriate tests in
 the same change** (this project does not do TDD — tests follow the change).
 
@@ -306,7 +320,8 @@ Non-obvious things the harness relies on:
   for in-process tests, or use the PATH-shim fake `terminus` (`tests/shims/terminus`, record/replay)
   for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
 - **Safety interlock.** `run_program()` in conftest is the only sanctioned way to run the program
-  in a subprocess; it raises `ForbiddenFlagError` if `--all`/`-a`/`--for-real` appear, and
+  in a subprocess; it raises `ForbiddenFlagError` if `--all`/`-a`/`--for-real` appear (including
+  argparse abbreviations like `--fo` and short bundles like `-av` — it fails closed), and
   `ForbiddenLiveDataError` if `--create-tables`/`--import-older-metrics` would run live or against
   a non-fixture config (a config-**path** allowlist, not a backend-type test — the production
   default DB is also sqlite). Never bypass it. Tests use only `its-wws-test1`/`its-wws-test2`,
@@ -314,12 +329,18 @@ Non-obvious things the harness relies on:
 - **Pure-helper seam.** Pure functions extracted from `main()` as module-level defs so they're
   importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
   `estimate_month_visits`, `plan_costs` (the cost model — DB-free via an injected
-  `op_lookup(month)`), plus `load_news_items` (P2), `build_plan_over_time` (P10 — returns `[]` for
-  zero traffic; `main()` guards the empty case and skips the plan sections),
-  `classify_hostname_dns` (P4 — separates transient DNS failures from "not in DNS"), and
+  `op_lookup(month)`), plus `load_news_items`, `build_plan_over_time` (returns `[]` for
+  zero traffic; `main()` guards the empty case and skips the plan sections), and
   `sites_from_resume_point`/`merge_prior_results` (the `--resume-from` logic, which cannot be
   reached through the `--all`-banned subprocess interlock and so is only testable in-process). The
-  extractions are behavior-preserving (goldens byte-identical).
+  extractions are behavior-preserving (goldens byte-identical). **`classify_hostname_dns` is NOT
+  one of these** — it moved out of the script into `dns_classify.py`; import it from there.
+- **DNS tests.** The `dns_classify.py` engine and `check/dns/` package have their own suite:
+  `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS),
+  `tests/unit/test_dns_notices.py` (notice builders), `tests/integration/test_check_dns.py` (the
+  `site_post_dns` hook), and `tests/integration/test_dns_notice_render.py` (syrupy snapshots).
+  **`dns_classify.resolve` is the one monkeypatchable DNS seam** — patch it (as those tests do) so
+  nothing hits real DNS; route any new resolution through it.
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
   and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots
@@ -337,18 +358,13 @@ Non-obvious things the harness relies on:
   end-to-end by `tests/e2e/test_recommendation_e2e.py` (seeds >4 in-window months) plus its
   unit/property tests — not by the golden. The render tier vendors axe-core locally
   (`tests/vendor/axe.min.js`) so it stays offline.
-- **The reusable (non-UMich) path had latent bugs** that production never hit because U-M always
-  runs with the UMich plugin enabled. A pragmatic subset was addressed (P8): email/SMTP identity
-  moved to `[Email]`/`[SMTP]` config, and the fqdns-gated Cloudflare-cache checks are behind
-  `umich_enabled()`. The fqdns-gated U-M CMS-integration checks (umich-cloudflare plugin, the 4
-  Drupal Cloudflare modules) are now **relocated** to `check/umich/cloudflare_cms.py` at the
-  `site_post_gather` phase (the seam the named-phase system added). Still **not** yet relocated
-  (deferred to the full de-monolith stage): the
-  large date-driven annual-billing notices, the `umich-oidc-login`/Hummingbird/Drupal user-agent
-  checks, and the U-M branding hardcoded in `email_template.html` (its.umich.edu URLs,
-  `webmaster@umich.edu`, `node/4705`) — the non-U-M golden asserts only the strings P8 removed, not
-  "no umich.edu anywhere". When adding code, keep institution-specific logic behind config flags /
-  the `umich` plugin+check packages.
+- **The reusable (non-UMich) path is only partly de-U-M-ified.** Bugs hide here because production
+  always runs with the UMich plugin enabled, so the non-U-M golden is the only guard. **Still
+  hardcoded U-M** in core (not yet relocated to the `umich` packages): the date-driven
+  annual-billing notices, the `umich-oidc-login`/Hummingbird/Drupal user-agent checks, and the
+  branding in `email_template.html` (its.umich.edu URLs, `webmaster@umich.edu`, `node/4705`). The
+  non-U-M golden does **not** assert "no umich.edu anywhere", so it will not catch new leakage —
+  keep institution-specific logic behind config flags / the `umich` plugin+check packages.
 - **Cache-check tests.** The `check/cloudflare/` modules are loaded standalone (SourceFileLoader;
   for modules with relative imports, a probe package with `__path__`/`submodule_search_locations`
   is registered in `sys.modules` first — see `test_check_cloudflare_init.py`). Unit tier:
@@ -361,6 +377,18 @@ Non-obvious things the harness relies on:
   `test_cachecheck_notice_render.py` (syrupy snapshots of the notice HTML/plaintext — refresh with
   `--update-goldens`). The e2e goldens keep `[Cloudflare].enabled=false`, so the cache check must
   never alter them.
+
+## Reusable prompts (`prompts/`)
+
+`prompts/` holds the repo's own workflow prompts — read the relevant one before doing that kind of
+work, and cite it by name rather than re-deriving the conventions:
+`new-feature-standards.md` (how features get specced),
+`implementation-standards.md` (the standards layered on `superpowers:subagent-driven-development`;
+the intended invocation is "implement everything per the spec doc(s), adhering to the standards in
+`prompts/implementation-standards.md`"), `adversarial-review.md`, `add-tests-for-change.prompt.md`,
+`refresh-fixtures.prompt.md`, and `update-claude-md.md`. Note
+`development/2026-07-04-test-harness/` contains **stale copies** of two of these — `prompts/` is
+the source of truth.
 
 ## Development archive (`development/`)
 
@@ -376,10 +404,12 @@ committing, and the raw session JSONL is **never committed** (gitignored). A fea
 
 ## Dev container
 
-`.devcontainer/` defines a sandboxed Node/Debian image (`Dockerfile`, `devcontainer.json`)
-that pre-installs uv+Python, PHP+Composer, Terminus, AWS CLI, mise, and Claude Code, with a
-locked-down firewall (`init-firewall.sh`) and SSH keys under `.devcontainer/ssh/`. Secret
-handling here is still a work in progress (see README TODO).
+`.devcontainer/` defines a sandboxed Node/Debian image (`Dockerfile`, `devcontainer.json`,
+`container-start.sh`) that pre-installs uv+Python, PHP+Composer, Terminus, AWS CLI, mise, and
+Claude Code, with SSH keys under `.devcontainer/ssh/` and a Terminus token cache under
+`.devcontainer/terminus/`. **The egress firewall is currently disabled** — the script is checked
+in as `DISABLED_init-firewall.sh`, so don't assume network lockdown. Secret handling here is
+still a work in progress (see README TODO).
 
 ## Pantheon API
 
