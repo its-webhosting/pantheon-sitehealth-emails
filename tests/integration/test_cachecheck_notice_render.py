@@ -46,6 +46,8 @@ def _representative_items(fqdn):
         _item("short-cache-time", f"https://{fqdn}/about", seconds=3600),
         _item("miss-persistent", f"https://{fqdn}/js/app.js", kind="asset"),
         _item("invalid-cert", f"https://{fqdn}/img/logo.png", kind="asset"),
+        _item("cc-must-revalidate", f"https://{fqdn}/news", directive="must-revalidate"),
+        _item("cc-must-revalidate", f"https://{fqdn}/events", directive="proxy-revalidate"),
     ]
 
 

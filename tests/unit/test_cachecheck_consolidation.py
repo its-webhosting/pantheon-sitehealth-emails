@@ -274,9 +274,10 @@ def test_item_language_agrees_with_the_number_of_urls_listed(notices):
 def test_site_config_items_direct_the_owner_site_wide(notices):
     # The listed URLs are only a sample, so items whose fix is a site-wide configuration
     # change must say so rather than implying only those URLs are affected.
-    params_by_id = {"short-cache-time": {"seconds": 60}}
+    params_by_id = {"short-cache-time": {"seconds": 60},
+                    "cc-must-revalidate": {"directive": "must-revalidate"}}
     for item_id in ("no-cache-control", "no-max-age", "short-cache-time", "cc-private",
-                    "cc-no-cache", "cc-no-store", "cc-proxy-revalidate", "expires-short"):
+                    "cc-no-cache", "cc-no-store", "cc-must-revalidate", "expires-short"):
         one = _build(notices, {"a.example.edu": [
             _item(item_id, "https://a.example.edu/", **params_by_id.get(item_id, {}))
         ]})[0]["message"]
@@ -293,35 +294,55 @@ def test_site_config_items_direct_the_owner_site_wide(notices):
                 "are only what we sampled." in two), item_id
 
 
-def test_must_revalidate_umich_names_its_referent_and_trails_the_home_page_caveat(notices):
-    def message(count, kind="page"):
-        items = [_item("cc-must-revalidate", f"https://a.example.edu/p{i}", kind=kind)
+def test_must_revalidate_states_the_stale_risk_and_says_remove_it(notices):
+    def message(count, kind="page", directive="must-revalidate", umich=True):
+        items = [_item("cc-must-revalidate", f"https://a.example.edu/p{i}", kind=kind,
+                       directive=directive)
                  for i in range(count)]
-        return _build(notices, {"a.example.edu": items})[0]["message"]
+        return _build(notices, {"a.example.edu": items}, umich=umich)[0]["message"]
 
-    # "remove it here" had no referent once a list of URLs sits below the sentence:
-    assert "remove it from this page." in message(1)
-    assert "remove it from these pages." in message(2)
-    assert "remove it from these static assets." in message(2, kind="asset")
-    assert "remove it here" not in message(1)
-
-    # The home-page caveat explains why the home page is NOT listed, so it follows the
-    # fix instruction instead of interrupting it.
     one = message(1)
-    assert one.index("Configure your site to remove it") < one.index("On your home page")
-    assert "it is never reported there." in one
+    assert "<code>must-revalidate</code>" in one
+    assert "You should remove it" in one
+    assert "no effect until this page goes stale" in one
+    assert "visitors will get errors rather than a stale copy of this page." in one
 
-    # The generic variant is untouched (no U-M home-page/alerts language):
-    generic = _build(notices, {"a.example.edu": [
-        _item("cc-must-revalidate", "https://a.example.edu/p")]}, umich=False)[0]["message"]
-    assert "home page" not in generic
-    assert "strict freshness requirement" in generic
+    # Number agreement with the URL list rendered below the sentence:
+    two = message(2)
+    assert "no effect until these pages go stale" in two
+    assert "visitors will get errors rather than stale copies of these pages." in two
+    assert "these static assets" in message(2, kind="asset")
+
+    # The notice names the directive actually seen.  NOTE: assert on the <code> span, not the
+    # bare string -- the U-M variant's "How to fix this" link is {doc_url}#cc-must-revalidate,
+    # so the raw substring "must-revalidate" appears in EVERY U-M message.
+    proxy = message(1, directive="proxy-revalidate")
+    assert "<code>proxy-revalidate</code>" in proxy
+    assert "<code>must-revalidate</code>" not in proxy
+
+    # The old, wrong language is gone from BOTH variants:
+    for msg in (one, message(1, umich=False)):
+        assert "defeats caching" not in msg
+        assert "reduces caching benefit" not in msg
+        assert "strict freshness requirement" not in msg
+        assert "home page" not in msg
+        assert "emergency" not in msg
+
+
+def test_revalidate_directives_do_not_consolidate_into_each_other(notices):
+    # Consolidation identity is (id, kind, params), so the differing directive keeps them
+    # apart even though they share an item id.
+    items = [_item("cc-must-revalidate", "https://a.example.edu/a", directive="must-revalidate"),
+             _item("cc-must-revalidate", "https://a.example.edu/b", directive="proxy-revalidate")]
+    message = _build(notices, {"a.example.edu": items})[0]["message"]
+    assert "<code>must-revalidate</code>" in message
+    assert "<code>proxy-revalidate</code>" in message
 
 
 def test_location_specific_items_are_not_given_the_site_wide_direction(notices):
-    # cc-must-revalidate is deliberately about WHERE the directive appears (intentional on
-    # the home page), and the transport/status items are about the listed URLs themselves.
-    for item_id, params in (("cc-must-revalidate", {}), ("http-error", {"status": 404}),
+    # The transport/status items are about the listed URLs themselves, not about a site-wide
+    # configuration, so they must not carry the "apply this site-wide" direction.
+    for item_id, params in (("http-error", {"status": 404}),
                             ("timeout", {"timeout": 5}), ("invalid-cert", {})):
         message = _build(notices, {"a.example.edu": [
             _item(item_id, "https://a.example.edu/p", **params)]})[0]["message"]
@@ -372,6 +393,7 @@ def _all_item_messages(notices, **build_kwargs):
         "short-cache-time": {"seconds": 60}, "timeout": {"timeout": 5},
         "request-failed": {"reason": "connection refused"},
         "too-many-redirects": {"max_redirects": 5},
+        "cc-must-revalidate": {"directive": "must-revalidate"},
     }
     for item_id in notices._CONSOLE:
         item = _item(item_id, "https://a.example.edu/p", **params_by_id.get(item_id, {}))
@@ -440,6 +462,7 @@ def test_every_item_id_has_console_and_html_language(notices):
         "too-many-redirects": {"max_redirects": 5},
         "set-cookie": {"cookies": "sessionid"},
         "set-cookie-bypass": {"cookies": "sessionid"},
+        "cc-must-revalidate": {"directive": "must-revalidate"},
     }
     for item_id in notices._CONSOLE:
         item = _item(item_id, "https://a.example.edu/p", **params_by_id.get(item_id, {}))

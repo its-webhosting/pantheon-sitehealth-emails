@@ -63,8 +63,7 @@ _CONSOLE = {
     "cc-private": "Cache-Control contains private",
     "cc-no-cache": "Cache-Control contains no-cache",
     "cc-no-store": "Cache-Control contains no-store",
-    "cc-proxy-revalidate": "Cache-Control contains proxy-revalidate",
-    "cc-must-revalidate": "Cache-Control contains must-revalidate (non-main page)",
+    "cc-must-revalidate": "Cache-Control contains {directive}",
     "expires-short": "Expires < 3 days and no max-age",
     "set-cookie": "Set-Cookie on public content: {cookies}",
     "set-cookie-bypass": "Cf-Cache-Status BYPASS caused by Set-Cookie: {cookies}",
@@ -206,7 +205,7 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
                 f"cost-savings and performance benefit." + sitewide)
         links = ([learn, _a(NODE_4241, "Managing Cloudflare caching")] if umich
                  else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")])
-    elif item_id in ("cc-private", "cc-no-cache", "cc-no-store", "cc-proxy-revalidate"):
+    elif item_id in ("cc-private", "cc-no-cache", "cc-no-store"):
         directive = item_id[3:]
         text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
                 f"<code>{directive}</code>, which prevents Cloudflare from caching {it}. "
@@ -214,23 +213,18 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
                 f"content." + sitewide)
         links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "cc-must-revalidate":
-        if umich:
-            # The battery never raises this item for the main page (see evaluate_headers),
-            # so the home-page caveat is context, not part of the fix: it trails the
-            # instruction rather than interrupting it.
-            text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
-                    f"<code>must-revalidate</code>, which defeats caching. Configure your "
-                    f"site to remove it from {object_}. (On your home page "
-                    f"<code>must-revalidate</code> is intentional &mdash; it makes emergency "
-                    f"alerts appear promptly &mdash; so it is never reported there.)")
-            links = [learn]
-        else:
-            text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
-                    f"<code>must-revalidate</code>, which forces revalidation and reduces "
-                    f"caching benefit. Remove it unless "
-                    f"{f'these specific {nouns} have' if many else f'this specific {noun} has'} "
-                    f"a strict freshness requirement.")
-            links = [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
+        # Same text for both variants; only the link differs.  No "unless you have a strict
+        # freshness requirement" escape hatch: a real freshness requirement is met by purging
+        # the stale copy, never by must-revalidate.  p["directive"] is always supplied by
+        # headers.py -- a KeyError here means a caller broke the item contract.
+        directive = html.escape(str(p["directive"]))
+        text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
+                f"<code>{directive}</code>. You should remove it since it has no effect "
+                f"until {object_} {'go' if many else 'goes'} stale, and if Cloudflare "
+                f"can't reach your web server at that time, visitors will get errors "
+                f"rather than {'stale copies' if many else 'a stale copy'} of {object_}."
+                + sitewide)
+        links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "expires-short":
         text = (f"{subject} "
                 + (f"rely on legacy <code>Expires</code> headers that expire" if many

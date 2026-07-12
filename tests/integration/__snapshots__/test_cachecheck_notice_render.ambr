@@ -11,6 +11,10 @@
   <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li></ul></li>
   <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
   <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>must-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/news">https://www.example.edu/news</a> (page)</li>
+  <li><a href="https://www2.example.edu/news">https://www2.example.edu/news</a> (page)</li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>proxy-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/events">https://www.example.edu/events</a> (page)</li>
+  <li><a href="https://www2.example.edu/events">https://www2.example.edu/events</a> (page)</li></ul></li></ul></li>
   </ul>
   '''
 # ---
@@ -48,6 +52,24 @@
       * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
         * <https://www.example.edu/img/logo.png> (static asset)
         * <https://www2.example.edu/img/logo.png> (static asset)
+    * These pages' `Cache-Control` headers contain `must-revalidate`. You should
+      remove it since it has no effect until these pages go stale, and if
+      Cloudflare can't reach your web server at that time, visitors will get
+      errors rather than stale copies of these pages. Apply this to all pages
+      site-wide — the ones listed below are only what we sampled. [About the
+      Cache-Control header][5]
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/news> (page)
+        * <https://www2.example.edu/news> (page)
+    * These pages' `Cache-Control` headers contain `proxy-revalidate`. You
+      should remove it since it has no effect until these pages go stale, and if
+      Cloudflare can't reach your web server at that time, visitors will get
+      errors rather than stale copies of these pages. Apply this to all pages
+      site-wide — the ones listed below are only what we sampled. [About the
+      Cache-Control header][5]
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/events> (page)
+        * <https://www2.example.edu/events> (page)
   
      [1]: <https://www.example.edu/>
      [2]: <https://www2.example.edu/>
@@ -72,6 +94,10 @@
   <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li></ul></li>
   <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert">How to fix this</a> &middot; <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
   <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>must-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/news">https://www.example.edu/news</a> (page)</li>
+  <li><a href="https://www2.example.edu/news">https://www2.example.edu/news</a> (page)</li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>proxy-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/events">https://www.example.edu/events</a> (page)</li>
+  <li><a href="https://www2.example.edu/events">https://www2.example.edu/events</a> (page)</li></ul></li></ul></li>
   </ul>
   '''
 # ---
@@ -95,6 +121,14 @@
       * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
         * <https://www.example.edu/img/logo.png> (static asset)
         * <https://www2.example.edu/img/logo.png> (static asset)
+    * These pages' `Cache-Control` headers contain `must-revalidate`. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide — the ones listed below are only what we sampled. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate>)
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/news> (page)
+        * <https://www2.example.edu/news> (page)
+    * These pages' `Cache-Control` headers contain `proxy-revalidate`. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide — the ones listed below are only what we sampled. [How to fix this](<https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate>)
+      * URLs with this issue (checked main page plus 3 random pages linked from it)
+        * <https://www.example.edu/events> (page)
+        * <https://www2.example.edu/events> (page)
   
   
   '''
