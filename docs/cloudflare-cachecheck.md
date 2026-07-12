@@ -113,8 +113,8 @@ list_name = "..."        # REQUIRED: the list of allow-listed IPs/CIDRs
 | `no-cache-control` | No `Cache-Control` header |
 | `no-max-age` | `Cache-Control` without a usable `max-age`/`s-maxage` |
 | `short-cache-time` | Cache time under 3 days (1 year is recommended) |
-| `cc-private` / `cc-no-cache` / `cc-no-store` | Caching-hostile directives on public content |
-| `cc-must-revalidate` | `must-revalidate` or `proxy-revalidate` on any page or asset (the directive seen is in `params["directive"]`). Neither prevents caching; both mean that once the content is stale and the origin is unreachable, visitors get an error instead of a stale copy. Suppressed when the response is already uncacheable. |
+| `cc-private` / `cc-no-cache` / `cc-no-store` | Directives that stop Cloudflare serving the visitor from its cache, so every request is passed through to the origin (slower, and each request can count toward the Pantheon visit limits). `no-cache` differs only in that Cloudflare may hold a copy but must check with the origin before serving it. |
+| `cc-must-revalidate` | `must-revalidate` or `proxy-revalidate` on any page or asset (the directive seen is in `params["directive"]`). Neither prevents caching; both mean that once the content is stale and the origin is unreachable, visitors get an error instead of a stale copy. Suppressed whenever the content is not being served from Cloudflare's cache in the first place — either the header says so (`private`/`no-cache`/`no-store`) or Cloudflare does (a `Cf-Cache-Status` such as `DYNAMIC`/`BYPASS`) — since content that is never served from cache cannot go stale. |
 | `expires-short` | Legacy `Expires` under 3 days with no usable `Cache-Control` cache time |
 | `set-cookie` / `set-cookie-bypass` | Cookies set on public content (the `-bypass` form when the cookie is what made Cloudflare bypass its cache) |
 | `miss-persistent` | Headers allow caching but the object never entered the cache across 3 attempts |

@@ -117,7 +117,7 @@ def _run_miss_retries(result, url: str, fqdn: str, cfg: dict, items: list, found
     _emit(items, {"id": "miss-persistent", "kind": kind, "url": url, "params": {}})
 
 
-def _test_url(url: str, fqdn: str, cfg: dict, items: list, *, is_main_page: bool,
+def _test_url(url: str, fqdn: str, cfg: dict, items: list, *,
               kind: str, status, pool):  # -> FetchResult | None
     """Fetch one URL and run the battery; transport policy in one place (SPEC §8.8).
     Returns the FetchResult the battery ran against (callers mine ONLY successful 2xx
@@ -144,7 +144,7 @@ def _test_url(url: str, fqdn: str, cfg: dict, items: list, *, is_main_page: bool
         _emit(items, _transport_item(result, kind, cfg))
         return result
 
-    found = evaluate_headers(result.headers, is_main_page=is_main_page, kind=kind,
+    found = evaluate_headers(result.headers, kind=kind,
                              now=datetime.now(timezone.utc),
                              status_code=result.status_code)
     for item in found:
@@ -182,7 +182,7 @@ def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> (list, dict):
     # mode) instead of once per URL; cookies are still never sent (the pool clears the
     # jar before every request).
     with httpseam.ClientPool(cfg["timeout"], cfg["user_agent"]) as pool:
-        main = _test_url(f"https://{fqdn}/", fqdn, cfg, items, is_main_page=True,
+        main = _test_url(f"https://{fqdn}/", fqdn, cfg, items,
                          kind="page", status=status, pool=pool)
         if not _ok(main):
             # link/asset steps need a successful body; move on (PROMPT)
@@ -196,7 +196,7 @@ def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> (list, dict):
         checked_pages = 0
         for url in picks:
             before = len(items)
-            result = _test_url(url, fqdn, cfg, items, is_main_page=False, kind="page",
+            result = _test_url(url, fqdn, cfg, items, kind="page",
                                status=status, pool=pool)
             # A pick counts as checked when its battery ran OR it produced a result item
             # (its URL is then listed under the header's count).  Testing for an item --
@@ -215,7 +215,7 @@ def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> (list, dict):
                 sc.debug(rich_escape(f"{fqdn}: testing asset(s) from {page.final_url}: "
                                      f"{[url for _cls, url in chosen]}"))
             for _cls, url in chosen:
-                _test_url(url, fqdn, cfg, items, is_main_page=False, kind="asset",
+                _test_url(url, fqdn, cfg, items, kind="asset",
                           status=status, pool=pool)
     return items, {"pages": checked_pages, "asset_pages": len(pages) - 1}
 

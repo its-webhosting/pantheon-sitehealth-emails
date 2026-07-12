@@ -29,6 +29,12 @@ import email.utils
 from datetime import datetime, timedelta, timezone
 
 ACCEPTABLE_CACHE_STATUSES = {"HIT", "MISS", "EXPIRED", "STALE", "REVALIDATED", "UPDATING"}
+
+# Directives that stop Cloudflare serving a visitor from its own cache, so every request is
+# passed through to the origin.  ONE definition: the per-directive items and the
+# revalidate-suppression predicate both read this, so they cannot drift apart.
+UNCACHEABLE_DIRECTIVES = ("private", "no-cache", "no-store")
+
 MIN_CACHE_SECONDS = 3 * 86400        # the 3-day floor
 RECOMMENDED_MAX_AGE = 31536000       # 1 year
 MISS_RETRY_DELAY_SECONDS = 2
@@ -132,14 +138,10 @@ def _item(item_id: str, kind: str, **params) -> dict:
     return {"id": item_id, "kind": kind, "url": None, "params": params}
 
 
-def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
+def evaluate_headers(headers: dict, *, kind: str,
                      now: datetime, status_code: int) -> list:
     """Run the battery against one response's headers (lowercased keys; 'set-cookie' may
     be a list).  Returns result items; the caller fills in each item's 'url'."""
-    # is_main_page is a reserved seam: no rule currently consults it.  (The must-revalidate
-    # main-page carve-out that used to read it was retired -- see
-    # development/2026-07-11-cachecheck-must-revalidate/SPEC.md.)  Removing it end-to-end
-    # through cache.py is a separate cleanup.
     items = []
 
     # Non-2xx: nothing else is evaluated for this URL (PROMPT: "do not check anything
@@ -163,7 +165,7 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
     else:
         if seconds < MIN_CACHE_SECONDS:
             items.append(_item("short-cache-time", kind, seconds=seconds))
-        for directive in ("private", "no-cache", "no-store"):
+        for directive in UNCACHEABLE_DIRECTIVES:
             if directive in cc:
                 items.append(_item(f"cc-{directive}", kind))
 
@@ -174,9 +176,20 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
     # Neither prevents caching; both mean that once the content is stale and the origin is
     # unreachable, visitors get an error instead of a stale copy.  must-revalidate is the
     # superset, so when both are present we report it alone rather than emitting two
-    # near-identical items for one URL.  Suppressed on an uncacheable response: content
-    # Cloudflare never caches cannot go stale, so the risk cannot arise.
-    uncacheable = any(d in cc for d in ("private", "no-cache", "no-store"))
+    # near-identical items for one URL.
+    #
+    # Suppressed whenever this content is not being served from Cloudflare's cache in the
+    # first place -- content that is never served from cache cannot go stale, so the risk the
+    # notice describes cannot arise, and the "you aren't being served from cache at all"
+    # finding is the one the owner must act on.  Two ways that happens, and BOTH suppress:
+    #   - the header says so (private/no-cache/no-store), or
+    #   - Cloudflare says so (a Cf-Cache-Status like DYNAMIC/BYPASS).
+    # The header test reads `cc`, not the emitted items: cc-private/cc-no-cache/cc-no-store
+    # are only emitted once a max-age parses, so a `private, must-revalidate` response with
+    # no max-age emits neither -- and must still suppress.
+    uncacheable = (any(d in cc for d in UNCACHEABLE_DIRECTIVES)
+                   or (cf_status is not None
+                       and cf_status.upper() not in ACCEPTABLE_CACHE_STATUSES))
     revalidate = ("must-revalidate" if "must-revalidate" in cc
                   else "proxy-revalidate" if "proxy-revalidate" in cc
                   else None)

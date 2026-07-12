@@ -93,12 +93,21 @@ def html_to_text(html: str) -> str:
     """Render notice/news HTML to the plaintext used in the text/plain email part.
 
     A FRESH HTML2Text per call, deliberately: the instance is stateful, and sharing one
-    across calls made every notice render differently from its siblings.  Two ways it bit us:
-    `inline_links` is the flag html2text actually honors (`reference_links` only flips it
-    during the first handle()), so the run's FIRST notice silently ignored the configured
-    link style; and the reference counter then climbed across the whole run ([1], [2], ...
-    into the hundreds) instead of restarting per notice.  Setting `inline_links` explicitly
-    below is what makes the very first call honor the reference-link style.
+    across calls made every notice render differently from its siblings -- the run's FIRST
+    notice came out in a different link style from all the others, and html2text's reference
+    counter climbed across the whole run instead of restarting.
+
+    Links are reference-style, and html2text numbers them per handle() call.  An email body
+    is many notices concatenated (email_template.txt loops over notice.text), so one message
+    can contain several "[1]" labels -- one per notice.  That is an ACCEPTED trade-off, not an
+    oversight: each notice's footnote definitions immediately follow its own block
+    (links_after_para), so every label sits next to its URL and reads unambiguously.  The
+    alternative -- inline links -- is worse in this content: with wrap_links=False any
+    paragraph containing a link stops wrapping (250+ character lines in a plaintext email),
+    and with wrap_links=True html2text splits long URLs mid-string and breaks them.
+    `inline_links` is the flag html2text actually honors; `reference_links` alone only flips
+    it during the first handle(), which is what made the first notice of a run come out in a
+    different style from all the others.
 
     Equivalent to:
       html2text --protect-links --images-to-alt --unicode-snob --reference-links

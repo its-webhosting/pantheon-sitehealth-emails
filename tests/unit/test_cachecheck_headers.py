@@ -27,9 +27,8 @@ def hdrs(psh):
     return module
 
 
-def run(hdrs, headers, *, main=False, kind="page", status=200):
-    return hdrs.evaluate_headers(headers, is_main_page=main, kind=kind, now=NOW,
-                                 status_code=status)
+def run(hdrs, headers, *, kind="page", status=200):
+    return hdrs.evaluate_headers(headers, kind=kind, now=NOW, status_code=status)
 
 
 def ids(items):
@@ -102,12 +101,23 @@ def test_bad_directives_each_flagged(hdrs):
     assert ids(run(hdrs, headers)) == ["cc-no-cache", "cc-no-store", "cc-private"]
 
 
-def test_must_revalidate_flagged_everywhere_including_main_page(hdrs):
+def test_must_revalidate_flagged_on_every_page_and_asset(hdrs):
     headers = {"cf-cache-status": "HIT", "cache-control": f"must-revalidate, {YEAR}"}
-    for kwargs in ({"main": True}, {"main": False}, {"kind": "asset"}):
+    for kwargs in ({"kind": "page"}, {"kind": "asset"}):
         items = run(hdrs, headers, **kwargs)
         assert ids(items) == ["cc-must-revalidate"], kwargs
         assert _directive(items) == ["must-revalidate"], kwargs
+
+
+@pytest.mark.parametrize("cf_status", ["DYNAMIC", "BYPASS"])
+def test_revalidate_item_suppressed_when_cloudflare_is_not_serving_from_cache(hdrs, cf_status):
+    # Same rationale as the private/no-cache/no-store suppression, applied to the other way a
+    # response can fail to be served from cache: content Cloudflare never serves from cache
+    # cannot go stale, so the notice's stale-content risk cannot arise.  cf-status-uncacheable
+    # is the finding the owner must act on.
+    items = run(hdrs, {"cf-cache-status": cf_status,
+                       "cache-control": f"must-revalidate, {YEAR}"})
+    assert ids(items) == ["cf-status-uncacheable"]
 
 
 def test_proxy_revalidate_shares_the_item_and_names_itself(hdrs):
@@ -273,8 +283,8 @@ def test_cookie_names_helper(hdrs):
 
 # ── should_retry_miss ───────────────────────────────────────────────────────────────
 def test_retry_miss_matrix(hdrs):
-    def check(headers, *, status=200, main=False):
-        items = run(hdrs, headers, main=main, status=status)
+    def check(headers, *, status=200):
+        items = run(hdrs, headers, status=status)
         return hdrs.should_retry_miss(headers, items)
 
     cacheable_miss = {"cf-cache-status": "MISS", "cache-control": YEAR}
@@ -323,9 +333,9 @@ def test_evaluate_headers_deterministic_and_total(psh, headers):
     hdrs = _load(psh)
     if "set-cookie" in headers:
         headers["set-cookie"] = [headers["set-cookie"]]
-    once = hdrs.evaluate_headers(headers, is_main_page=False, kind="page", now=NOW,
+    once = hdrs.evaluate_headers(headers, kind="page", now=NOW,
                                  status_code=200)
-    twice = hdrs.evaluate_headers(headers, is_main_page=False, kind="page", now=NOW,
+    twice = hdrs.evaluate_headers(headers, kind="page", now=NOW,
                                   status_code=200)
     assert once == twice
 

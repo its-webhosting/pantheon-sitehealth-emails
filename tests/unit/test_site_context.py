@@ -42,6 +42,25 @@ def test_plaintext_rendering_is_deterministic_across_notices(reset_sc):
     assert last["notices"][0]["text"] == first["notices"][0]["text"]
 
 
+def test_plaintext_links_keep_their_urls_intact_and_wrap_the_prose(reset_sc):
+    """Reference-style links: prose wraps, URLs stay whole.
+
+    The e2e golden's fixture notices carry no links, so nothing else covers how a LINKED
+    notice renders to plaintext.  Both failure modes of the inline-link alternative are
+    pinned here: unwrapped 250+ char lines, and URLs split mid-string (which would break the
+    link for the reader).
+    """
+    long_url = "https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time"
+    ctx = reset_sc.SiteContext({"name": "x"})
+    ctx.add_notice(_n(f'<p>These pages are only cached for 1 hour. Increase the cache time to '
+                      f'31536000 seconds for the full cost-savings and performance benefit. '
+                      f'<a href="{long_url}">How to fix this</a></p>'))
+    text = ctx["notices"][0]["text"]
+
+    assert max(len(line) for line in text.splitlines()) < 100   # prose wrapped
+    assert long_url in text                                     # URL never split mid-string
+
+
 def test_construction_has_empty_collections(reset_sc):
     ctx = reset_sc.SiteContext({"name": "x"})
     assert isinstance(ctx, dict)  # subscript access preserved

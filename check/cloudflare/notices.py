@@ -207,10 +207,23 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
                  else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")])
     elif item_id in ("cc-private", "cc-no-cache", "cc-no-store"):
         directive = item_id[3:]
+        # Lead with the CONSEQUENCE, not the mechanism.  "Prevents Cloudflare from caching"
+        # was imprecise for no-cache: Cloudflare's own docs disagree with themselves about
+        # whether a no-cache response is stored-and-revalidated or bypassed outright.  Under
+        # BOTH readings the owner-visible outcome is the same and is the part that matters --
+        # Cloudflare never serves the visitor from its cache, so every request goes to the
+        # origin.  Say that, and it is exactly true for all three directives.
+        effect = ("Cloudflare will not serve {it} from its cache without first checking with "
+                  "your web server").format(it=it) if directive == "no-cache" else (
+                 f"Cloudflare cannot serve {it} from its cache")
+        # NB: no punctuation immediately after </strong> -- html2text renders "</strong>:" as
+        # "** :", leaving a stray space before the colon in the plaintext part.
         text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
-                f"<code>{directive}</code>, which prevents Cloudflare from caching {it}. "
-                f"Configure your site to remove <code>{directive}</code> from public "
-                f"content." + sitewide)
+                f"<code>{directive}</code>, so {effect}. That means <strong>every visitor "
+                f"request is passed through to your web server</strong> &mdash; pages load "
+                f"more slowly, and each request can count toward the Pantheon visit limits "
+                f"that determine your hosting costs. Configure your site to remove "
+                f"<code>{directive}</code> from public content." + sitewide)
         links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "cc-must-revalidate":
         # Same text for both variants; only the link differs.  No "unless you have a strict

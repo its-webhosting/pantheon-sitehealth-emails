@@ -79,8 +79,11 @@ presentation (notices) lives in `check/dns/`, not here. Cross-cutting state and 
 in **`script_context.py`** (imported everywhere as
 `sc`): `sc.options` (parsed argv), `sc.config` (parsed TOML), `sc.plugin`/`sc.check`
 (loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.substitutions`, and
-helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_news_item()` (notice-adding is now a
-`SiteContext` method, below). The parser is built by `build_arg_parser()` and `sc.options`
+helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_news_item()`, `html_to_text()` (notice-adding
+is now a `SiteContext` method, below). **`html_to_text()` builds a fresh `HTML2Text` per call** —
+never reintroduce a shared instance: it is stateful, and sharing one made the first notice of a run
+render in a different link style from every other (the module-level `sc.text_maker` it replaced is
+gone). The parser is built by `build_arg_parser()` and `sc.options`
 is populated by the caller via `parse_args()` before other functions run, so it is
 available to every function at call time.
 

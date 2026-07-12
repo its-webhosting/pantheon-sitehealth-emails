@@ -294,6 +294,38 @@ def test_site_config_items_direct_the_owner_site_wide(notices):
                 "are only what we sampled." in two), item_id
 
 
+def test_uncacheable_directives_lead_with_the_origin_hit_consequence(notices):
+    """private/no-cache/no-store all mean Cloudflare never serves the visitor from cache.
+
+    The old text led with the mechanism ("prevents Cloudflare from caching it"), which was
+    imprecise for no-cache -- Cloudflare's docs disagree with themselves about whether a
+    no-cache response is stored-and-revalidated or bypassed.  What is true under BOTH
+    readings, and is what the owner actually pays for, is that every request reaches the
+    origin.
+    """
+    def message(item_id, umich=True):
+        return _build(notices, {"a.example.edu": [
+            _item(item_id, "https://a.example.edu/p")]}, umich=umich)[0]["message"]
+
+    for item_id in ("cc-private", "cc-no-cache", "cc-no-store"):
+        msg = message(item_id)
+        assert "every visitor request is passed through to your web server" in msg, item_id
+        assert "count toward the Pantheon visit limits" in msg, item_id
+        # The imprecise mechanism claim is gone:
+        assert "prevents Cloudflare from caching" not in msg, item_id
+
+    # no-cache is the one that is NOT simply "cannot cache": Cloudflare may hold a copy but
+    # must check with the origin before serving it.
+    assert ("will not serve it from its cache without first checking with your web "
+            "server") in message("cc-no-cache")
+    assert "cannot serve it from its cache" in message("cc-private")
+    assert "cannot serve it from its cache" in message("cc-no-store")
+
+    # Generic (non-U-M) variant carries the same consequence:
+    assert "every visitor request is passed through to your web server" in message(
+        "cc-no-cache", umich=False)
+
+
 def test_must_revalidate_states_the_stale_risk_and_says_remove_it(notices):
     def message(count, kind="page", directive="must-revalidate", umich=True):
         items = [_item("cc-must-revalidate", f"https://a.example.edu/p{i}", kind=kind,
