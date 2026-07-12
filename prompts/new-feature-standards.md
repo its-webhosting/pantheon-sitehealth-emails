@@ -110,6 +110,12 @@ The spec the skill writes must clear this bar:
 - Stable rules live in `CLAUDE.md`; other documents carry only task-specific material.
 - Closing audit questions queued for after implementation.
 
+Create the spec/plan and other documents produced under `development/`,
+in the same subdirectory as the prompt if the prompt came from a file or
+creating a new subdirectory named with a proper date and slug if the prompt
+did not come from a file; this is instead of putting the files under
+`docs/superpowers`.
+
 ## This project's context
 
 Read `CLAUDE.md` for the conventions a design must respect here:
