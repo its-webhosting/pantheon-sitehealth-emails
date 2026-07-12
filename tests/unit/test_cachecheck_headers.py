@@ -72,8 +72,9 @@ def test_no_cache_control_skips_remaining_cc_rules(hdrs):
 
 @pytest.mark.parametrize("cc", ["public", "max-age=garbage", "private"])
 def test_no_parseable_max_age(hdrs, cc):
-    # no-max-age fires and the remaining CC rules are skipped (note: 'private' present
-    # but not flagged -- the directive rules only run once a cache time parses).
+    # no-max-age fires and the private/no-cache/no-store rules are skipped (they only run
+    # once a cache time parses).  The revalidate rule is the exception -- it runs regardless;
+    # see test_must_revalidate_flagged_without_max_age.
     items = run(hdrs, {"cf-cache-status": "HIT", "cache-control": cc})
     assert ids(items) == ["no-max-age"]
 
@@ -89,18 +90,62 @@ def test_cache_time_is_max_of_max_age_and_s_maxage(hdrs):
     assert run(hdrs, headers) == []
 
 
+def _directive(items):
+    return [i["params"].get("directive") for i in items if i["id"] == "cc-must-revalidate"]
+
+
 def test_bad_directives_each_flagged(hdrs):
+    # proxy-revalidate is NOT bucketed with the caching-hostile directives any more, and the
+    # revalidate item is suppressed here because the response is already uncacheable.
     headers = {"cf-cache-status": "HIT",
                "cache-control": f"private, no-cache, no-store, proxy-revalidate, {YEAR}"}
-    assert ids(run(hdrs, headers)) == ["cc-no-cache", "cc-no-store", "cc-private",
-                                       "cc-proxy-revalidate"]
+    assert ids(run(hdrs, headers)) == ["cc-no-cache", "cc-no-store", "cc-private"]
 
 
-def test_must_revalidate_ok_on_main_page_flagged_elsewhere(hdrs):
+def test_must_revalidate_flagged_everywhere_including_main_page(hdrs):
     headers = {"cf-cache-status": "HIT", "cache-control": f"must-revalidate, {YEAR}"}
-    assert run(hdrs, headers, main=True) == []
-    assert ids(run(hdrs, headers, main=False)) == ["cc-must-revalidate"]
-    assert ids(run(hdrs, headers, kind="asset")) == ["cc-must-revalidate"]
+    for kwargs in ({"main": True}, {"main": False}, {"kind": "asset"}):
+        items = run(hdrs, headers, **kwargs)
+        assert ids(items) == ["cc-must-revalidate"], kwargs
+        assert _directive(items) == ["must-revalidate"], kwargs
+
+
+def test_proxy_revalidate_shares_the_item_and_names_itself(hdrs):
+    headers = {"cf-cache-status": "HIT", "cache-control": f"proxy-revalidate, {YEAR}"}
+    items = run(hdrs, headers)
+    assert ids(items) == ["cc-must-revalidate"]
+    assert _directive(items) == ["proxy-revalidate"]
+
+
+def test_both_revalidate_directives_yield_one_item_naming_must_revalidate(hdrs):
+    headers = {"cf-cache-status": "HIT",
+               "cache-control": f"must-revalidate, proxy-revalidate, {YEAR}"}
+    items = run(hdrs, headers)
+    assert ids(items) == ["cc-must-revalidate"]
+    assert _directive(items) == ["must-revalidate"]
+
+
+def test_must_revalidate_flagged_without_max_age(hdrs):
+    # Previously silent: the directive check sat inside the max-age branch.
+    items = run(hdrs, {"cf-cache-status": "HIT", "cache-control": "must-revalidate"})
+    assert ids(items) == ["cc-must-revalidate", "no-max-age"]
+
+
+@pytest.mark.parametrize("blocker", ["private", "no-cache", "no-store"])
+def test_revalidate_item_suppressed_on_an_uncacheable_response(hdrs, blocker):
+    # Content Cloudflare never caches cannot go stale, so the stale-content risk the notice
+    # describes cannot arise.
+    items = run(hdrs, {"cf-cache-status": "HIT",
+                       "cache-control": f"{blocker}, must-revalidate, {YEAR}"})
+    assert ids(items) == [f"cc-{blocker}"]
+
+
+def test_suppression_keys_off_the_header_not_the_emitted_item(hdrs):
+    # cc-private is only emitted once a max-age parses, so here NEITHER directive produces an
+    # item.  Suppression still applies: the page is uncacheable whether or not we emitted a
+    # finding saying so, and no-max-age already tells the owner to configure caching.
+    items = run(hdrs, {"cf-cache-status": "HIT", "cache-control": "private, must-revalidate"})
+    assert ids(items) == ["no-max-age"]
 
 
 # ── Expires ─────────────────────────────────────────────────────────────────────────
@@ -237,6 +282,11 @@ def test_retry_miss_matrix(hdrs):
     # must-revalidate alone does not block the retry (object still cacheable):
     assert check({"cf-cache-status": "MISS",
                   "cache-control": f"must-revalidate, {YEAR}"}) is True
+    # Neither revalidate directive prevents caching, so neither explains a MISS -- both must
+    # still be retried (cc-proxy-revalidate in _MISS_RETRY_BLOCKERS used to wrongly suppress
+    # this):
+    assert check({"cf-cache-status": "MISS",
+                  "cache-control": f"proxy-revalidate, {YEAR}"}) is True
     # short/missing cache time blocks:
     assert check({"cf-cache-status": "MISS", "cache-control": "max-age=3600"}) is False
     assert check({"cf-cache-status": "MISS"}) is False

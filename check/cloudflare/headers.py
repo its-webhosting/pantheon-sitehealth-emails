@@ -15,8 +15,10 @@ Battery decision flow (see SPEC §8.6):
     Cache-Control  ──▶ absent → no-cache-control, skip rest of CC rules
                        no parseable max-age/s-maxage → no-max-age, skip rest
                        < 3 days → short-cache-time
-                       private/no-cache/no-store/proxy-revalidate → one item each
-                       must-revalidate → item on non-main pages only
+                       private/no-cache/no-store → one item each
+                       must-revalidate/proxy-revalidate → one cc-must-revalidate item naming
+                       the directive seen, on every page and asset, but suppressed when the
+                       response is already uncacheable (private/no-cache/no-store)
     Expires        ──▶ only when CC absent or without parseable max-age/s-maxage
     Set-Cookie     ──▶ set-cookie, or set-cookie-bypass REPLACING the BYPASS status item
 """
@@ -31,10 +33,12 @@ MISS_RETRY_DELAY_SECONDS = 2
 MISS_RETRY_ATTEMPTS = 2              # re-requests after the initial one (3 requests total)
 
 # Items that make a MISS expected rather than mysterious; any of these suppresses the
-# MISS-retry protocol (http-error because testing already stopped on that URL):
+# MISS-retry protocol (http-error because testing already stopped on that URL).
+# NOTE: no revalidate directive belongs here -- must-revalidate/proxy-revalidate do not
+# prevent Cloudflare from caching, so they never explain a MISS.
 _MISS_RETRY_BLOCKERS = {
     "http-error", "no-cache-control", "no-max-age", "short-cache-time",
-    "cc-private", "cc-no-cache", "cc-no-store", "cc-proxy-revalidate",
+    "cc-private", "cc-no-cache", "cc-no-store",
     "set-cookie", "set-cookie-bypass",
 }
 
@@ -130,6 +134,10 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
                      now: datetime, status_code: int) -> list:
     """Run the battery against one response's headers (lowercased keys; 'set-cookie' may
     be a list).  Returns result items; the caller fills in each item's 'url'."""
+    # is_main_page is a reserved seam: no rule currently consults it.  (The must-revalidate
+    # main-page carve-out that used to read it was retired -- see
+    # development/2026-07-11-cachecheck-must-revalidate/SPEC.md.)  Removing it end-to-end
+    # through cache.py is a separate cleanup.
     items = []
 
     # Non-2xx: nothing else is evaluated for this URL (PROMPT: "do not check anything
@@ -153,13 +161,25 @@ def evaluate_headers(headers: dict, *, is_main_page: bool, kind: str,
     else:
         if seconds < MIN_CACHE_SECONDS:
             items.append(_item("short-cache-time", kind, seconds=seconds))
-        for directive in ("private", "no-cache", "no-store", "proxy-revalidate"):
+        for directive in ("private", "no-cache", "no-store"):   # proxy-revalidate removed
             if directive in cc:
                 items.append(_item(f"cc-{directive}", kind))
-        if "must-revalidate" in cc and not is_main_page:
-            # On the main page must-revalidate is deliberate (emergency alerts must
-            # appear promptly); anywhere else it defeats caching.
-            items.append(_item("cc-must-revalidate", kind))
+
+    # Outside the max-age branch on purpose: these directives matter whenever they are
+    # present, even with no parseable cache time (that case used to be silent).
+    #
+    # must-revalidate and proxy-revalidate are the same thing to Cloudflare (a shared cache).
+    # Neither prevents caching; both mean that once the content is stale and the origin is
+    # unreachable, visitors get an error instead of a stale copy.  must-revalidate is the
+    # superset, so when both are present we report it alone rather than emitting two
+    # near-identical items for one URL.  Suppressed on an uncacheable response: content
+    # Cloudflare never caches cannot go stale, so the risk cannot arise.
+    uncacheable = any(d in cc for d in ("private", "no-cache", "no-store"))
+    revalidate = ("must-revalidate" if "must-revalidate" in cc
+                  else "proxy-revalidate" if "proxy-revalidate" in cc
+                  else None)
+    if revalidate and not uncacheable:
+        items.append(_item("cc-must-revalidate", kind, directive=revalidate))
 
     # Expires matters only when Cache-Control provides no parseable cache time:
     expires_value = headers.get("expires")
