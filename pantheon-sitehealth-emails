@@ -1654,9 +1654,6 @@ and to find out what went wrong:
         # the plugin_context bag exists).
 
         # Query Pantheon for the site's domains
-        # TODO: check domains for site
-        #   - In Cloudflare, do they all point at the correct Pantheon IPs?
-        #   - If not in Cloudflare, are they all A / AAAA records?  We need to get rid of CNAMEs to live-${site_name}.pantheonsite.io.
         domains, errors, fatal = terminus("domain:list", live_site)
         if fatal or domains is None:
             sc.console.print(
