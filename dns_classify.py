@@ -8,15 +8,37 @@ check/dns/, not here.  Named dns_classify (not dns) to avoid shadowing dnspython
 import ipaddress
 from typing import NamedTuple
 
+import dns.exception
+import dns.name
 import dns.resolver
 from rich.markup import escape as rich_escape
 
 import script_context as sc
 
 
+class MalformedNameError(Exception):
+    """`hostname` is not a syntactically valid DNS name.
+
+    dnspython raises dns.name.EmptyLabel / LabelTooLong / BadEscape (all dns.exception.
+    SyntaxError) and dns.name.NameTooLong (a dns.exception.FormError) for these.  None derive
+    from dns.resolver.*, so no resolver-exception handler catches them -- and the per-site loop
+    in the main script has no try/except, so an escaped one aborts the entire run (a single
+    malformed Pantheon domain id would take down an --all run).  resolve() converts them here,
+    ONCE, at the single DNS seam, so no caller can forget them.
+    """
+
+
 def resolve(hostname: str, rrtype: str):
-    """The one seam over dns.resolver.resolve; tests monkeypatch dns_classify.resolve."""
-    return dns.resolver.resolve(hostname, rrtype)
+    """The one seam over dns.resolver.resolve; tests monkeypatch dns_classify.resolve.
+
+    Raises MalformedNameError for a syntactically invalid name (see that class).  Every other
+    dnspython exception (NoAnswer/NXDOMAIN/NoNameservers/Timeout) propagates unchanged to the
+    caller, which knows what each one means.
+    """
+    try:
+        return dns.resolver.resolve(hostname, rrtype)
+    except (dns.exception.SyntaxError, dns.name.NameTooLong) as e:
+        raise MalformedNameError(f"{hostname}: {type(e).__name__}") from e
 
 
 def classify_hostname_dns(
@@ -57,6 +79,16 @@ def classify_hostname_dns(
             sc.console.print(
                 f"Transient DNS error resolving {hostname} ({rrtype}): {type(e).__name__}",
                 style="red")
+        except MalformedNameError as e:
+            # Returns immediately -- if the *name* is malformed the second rrtype lookup fails
+            # identically, and one ATTENTION line is enough.  rich_escape BOTH hostname and e:
+            # e's message embeds the raw hostname, so leaving it unescaped would put the
+            # unescaped name straight back into a rich-markup string.
+            sc.console.print(
+                f":exclamation: [bold red] ATTENTION: {rich_escape(str(hostname))} is not a "
+                f"valid DNS name ({rich_escape(str(e))}); it cannot be in DNS",
+                style="red")
+            return 0, 0, False       # definitive -- the caller aggregates this into not_in_dns
 
     return points_at_cloudflare, points_elsewhere, transient
 

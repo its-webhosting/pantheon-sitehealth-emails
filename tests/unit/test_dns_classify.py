@@ -237,3 +237,45 @@ def test_cf_host_absent_from_proxied_lands_in_behind_cloudflare_not_proxied(psh,
     assert facts.behind_cloudflare_not_proxied == ["c.example.org"]
     assert facts.fqdns_behind_cloudflare == []
     assert facts.fqdns_not_behind_cloudflare == []
+
+
+def test_resolve_converts_a_malformed_name_into_a_named_exception(psh, reset_sc):
+    # F10: dns.name.EmptyLabel derives from dns.exception.SyntaxError, which no dns.resolver.*
+    # except clause catches -- unconverted, it aborts the whole run from inside the per-site loop.
+    import dns_classify
+    with pytest.raises(dns_classify.MalformedNameError):
+        dns_classify.resolve("a..b", "CNAME")
+    with pytest.raises(dns_classify.MalformedNameError):
+        dns_classify.resolve("x" * 70 + ".example.org", "A")
+
+
+def test_classify_hostname_dns_survives_a_malformed_name(psh, reset_sc, monkeypatch):
+    # The caller must NOT see the exception: a bad domain id skips that host, it does not kill
+    # the run.  A name that cannot exist in DNS is definitively unresolvable -> (0, 0, False),
+    # which the caller aggregates into the existing not_in_dns alert (whose remedy -- "remove
+    # these domains from the Pantheon live environment, or add them to DNS" -- is correct here).
+    import dns_classify
+
+    def boom(name, rrtype):
+        raise dns_classify.MalformedNameError(f"{name}: EmptyLabel")
+
+    monkeypatch.setattr(dns_classify, "resolve", boom)
+    assert dns_classify.classify_hostname_dns("a..b", False, [], []) == (0, 0, False)
+
+
+def test_malformed_domain_id_does_not_abort_classify_domains(psh, reset_sc, monkeypatch):
+    # End of the shadow path: a malformed id in a real domain:list must not raise out of
+    # classify_domains (which runs inside the per-site loop, which has no try/except).
+    import re
+
+    import dns_classify
+
+    def boom(name, rrtype):
+        raise dns_classify.MalformedNameError(f"{name}: EmptyLabel")
+
+    monkeypatch.setattr(dns_classify, "resolve", boom)
+    domains = {"a..b": {"id": "a..b", "type": "custom", "primary": True}}
+    facts = dns_classify.classify_domains(
+        domains, False, [], [], {}, {}, re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.I))
+    assert facts.not_in_dns == ["a..b"]      # definitive: it cannot be in DNS
+    assert facts.dns_transient == []
