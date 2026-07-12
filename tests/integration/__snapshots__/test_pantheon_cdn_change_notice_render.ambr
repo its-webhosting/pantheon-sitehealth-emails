@@ -1,0 +1,156 @@
+# serializer version: 1
+# name: test_notice_message_and_text_snapshot[generic]
+  '''
+  <p>Pantheon is <a href="https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup">making a change to their CDN</a>, from the legacy Pantheon GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before <strong>bus-occb</strong> can move to the new GCDN Beta, each of its custom domains must resolve through A and AAAA records instead of a CNAME record.</p>
+  <p>These domains for <strong>bus-occb</strong> still use a CNAME record:</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
+  <tbody>
+  <tr><td>occb.bus.umich.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
+  <tr><td>backstage.its.umich.edu</td><td>our (non-Pantheon) Cloudflare</td><td>A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</td></tr>
+  <tr><td>both.example.org</td><td>DNS and our (non-Pantheon) Cloudflare</td><td>A 23.185.0.9</td></tr>
+  <tr><td>migrated.example.org</td><td>DNS</td><td>CNAME fe.cfp2c.edge.pantheon.io</td></tr>
+  <tr><td>unresolvable.example.org</td><td>DNS</td><td>unavailable</td></tr>
+  </tbody>
+  </table>
+  </div>
+  <p>Please replace each CNAME record above with the A and AAAA records shown.</p>
+  '''
+# ---
+# name: test_notice_message_and_text_snapshot[generic].1
+  '''
+  Pantheon is making a change to their CDN <https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup>, from the legacy Pantheon
+  GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before
+  bus-occb can move to the new GCDN Beta, each of its custom domains must resolve
+  through A and AAAA records instead of a CNAME record.
+  
+  These domains for bus-occb still use a CNAME record:
+  
+    occb.bus.umich.edu  (change it in DNS)
+        A      23.185.0.4
+        AAAA   2620:12a:8000::4
+        AAAA   2620:12a:8001::4
+  
+    backstage.its.umich.edu  (change it in our (non-Pantheon) Cloudflare)
+        A      23.185.0.2
+        AAAA   2620:12a:8000::2
+        AAAA   2620:12a:8001::2
+  
+    both.example.org  (change it in DNS and our (non-Pantheon) Cloudflare)
+        A      23.185.0.9
+  
+    migrated.example.org  (change it in DNS)
+        CNAME  fe.cfp2c.edge.pantheon.io
+  
+    unresolvable.example.org  (change it in DNS)
+        unavailable
+  
+  Please replace each CNAME record above with the A and AAAA records shown.
+  
+  '''
+# ---
+# name: test_notice_message_and_text_snapshot[umich-after-cutoff]
+  '''
+  <p>Pantheon is <a href="https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup">making a change to their CDN</a>, from the legacy Pantheon GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before <strong>bus-occb</strong> can move to the new GCDN Beta, each of its custom domains must resolve through A and AAAA records instead of a CNAME record.</p>
+  <p>These domains for <strong>bus-occb</strong> still use a CNAME record:</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
+  <tbody>
+  <tr><td>occb.bus.umich.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
+  <tr><td>backstage.its.umich.edu</td><td>U-M Cloudflare</td><td>A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</td></tr>
+  <tr><td>both.example.org</td><td>DNS and U-M Cloudflare</td><td>A 23.185.0.9</td></tr>
+  <tr><td>migrated.example.org</td><td>DNS</td><td>CNAME fe.cfp2c.edge.pantheon.io</td></tr>
+  <tr><td>unresolvable.example.org</td><td>DNS</td><td>unavailable &mdash; please contact us</td></tr>
+  </tbody>
+  </table>
+  </div>
+  <p>Please replace each CNAME record above with the A and AAAA records shown.</p>
+  '''
+# ---
+# name: test_notice_message_and_text_snapshot[umich-after-cutoff].1
+  '''
+  Pantheon is making a change to their CDN <https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup>, from the legacy Pantheon
+  GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before
+  bus-occb can move to the new GCDN Beta, each of its custom domains must resolve
+  through A and AAAA records instead of a CNAME record.
+  
+  These domains for bus-occb still use a CNAME record:
+  
+    occb.bus.umich.edu  (change it in DNS)
+        A      23.185.0.4
+        AAAA   2620:12a:8000::4
+        AAAA   2620:12a:8001::4
+  
+    backstage.its.umich.edu  (change it in U-M Cloudflare)
+        A      23.185.0.2
+        AAAA   2620:12a:8000::2
+        AAAA   2620:12a:8001::2
+  
+    both.example.org  (change it in DNS and U-M Cloudflare)
+        A      23.185.0.9
+  
+    migrated.example.org  (change it in DNS)
+        CNAME  fe.cfp2c.edge.pantheon.io
+  
+    unresolvable.example.org  (change it in DNS)
+        unavailable -- please contact us
+  
+  Please replace each CNAME record above with the A and AAAA records shown.
+  
+  '''
+# ---
+# name: test_notice_message_and_text_snapshot[umich-before-cutoff]
+  '''
+  <p>Pantheon is <a href="https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup">making a change to their CDN</a>, from the legacy Pantheon GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before <strong>bus-occb</strong> can move to the new GCDN Beta, each of its custom domains must resolve through A and AAAA records instead of a CNAME record.</p>
+  <p>These domains for <strong>bus-occb</strong> still use a CNAME record:</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
+  <tbody>
+  <tr><td>occb.bus.umich.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
+  <tr><td>backstage.its.umich.edu</td><td>U-M Cloudflare</td><td>A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</td></tr>
+  <tr><td>both.example.org</td><td>DNS and U-M Cloudflare</td><td>A 23.185.0.9</td></tr>
+  <tr><td>migrated.example.org</td><td>DNS</td><td>CNAME fe.cfp2c.edge.pantheon.io</td></tr>
+  <tr><td>unresolvable.example.org</td><td>DNS</td><td>unavailable &mdash; please contact us</td></tr>
+  </tbody>
+  </table>
+  </div>
+  <p>ITS will make these changes for you during an upcoming maintenance, which we will schedule and announce.  If you would rather make the changes yourself before then, you are welcome to.</p>
+  '''
+# ---
+# name: test_notice_message_and_text_snapshot[umich-before-cutoff].1
+  '''
+  Pantheon is making a change to their CDN <https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup>, from the legacy Pantheon
+  GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before
+  bus-occb can move to the new GCDN Beta, each of its custom domains must resolve
+  through A and AAAA records instead of a CNAME record.
+  
+  These domains for bus-occb still use a CNAME record:
+  
+    occb.bus.umich.edu  (change it in DNS)
+        A      23.185.0.4
+        AAAA   2620:12a:8000::4
+        AAAA   2620:12a:8001::4
+  
+    backstage.its.umich.edu  (change it in U-M Cloudflare)
+        A      23.185.0.2
+        AAAA   2620:12a:8000::2
+        AAAA   2620:12a:8001::2
+  
+    both.example.org  (change it in DNS and U-M Cloudflare)
+        A      23.185.0.9
+  
+    migrated.example.org  (change it in DNS)
+        CNAME  fe.cfp2c.edge.pantheon.io
+  
+    unresolvable.example.org  (change it in DNS)
+        unavailable -- please contact us
+  
+  ITS will make these changes for you during an upcoming maintenance, which we
+  will schedule and announce.  If you would rather make the changes yourself
+  before then, you are welcome to.
+  
+  '''
+# ---
