@@ -89,16 +89,33 @@ def invoke_hooks(hook_name: str, *args, **kwargs) -> None:
         hook['func'](*args, **kwargs)
 
 
-text_maker = html2text.HTML2Text()
-# html2text --protect-links --images-to-alt --unicode-snob --reference-links --no-wrap-links --links-after-para --wrap-list-items --pad-tables file.html
-text_maker.protect_links    = True
-text_maker.images_to_alt    = True
-text_maker.unicode_snob     = True
-text_maker.reference_links  = True
-text_maker.wrap_links       = False
-text_maker.links_after_para = True
-text_maker.wrap_list_items  = True
-text_maker.pad_tables       = True
+def html_to_text(html: str) -> str:
+    """Render notice/news HTML to the plaintext used in the text/plain email part.
+
+    A FRESH HTML2Text per call, deliberately: the instance is stateful, and sharing one
+    across calls made every notice render differently from its siblings.  Two ways it bit us:
+    `inline_links` is the flag html2text actually honors (`reference_links` only flips it
+    during the first handle()), so the run's FIRST notice silently ignored the configured
+    link style; and the reference counter then climbed across the whole run ([1], [2], ...
+    into the hundreds) instead of restarting per notice.  Setting `inline_links` explicitly
+    below is what makes the very first call honor the reference-link style.
+
+    Equivalent to:
+      html2text --protect-links --images-to-alt --unicode-snob --reference-links
+                --no-wrap-links --links-after-para --wrap-list-items --pad-tables file.html
+    """
+    text_maker = html2text.HTML2Text()
+    text_maker.protect_links    = True
+    text_maker.images_to_alt    = True
+    text_maker.unicode_snob     = True
+    text_maker.reference_links  = True
+    text_maker.inline_links     = False   # what reference_links=True actually needs; see above
+    text_maker.wrap_links       = False
+    text_maker.links_after_para = True
+    text_maker.wrap_list_items  = True
+    text_maker.pad_tables       = True
+    return text_maker.handle(html)
+
 
 class SiteContext(dict):
     """
@@ -125,7 +142,7 @@ class SiteContext(dict):
         if 'icon' not in notice:
             notice['icon'] = icon[notice['type']]
         if 'text' not in notice:
-            notice['text'] = text_maker.handle(notice['message'])
+            notice['text'] = html_to_text(notice['message'])
         order = notice['order'] if 'order' in notice else 'append'
         if order == 'prepend' or order == 'first':
             self['notices'].insert(0, notice)
@@ -173,7 +190,7 @@ def add_news_item(news_item: dict, from_where: str = 'check') -> None:
     if 'icon' not in news_item:
         news_item['icon'] = icon[news_item['type']]
     if 'text' not in news_item:
-        news_item['text'] = text_maker.handle(news_item['message'])
+        news_item['text'] = html_to_text(news_item['message'])
     order = news_item['order'] if 'order' in news_item else 'append'
     if order == 'prepend' or order == 'first':
         news.insert(0, news_item)

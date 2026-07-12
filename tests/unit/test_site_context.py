@@ -13,6 +13,35 @@ def _n(message="<p>Hi</p>", type="info", **extra):
     return {"type": type, "message": message, **extra}
 
 
+_LINKED = ('<p>Some pages on <a href="https://a.example.edu/">a.example.edu</a> are not '
+           'cached, which protects your site from traffic spikes and makes pages load '
+           'faster.</p>')
+
+
+def test_plaintext_rendering_is_deterministic_across_notices(reset_sc):
+    """The html2text renderer must be stateless across calls.
+
+    Regression: sc used ONE shared html2text.HTML2Text instance.  That instance flips its
+    own `inline_links` True->False during the first handle(), so the FIRST notice of a run
+    ignored the configured reference-link style, and the reference counter then climbed
+    ([1], [2], ...) for the rest of the run -- every notice rendered differently from its
+    siblings, and test outcomes depended on how many notices any earlier test had rendered.
+    """
+    first = reset_sc.SiteContext({"name": "x"})
+    first.add_notice(_n(_LINKED))
+
+    # Render several more notices, exactly as a real multi-site run does...
+    for _ in range(3):
+        other = reset_sc.SiteContext({"name": "y"})
+        other.add_notice(_n(_LINKED))
+
+    # ...then the same HTML again.  Identical input must give identical plaintext.
+    last = reset_sc.SiteContext({"name": "z"})
+    last.add_notice(_n(_LINKED))
+
+    assert last["notices"][0]["text"] == first["notices"][0]["text"]
+
+
 def test_construction_has_empty_collections(reset_sc):
     ctx = reset_sc.SiteContext({"name": "x"})
     assert isinstance(ctx, dict)  # subscript access preserved
