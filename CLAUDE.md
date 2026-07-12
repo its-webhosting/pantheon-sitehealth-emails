@@ -92,7 +92,7 @@ available to every function at call time.
 `find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
 containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
-`check.cloudflare`, `check.dns`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
+`check.cloudflare`, `check.dns`, `check.pantheon_cdn_change`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
 sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`, `env/get_env.py`,
 `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
 only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{env NAME}` /
@@ -139,12 +139,17 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 `setup` + per-FQDN HTTP checks at `site_post_dns`, see `docs/cloudflare-cachecheck.md`).
 DNS-resolution notices live in `check/dns/` (`notices.py` builders + the `site_post_dns`
 `hook.py`), fed by the `dns_classify.py` engine; `no-domains`/`no-primary-domain` remain in
-core.
+core. `check/pantheon_cdn_change/` (`site_post_dns`, unconditional registration) flags
+custom domains still CNAME'd to the legacy Pantheon GCDN (Fastly) — in public DNS or in
+Cloudflare — and gets the replacement records Pantheon requires from `terminus domain:dns`;
+**temporary**, delete once Pantheon's CDN migration is done — see
+`docs/pantheon-cdn-change.md`.
 To add a check or integration, create a new package dir with a non-empty `__init__.py`
 that self-registers — no central registry to edit. Check modules cannot import the
 dash-named main script; the helpers they need are exposed as `sc` attributes near the
 `cloudflare_enabled()` def (`sc.escape_url`, `sc.check_wordpress_plugin`,
-`sc.check_drupal_module`, `sc.umich_enabled`, `sc.cloudflare_enabled`) — extend that block for new ones (tests
+`sc.check_drupal_module`, `sc.umich_enabled`, `sc.cloudflare_enabled`, `sc.terminus`,
+`sc.fqdn_re`) — extend that block for new ones (tests
 monkeypatch these when loading check modules standalone). `check/cloudflare/httpseam.py`
 holds the ONE monkeypatchable HTTP seam (`fetch`/`sleep`) and `egress.py` its own `probe`
 seam — route any new outbound HTTP in that package through them to stay offline-testable.
@@ -217,10 +222,11 @@ when the source was disabled, malformed, or failed):
   `dns.records.list(proxied=True)`), **writes `fqdns.json` atomically** (temp + `os.replace`,
   replacing a symlink with a plain file), and loads it into
   `sc.plugin_context['plugin.cloudflare']['proxied_fqdns']`. This replaces the old per-site file
-  read; the per-site loop only does a keys-only membership test (`hostname not in …`), so
-  `fqdns.json` values are now `{zone_id, origins}` objects (was bare arrays) but **only the keys
-  are consumed** — old array-format files still load, and `zone_id` is stored for a future feature,
-  unused now. Refresh rules (see `docs/cloudflare-fqdns.md`): update if the file is missing, or
+  read; the per-site loop still does its keys-only membership test (`hostname not in …`), so
+  `fqdns.json` values are now `{zone_id, origins}` objects (was bare arrays) — old array-format
+  files still load. **`origins` is now consumed**, by `check/pantheon_cdn_change` (it walks each
+  origin's CNAME chain looking for the legacy Pantheon GCDN); `zone_id` remains stored but unread.
+  Refresh rules (see `docs/cloudflare-fqdns.md`): update if the file is missing, or
   stale (>24h) + processing multiple sites + not `--no-update-cloudflare-fqdns`, or
   `--update-cloudflare-fqdns` (forces; requires `[Cloudflare]` enabled). `--update` /
   `--import-older-metrics` / `--create-tables` skip the refresh entirely (they never consume
@@ -339,23 +345,63 @@ Non-obvious things the harness relies on:
   extractions are behavior-preserving (goldens byte-identical). **`classify_hostname_dns` is NOT
   one of these** — it moved out of the script into `dns_classify.py`; import it from there.
 - **DNS tests.** The `dns_classify.py` engine and `check/dns/` package have their own suite:
-  `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS),
-  `tests/unit/test_dns_notices.py` (notice builders), `tests/integration/test_check_dns.py` (the
-  `site_post_dns` hook), and `tests/integration/test_dns_notice_render.py` (syrupy snapshots).
+  `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS, and
+  `dns_classify.MalformedNameError` — `resolve()` converts dnspython's syntax errors
+  (`dns.exception.SyntaxError`, `dns.name.NameTooLong`) into this named exception at the single
+  DNS seam, and `classify_hostname_dns` catches it and returns `(0, 0, False)`, so a malformed
+  hostname — e.g. a Pantheon domain id like `a..b`, which `fqdn_re` accepts — can never escape and
+  abort the whole run), `tests/unit/test_dns_notices.py` (notice builders),
+  `tests/integration/test_check_dns.py` (the `site_post_dns` hook), and
+  `tests/integration/test_dns_notice_render.py` (syrupy snapshots). `check/pantheon_cdn_change/`
+  has its own parallel suite: `tests/unit/test_pantheon_cdn_change_chain.py`,
+  `tests/unit/test_pantheon_cdn_change_pantheon.py`,
+  `tests/unit/test_pantheon_cdn_change_detect.py`, `tests/unit/test_pantheon_cdn_change_notices.py`,
+  `tests/integration/test_check_pantheon_cdn_change.py` (hook/phase registration),
+  `tests/integration/test_pantheon_cdn_change_notice_render.py` (syrupy snapshots, and where the
+  U-M-before-cutoff copy is pinned), and the 4th e2e golden (below).
   **`dns_classify.resolve` is the one monkeypatchable DNS seam** — patch it (as those tests do) so
   nothing hits real DNS; route any new resolution through it.
+- **Shared DNS-test infrastructure (`tests/helpers/`).** `dnsfake.py` has the fake
+  `dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`) and
+  `recording_console` (a wide `record=True` Console, read back with `export_text()` — not `capsys`,
+  which wraps at width 80 and breaks substring assertions as messages grow). `checkload.py` loads a
+  `check/` package (or one module of it) standalone via a probe package registered in
+  `sys.modules`, for packages using relative imports. Both take pytest's `request` (not
+  `monkeypatch`) to register their cleanup: `monkeypatch.delitem(..., raising=False)` on a key that
+  does not exist yet records no undo entry, so a package created later by `from . import chain`
+  would leak into the next test's `sys.modules` — these purge by module-name prefix instead.
+  `tests/shims/dnsshim/sitecustomize.py` is the subprocess counterpart: `run_program()` launches
+  the real program in a subprocess, so an in-process `monkeypatch` of `dns_classify.resolve` cannot
+  reach it. Putting this directory on `PYTHONPATH` makes Python auto-import `sitecustomize` at
+  interpreter startup (before the program imports anything) and replace `dns.resolver.resolve`,
+  reading its zone from the `DNS_SHIM_ZONE` JSON file env var — the 4th e2e golden below is what
+  needs it.
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
   and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots
   normalize the volatile `make_msgid` CIDs; refresh with `./run-tests --update-goldens`. There are
-  **three** goldens: WordPress (`its-wws-test1`, fixtures in `tests/fixtures/terminus/`), Drupal
+  **four** goldens: WordPress (`its-wws-test1`, fixtures in `tests/fixtures/terminus/`), Drupal
   (`its-wws-test2`, `tests/fixtures/terminus-drupal/`, selected via `run_program(fixtures_dir=…)`),
-  and a **non-U-M** golden (`test_golden_nonumich.py`, `minimal-nonumich.toml` with no
+  a **non-U-M** golden (`test_golden_nonumich.py`, `minimal-nonumich.toml` with no
   `[UMich]` section + generic `[Email]`) that proves the P8 config-driven email headers/msgid and that the
-  U-M-guarded doc-URL checks don't appear for a non-U-M run. The `.eml` identity headers have no
+  U-M-guarded doc-URL checks don't appear for a non-U-M run, and the **Pantheon CDN-change**
+  golden (`tests/e2e/test_golden_cdn_change.py`, `tests/fixtures/terminus-cdnchange/`, DNS shimmed
+  via `tests/shims/dnsshim`) driving `check/pantheon_cdn_change` through the real `main()`. It has
+  two deliberate scope limits, both asserted in the test rather than left implicit: it covers only
+  the public-DNS detection source (`[Cloudflare]` stays disabled, since enabling it would make a
+  setup hook call the live Cloudflare API), and it pins the **generic** notice copy
+  (`minimal.toml` has no `[UMich]` section) — the U-M copy is pinned instead by
+  `tests/integration/__snapshots__/test_pantheon_cdn_change_notice_render.ambr`. The `.eml`
+  identity headers have no
   byte golden (the `Date:` is volatile) — `test_eml_headers.py` asserts them explicitly. Refresh
   WordPress fixtures with `./run-tests --record`, Drupal with `python tests/tools/record.py
   --drupal` (both trim the org list to the one test site and scrub team emails).
+- **`tests/conftest.py`'s `_CWD_ASSETS`** must include `check` and `plugin` (symlinked into the
+  isolated e2e working directory alongside the template/PHP assets): `find_modules()` walks
+  `check/`/`plugin/` **CWD-relative**, and the e2e workdir is a fresh temp directory — before this
+  was fixed, **no e2e golden had ever loaded a single check or plugin package**, so every offline
+  e2e run was silently testing a program with every check disabled. Anyone editing `make_workdir()`
+  needs to preserve this or the e2e tier stops testing anything the check/plugin system does.
 - **The offline golden only reaches the ≤4-month "not enough data" state** (its recorded metrics
   fall after the March report date), so the extracted `plan_costs` cost model is exercised
   end-to-end by `tests/e2e/test_recommendation_e2e.py` (seeds >4 in-window months) plus its
