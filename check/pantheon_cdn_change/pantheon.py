@@ -36,6 +36,8 @@ from rich.markup import escape as rich_escape
 
 import script_context as sc
 
+from . import chain
+
 
 class Required(NamedTuple):
     a: list            # Pantheon's required A records,     IN PANTHEON'S ORDER
@@ -43,7 +45,10 @@ class Required(NamedTuple):
     cname: list        # Pantheon's required CNAME values (an already-migrated site -- F14)
 
 
-EMPTY = Required([], [], [])
+# Tuples, not lists: EMPTY is a SHARED instance handed out as a default value.  A list would let
+# a careless `pantheon.EMPTY.a.append(...)` silently corrupt every future caller; a tuple fails
+# loudly (AttributeError) instead.
+EMPTY = Required((), (), ())
 
 
 def required_records(site_id: str, site_name: str = "") -> dict:
@@ -78,13 +83,19 @@ def required_records(site_id: str, site_name: str = "") -> dict:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        domain = str(row.get("domain", "")).strip().rstrip(".").lower()
+        raw_domain = row.get("domain")
+        # A JSON `null` (or any other non-string) is ABSENT, not the literal string "None" --
+        # str(None) == "None" would pass the truthiness check below and publish a fabricated key.
+        domain = chain.normalize(raw_domain) if isinstance(raw_domain, str) else ""
         rrtype = row.get("type")
-        value = str(row.get("value", "")).strip()
+        raw_value = row.get("value")
+        value = raw_value.strip() if isinstance(raw_value, str) else ""
         if not domain or not value or rrtype not in ("A", "AAAA", "CNAME"):
             continue          # an empty `value` ("Remove this detected record") is no requirement
         buckets.setdefault(domain, {"A": [], "AAAA": [], "CNAME": []})[rrtype].append(value)
 
     records = {d: Required(v["A"], v["AAAA"], v["CNAME"]) for d, v in buckets.items()}
-    sc.debug(f"Pantheon requires records for {len(records)} domain(s) of {label}", level=2)
+    sc.debug(
+        f"Pantheon requires records for {len(records)} domain(s) of {rich_escape(str(label))}",
+        level=2)
     return records

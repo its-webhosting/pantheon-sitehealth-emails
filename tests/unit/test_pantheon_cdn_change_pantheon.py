@@ -36,6 +36,12 @@ def pantheon(psh, reset_sc, request):
         psh, "pantheon_cdn_change", "pantheon", "pcc_pantheon_probe", request)
 
 
+@pytest.fixture
+def chain(psh, reset_sc, request):
+    return load_check_module(
+        psh, "pantheon_cdn_change", "chain", "pcc_pantheon_chain_probe", request)
+
+
 def _fake_terminus(reset_sc, monkeypatch, result, errors="", fatal=False, calls=None):
     def _terminus(*args):
         if calls is not None:
@@ -113,3 +119,48 @@ def test_failure_yields_empty_map_and_never_raises(
         assert "ATTENTION" in out
         assert "bus-occb" in out                    # the NAME, never the UUID
         assert "9cf2c790" not in out
+
+
+def test_null_value_row_produces_no_entry(pantheon, reset_sc, monkeypatch):
+    # A JSON `null` value must be treated as ABSENT, not stringified into the literal "None" --
+    # str(None) == "None" would otherwise pass the truthiness check and get published as a
+    # fabricated record value.
+    rows = [
+        {"domain": "x.example.org", "type": "A", "value": None},
+        {"domain": "x.example.org", "type": "AAAA", "value": "2620:12a:8000::4"},
+    ]
+    _fake_terminus(reset_sc, monkeypatch, rows)
+    out = pantheon.required_records("s", "s")
+    assert out == {"x.example.org": pantheon.Required([], ["2620:12a:8000::4"], [])}
+    assert "None" not in str(out)
+
+
+def test_null_domain_row_produces_no_entry(pantheon, reset_sc, monkeypatch):
+    # A JSON `null` domain must be treated as ABSENT, not stringified into the literal "None" --
+    # str(None) == "None" would otherwise pass the truthiness check and get published as a
+    # fabricated domain key.
+    rows = [{"domain": None, "type": "A", "value": "23.185.0.4"}]
+    _fake_terminus(reset_sc, monkeypatch, rows)
+    out = pantheon.required_records("s", "s")
+    assert out == {}
+    assert "none" not in str(out).lower()
+
+
+def test_normalization_matches_chain_normalize(pantheon, chain, reset_sc, monkeypatch):
+    # detect.py (a later task) looks these keys up with chain.normalize(fqdn) -- the two MUST
+    # agree, so pantheon.py must not reimplement normalization inline.
+    rows = [{"domain": "OCCB.Bus.UMich.edu.", "type": "A", "value": "23.185.0.4"}]
+    _fake_terminus(reset_sc, monkeypatch, rows)
+    out = pantheon.required_records("s", "s")
+    key = chain.normalize("OCCB.Bus.UMich.edu.")
+    assert key == "occb.bus.umich.edu"
+    assert key in out
+    assert out[key].a == ["23.185.0.4"]
+
+
+def test_empty_is_immutable(pantheon):
+    # EMPTY is a SHARED instance handed out as a default value; its lists must not be mutable,
+    # or a careless caller could silently corrupt it for every future caller.
+    assert pantheon.EMPTY == pantheon.Required((), (), ())
+    with pytest.raises(AttributeError):
+        pantheon.EMPTY.a.append("23.185.0.4")
