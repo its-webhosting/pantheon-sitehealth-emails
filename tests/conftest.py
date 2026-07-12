@@ -46,6 +46,15 @@ _CWD_ASSETS = (
     "email_template.txt",
     "header-image.png",
     "inline-styles.php",  # PHP resolves vendor/ via realpath __DIR__, so no vendor symlink needed
+    # find_modules() walks os.walk("check") / os.walk("plugin") -- CWD-RELATIVE
+    # (pantheon-sitehealth-emails:900).  Without these, an e2e run in the isolated workdir
+    # discovers NO check or plugin package at all, so no hook ever registers and the e2e tier
+    # silently tests a program with every check disabled -- which is not the program we ship.
+    # (Adding them leaves the three pre-existing goldens byte-identical: with the offline
+    # configs, check/umich and check/cloudflare self-gate off, and check/dns emits nothing for
+    # fixtures whose domain:list carries only the platform domain.)
+    "check",
+    "plugin",
 )
 
 # Flags that must never reach the real program (see SPEC §2, constraints C1/C2).

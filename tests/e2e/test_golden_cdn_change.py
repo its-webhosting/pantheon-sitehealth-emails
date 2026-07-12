@@ -51,11 +51,6 @@ ZONE = {
 @pytest.fixture(scope="module")
 def cdn_change_render(tmp_path_factory):
     work = make_workdir(tmp_path_factory.mktemp("cdnchange"))
-    # find_modules() walks os.walk("check") -- CWD-RELATIVE (pantheon-sitehealth-emails:900), and
-    # make_workdir() symlinks only the render assets.  Without this link no check package is
-    # discovered in the isolated workdir and the hook under test never registers.  Linked HERE
-    # rather than in make_workdir() so the three pre-existing goldens keep their exact behaviour.
-    (work / "check").symlink_to(REPO_ROOT / "check")
     zone_file = work / "zone.json"
     zone_file.write_text(json.dumps(ZONE))
     proc = build_rendered_report(
