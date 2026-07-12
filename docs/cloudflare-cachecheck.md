@@ -47,9 +47,11 @@ list in `check/cloudflare/headers.py`, matched case-insensitively) are ignored �
 not affect origin caching — so a response whose only cookies are Cloudflare's produces no
 cookie finding.  When a response is a cacheable `MISS`, it is re-requested up to twice
 (2-second pauses) to distinguish "not cached *yet*" from "never caches"; only a
-persistent `MISS` is reported.  An invalid HTTPS certificate is reported and the checks
-then continue against the response anyway.  A `cf-mitigated: challenge` response is
-reported and ends that URL's checks.
+persistent `MISS` is reported.  No revalidate directive suppresses this retry —
+neither `must-revalidate` nor `proxy-revalidate` prevents Cloudflare from caching,
+so neither explains a `MISS`.  An invalid HTTPS certificate is reported and the
+checks then continue against the response anyway.  A `cf-mitigated: challenge`
+response is reported and ends that URL's checks.
 
 Every finding prints to the console immediately (any verbosity).  At verbosity 0 progress
 is shown ephemerally; `-v` prints plain step lines; `-vvv` additionally prints each
@@ -111,8 +113,8 @@ list_name = "..."        # REQUIRED: the list of allow-listed IPs/CIDRs
 | `no-cache-control` | No `Cache-Control` header |
 | `no-max-age` | `Cache-Control` without a usable `max-age`/`s-maxage` |
 | `short-cache-time` | Cache time under 3 days (1 year is recommended) |
-| `cc-private` / `cc-no-cache` / `cc-no-store` / `cc-proxy-revalidate` | Caching-hostile directives on public content |
-| `cc-must-revalidate` | `must-revalidate` anywhere except the main page (allowed there for emergency alerts) |
+| `cc-private` / `cc-no-cache` / `cc-no-store` | Caching-hostile directives on public content |
+| `cc-must-revalidate` | `must-revalidate` or `proxy-revalidate` on any page or asset (the directive seen is in `params["directive"]`). Neither prevents caching; both mean that once the content is stale and the origin is unreachable, visitors get an error instead of a stale copy. Suppressed when the response is already uncacheable. |
 | `expires-short` | Legacy `Expires` under 3 days with no usable `Cache-Control` cache time |
 | `set-cookie` / `set-cookie-bypass` | Cookies set on public content (the `-bypass` form when the cookie is what made Cloudflare bypass its cache) |
 | `miss-persistent` | Headers allow caching but the object never entered the cache across 3 attempts |
