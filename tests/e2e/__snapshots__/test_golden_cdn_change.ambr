@@ -356,7 +356,7 @@
   </tbody>
   </table>
   </div>
-  <p>Please replace each CNAME record above with the A and AAAA records shown.</p></div>
+  <p>Please replace each CNAME record above with the records shown.</p></div>
   </div>
   
   
@@ -632,7 +632,7 @@
         AAAA   2620:12a:8000::4
         AAAA   2620:12a:8001::4
   
-  Please replace each CNAME record above with the A and AAAA records shown.
+  Please replace each CNAME record above with the records shown.
   
   
   

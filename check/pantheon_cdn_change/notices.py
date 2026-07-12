@@ -48,11 +48,14 @@ MAINTENANCE_TEXT = (
     "will schedule and announce.  If you would rather make the changes yourself\n"
     "before then, you are welcome to.")
 
+# "the records shown", not "the A and AAAA records shown": a site Pantheon has ALREADY migrated
+# answers domain:dns with a CNAME and no A/AAAA (F14), so its row shows a CNAME.  Naming the record
+# types here would contradict the very table the sentence points at.
 SELF_SERVE_HTML = (
-    "<p>Please replace each CNAME record above with the A and AAAA records shown.</p>")
+    "<p>Please replace each CNAME record above with the records shown.</p>")
 
 SELF_SERVE_TEXT = (
-    "Please replace each CNAME record above with the A and AAAA records shown.")
+    "Please replace each CNAME record above with the records shown.")
 
 
 def _cloudflare_label(umich: bool) -> str:
