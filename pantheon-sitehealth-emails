@@ -1196,6 +1196,8 @@ sc.check_wordpress_plugin = check_wordpress_plugin
 sc.check_drupal_module = check_drupal_module
 sc.umich_enabled = umich_enabled
 sc.cloudflare_enabled = cloudflare_enabled
+sc.terminus = terminus      # check packages: Pantheon calls (e.g. domain:dns) go through this
+sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
 
 
 def main() -> None:

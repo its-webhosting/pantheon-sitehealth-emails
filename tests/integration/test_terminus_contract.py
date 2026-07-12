@@ -84,3 +84,13 @@ def test_session_expiry_retries_once_then_returns(psh, monkeypatch):
     result, errors, fatal = psh.terminus("org:site:list", "org")
     assert result == {"ok": 1}
     assert calls["n"] == 2
+
+
+def test_check_helpers_are_exposed_on_sc(psh, reset_sc):
+    # Check packages cannot import the dash-named script; these are the documented seam
+    # (CLAUDE.md).  check/pantheon_cdn_change calls sc.terminus("domain:dns", ...) and validates
+    # domain ids with sc.fqdn_re before they reach -notices.csv (which has no escaping).
+    assert reset_sc.terminus is psh.terminus
+    assert reset_sc.fqdn_re is psh.fqdn_re
+    assert reset_sc.fqdn_re.match("occb.bus.umich.edu")
+    assert not reset_sc.fqdn_re.match("has,comma.example.org")
