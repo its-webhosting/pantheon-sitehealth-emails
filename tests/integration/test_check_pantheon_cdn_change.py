@@ -79,9 +79,12 @@ def test_on_or_after_cutoff_umich_gets_the_generic_instruction(check, reset_sc, 
 
 
 def test_no_custom_domains_no_notice(check, reset_sc, monkeypatch):
+    # Assert against the SiteContext the hook actually ran on -- a freshly built one would have an
+    # empty notices list no matter what the hook did, which asserts nothing.
     monkeypatch.setattr(check.hook, "today", lambda: datetime.date(2026, 8, 1))
-    check.hook.check_pantheon_cdn_change(_ctx(reset_sc, []))
-    assert _ctx(reset_sc, [])["notices"] == []
+    ctx = _ctx(reset_sc, [])
+    check.hook.check_pantheon_cdn_change(ctx)
+    assert ctx["notices"] == []
 
 
 def test_clean_site_no_notice(check, reset_sc, monkeypatch):
