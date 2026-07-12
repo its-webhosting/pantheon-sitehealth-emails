@@ -11,7 +11,7 @@
   <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">backstage.its.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">our (non-Pantheon) Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</div></td></tr>
   <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">both.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS and our (non-Pantheon) Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.9</div></td></tr>
   <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">migrated.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">CNAME fe.cfp2c.edge.pantheon.io</div></td></tr>
-  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">unresolvable.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">unavailable</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">unresolvable.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">unavailable &mdash; see this site&#39;s Domains page in the Pantheon dashboard</div></td></tr>
   </tbody>
   </table>
   </div>
@@ -44,7 +44,7 @@
         CNAME  fe.cfp2c.edge.pantheon.io
   
     unresolvable.example.org  (change it in DNS)
-        unavailable
+        unavailable -- see this site's Domains page in the Pantheon dashboard
   
   Please replace each CNAME record above with the records shown.
   

@@ -96,6 +96,16 @@ def required_records(site_id: str, site_name: str = "") -> dict:
         buckets.setdefault(domain, {"A": [], "AAAA": [], "CNAME": []})[rrtype].append(value)
 
     records = {d: Required(v["A"], v["AAAA"], v["CNAME"]) for d, v in buckets.items()}
+    if not records:
+        # The call SUCCEEDED but nothing usable came back -- an empty list, or rows whose shape
+        # changed (a renamed key, every `value` empty).  Without this line the failure is totally
+        # silent: the three guards above only print for fatal/None/non-list, and the caller's
+        # per-domain warning is skipped because it cannot tell {} apart from "call failed".  Every
+        # affected owner would then be emailed "unavailable" while the run reports success.
+        sc.console.print(
+            ":exclamation: [bold red] ATTENTION: Pantheon's domain:dns answer for "
+            f"{rich_escape(str(label))} contained no usable records "
+            f"({len(rows)} row(s) returned) -- owners will be told the records are unavailable")
     sc.debug(
         f"Pantheon requires records for {len(records)} domain(s) of {rich_escape(str(label))}",
         level=2)

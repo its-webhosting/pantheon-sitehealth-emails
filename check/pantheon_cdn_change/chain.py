@@ -104,11 +104,12 @@ def walk(start: str) -> ChainResult:
                 ":exclamation: [bold red] ATTENTION: not a valid DNS name, skipping the "
                 f"legacy-GCDN check for it: {rich_escape(str(e))}")
             return ChainResult("", False)
-        targets = [normalize(rdata.target) for rdata in answer]
-        if not targets:
-            return ChainResult("", False)
-        sc.debug(f"{rich_escape(name)} is a CNAME to {rich_escape(targets[0])}", level=2)
-        name = targets[0]
+        # No empty-answer guard: dns_classify.resolve either raises (every case is handled above)
+        # or returns a non-empty rdata set -- an empty CNAME answer surfaces as NoAnswer, never as
+        # an empty iterable.  A guard here would be untestable dead code.
+        target = normalize(next(iter(answer)).target)
+        sc.debug(f"{rich_escape(name)} is a CNAME to {rich_escape(target)}", level=2)
+        name = target
     sc.console.print(
         ":exclamation: [bold red] ATTENTION: CNAME chain for "
         f"{rich_escape(normalize(start))} exceeds {MAX_CNAME_DEPTH} hops")

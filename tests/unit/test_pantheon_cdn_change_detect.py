@@ -149,6 +149,31 @@ def test_finding_without_records_still_reported(detect, monkeypatch):
     assert findings[0].a == [] and findings[0].aaaa == [] and findings[0].cname == []
 
 
+def test_fqdn_absent_from_a_successful_answer_is_announced(detect, reset_sc, monkeypatch):
+    # The call succeeded and answered for OTHER domains, but has no row for this one.  The owner
+    # will be told "unavailable", so the operator has to hear about it.  Detected by MEMBERSHIP,
+    # not by `records is pantheon.EMPTY`: an identity check against the shared sentinel would
+    # silently stop firing the day required_records returns an equal-but-distinct Required([],[],[]).
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {"someone.else.example.org": (["1.2.3.4"], [], [])})
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert findings[0].a == []                       # still reported, records empty
+    out = console.export_text()
+    assert "ATTENTION" in out and "no required records" in out
+    assert "occb.bus.umich.edu" in out
+
+
+def test_no_per_domain_noise_when_the_whole_call_failed(detect, reset_sc, monkeypatch):
+    # required_records already printed its own ATTENTION for the failure; a second line per domain
+    # would be noise.
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, OCCB_ZONE)
+    _pantheon_says(detect, monkeypatch, {})          # {} == the call failed / nothing usable
+    detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert "no required records" not in console.export_text()
+
+
 def test_absent_fqdn_in_successful_answer_warns_operator(detect, reset_sc, monkeypatch):
     # The call SUCCEEDED (Pantheon answered for at least one domain) but has no row for THIS
     # candidate.  The owner is about to be emailed "unavailable" -- the operator must be told,

@@ -38,15 +38,39 @@ class MalformedNameError(Exception):
 def resolve(hostname: str, rrtype: str):
     """The one seam over dns.resolver.resolve; tests monkeypatch dns_classify.resolve.
 
-    Raises MalformedNameError for a syntactically invalid name (see that class).  Every other
+    Raises MalformedNameError for a syntactically invalid NAME (see that class).  Every other
     dnspython exception (NoAnswer/NXDOMAIN/NoNameservers/Timeout) propagates unchanged to the
     caller, which knows what each one means.
+
+    The name is parsed FIRST, in its own try, so only a parse-time failure can be reported as a
+    malformed name.  struct.error is the reason this matters: dns.name.from_text raises it for an
+    out-of-range byte escape (the literal text "\\300.com"), but dnspython ALSO raises it from
+    dns/query.py's struct.unpack of a TCP length prefix -- i.e. from garbled wire data on a
+    perfectly valid name.  Catching struct.error around the resolve() call would report a
+    truncated network response as "not a valid DNS name", and classify_hostname_dns would then
+    aggregate that host into not_in_dns -- telling the owner, in an alert, to remove a domain
+    from Pantheon because of a transient network blip.  A garbled response is instead re-raised
+    as NoNameservers ("no nameserver gave a usable answer"), which every caller already treats as
+    transient = UNKNOWN, retry.
     """
     try:
-        return dns.resolver.resolve(hostname, rrtype)
+        dns.name.from_text(hostname)
     except (dns.exception.SyntaxError, dns.name.NameTooLong, dns.name.IDNAException,
             struct.error) as e:
         raise MalformedNameError(f"{hostname}: {type(e).__name__}") from e
+
+    try:
+        return dns.resolver.resolve(hostname, rrtype)
+    except (dns.exception.SyntaxError, dns.name.NameTooLong, dns.name.IDNAException) as e:
+        # Still name-level (the resolver re-parses, and may apply a search suffix that from_text
+        # above never saw) -- so these remain "malformed name".
+        raise MalformedNameError(f"{hostname}: {type(e).__name__}") from e
+    except struct.error as e:
+        # WIRE-level garbage, NOT a bad name -- this is the one that must not be reported as a
+        # malformed name (see the docstring).  Never let it escape either: the per-site loop has
+        # no try/except.  Bare NoNameservers(): passing request=None makes dnspython's own
+        # __str__ raise while formatting the message.
+        raise dns.resolver.NoNameservers() from e
 
 
 def classify_hostname_dns(

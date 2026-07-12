@@ -89,17 +89,28 @@ def _records(finding) -> list:
             + [("CNAME", name) for name in finding.cname])
 
 
+# F4: Pantheon did not tell us this domain's required records.  The U-M owner has a support
+# channel; a non-U-M owner has none, so "unavailable" alone would be a dead end -- point them at
+# where the value actually lives, which is Pantheon's own dashboard.
+UNAVAILABLE_UMICH = "unavailable &mdash; please contact us"
+UNAVAILABLE_GENERIC = (
+    "unavailable &mdash; see this site&#39;s Domains page in the Pantheon dashboard")
+UNAVAILABLE_UMICH_TEXT = "unavailable -- please contact us"
+UNAVAILABLE_GENERIC_TEXT = (
+    "unavailable -- see this site's Domains page in the Pantheon dashboard")
+
+
 def _records_html(finding, umich: bool) -> str:
     records = _records(finding)
     if not records:      # F4: no answer at all
-        return "unavailable &mdash; please contact us" if umich else "unavailable"
+        return UNAVAILABLE_UMICH if umich else UNAVAILABLE_GENERIC
     return "<br>".join(f"{rrtype} {html.escape(value)}" for rrtype, value in records)
 
 
 def _records_text(finding, umich: bool) -> str:
     records = _records(finding)
     if not records:
-        return "      unavailable -- please contact us" if umich else "      unavailable"
+        return "      " + (UNAVAILABLE_UMICH_TEXT if umich else UNAVAILABLE_GENERIC_TEXT)
     return "\n".join(f"      {rrtype:<6s} {value}" for rrtype, value in records)
 
 

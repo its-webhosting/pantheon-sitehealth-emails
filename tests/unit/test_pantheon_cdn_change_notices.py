@@ -120,6 +120,11 @@ def test_missing_records_render_as_unavailable(notices):
     assert "unavailable" in umich["message"] and "please contact us" in umich["message"]
     assert "unavailable" in generic["message"]
     assert "x.example.org" in generic["message"]        # the finding is STILL reported
+    # A non-U-M owner has no "contact us" channel, so a bare "unavailable" would be a dead end:
+    # point them at where the value actually lives.  In BOTH renderings.
+    for body in (generic["message"], generic["text"]):
+        assert "Pantheon dashboard" in body
+        assert "contact us" not in body
 
 
 def test_cname_only_records_render_as_a_cname_not_unavailable(notices):

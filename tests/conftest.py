@@ -426,7 +426,13 @@ def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300, fixtur
     env["TERMINUS_SHIM_REAL"] = REAL_TERMINUS
     env["MPLBACKEND"] = "Agg"
     if extra_env:
+        # PYTHONPATH is PREPENDED, not replaced: a plain dict.update would silently drop an
+        # inherited PYTHONPATH (or a second shim dir a future caller adds), and the imports it
+        # provided would vanish with no error.  PATH above is prepended for the same reason.
+        extra_pythonpath = extra_env.get("PYTHONPATH")
         env.update(extra_env)
+        if extra_pythonpath and os.environ.get("PYTHONPATH"):
+            env["PYTHONPATH"] = f"{extra_pythonpath}{os.pathsep}{os.environ['PYTHONPATH']}"
 
     return subprocess.run(
         [str(PROGRAM), *args],

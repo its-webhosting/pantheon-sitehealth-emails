@@ -391,7 +391,10 @@ Non-obvious things the harness relies on:
   the public-DNS detection source (`[Cloudflare]` stays disabled, since enabling it would make a
   setup hook call the live Cloudflare API), and it pins the **generic** notice copy
   (`minimal.toml` has no `[UMich]` section) — the U-M copy is pinned instead by
-  `tests/integration/__snapshots__/test_pantheon_cdn_change_notice_render.ambr`. The `.eml`
+  `tests/integration/__snapshots__/test_pantheon_cdn_change_notice_render.ambr`. **Its fixtures are
+  hand-maintained**: `--record` refreshes only `terminus/` and `terminus-drupal/`, so
+  `terminus-cdnchange/` will silently freeze at today's Pantheon JSON shape — see the README in
+  that directory. The `.eml`
   identity headers have no
   byte golden (the `Date:` is volatile) — `test_eml_headers.py` asserts them explicitly. Refresh
   WordPress fixtures with `./run-tests --record`, Drupal with `python tests/tools/record.py

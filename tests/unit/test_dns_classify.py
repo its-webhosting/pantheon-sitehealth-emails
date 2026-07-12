@@ -288,6 +288,32 @@ def test_resolve_converts_a_real_idna_exception(psh, reset_sc, monkeypatch):
         dns_classify.resolve("xn--0.example.org", "A")
 
 
+def test_wire_level_struct_error_is_transient_not_a_malformed_name(psh, reset_sc, monkeypatch):
+    # struct.error is ambiguous: dns.name.from_text raises it for an out-of-range byte escape (a
+    # BAD NAME -- the test above), but dnspython ALSO raises it from dns/query.py's struct.unpack
+    # of a TCP length prefix -- i.e. from GARBLED WIRE DATA on a perfectly valid name.  Catching
+    # it around the resolve() call would report a truncated response as "not a valid DNS name",
+    # and classify_hostname_dns would aggregate the host into not_in_dns -- emailing the owner an
+    # alert telling them to remove a live domain from Pantheon because of a network blip.
+    # A garbled response must be TRANSIENT (unknown, retry) instead.
+    import struct
+
+    import dns.resolver
+
+    import dns_classify
+
+    def garbled_wire(hostname, rrtype):
+        raise struct.error("unpack requires a buffer of 2 bytes")
+
+    monkeypatch.setattr(dns.resolver, "resolve", garbled_wire)
+    with pytest.raises(dns.resolver.NoNameservers):
+        dns_classify.resolve("occb.bus.umich.edu", "A")
+
+    # The owner-facing consequence is what actually matters: transient=True, NOT (0, 0, False),
+    # which is what would have put this host in not_in_dns.
+    assert dns_classify.classify_hostname_dns("occb.bus.umich.edu", False, [], []) == (0, 0, True)
+
+
 def test_classify_hostname_dns_survives_a_malformed_name(psh, reset_sc, monkeypatch):
     # The caller must NOT see the exception: a bad domain id skips that host, it does not kill
     # the run.  A name that cannot exist in DNS is definitively unresolvable -> (0, 0, False),

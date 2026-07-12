@@ -121,6 +121,35 @@ def test_failure_yields_empty_map_and_never_raises(
         assert "9cf2c790" not in out
 
 
+@pytest.mark.parametrize(
+    "rows",
+    [[], [{"junk": 1}], [{"domain": "occb.bus.umich.edu", "type": "A", "value": ""}]],
+    ids=["empty-list", "unrecognized-shape", "every-value-empty"])
+def test_a_successful_call_with_no_usable_rows_is_announced(
+        pantheon, reset_sc, monkeypatch, rows):
+    # The gap this closes: the call SUCCEEDS (not fatal, result is a list), so none of the three
+    # failure guards fire -- but nothing parses, so {} comes back.  The caller cannot tell that {}
+    # apart from "the call failed", so its per-domain warning stays quiet too.  Left unannounced,
+    # every affected owner is emailed "unavailable" while the run reports success and the operator
+    # sees nothing at all.
+    console = recording_console(monkeypatch, reset_sc)
+    monkeypatch.setattr(reset_sc, "terminus", lambda *args: (rows, "", False))
+    assert pantheon.required_records("9cf2c790-uuid", "bus-occb") == {}
+    out = console.export_text()
+    assert "ATTENTION" in out
+    assert "no usable records" in out
+    assert "bus-occb" in out                        # the NAME, never the UUID
+    assert "9cf2c790" not in out
+
+
+def test_a_usable_answer_is_not_announced_as_empty(pantheon, reset_sc, monkeypatch):
+    # The negative half: a normal answer must NOT trip the "no usable records" warning.
+    console = recording_console(monkeypatch, reset_sc)
+    monkeypatch.setattr(reset_sc, "terminus", lambda *args: (OCCB_ROWS, "", False))
+    assert pantheon.required_records("uuid", "bus-occb")
+    assert "no usable records" not in console.export_text()
+
+
 def test_null_value_row_produces_no_entry(pantheon, reset_sc, monkeypatch):
     # A JSON `null` value must be treated as ABSENT, not stringified into the literal "None" --
     # str(None) == "None" would otherwise pass the truthiness check and get published as a

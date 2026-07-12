@@ -127,13 +127,18 @@ def find_findings(site_id: str, site_name: str, custom_domains: list, proxied_fq
     required = pantheon.required_records(site_id, site_name)   # {} on failure -- never fatal (F4)
     findings = []
     for fqdn, where, target in candidates:
-        records = required.get(chain.normalize(fqdn), pantheon.EMPTY)
-        if records is pantheon.EMPTY and required:
-            # The call succeeded (required is non-empty) but Pantheon's answer has no row for
-            # THIS fqdn -- as opposed to a total call failure, which already prints its own
-            # ATTENTION in pantheon.required_records (a second line per domain there would be
-            # noise).  Without this, the owner is silently emailed "unavailable" and the operator
-            # never finds out.
+        key = chain.normalize(fqdn)
+        records = required.get(key, pantheon.EMPTY)
+        if required and key not in required:
+            # Membership, NOT `records is pantheon.EMPTY`: an identity check against the shared
+            # sentinel silently stops firing the day required_records returns an equal-but-distinct
+            # Required([], [], []) for a domain, and the warning below is the only thing standing
+            # between an owner and a silent "unavailable".
+            #
+            # The call succeeded (required is non-empty) but Pantheon's answer has no row for THIS
+            # fqdn -- as opposed to a call that failed or came back with nothing usable, both of
+            # which print their own ATTENTION in pantheon.required_records (a second line per
+            # domain there would be noise).
             sc.console.print(
                 ":exclamation: [bold red] ATTENTION: Pantheon returned no required records for "
                 f"{rich_escape(str(fqdn))} -- the owner will be told they are unavailable")
