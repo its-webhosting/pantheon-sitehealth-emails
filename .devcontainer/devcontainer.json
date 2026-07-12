@@ -10,7 +10,13 @@
   },
   "runArgs": [
     "--shm-size=1g",
-    "--security-opt=seccomp=unconfined"
+    "--security-opt=seccomp=unconfined",
+    // Docker Desktop's resolver (192.168.65.7) answers every AAAA query with NODATA, so
+    // dns_classify would see IPv6-only records as absent.  Use public resolvers instead;
+    // --add-host preserves host.docker.internal, which that resolver used to provide.
+    "--dns=1.1.1.1",
+    "--dns=8.8.8.8",
+    "--add-host=host.docker.internal:host-gateway"
   ],
   "remoteUser": "node",
   "mounts": [
