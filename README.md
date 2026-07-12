@@ -251,6 +251,10 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
+* git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
+* assess memory system -- good enough, or install something new?
+* update analyze-session skill based on new workflow
+  * git rtk not worth it, after removing from analyze-session, uninstall
 * add SendGrid API support as an alternative to SMTP
 * finish implementing better secrets handling
     * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
