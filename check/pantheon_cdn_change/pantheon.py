@@ -45,10 +45,11 @@ class Required(NamedTuple):
     cname: list        # Pantheon's required CNAME values (an already-migrated site -- F14)
 
 
-# Tuples, not lists: EMPTY is a SHARED instance handed out as a default value.  A list would let
-# a careless `pantheon.EMPTY.a.append(...)` silently corrupt every future caller; a tuple fails
-# loudly (AttributeError) instead.
-EMPTY = Required((), (), ())
+# The "Pantheon said nothing about this domain" answer (F4).  It is a SHARED instance handed out
+# as a default, so it is READ-ONLY by contract: never mutate EMPTY's lists.  Lists (not tuples)
+# deliberately -- every other Required carries lists, and a mixed-type field would make
+# `finding.a == []` false for exactly this case, which is the one the notice renders specially.
+EMPTY = Required([], [], [])
 
 
 def required_records(site_id: str, site_name: str = "") -> dict:

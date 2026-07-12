@@ -158,9 +158,10 @@ def test_normalization_matches_chain_normalize(pantheon, chain, reset_sc, monkey
     assert out[key].a == ["23.185.0.4"]
 
 
-def test_empty_is_immutable(pantheon):
-    # EMPTY is a SHARED instance handed out as a default value; its lists must not be mutable,
-    # or a careless caller could silently corrupt it for every future caller.
-    assert pantheon.EMPTY == pantheon.Required((), (), ())
-    with pytest.raises(AttributeError):
-        pantheon.EMPTY.a.append("23.185.0.4")
+def test_empty_carries_the_same_field_types_as_a_real_answer(pantheon):
+    # EMPTY is the "Pantheon said nothing about this domain" answer (F4), which the notice renders
+    # as "unavailable".  Its fields MUST be lists like every other Required: the renderer and the
+    # tests both compare `finding.a == []`, and a tuple here would make that false for exactly the
+    # case that needs the special rendering.  (EMPTY is shared, so it is read-only by contract.)
+    assert pantheon.EMPTY == pantheon.Required([], [], [])
+    assert all(isinstance(field, list) for field in pantheon.EMPTY)
