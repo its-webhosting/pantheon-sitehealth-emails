@@ -56,7 +56,9 @@ def cloudflare_origins(fqdn: str, proxied_fqdns: dict) -> list:
     """
     entry = (proxied_fqdns or {}).get(chain.normalize(fqdn))
     if isinstance(entry, dict):
-        origins = entry.get("origins") or []
+        origins = entry.get("origins")
+        if not isinstance(origins, list):
+            origins = []
     elif isinstance(entry, list):
         origins = entry
     else:
@@ -113,7 +115,7 @@ def _candidates(custom_domains: list, proxied_fqdns: dict, cloudflare_on: bool) 
 
 
 def find_findings(site_id: str, site_name: str, custom_domains: list, proxied_fqdns: dict,
-                  cloudflare_on: bool) -> list:
+                   cloudflare_on: bool) -> list:
     """Detect candidates, then enrich them with Pantheon's required records (lazily).
 
     site_id is the UUID the terminus command needs; site_name is what operator messages print.

@@ -182,3 +182,26 @@ def test_no_custom_domains(detect, monkeypatch):
     patch_resolve(monkeypatch, {})
     _pantheon_says(detect, monkeypatch, {})
     assert detect.find_findings("uuid", "s", [], {}, True) == []
+
+
+def test_cloudflare_origins_rejects_non_list_origins(detect):
+    # A corrupted or future-format fqdns.json could carry a non-list `origins` value.  Must be []
+    # -- never a TypeError (which would abort the whole --all run) and never a silent iteration
+    # over the wrong thing (e.g. the characters of a string, or a dict's keys).
+    assert detect.cloudflare_origins(
+        "x.example.org", {"x.example.org": {"origins": 42}}) == []
+    assert detect.cloudflare_origins(
+        "x.example.org", {"x.example.org": {"origins": "abc"}}) == []
+    assert detect.cloudflare_origins(
+        "x.example.org", {"x.example.org": {"origins": {"a": 1}}}) == []
+
+
+def test_find_findings_survives_non_list_origins(detect, monkeypatch):
+    # Same corruption, exercised through find_findings: must not raise, and with no other
+    # candidate source it must yield no finding (not a crashed --all run).
+    patch_resolve(monkeypatch, {})
+    _pantheon_says(detect, monkeypatch, {})
+    proxied_int = {"x.example.org": {"origins": 42}}
+    assert detect.find_findings("uuid", "s", ["x.example.org"], proxied_int, True) == []
+    proxied_str = {"x.example.org": {"origins": "abc"}}
+    assert detect.find_findings("uuid", "s", ["x.example.org"], proxied_str, True) == []
