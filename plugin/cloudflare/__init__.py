@@ -18,8 +18,7 @@ if 'Cloudflare' in sc.config and 'enabled' in sc.config['Cloudflare'] and sc.con
     bag = sc.plugin_context.setdefault('plugin.cloudflare', {})
     bag['get_client'] = get_client
 
-    for name, func in (
-        ('plugin.cloudflare.ips.get_cloudflare_ips', get_cloudflare_ips),
-        ('plugin.cloudflare.fqdns.update_and_load_proxied_fqdns', update_and_load_proxied_fqdns),
-    ):
-        sc.hooks['setup'].append({'name': name, 'func': func})
+    sc.add_hook('setup', {'name': 'plugin.cloudflare.ips.get_cloudflare_ips',
+                          'func': get_cloudflare_ips})
+    sc.add_hook('setup', {'name': 'plugin.cloudflare.fqdns.update_and_load_proxied_fqdns',
+                          'func': update_and_load_proxied_fqdns})
