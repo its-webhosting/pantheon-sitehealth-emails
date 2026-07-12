@@ -352,7 +352,7 @@
   <table class="responsive-table site-updates">
   <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
   <tbody>
-  <tr><td>cdn-change.example.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">cdn-change.example.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</div></td></tr>
   </tbody>
   </table>
   </div>

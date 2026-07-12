@@ -7,11 +7,11 @@
   <table class="responsive-table site-updates">
   <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
   <tbody>
-  <tr><td>occb.bus.umich.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
-  <tr><td>backstage.its.umich.edu</td><td>our (non-Pantheon) Cloudflare</td><td>A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</td></tr>
-  <tr><td>both.example.org</td><td>DNS and our (non-Pantheon) Cloudflare</td><td>A 23.185.0.9</td></tr>
-  <tr><td>migrated.example.org</td><td>DNS</td><td>CNAME fe.cfp2c.edge.pantheon.io</td></tr>
-  <tr><td>unresolvable.example.org</td><td>DNS</td><td>unavailable</td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">occb.bus.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">backstage.its.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">our (non-Pantheon) Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">both.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS and our (non-Pantheon) Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.9</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">migrated.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">CNAME fe.cfp2c.edge.pantheon.io</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">unresolvable.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">unavailable</div></td></tr>
   </tbody>
   </table>
   </div>
@@ -58,11 +58,11 @@
   <table class="responsive-table site-updates">
   <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
   <tbody>
-  <tr><td>occb.bus.umich.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
-  <tr><td>backstage.its.umich.edu</td><td>U-M Cloudflare</td><td>A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</td></tr>
-  <tr><td>both.example.org</td><td>DNS and U-M Cloudflare</td><td>A 23.185.0.9</td></tr>
-  <tr><td>migrated.example.org</td><td>DNS</td><td>CNAME fe.cfp2c.edge.pantheon.io</td></tr>
-  <tr><td>unresolvable.example.org</td><td>DNS</td><td>unavailable &mdash; please contact us</td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">occb.bus.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">backstage.its.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">U-M Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">both.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS and U-M Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.9</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">migrated.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">CNAME fe.cfp2c.edge.pantheon.io</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">unresolvable.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">unavailable &mdash; please contact us</div></td></tr>
   </tbody>
   </table>
   </div>
@@ -109,11 +109,11 @@
   <table class="responsive-table site-updates">
   <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
   <tbody>
-  <tr><td>occb.bus.umich.edu</td><td>DNS</td><td>A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</td></tr>
-  <tr><td>backstage.its.umich.edu</td><td>U-M Cloudflare</td><td>A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</td></tr>
-  <tr><td>both.example.org</td><td>DNS and U-M Cloudflare</td><td>A 23.185.0.9</td></tr>
-  <tr><td>migrated.example.org</td><td>DNS</td><td>CNAME fe.cfp2c.edge.pantheon.io</td></tr>
-  <tr><td>unresolvable.example.org</td><td>DNS</td><td>unavailable &mdash; please contact us</td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">occb.bus.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.4<br>AAAA 2620:12a:8000::4<br>AAAA 2620:12a:8001::4</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">backstage.its.umich.edu</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">U-M Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.2<br>AAAA 2620:12a:8000::2<br>AAAA 2620:12a:8001::2</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">both.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS and U-M Cloudflare</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">A 23.185.0.9</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">migrated.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">CNAME fe.cfp2c.edge.pantheon.io</div></td></tr>
+  <tr><td><div class="rt-data-header rt-plan">Domain</div><div class="rt-data rt-plan">unresolvable.example.org</div></td><td><div class="rt-data-header rt-plan">Change it in</div><div class="rt-data rt-plan">DNS</div></td><td><div class="rt-data-header rt-plan">Replace the CNAME record with</div><div class="rt-data rt-plan">unavailable &mdash; please contact us</div></td></tr>
   </tbody>
   </table>
   </div>

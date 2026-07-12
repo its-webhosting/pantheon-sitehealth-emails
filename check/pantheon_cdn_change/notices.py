@@ -103,13 +103,29 @@ def _records_text(finding, umich: bool) -> str:
     return "\n".join(f"      {rrtype:<6s} {value}" for rrtype, value in records)
 
 
+def _cell(header: str, value: str) -> str:
+    """One table cell, in the shape email_template.html expects (see the core's own notices,
+    pantheon-sitehealth-emails:2496).
+
+    `rt-plan` is what left-aligns the cell: .responsive-table's default is text-align: right, and
+    only the rt-* classes override it -- so a bare <td> right-aligns under a left-aligned header.
+    The rt-data-header div is display:none on desktop and reappears as the row label when the
+    table stacks into one column on a phone, where there is no <thead> left to label the value.
+    `value` is pre-escaped by the caller (a records cell contains <br> tags on purpose).
+    """
+    return (f'<td><div class="rt-data-header rt-plan">{header}</div>'
+            f'<div class="rt-data rt-plan">{value}</div></td>')
+
+
 def cdn_change_notice(site_name: str, findings: list, *, umich: bool, before_cutoff: bool) -> dict:
     """ONE info notice covering every affected custom domain for the site."""
     site = html.escape(site_name)
     rows = "\n".join(
-        f"<tr><td>{html.escape(f.fqdn)}</td>"
-        f"<td>{html.escape(where_label(f.where, umich=umich))}</td>"
-        f"<td>{_records_html(f, umich)}</td></tr>"
+        "<tr>"
+        + _cell("Domain", html.escape(f.fqdn))
+        + _cell("Change it in", html.escape(where_label(f.where, umich=umich)))
+        + _cell("Replace the CNAME record with", _records_html(f, umich))
+        + "</tr>"
         for f in findings)
     blocks = "\n\n".join(
         f"  {f.fqdn}  (change it in {where_label(f.where, umich=umich)})\n"

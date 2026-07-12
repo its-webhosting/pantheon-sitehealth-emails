@@ -41,6 +41,22 @@ def test_notices_module_is_pure(notices):
     assert not hasattr(notices, "chain") and not hasattr(notices, "pantheon")
 
 
+def test_every_body_cell_is_left_aligned_and_labelled(notices, findings):
+    # email_template.html's .responsive-table defaults to text-align: right; only the rt-* classes
+    # override it.  A bare <td> therefore right-aligns under its left-aligned header.  Each cell
+    # also carries an rt-data-header div, which is hidden on desktop and becomes the row label when
+    # the table stacks into one column on a phone (there is no <thead> left to label the value).
+    n = notices.cdn_change_notice("s", findings, umich=True, before_cutoff=True)
+    cells = n["message"].count("<td>")
+    assert cells == 3 * len(findings)                       # Domain / Change it in / records
+    assert n["message"].count('<div class="rt-data rt-plan">') == cells
+    assert n["message"].count('<div class="rt-data-header rt-plan">') == cells
+    assert "<td>" not in n["message"].replace(
+        '<td><div class="rt-data-header rt-plan">', "")     # no bare, unclassed cell survives
+    for header in ("Domain", "Change it in", "Replace the CNAME record with"):
+        assert n["message"].count(header) == 1 + len(findings)   # the <th> plus one label per row
+
+
 def test_where_label_matrix(notices):
     assert notices.where_label("dns", umich=True) == "DNS"
     assert notices.where_label("dns", umich=False) == "DNS"
