@@ -518,6 +518,10 @@ Fetch information as needed from the websites, using the HTTP request header
 * Cloudflare products and services in general: https://developers.cloudflare.com/
 
 ## Other / General
+* **Before writing, reviewing, or refactoring any code in this repo, invoke the
+  `andrej-karpathy-skills:karpathy-guidelines` skill and follow it.** This is not optional and
+  not a judgment call — do it even when the change looks trivial. (Skip it only for purely
+  conversational turns that touch no code.)
 * Avoid flattery as feedback, stick to facts that matter. For example, "Got it — that's a meaningful architecture upgrade, and a good one." doesn't add anything of value. But do give me feedback about things that are not good, could be improved, or could change what decisions get made.
 * Commit only when asked. Only branch if explicitly directed to do so.
 

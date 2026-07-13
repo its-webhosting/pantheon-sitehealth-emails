@@ -266,7 +266,7 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 * update dependencies
 * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
 * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
-* switch to Pantheon API where possible
+* switch to Pantheon API where possible (make sure `Connection: keep-alive` request header is sent)
 * parallelize where safe and possible, both within a single site (careful about data dependencies!) as well as handling a predefinied number of multiple sites in parallel (when run with `--all` or multiple sites explicitly specified)
 * add everything to its-webhosting/terraform-infra repo that should be there
 
