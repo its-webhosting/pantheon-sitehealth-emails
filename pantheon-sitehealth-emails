@@ -1526,6 +1526,106 @@ sc.terminus = terminus      # check packages: Pantheon calls (e.g. domain:dns) g
 sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
 
 
+def finish_run(
+    db_session,
+    db_engine,
+    site_count: int,
+    emails_sent: int,
+    all_warnings: list,
+    site_results: dict,
+    site_savings: list,
+    *,
+    aborted_at: str = None,
+    reason: str = None,
+) -> None:
+    """Close out a run: release the DB, print the totals, write the summary artifacts.
+
+    Called from two places -- normal completion, and abort_run() (SPEC 3.5).  One epilogue with
+    two callers is what makes an aborted run's artifacts identical in shape to a completed run's.
+
+    `aborted_at` / `reason` are None on a normal run.  When set, the totals say so instead of
+    claiming success, and both are recorded in results.json's `_run` key so the outcome outlives
+    the terminal (SPEC 3.6).
+    """
+    # Two separate try blocks, deliberately: a failing close() must not skip dispose().  The
+    # catches are narrow -- (SQLAlchemyError, OSError), not Exception -- so a TypeError from a
+    # future edit still crashes loudly.  Neither failure may cost the operator the artifacts:
+    # finish_run() is called from the abort path, on a session whose database is already sick
+    # (SPEC 3.3.3).
+    try:
+        db_session.close()
+    except (SQLAlchemyError, OSError) as e:
+        sc.console.print(f":warning: [yellow]Could not close the database session: {e}")
+    try:
+        db_engine.dispose()
+    except (SQLAlchemyError, OSError) as e:
+        sc.console.print(f":warning: [yellow]Could not dispose the database engine: {e}")
+
+    reconnects = sum(db_reconnects_by_site.values())
+
+    if sc.options.all:
+        # On a resumed run these two on-disk summaries accumulate across the original and the
+        # resumed run instead of being truncated to just the resumed subset.  (The console-only
+        # totals printed here and below still cover only this run's sites.)
+        resuming = sc.options.resume_from is not None
+        if aborted_at is None:
+            sc.console.print(
+                f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
+                + (f" (resumed from {sc.options.resume_from}).\n" if resuming else ".\n")
+            )
+        else:
+            sc.console.print(
+                f"\n[bold yellow]Email sent for {emails_sent} sites before aborting at "
+                f"{aborted_at}.\n"
+            )
+        ymd = datetime.datetime.today().strftime("%Y%m%d")
+        with open(f"{ymd}-notices.csv", "a" if resuming else "w", encoding="utf-8") as f:
+            for n in all_warnings:
+                f.write(n + "\n")
+
+        results_path = f"{ymd}-results.json"
+        # On a resumed run, pull the prior payload first so this run's _run can NEST the aborted
+        # run's under "previous".  A plain merge would overwrite it -- and the aborted run's block
+        # is the one carrying the reconnect evidence that prompted the resume in the first place.
+        prior = merge_prior_results(results_path, {}) if resuming else {}
+        # "this_run" in the names, not "processed": merge_prior_results() makes the FILE describe
+        # the original run plus this one, while these numbers describe only this one.  (An
+        # --only-warn run emails nobody, so this counts sites processed, not sites emailed.)
+        run_meta = {
+            "aborted_at": aborted_at,
+            "reason": reason,
+            "sites_completed_this_run": len(site_results),
+            "db_reconnects_this_run": reconnects,
+            "reconnects_by_site": dict(db_reconnects_by_site),
+        }
+        if "_run" in prior:
+            run_meta["previous"] = prior["_run"]
+        site_results["_run"] = run_meta
+        # merge_prior_results() again rather than a hand-rolled {**prior, **site_results}: it owns
+        # the "new wins" rule AND the malformed-prior-file handling, and that logic must live in
+        # one place.  It re-reads the file; a second read of a small JSON file at the very end of
+        # a multi-hour run is not worth duplicating the semantics to avoid.
+        payload = (
+            merge_prior_results(results_path, site_results) if resuming else site_results
+        )
+        with open(results_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
+    else:
+        for n in all_warnings:
+            sc.console.print(n)
+        pprint(site_results)
+
+    sc.console.print(f"\n[bold green]Site savings:\n")
+    pprint(site_savings)
+    sc.console.print(f"Sites with savings: {len(site_savings)}")
+    sc.console.print(
+        f"Total savings: ${sum([s['savings'] for s in site_savings]):,.2f}"
+    )
+    sc.console.print(f"Database reconnects: {reconnects}")
+
+    sc.debug("Done!")
+
+
 def main() -> None:
 
     sc.debug(f"Loading configuration from {sc.options.config}")
@@ -4125,42 +4225,15 @@ an additional pro-rated bill or credit in the following month.
         # TODO: % Pages Cached -- should be Cloudflare
         # TODO: CSV attachment
 
-    db_session.close()
-    db_engine.dispose()
-
-    if sc.options.all:
-        # On a resumed run these two on-disk summaries accumulate across the original and the
-        # resumed run instead of being truncated to just the resumed subset.  (The console-only
-        # totals printed here and below still cover only this run's sites.)
-        resuming = sc.options.resume_from is not None
-        sc.console.print(
-            f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
-            + (f" (resumed from {sc.options.resume_from}).\n" if resuming else ".\n")
-        )
-        ymd = datetime.datetime.today().strftime("%Y%m%d")
-        with open(f"{ymd}-notices.csv", "a" if resuming else "w", encoding="utf-8") as f:
-            for n in all_warnings:
-                f.write(n + "\n")
-
-        results_path = f"{ymd}-results.json"
-        payload = (
-            merge_prior_results(results_path, site_results) if resuming else site_results
-        )
-        with open(results_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4)
-    else:
-        for n in all_warnings:
-            sc.console.print(n)
-        pprint(site_results)
-
-    sc.console.print(f"\n[bold green]Site savings:\n")
-    pprint(site_savings)
-    sc.console.print(f"Sites with savings: {len(site_savings)}")
-    sc.console.print(
-        f"Total savings: ${sum([s['savings'] for s in site_savings]):,.2f}"
+    finish_run(
+        db_session,
+        db_engine,
+        site_count,
+        emails_sent,
+        all_warnings,
+        site_results,
+        site_savings,
     )
-
-    sc.debug("Done!")
 
 
 if __name__ == "__main__":
