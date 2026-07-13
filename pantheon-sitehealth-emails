@@ -22,6 +22,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import stat
 import subprocess
 import sys
@@ -32,7 +33,7 @@ from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import make_msgid
 from smtplib import SMTP_SSL
-from typing import Any
+from typing import Any, NamedTuple
 
 import matplotlib
 import matplotlib.dates as mdates
@@ -56,6 +57,7 @@ from sqlalchemy import (
     insert,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
@@ -1116,6 +1118,64 @@ def build_plan_over_time(plan_on_day: dict, plot_right_date) -> list:
 
 class ResumeSiteNotFoundError(Exception):
     """--resume-from named a site not present in the org site list."""
+
+
+class DatabaseUnavailableError(RuntimeError):
+    """A database operation failed, was retried once, and failed again.
+
+    Raised by db_retry().  Caught once, around the site loop in main(), which flushes the
+    end-of-run artifacts and exits nonzero with a command to re-run what is left (SPEC 3.5).
+    """
+
+
+# Reconnects healed by db_retry(), attributed to the site that caused them.  The single source
+# of truth: the run total is sum(db_reconnects_by_site.values()), so there is no second counter
+# to drift out of sync.  Reported on the console and in results.json's _run key (SPEC 3.6).
+db_reconnects_by_site = {}
+
+
+def db_retry(session, unit, *, what: str, site: str = None):
+    """Run `unit()`; on a database failure, roll back and re-run it exactly once.
+
+    `unit` MUST be idempotent.  A rollback discards every pending ORM change in the session, so
+    the retry re-runs the unit from scratch -- which is why retries happen at unit-of-work
+    granularity and NEVER around a single statement that runs while writes are pending
+    (SPEC 3.3.1).
+
+    A rollback ALSO expires every loaded ORM object, regardless of expire_on_commit.  So a
+    retryable unit must never be placed where live ORM rows will be read afterwards: the read
+    would emit a fresh SELECT outside any unit, and therefore outside any retry.  This is why
+    load_traffic_rows() returns plain TrafficRow data (SPEC 3.3.2).
+
+    Only OperationalError is retried -- a lost connection, but also a deadlock, a lock-wait
+    timeout, or too-many-connections, which MySQLdb surfaces through the same class.  We
+    deliberately do not sniff error codes to tell them apart (SPEC 2.2); the abort message says
+    "a database operation failed" and prints the underlying error, which names the real cause.
+    IntegrityError, ProgrammingError and friends are real bugs and must stay loud.
+    """
+    try:
+        return unit()
+    except OperationalError as first_error:
+        try:
+            session.rollback()
+        except OperationalError as rollback_error:
+            # The rollback hit the wire and died too (the connection was not invalidated, so
+            # SQLAlchemy really emitted a ROLLBACK).  Name it rather than let a raw
+            # OperationalError escape past main()'s handler -- SPEC 3.3.3.
+            raise DatabaseUnavailableError(
+                f"{what}: rollback failed after {first_error}"
+            ) from rollback_error
+        key = site if site is not None else "(no site)"
+        db_reconnects_by_site[key] = db_reconnects_by_site.get(key, 0) + 1
+        sc.console.print(
+            f":warning: [bold yellow]Lost the database connection during {what}; "
+            "reconnecting and retrying."
+        )
+        time.sleep(1)
+        try:
+            return unit()
+        except OperationalError as retry_error:
+            raise DatabaseUnavailableError(f"{what}: {retry_error}") from retry_error
 
 
 def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:
