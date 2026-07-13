@@ -135,6 +135,23 @@ class PantheonOverageProtection(Base):
         return f"<{self.site_id} {self.month} : {self.months_remaining}>"
 
 
+class TrafficRow(NamedTuple):
+    """A pantheon_traffic row, detached from the ORM.
+
+    Plain data on purpose: a db_retry() rollback expires every live ORM object, so a row held
+    across a retryable unit would emit an unretried SELECT on the next attribute read -- outside
+    every unit of work.  The attribute names match PantheonTraffic's, so consumers of the
+    site_post_traffic data-contract key `traffic_rows` are unaffected.  See SPEC 3.3.2.
+    """
+
+    site_id: str
+    traffic_date: datetime.date
+    site_plan: str
+    visits: int
+    pages_served: int
+    cache_hits: int
+
+
 #
 # Global initialization:
 #
@@ -1178,6 +1195,96 @@ def db_retry(session, unit, *, what: str, site: str = None):
             raise DatabaseUnavailableError(f"{what}: {retry_error}") from retry_error
 
 
+def update_traffic_rows(session, site: dict, metrics: dict, start_date, end_date) -> None:
+    """Merge a site's daily metrics into pantheon_traffic and commit.
+
+    Idempotent (session.merge() is upsert-by-primary-key), so db_retry() may re-run it.
+    """
+    # Preload the session with the data we're going to be updating.  This makes the merge()
+    # calls below much faster.
+    _ = (
+        session.query(PantheonTraffic)
+        .filter(
+            PantheonTraffic.site_id == site["id"],
+            PantheonTraffic.traffic_date.between(start_date, end_date),
+        )
+        .all()
+    )
+    for e in metrics["timeseries"]:
+        entry = metrics["timeseries"][e]
+        traffic_date = datetime.datetime.strptime(
+            entry["datetime"], "%Y-%m-%dT%H:%M:%S"
+        ).date()
+        if traffic_date == end_date:
+            continue  # skip today's partial data
+        session.merge(
+            PantheonTraffic(
+                site_id=site["id"],
+                traffic_date=traffic_date,
+                site_plan=site["plan_name"],
+                visits=entry["visits"],
+                pages_served=entry["pages_served"],
+                cache_hits=entry["cache_hits"],
+            )
+        )
+    session.commit()
+
+
+def insert_traffic_rows(session, rows: list) -> None:
+    """Insert-or-ignore historical traffic rows and commit.
+
+    Idempotent (ON CONFLICT DO NOTHING / INSERT IGNORE), so db_retry() may re-run it.
+    """
+    if len(rows) == 0:
+        return
+    if sc.config["Database"]["type"] == "sqlite":
+        session.execute(
+            sqlite_insert(PantheonTraffic).on_conflict_do_nothing(
+                index_elements=["site_id", "traffic_date"]
+            ),
+            rows,
+        )
+    else:  # mysql:
+        session.execute(insert(PantheonTraffic).prefix_with("IGNORE"), rows)
+    session.commit()
+
+
+def load_traffic_rows(session, site: dict, start_date, end_date) -> list:
+    """Read a site's traffic rows for the report, then RELEASE the connection.
+
+    The commit here looks redundant for a read-only query.  It is not, and it MUST NOT be
+    removed: without it the session holds its connection, inside an open transaction, for the
+    entire per-site gather (terminus, wp/drush, DNS, cache checks, matplotlib -- minutes).  A
+    NAT/firewall on the path to RDS reaps that idle flow and the next query dies with MySQL error
+    2013.  Committing returns the connection to the pool, where pool_pre_ping can validate and
+    silently replace it on the next checkout.
+
+    Returns plain TrafficRow data rather than ORM rows, so that a later db_retry() rollback --
+    which expires every live ORM object -- cannot turn a downstream attribute read into an
+    unretried SELECT.  See development/2026-07-13-db-connection-resilience/SPEC.md 3.1, 3.3.2.
+    """
+    rows = (
+        session.query(PantheonTraffic)
+        .filter(
+            PantheonTraffic.site_id == site["id"],
+            PantheonTraffic.traffic_date.between(start_date, end_date),
+        )
+        .all()
+    )
+    session.commit()
+    return [
+        TrafficRow(
+            site_id=r.site_id,
+            traffic_date=r.traffic_date,
+            site_plan=r.site_plan,
+            visits=r.visits,
+            pages_served=r.pages_served,
+            cache_hits=r.cache_hits,
+        )
+        for r in rows
+    ]
+
+
 def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:
     """
     Return the suffix of sorted_site_names starting at resume_from (inclusive).
@@ -1631,87 +1738,40 @@ and to find out what went wrong:
             continue
 
         sc.debug(f"[bold magenta]=== Updating metrics for {site['name']}:")
-        # Preload the session with the data we're going to be updating.  This makes the call to `db_session.merge()`
-        # in the loop below much faster.
-        _ = (
-            db_session.query(PantheonTraffic)
-            .filter(
-                PantheonTraffic.site_id == site["id"],
-                PantheonTraffic.traffic_date.between(start_date, end_date),
-            )
-            .all()
+        db_retry(
+            db_session,
+            lambda: update_traffic_rows(db_session, site, metrics, start_date, end_date),
+            what=f"updating traffic rows for {site['name']}",
+            site=site["name"],
         )
-
-        for e in metrics["timeseries"]:
-            entry = metrics["timeseries"][e]
-            traffic_date = datetime.datetime.strptime(
-                entry["datetime"], "%Y-%m-%dT%H:%M:%S"
-            ).date()
-            if traffic_date == end_date:
-                continue  # skip today's partial data
-            traffic = PantheonTraffic(
-                site_id=site["id"],
-                traffic_date=traffic_date,
-                site_plan=site["plan_name"],
-                visits=entry["visits"],
-                pages_served=entry["pages_served"],
-                cache_hits=entry["cache_hits"],
-            )
-            db_session.merge(traffic)
-
-        db_session.commit()
 
         if sc.options.import_older_metrics:
             sc.console.print(
                 f"[bold magenta]=== Importing older metrics for {site['name']}:"
             )
-
-            # Process old data by week:
-            new_rows = get_old_metrics(live_site, site, "week", end_date)
-            if len(new_rows) > 0:
-                if sc.config["Database"]["type"] == "sqlite":
-                    db_session.execute(
-                        sqlite_insert(PantheonTraffic).on_conflict_do_nothing(
-                            index_elements=["site_id", "traffic_date"]
-                        ),
-                        new_rows,
-                    )
-                else:  # mysql:
-                    db_session.execute(
-                        insert(PantheonTraffic).prefix_with("IGNORE"), new_rows
-                    )
-                db_session.commit()
-
-            # Process old data by month:
-            new_rows = get_old_metrics(live_site, site, "month", end_date)
-            if len(new_rows) > 0:
-                if sc.config["Database"]["type"] == "sqlite":
-                    db_session.execute(
-                        sqlite_insert(PantheonTraffic).on_conflict_do_nothing(
-                            index_elements=["site_id", "traffic_date"]
-                        ),
-                        new_rows,
-                    )
-                else:  # mysql:
-                    db_session.execute(
-                        insert(PantheonTraffic).prefix_with("IGNORE"), new_rows
-                    )
-                db_session.commit()
-
+            # The terminus call stays OUTSIDE the retried unit: a retry must not re-run it.
+            # Order (fetch week -> insert week -> fetch month -> insert month) is unchanged.
+            for period in ("week", "month"):
+                new_rows = get_old_metrics(live_site, site, period, end_date)
+                db_retry(
+                    db_session,
+                    lambda rows=new_rows: insert_traffic_rows(db_session, rows),
+                    what=f"importing older {period} metrics for {site['name']}",
+                    site=site["name"],
+                )
             continue  # skip the rest of the processing for the sites
 
         if sc.options.update:
             sc.console.print("site visitors updated, skipping report")
             continue
 
-        # Get all the data we will use:
-        results = (
-            db_session.query(PantheonTraffic)
-            .filter(
-                PantheonTraffic.site_id == site["id"],
-                PantheonTraffic.traffic_date.between(start_date, end_date),
-            )
-            .all()
+        # Get all the data we will use.  This ALSO releases the DB connection before the gather
+        # below -- see load_traffic_rows().
+        results = db_retry(
+            db_session,
+            lambda: load_traffic_rows(db_session, site, start_date, end_date),
+            what=f"loading traffic rows for {site['name']}",
+            site=site["name"],
         )
 
         sc.debug(

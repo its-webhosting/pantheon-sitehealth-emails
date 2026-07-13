@@ -134,3 +134,38 @@ def test_db_retry_never_retries_a_data_bug(psh, monkeypatch):
         psh.db_retry(session, unit, what="writing overage protection", site="its-wws-test1")
     assert len(calls) == 1         # not retried
     assert session.rollbacks == 0  # and not swallowed into a rollback
+
+
+@pytest.mark.unit
+def test_load_traffic_rows_releases_the_connection(psh):
+    # THE regression test for the bug this whole change exists to fix.  If load_traffic_rows()
+    # leaves a transaction open, the connection stays checked out of the pool for the entire
+    # per-site gather (minutes), a NAT/firewall reaps the idle flow, and the next query dies with
+    # MySQL error 2013.  A committed session reports in_transaction() == False.
+    engine = db.create_engine("sqlite://")
+    psh.Base.metadata.create_all(engine)
+    session = db.orm.sessionmaker(bind=engine, expire_on_commit=False)()
+    session.add(
+        psh.PantheonTraffic(
+            site_id="s1",
+            traffic_date=datetime.date(2026, 3, 1),
+            site_plan="Basic",
+            visits=10,
+            pages_served=20,
+            cache_hits=5,
+        )
+    )
+    session.commit()
+
+    rows = psh.load_traffic_rows(
+        session, {"id": "s1"}, datetime.date(2026, 3, 1), datetime.date(2026, 3, 31)
+    )
+
+    assert session.in_transaction() is False  # connection returned to the pool
+    # Plain data, not live ORM rows: a db_retry rollback expires ORM objects, and a later read of
+    # an expired row would emit an unretried SELECT outside every unit (SPEC 3.3.2).
+    assert isinstance(rows[0], psh.TrafficRow)
+    assert not isinstance(rows[0], psh.PantheonTraffic)
+    assert rows[0].visits == 10
+    assert rows[0].traffic_date == datetime.date(2026, 3, 1)
+    assert rows[0].site_plan == "Basic"
