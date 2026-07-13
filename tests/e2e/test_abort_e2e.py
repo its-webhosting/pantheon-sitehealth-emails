@@ -46,3 +46,38 @@ def test_database_failure_aborts_the_run_and_prints_a_rerun_command(tmp_path):
     # A single-site run gets a re-run command, never --resume-from (which requires --all).
     assert "--resume-from" not in proc.stdout
     assert "Continue this run with" in proc.stdout
+
+
+def test_a_fatal_bail_out_in_the_loop_still_runs_the_epilogue(tmp_path):
+    # sys.exit("Bailing out.") inside the site loop raises SystemExit -- a BaseException that the
+    # DatabaseUnavailableError/OperationalError and KeyboardInterrupt handlers do NOT catch.  Until
+    # main() grew an `except SystemExit:` handler, one site with an unknown plan threw away the
+    # notices and results of every site already processed.  The handler must flush through
+    # finish_run() and then RE-RAISE, preserving the original exit code and message.
+    #
+    # The trigger: a config whose [Pantheon.plan_info] has no entry for the test site's plan, so
+    # the "is on an unknown plan" check bails out mid-loop.  (--all is banned in a subprocess, so
+    # the flush is observed as the epilogue's console output rather than as *-results.json.)
+    work = make_workdir(tmp_path)
+    run_program(["--create-tables", "--config", str(MINIMAL_CONFIG)], cwd=work)
+    seed_traffic(work / "test.db")
+
+    config = tmp_path / "unknown-plan.toml"
+    config.write_text(
+        MINIMAL_CONFIG.read_text().replace(
+            '[Pantheon.plan_info."Performance Small"]',
+            '[Pantheon.plan_info."Performance Teeny"]',  # the test site's plan is now unknown
+        )
+    )
+
+    proc = run_program(
+        [E2E_SITE, "--date", E2E_DATE, "--smtp-username", E2E_SMTP_USERNAME,
+         "--config", str(config)],
+        cwd=work,
+    )
+
+    assert proc.returncode != 0
+    assert "Bailing out." in proc.stderr          # the original SystemExit message survives
+    assert "Traceback" not in proc.stderr
+    assert "is on an unknown plan" in proc.stdout
+    assert "Database reconnects:" in proc.stdout  # the epilogue ran: finish_run() flushed

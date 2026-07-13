@@ -124,6 +124,26 @@ def test_ctrl_c_after_the_email_was_sent_resumes_at_the_next_site(psh, monkeypat
 
 
 @pytest.mark.integration
+def test_database_abort_after_the_email_was_sent_resumes_at_the_next_site(
+    psh, monkeypatch, reset_sc,
+):
+    # The database handler in main() used to hardcode emailed=False ("the DB abort fires long
+    # before the send") while deliberately catching failures raised OUTSIDE a unit of work -- i.e.
+    # anywhere, including after the send.  Should a DB touch ever land after the send, the resumed
+    # run would mail that owner a DUPLICATE monthly report.  abort_run() must honor `emailed` for
+    # every reason, not just an interrupt.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "database", psh.DatabaseUnavailableError("boom"),
+        emailed=True,
+        site_results={"its-wws-test2": {"framework": "wordpress"}},
+    )
+    assert code == 1
+    assert "--resume-from its-wws-test3" in console.export_text()   # the NEXT site
+    assert "its-wws-test2" in captured["site_results"]              # its report really did go out
+
+
+@pytest.mark.integration
 def test_explicit_site_abort_prints_a_rerun_command_not_resume_from(psh, monkeypatch, reset_sc):
     argv = [
         "./pantheon-sitehealth-emails", "--date", "2026-03-31",

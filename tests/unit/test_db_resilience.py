@@ -206,6 +206,47 @@ def test_load_traffic_rows_releases_the_connection_with_default_session(psh):
 
 
 @pytest.mark.unit
+def test_load_overage_protection_releases_the_connection_on_a_miss(psh):
+    # The mirror of test_load_traffic_rows_releases_the_connection, for the OTHER per-site read.
+    # A Session.get() that MISSES the identity map emits a real SELECT, which autobegins a
+    # transaction; without the commit the session then holds that connection, idle in a
+    # transaction, through matplotlib, the render, the php inliner, the SMTP send and the NEXT
+    # site's terminus calls -- the reaped-idle-flow bug all over again.  Misses are the common
+    # case: a get() that returns None is never cached, so every candidate plan re-SELECTs.
+    engine = db.create_engine("sqlite://")
+    psh.Base.metadata.create_all(engine)
+    session = db.orm.sessionmaker(bind=engine, expire_on_commit=False)()
+
+    op = psh.load_overage_protection(session, {"id": "s1"}, "2026-03")
+
+    assert op is None                          # nothing in the table: a guaranteed miss
+    assert session.in_transaction() is False   # connection returned to the pool
+
+
+@pytest.mark.unit
+def test_load_overage_protection_row_is_readable_after_the_commit(psh):
+    # The commit must not cost the caller the row: plan_costs() reads op.used_this_month straight
+    # after the lookup, and main()'s session sets expire_on_commit=False for exactly this reason.
+    engine = db.create_engine("sqlite://")
+    psh.Base.metadata.create_all(engine)
+    session = db.orm.sessionmaker(bind=engine, expire_on_commit=False)()
+    session.add(
+        psh.PantheonOverageProtection(
+            site_id="s1",
+            month=datetime.date(2026, 3, 1),
+            months_remaining=2,
+            used_this_month=True,
+        )
+    )
+    session.commit()
+
+    op = psh.load_overage_protection(session, {"id": "s1"}, "2026-03")
+
+    assert op.used_this_month is True
+    assert session.in_transaction() is False
+
+
+@pytest.mark.unit
 def test_resume_command_preserves_every_flag_of_the_original_run(psh):
     # Rebuilt from argv, NOT re-enumerated from sc.options: enumerating would silently drop any
     # flag added later, and the operator pastes this command verbatim.  An --import-older-metrics

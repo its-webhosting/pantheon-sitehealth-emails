@@ -1416,6 +1416,29 @@ def load_traffic_rows(session, site: dict, start_date, end_date) -> list:
     return rows
 
 
+def load_overage_protection(session, site: dict, month: str):
+    """Read a month's overage-protection row for a site, then RELEASE the connection.
+
+    The commit is load_traffic_rows()' commit, for the same reason and with the same rule: it MUST
+    NOT be removed.  A Session.get() that MISSES the identity map emits a real SELECT, which
+    autobegins a transaction nothing else would close -- and misses are the common case here (a
+    Basic-plan site never loads an overage row during the traffic table, months before the plan
+    start or before 2024-01 have none, and a get() that returns None is never cached, so it
+    re-SELECTs for every candidate plan).  The session would then hold that connection, idle in a
+    transaction, through matplotlib, the Jinja render, the php inliner, the SMTP send and the NEXT
+    site's terminus calls -- exactly the reaped-idle-flow bug this change exists to fix.
+
+    Returning the ORM object after the commit is safe because main()'s session sets
+    expire_on_commit=False and plan_costs() reads op.used_this_month immediately.
+    """
+    op = session.get(
+        PantheonOverageProtection,
+        {"site_id": site["id"], "month": datetime.date.fromisoformat(month + "-01")},
+    )
+    session.commit()  # releases the connection -- see the docstring; MUST NOT be removed
+    return op
+
+
 def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:
     """
     Return the suffix of sorted_site_names starting at resume_from (inclusive).
@@ -1563,6 +1586,12 @@ def finish_run(
 
     reconnects = sum(db_reconnects_by_site.values())
 
+    # --update and --import-older-metrics `continue` before a report is ever built, so they have no
+    # notices and no results to write.  Writing anyway would open {ymd}-notices.csv in "w" mode with
+    # an empty list and overwrite {ymd}-results.json with a bare _run block -- DESTROYING the
+    # artifacts of a report run made earlier the same day.  Print the totals, write nothing.
+    write_artifacts = not (sc.options.update or sc.options.import_older_metrics)
+
     if sc.options.all:
         # On a resumed run these two on-disk summaries accumulate across the original and the
         # resumed run instead of being truncated to just the resumed subset.  (The console-only
@@ -1584,38 +1613,44 @@ def finish_run(
                 f"\n[bold yellow]Email sent for {emails_sent} sites before aborting at "
                 f"{aborted_at}.\n"
             )
-        ymd = datetime.datetime.today().strftime("%Y%m%d")
-        with open(f"{ymd}-notices.csv", "a" if resuming else "w", encoding="utf-8") as f:
-            for n in all_warnings:
-                f.write(n + "\n")
+        if write_artifacts:
+            ymd = datetime.datetime.today().strftime("%Y%m%d")
+            with open(
+                f"{ymd}-notices.csv", "a" if resuming else "w", encoding="utf-8"
+            ) as f:
+                for n in all_warnings:
+                    f.write(n + "\n")
 
-        results_path = f"{ymd}-results.json"
-        # On a resumed run, pull the prior payload first so this run's _run can NEST the aborted
-        # run's under "previous".  A plain merge would overwrite it -- and the aborted run's block
-        # is the one carrying the reconnect evidence that prompted the resume in the first place.
-        prior = merge_prior_results(results_path, {}) if resuming else {}
-        # "this_run" in the names, not "processed": merge_prior_results() makes the FILE describe
-        # the original run plus this one, while these numbers describe only this one.  (An
-        # --only-warn run emails nobody, so this counts sites processed, not sites emailed.)
-        run_meta = {
-            "aborted_at": aborted_at,
-            "reason": reason,
-            "sites_completed_this_run": len(site_results),
-            "db_reconnects_this_run": reconnects,
-            "reconnects_by_site": dict(db_reconnects_by_site),
-        }
-        if "_run" in prior:
-            run_meta["previous"] = prior["_run"]
-        site_results["_run"] = run_meta
-        # merge_prior_results() again rather than a hand-rolled {**prior, **site_results}: it owns
-        # the "new wins" rule AND the malformed-prior-file handling, and that logic must live in
-        # one place.  It re-reads the file; a second read of a small JSON file at the very end of
-        # a multi-hour run is not worth duplicating the semantics to avoid.
-        payload = (
-            merge_prior_results(results_path, site_results) if resuming else site_results
-        )
-        with open(results_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=4)
+            results_path = f"{ymd}-results.json"
+            # On a resumed run, pull the prior payload first so this run's _run can NEST the
+            # aborted run's under "previous".  A plain merge would overwrite it -- and the aborted
+            # run's block is the one carrying the reconnect evidence that prompted the resume in
+            # the first place.
+            prior = merge_prior_results(results_path, {}) if resuming else {}
+            # "this_run" in the names, not "processed": merge_prior_results() makes the FILE
+            # describe the original run plus this one, while these numbers describe only this one.
+            # (An --only-warn run emails nobody, so this counts sites processed, not sites emailed.)
+            run_meta = {
+                "aborted_at": aborted_at,
+                "reason": reason,
+                "sites_completed_this_run": len(site_results),
+                "db_reconnects_this_run": reconnects,
+                "reconnects_by_site": dict(db_reconnects_by_site),
+            }
+            if "_run" in prior:
+                run_meta["previous"] = prior["_run"]
+            site_results["_run"] = run_meta
+            # merge_prior_results() again rather than a hand-rolled {**prior, **site_results}: it
+            # owns the "new wins" rule AND the malformed-prior-file handling, and that logic must
+            # live in one place.  It re-reads the file; a second read of a small JSON file at the
+            # very end of a multi-hour run is not worth duplicating the semantics to avoid.
+            payload = (
+                merge_prior_results(results_path, site_results)
+                if resuming
+                else site_results
+            )
+            with open(results_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=4)
     else:
         for n in all_warnings:
             sc.console.print(n)
@@ -1726,8 +1761,9 @@ def abort_run(
     """Report an aborted run, flush its artifacts, print how to finish it, and exit.  Never returns.
 
     `reason` is "database" (exit 1) or "interrupted" (exit 130, the conventional SIGINT code).
-    `emailed` says whether the aborting site's report was already sent (only ever True for an
-    interrupt; the database abort fires long before the send).
+    `emailed` says whether the aborting site's report was already sent.  Every caller passes the
+    real value: a report that has gone out must never be re-sent by the resumed run, whichever
+    failure aborted the run after the send.
 
     This function runs when things are ALREADY broken, so it must not be able to crash: every input
     it slices on is guarded (SPEC 3.5.4).
@@ -3921,13 +3957,7 @@ remove PHP {new_php} sometime after September 30, 2026.
                 def op_lookup(month):
                     return db_retry(
                         db_session,
-                        lambda: db_session.get(
-                            PantheonOverageProtection,
-                            {
-                                "site_id": site["id"],
-                                "month": datetime.date.fromisoformat(month + "-01"),
-                            },
-                        ),
+                        lambda: load_overage_protection(db_session, site, month),
                         what=f"looking up overage protection for {site['name']} {month}",
                         site=site["name"],
                     )
@@ -4460,7 +4490,7 @@ an additional pro-rated bill or credit in the following month.
         # abort path with the artifacts flushed, rather than as a bare traceback (SPEC 3.3.3).
         abort_run(
             db_session, db_engine, site_name, "database", e,
-            emailed=False,  # the DB abort fires long before the send
+            emailed=site_emailed,
             site_names=site_names, site_count=site_count, emails_sent=emails_sent,
             all_warnings=all_warnings, site_results=site_results, site_savings=site_savings,
         )
@@ -4471,6 +4501,25 @@ an additional pro-rated bill or credit in the following month.
             site_names=site_names, site_count=site_count, emails_sent=emails_sent,
             all_warnings=all_warnings, site_results=site_results, site_savings=site_savings,
         )
+    except SystemExit:
+        # sys.exit("Bailing out.") inside the loop (an unknown/missing plan SKU, a missing live
+        # environment) raises SystemExit, a BaseException the handlers above do not catch.  Without
+        # this, an hour of completed sites' notices and results is discarded on the way out.  Flush
+        # them, then RE-RAISE so the original exit code and message are preserved -- this is not an
+        # abort_run() path: there is nothing to retry and no resume command to offer, because the
+        # bad site would just bail out again.
+        finish_run(
+            db_session,
+            db_engine,
+            site_count,
+            emails_sent,
+            all_warnings,
+            site_results,
+            site_savings,
+            aborted_at=site_name,
+            reason="fatal",
+        )
+        raise
 
     finish_run(
         db_session,

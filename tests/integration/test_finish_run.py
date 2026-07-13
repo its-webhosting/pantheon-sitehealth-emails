@@ -3,6 +3,7 @@ abort path).  The e2e goldens snapshot only the rendered report, so NOTHING else
 function prints or writes.  See SPEC section 5.
 """
 
+import datetime
 import json
 
 import pytest
@@ -116,6 +117,45 @@ def test_finish_run_aborted_before_any_site_does_not_claim_success(
     results = json.loads(list(tmp_path.glob("*-results.json"))[0].read_text())
     assert results["_run"]["aborted_at"] is None
     assert results["_run"]["reason"] == "interrupted"
+
+
+@pytest.mark.integration
+def test_finish_run_update_all_writes_no_artifacts(psh, tmp_path, monkeypatch, reset_sc):
+    # --update (and --import-older-metrics) `continue` before a report is ever built, so they have
+    # no notices and no results.  Now that an aborted run flushes through finish_run(), a Ctrl-C'd
+    # weekly `--update --all` would open {ymd}-notices.csv in "w" mode with an empty list and
+    # overwrite {ymd}-results.json with a bare _run block -- DESTROYING the artifacts of the
+    # monthly report run made earlier the same day.  Write nothing; still print the totals.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {"its-wws-test1": 2})
+    ymd = datetime.datetime.today().strftime("%Y%m%d")
+    (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-test9,from-the-report-run\n")
+    (tmp_path / f"{ymd}-results.json").write_text('{"its-wws-test9": {"plan": "Basic"}}')
+
+    console = run(
+        psh, monkeypatch, reset_sc, ["--all", "--update"],
+        aborted_at="its-wws-test1", reason="interrupted",
+    )
+
+    # The report run's artifacts are untouched, byte for byte.
+    assert (tmp_path / f"{ymd}-notices.csv").read_text() == "its-wws-test9,from-the-report-run\n"
+    assert json.loads((tmp_path / f"{ymd}-results.json").read_text()) == {
+        "its-wws-test9": {"plan": "Basic"}
+    }
+    assert "Database reconnects: 2" in console.export_text()   # the totals still print
+
+
+@pytest.mark.integration
+def test_finish_run_import_older_metrics_all_writes_no_artifacts(
+    psh, tmp_path, monkeypatch, reset_sc,
+):
+    # The other report-less mode: same rule, and it must not depend on --update alone.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    run(psh, monkeypatch, reset_sc, ["--all", "--import-older-metrics"])
+
+    assert list(tmp_path.glob("*-notices.csv")) == []
+    assert list(tmp_path.glob("*-results.json")) == []
 
 
 @pytest.mark.integration
