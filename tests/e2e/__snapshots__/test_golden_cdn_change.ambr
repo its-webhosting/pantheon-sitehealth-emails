@@ -347,7 +347,7 @@
   <div class="notice notice-type-info">
     <div class="notice-icon-area"><span class="notice-icon">&#x1F50E;</span></div>
     <div class="notice-text"><p>Pantheon is <a href="https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup">making a change to their CDN</a>, from the legacy Pantheon GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before <strong>its-wws-test1</strong> can move to the new GCDN Beta, each of its custom domains must resolve through A and AAAA records instead of a CNAME record.</p>
-  <p>These domains for <strong>its-wws-test1</strong> still use a CNAME record:</p>
+  <p>These domains for <strong>its-wws-test1</strong> still use a CNAME record pointing at live-its-wws-test1.pantheonsite.io:</p>
   <div class="container">
   <table class="responsive-table site-updates">
   <thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th><th class="rt-plan">Replace the CNAME record with</th></thead>
@@ -625,7 +625,8 @@
   its-wws-test1 can move to the new GCDN Beta, each of its custom domains must resolve
   through A and AAAA records instead of a CNAME record.
   
-  These domains for its-wws-test1 still use a CNAME record:
+  These domains for its-wws-test1 still use a CNAME record pointing at
+  live-its-wws-test1.pantheonsite.io:
   
     cdn-change.example.edu  (change it in DNS)
         A      23.185.0.4

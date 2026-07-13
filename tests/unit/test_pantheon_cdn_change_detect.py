@@ -149,6 +149,46 @@ def test_finding_without_records_still_reported(detect, monkeypatch):
     assert findings[0].a == [] and findings[0].aaaa == [] and findings[0].cname == []
 
 
+def test_expected_target_is_the_sites_own_live_name(detect):
+    assert detect.expected_target("bus-occb") == "live-bus-occb.pantheonsite.io"
+
+
+def test_no_warning_when_the_target_is_the_sites_own_live_name(detect, reset_sc, monkeypatch):
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch, OCCB_ZONE)          # occb -> live-bus-occb.pantheonsite.io
+    _pantheon_says(detect, monkeypatch, {})
+    detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert "not at this site's own" not in console.export_text()
+
+
+def test_a_target_belonging_to_another_pantheon_site_is_announced(detect, reset_sc, monkeypatch):
+    # The CNAME points at ANOTHER site's legacy name (a renamed site, a stale Cloudflare origin, a
+    # domain moved between sites).  The owner is still shown the real target -- telling them it
+    # points at X when it points at Y would be worse -- but a human needs to look at the site.
+    console = recording_console(monkeypatch, reset_sc)
+    patch_resolve(monkeypatch,
+                  {("occb.bus.umich.edu", "CNAME"): ["live-someone-else.pantheonsite.io."]})
+    _pantheon_says(detect, monkeypatch, {})
+    findings = detect.find_findings("uuid", "bus-occb", ["occb.bus.umich.edu"], {}, True)
+    assert findings[0].target == "live-someone-else.pantheonsite.io"    # reported as it IS
+    out = console.export_text()
+    assert "ATTENTION" in out
+    assert "live-someone-else.pantheonsite.io" in out
+    assert "live-bus-occb.pantheonsite.io" in out                       # what it SHOULD be
+    assert "occb.bus.umich.edu" in out
+
+
+def test_one_warning_per_wrong_target_not_one_per_domain(detect, reset_sc, monkeypatch):
+    # Ten domains on one wrong target must produce ONE line, not ten.
+    console = recording_console(monkeypatch, reset_sc)
+    domains = [f"d{i}.bus.umich.edu" for i in range(10)]
+    patch_resolve(monkeypatch,
+                  {(d, "CNAME"): ["live-someone-else.pantheonsite.io."] for d in domains})
+    _pantheon_says(detect, monkeypatch, {})
+    detect.find_findings("uuid", "bus-occb", domains, {}, True)
+    assert console.export_text().count("not at this site's own") == 1
+
+
 def test_fqdn_absent_from_a_successful_answer_is_announced(detect, reset_sc, monkeypatch):
     # The call succeeded and answered for OTHER domains, but has no row for this one.  The owner
     # will be told "unavailable", so the operator has to hear about it.  Detected by MEMBERSHIP,

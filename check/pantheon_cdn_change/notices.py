@@ -29,14 +29,17 @@ INTRO_HTML = (
     "Pantheon GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before "
     "<strong>{site}</strong> can move to the new GCDN Beta, each of its custom domains must "
     "resolve through A and AAAA records instead of a CNAME record.</p>\n"
-    "<p>These domains for <strong>{site}</strong> still use a CNAME record:</p>")
+    "<p>These domains for <strong>{site}</strong> still use a CNAME record pointing at "
+    "{targets}:</p>")
 
 INTRO_TEXT = (
     "Pantheon is making a change to their CDN <{docs}>, from the legacy Pantheon\n"
     "GCDN (Fastly) to the new Pantheon GCDN Beta (Pantheon Cloudflare).  Before\n"
     "{site} can move to the new GCDN Beta, each of its custom domains must resolve\n"
     "through A and AAAA records instead of a CNAME record.\n\n"
-    "These domains for {site} still use a CNAME record:")
+    # The target goes on its own line: the rest of this paragraph is hand-wrapped at ~75 columns,
+    # and a legacy-GCDN name is long enough to blow past that on the same line.
+    "These domains for {site} still use a CNAME record pointing at\n{targets}:")
 
 MAINTENANCE_HTML = (
     "<p>ITS will make these changes for you during an upcoming maintenance, which we will "
@@ -75,6 +78,33 @@ def where_label(where: str, *, umich: bool) -> str:
     if where == "both":
         return f"DNS and {_cloudflare_label(umich)}"
     raise ValueError(f"unknown Finding.where: {where!r}")
+
+
+# The intro names the legacy-GCDN name the domains currently point at.  It SHOULD always be the
+# site's own live name (live-<site>.pantheonsite.io) and there should be exactly one of them; when
+# it isn't, detect.py warns the operator (a record pointing at another site's legacy name is a real
+# misconfiguration).  The notice still renders whatever is actually there -- telling an owner their
+# CNAME points at X when it points at Y would be worse than saying nothing.
+FALLBACK_TARGET_PHRASE = "the legacy Pantheon GCDN"
+
+
+def _target_phrase(findings, *, escape: bool) -> str:
+    """The distinct legacy-GCDN names these findings point at, in first-seen order, as English.
+
+    One target (the normal case) -> "live-bus-occb.pantheonsite.io".  Several -> "a and b" /
+    "a, b and c".  None (defensive -- a finding always has a target) -> a phrase that keeps the
+    sentence grammatical rather than rendering "pointing at :".
+    """
+    targets = []
+    for finding in findings:
+        if finding.target and finding.target not in targets:
+            targets.append(finding.target)
+    if not targets:
+        return FALLBACK_TARGET_PHRASE
+    shown = [html.escape(t) for t in targets] if escape else list(targets)
+    if len(shown) == 1:
+        return shown[0]
+    return f"{', '.join(shown[:-1])} and {shown[-1]}"
 
 
 def _records(finding) -> list:
@@ -147,7 +177,7 @@ def cdn_change_notice(site_name: str, findings: list, *, umich: bool, before_cut
     closing_text = MAINTENANCE_TEXT if (umich and before_cutoff) else SELF_SERVE_TEXT
 
     message = (
-        f"{INTRO_HTML.format(docs=DOCS_URL, site=site)}\n"
+        f"{INTRO_HTML.format(docs=DOCS_URL, site=site, targets=_target_phrase(findings, escape=True))}\n"
         '<div class="container">\n'
         '<table class="responsive-table site-updates">\n'
         '<thead><th class="rt-plan">Domain</th><th class="rt-plan">Change it in</th>'
@@ -158,7 +188,7 @@ def cdn_change_notice(site_name: str, findings: list, *, umich: bool, before_cut
         f"{closing_html}")
 
     text = (
-        f"{INTRO_TEXT.format(docs=DOCS_URL, site=site_name)}\n\n"
+        f"{INTRO_TEXT.format(docs=DOCS_URL, site=site_name, targets=_target_phrase(findings, escape=False))}\n\n"
         f"{blocks}\n\n"
         f"{closing_text}\n")
 

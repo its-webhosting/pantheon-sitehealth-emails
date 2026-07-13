@@ -57,6 +57,47 @@ def test_every_body_cell_is_left_aligned_and_labelled(notices, findings):
         assert n["message"].count(header) == 1 + len(findings)   # the <th> plus one label per row
 
 
+def test_intro_names_the_cname_target(notices, findings):
+    # The owner should not have to go look up what their CNAME currently points at.
+    for umich in (True, False):
+        n = notices.cdn_change_notice("bus-occb", findings, umich=umich, before_cutoff=True)
+        for body in (n["message"], n["text"]):
+            assert "still use a CNAME record pointing at" in body
+            assert "live-bus-occb.pantheonsite.io" in body
+
+
+def test_intro_lists_every_distinct_target(notices):
+    # Should never happen (detect.py warns when it does), but if two domains point at different
+    # legacy names the sentence must name BOTH -- naming only one would be a lie about the other.
+    F = notices.Finding
+    f = [F("a.example.org", "dns", "live-aaa.pantheonsite.io", ["1.2.3.4"], [], []),
+         F("b.example.org", "dns", "live-bbb.pantheonsite.io", ["1.2.3.4"], [], []),
+         F("c.example.org", "dns", "live-aaa.pantheonsite.io", ["1.2.3.4"], [], [])]
+    n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
+    # The plaintext puts the target list on its own line (the paragraph wraps at ~75 columns).
+    assert "pointing at\nlive-aaa.pantheonsite.io and live-bbb.pantheonsite.io:" in n["text"]
+    assert "pointing at live-aaa.pantheonsite.io and live-bbb.pantheonsite.io:" in n["message"]
+    assert n["text"].count("live-aaa.pantheonsite.io") == 1     # distinct, first-seen order
+
+
+def test_target_is_html_escaped_in_the_intro(notices):
+    F = notices.Finding
+    f = [F("a.example.org", "dns", "live-<script>.pantheonsite.io", ["1.2.3.4"], [], [])]
+    n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
+    assert "<script>" not in n["message"]
+    assert "&lt;script&gt;" in n["message"]
+
+
+def test_intro_stays_grammatical_with_no_target(notices):
+    # Defensive: a finding always carries a target, but "pointing at :" must never be rendered.
+    F = notices.Finding
+    f = [F("a.example.org", "dns", "", ["1.2.3.4"], [], [])]
+    n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
+    assert "pointing at\nthe legacy Pantheon GCDN:" in n["text"]
+    assert "pointing at the legacy Pantheon GCDN:" in n["message"]
+    assert "pointing at :" not in n["text"] and "pointing at :" not in n["message"]
+
+
 def test_where_label_matrix(notices):
     assert notices.where_label("dns", umich=True) == "DNS"
     assert notices.where_label("dns", umich=False) == "DNS"

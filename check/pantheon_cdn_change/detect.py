@@ -114,8 +114,35 @@ def _candidates(custom_domains: list, proxied_fqdns: dict, cloudflare_on: bool) 
     return found
 
 
+def expected_target(site_name: str) -> str:
+    """The legacy-GCDN name a site's custom domains SHOULD be pointing at."""
+    return f"live-{chain.normalize(site_name)}{chain.LEGACY_GCDN_SUFFIX}"
+
+
+def _warn_on_unexpected_targets(site_name: str, candidates: list) -> None:
+    """The notice tells the owner which legacy-GCDN name their domains point at.  It should always
+    be the site's OWN live name; anything else means the record points at a DIFFERENT Pantheon
+    site (renamed site, stale Cloudflare origin, a domain moved between sites) and needs a human.
+
+    Warn once per unexpected target, not once per domain -- a site with ten domains on one wrong
+    target should produce one line, not ten.  The notice still shows the real target either way:
+    telling an owner their CNAME points at X when it points at Y would be worse than saying nothing.
+    """
+    expected = expected_target(site_name)
+    unexpected = {}
+    for fqdn, _where, target in candidates:
+        if target and target != expected:
+            unexpected.setdefault(target, []).append(str(fqdn))
+    for target, fqdns in unexpected.items():
+        sc.console.print(
+            f":exclamation: [bold red] ATTENTION: {rich_escape(str(site_name))} has "
+            f"{len(fqdns)} custom domain(s) pointing at {rich_escape(target)}, not at this "
+            f"site's own {rich_escape(expected)} -- that is another Pantheon site's legacy name; "
+            f"check the site ({rich_escape(', '.join(fqdns))})")
+
+
 def find_findings(site_id: str, site_name: str, custom_domains: list, proxied_fqdns: dict,
-                   cloudflare_on: bool) -> list:
+                  cloudflare_on: bool) -> list:
     """Detect candidates, then enrich them with Pantheon's required records (lazily).
 
     site_id is the UUID the terminus command needs; site_name is what operator messages print.
@@ -123,6 +150,8 @@ def find_findings(site_id: str, site_name: str, custom_domains: list, proxied_fq
     candidates = _candidates(custom_domains, proxied_fqdns, cloudflare_on)
     if not candidates:
         return []      # a clean site issues NO domain:dns call
+
+    _warn_on_unexpected_targets(site_name, candidates)
 
     required = pantheon.required_records(site_id, site_name)   # {} on failure -- never fatal (F4)
     findings = []
