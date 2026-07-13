@@ -2,11 +2,13 @@
   "permissions": {
     "allow": [
       "mcp__codegraph",
-      "mcp__chrome-devtools",
-      "mcp__plugin_context-mode_context-mode",
-      "mcp__plugin_context-mode_context-mode__ctx_batch_execute"
+      "mcp__chrome-devtools"
     ]
   },
+  "enabledMcpjsonServers": [
+    "codegraph",
+    "chrome-devtools"
+  ],
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -27,11 +29,6 @@
     "feature-dev@claude-plugins-official": true,
     "cloudflare@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
-    "security-guidance@claude-plugins-official": true,
-    "context-mode@context-mode": true
-  },
-  "enabledMcpjsonServers": [
-    "codegraph",
-    "chrome-devtools"
-  ]
+    "security-guidance@claude-plugins-official": true
+  }
 }

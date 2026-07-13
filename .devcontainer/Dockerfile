@@ -70,10 +70,10 @@ RUN curl -sS https://starship.rs/install.sh >/tmp/install.sh \
   && sh /tmp/install.sh --yes \
   && rm /tmp/install.sh
 
-# install RTK
-ADD https://api.github.com/repos/rtk-ai/rtk/tags?per_page=1 /home/$USERNAME/software_versions/rtk_version.json
-RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh \
-  | env RTK_INSTALL_DIR=/usr/local/bin sh
+# install RTK -- commented out because wasn't getting enough gains to make it worth it.
+#ADD https://api.github.com/repos/rtk-ai/rtk/tags?per_page=1 /home/$USERNAME/software_versions/rtk_version.json
+#RUN curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh \
+#  | env RTK_INSTALL_DIR=/usr/local/bin sh
 
 RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/software_versions
 
