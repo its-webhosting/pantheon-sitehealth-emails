@@ -1,0 +1,153 @@
+"""The abort path: flush the artifacts, drop the failed site, print a RUNNABLE command, exit
+nonzero.  In-process, because the subprocess safety interlock bans --all (CLAUDE.md).
+
+See development/2026-07-13-db-connection-resilience/SPEC.md sections 3.5.1-3.5.4.
+"""
+
+import signal
+
+import pytest
+
+from helpers.dnsfake import recording_console
+
+SITE_NAMES = ["its-wws-test1", "its-wws-test2", "its-wws-test3"]
+
+
+class FakeSession:
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class FakeEngine:
+    def dispose(self):
+        pass
+
+
+def abort(psh, monkeypatch, reset_sc, argv, reason, error, *, emailed=False, site_results=None):
+    console = recording_console(monkeypatch, reset_sc)
+    reset_sc.options = psh.parse_args(argv[1:])
+    monkeypatch.setattr(psh.sys, "argv", argv)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+
+    # abort_run() sets SIGINT to SIG_IGN, which is PROCESS-GLOBAL and restored by no fixture:
+    # without this patch, the rest of the pytest session would silently ignore Ctrl-C
+    # (SPEC 5, harness rule 2).
+    signals_set = []
+    monkeypatch.setattr(psh.signal, "signal", lambda sig, handler: signals_set.append((sig, handler)))
+
+    captured = {}
+
+    def fake_finish_run(_session, _engine, _site_count, _emails_sent, _warnings, results, *_a, **kw):
+        captured.update(kw)
+        captured["site_results"] = results
+        captured["ran"] = True
+
+    monkeypatch.setattr(psh, "finish_run", fake_finish_run)
+    with pytest.raises(SystemExit) as excinfo:
+        psh.abort_run(
+            FakeSession(), FakeEngine(), "its-wws-test2", reason, error,
+            emailed=emailed, site_names=SITE_NAMES,
+            site_count=10, emails_sent=4, all_warnings=[],
+            site_results=site_results if site_results is not None else {},
+            site_savings=[],
+        )
+    assert (signal.SIGINT, signal.SIG_IGN) in signals_set  # the flush is protected
+    return console, captured, excinfo.value.code
+
+
+@pytest.mark.integration
+def test_database_abort_flushes_and_prints_a_resume_command(psh, monkeypatch, reset_sc):
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all", "--only-warn"]
+    console, captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "database",
+        psh.DatabaseUnavailableError("loading traffic rows: (2013, 'Lost connection')"),
+    )
+    assert code == 1
+    assert captured["ran"] is True                  # artifacts flushed BEFORE exiting
+    assert captured["aborted_at"] == "its-wws-test2"
+    output = console.export_text()
+    assert "--resume-from its-wws-test2" in output
+    assert "--only-warn" in output                  # the run's real flags survive (SPEC 3.5.1)
+
+
+@pytest.mark.integration
+def test_abort_drops_the_failed_site_from_the_results(psh, monkeypatch, reset_sc):
+    # site_results[site] is written DURING the gather, long before the crash -- so without this
+    # pop, results.json would ship the failed site as though it had succeeded, with no matching
+    # notices (SPEC 3.5.2).
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    _console, captured, _code = abort(
+        psh, monkeypatch, reset_sc, argv, "database", psh.DatabaseUnavailableError("boom"),
+        site_results={
+            "its-wws-test1": {"framework": "wordpress"},
+            "its-wws-test2": {"framework": "wordpress"},  # the site that died
+        },
+    )
+    assert list(captured["site_results"].keys()) == ["its-wws-test1"]
+
+
+@pytest.mark.integration
+def test_ctrl_c_flushes_artifacts_and_exits_130(psh, monkeypatch, reset_sc):
+    # Prime Directive #7: a run is not atomic.  Before this, Ctrl-C at hour two lost every
+    # artifact of the run -- while a DB failure at hour two kept them.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+    )
+    assert code == 130                             # conventional SIGINT exit code
+    assert captured["ran"] is True
+    assert "--resume-from its-wws-test2" in console.export_text()
+
+
+@pytest.mark.integration
+def test_ctrl_c_after_the_email_was_sent_resumes_at_the_next_site(psh, monkeypatch, reset_sc):
+    # The report for its-wws-test2 was already DELIVERED when the interrupt landed.  Resuming
+    # there (--resume-from is inclusive) would send that owner a second copy of the same monthly
+    # report -- a silent, outward-facing failure.  Resume at the next site instead, and KEEP the
+    # site's results entry, because it really did complete (SPEC 3.5.3).
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+        emailed=True,
+        site_results={"its-wws-test2": {"framework": "wordpress"}},
+    )
+    assert code == 130
+    assert "--resume-from its-wws-test3" in console.export_text()   # the NEXT site
+    assert "its-wws-test2" in captured["site_results"]              # entry kept, not popped
+
+
+@pytest.mark.integration
+def test_explicit_site_abort_prints_a_rerun_command_not_resume_from(psh, monkeypatch, reset_sc):
+    argv = [
+        "./pantheon-sitehealth-emails", "--date", "2026-03-31",
+        "its-wws-test1", "its-wws-test2", "its-wws-test3",
+    ]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "database", psh.DatabaseUnavailableError("boom"),
+    )
+    assert code == 1
+    output = console.export_text()
+    assert "--resume-from" not in output           # it requires --all; would fail when pasted
+    assert "its-wws-test2 its-wws-test3" in output # the sites not yet processed
+
+
+@pytest.mark.integration
+def test_abort_on_an_unrequested_site_does_not_crash(psh, monkeypatch, reset_sc):
+    # A non---all run iterates EVERY org site and `continue`s the unrequested ones, so a Ctrl-C
+    # can land on a site the operator never asked for.  Slicing the requested list at that name
+    # would raise ResumeSiteNotFoundError -- inside the abort handler, after SIGINT was ignored
+    # and the artifacts were flushed.  The operator would get a traceback instead of a command
+    # (SPEC 3.5.4).
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "its-wws-test9"]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+    )
+    assert code == 130
+    # ONE export_text() call: rich's export_text(clear=True) is the default, so a second call
+    # would come back empty and silently pass any `not in` assertion made against it.
+    output = console.export_text()
+    assert "Traceback" not in output
+    assert "its-wws-test9" in output  # re-run what was actually requested

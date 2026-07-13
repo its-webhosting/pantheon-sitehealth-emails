@@ -203,3 +203,78 @@ def test_load_traffic_rows_releases_the_connection_with_default_session(psh):
     assert rows[0].visits == 10
     assert rows[0].traffic_date == datetime.date(2026, 3, 1)
     assert rows[0].site_plan == "Basic"
+
+
+@pytest.mark.unit
+def test_resume_command_preserves_every_flag_of_the_original_run(psh):
+    # Rebuilt from argv, NOT re-enumerated from sc.options: enumerating would silently drop any
+    # flag added later, and the operator pastes this command verbatim.  An --import-older-metrics
+    # run whose hint came back as a plain report run would generate and send full reports
+    # (SPEC 3.5.1).
+    argv = [
+        "./pantheon-sitehealth-emails",
+        "-c", "prod.toml", "--date", "20260331", "--all", "--import-older-metrics", "-vv",
+    ]
+    cmd = psh.resume_command(argv, "its-wws-test2")
+    for fragment in ("-c prod.toml", "--date 20260331", "--all", "--import-older-metrics", "-vv"):
+        assert fragment in cmd
+    assert cmd.endswith("--resume-from its-wws-test2")
+
+
+@pytest.mark.unit
+def test_resume_command_replaces_an_existing_resume_from(psh):
+    for argv in (
+        ["./pantheon-sitehealth-emails", "--all", "--resume-from", "its-wws-test1"],
+        ["./pantheon-sitehealth-emails", "--all", "--resume-from=its-wws-test1"],
+    ):
+        cmd = psh.resume_command(argv, "its-wws-test2")
+        assert "its-wws-test1" not in cmd
+        assert cmd.count("--resume-from") == 1
+        assert cmd.endswith("--resume-from its-wws-test2")
+
+
+@pytest.mark.unit
+def test_rerun_command_lists_the_remaining_sites_and_never_resume_from(psh):
+    # --resume-from requires --all, so printing it after an explicit-SITE run would hand the
+    # operator a command that exits with an error (SPEC 3.5.1).
+    argv = [
+        "./pantheon-sitehealth-emails", "--date", "20260331", "-c", "prod.toml",
+        "its-wws-test1", "its-wws-test2", "its-wws-test3",
+    ]
+    cmd = psh.rerun_command(
+        argv,
+        ["its-wws-test1", "its-wws-test2", "its-wws-test3"],
+        ["its-wws-test2", "its-wws-test3"],
+    )
+    assert "--resume-from" not in cmd
+    assert "its-wws-test1" not in cmd        # already done, dropped
+    assert cmd.endswith("its-wws-test2 its-wws-test3")
+    assert "-c prod.toml" in cmd             # every other flag survives
+
+
+@pytest.mark.unit
+def test_rerun_command_keeps_a_site_name_that_is_an_option_value(psh):
+    # A site name in an option's VALUE slot is not a positional.  A naive
+    # `[a for a in argv if a not in original_sites]` deletes it, leaving `-c` to swallow the next
+    # token -- handing the operator a mangled command at the moment they are least careful
+    # (SPEC 3.5.1).  The value-taking options are derived from the parser, so this cannot rot.
+    argv = [
+        "./pantheon-sitehealth-emails", "-c", "its-wws-test1",  # a config file NAMED like a site
+        "--date", "20260331", "its-wws-test1", "its-wws-test2",
+    ]
+    cmd = psh.rerun_command(
+        argv, ["its-wws-test1", "its-wws-test2"], ["its-wws-test2"]
+    )
+    assert "-c its-wws-test1" in cmd         # the option value survives
+    assert cmd.endswith("its-wws-test2")     # only the positional was dropped
+
+
+@pytest.mark.unit
+def test_resume_point_skips_a_site_whose_report_was_already_emailed(psh):
+    sites = ["a", "b", "c"]
+    # Not emailed: --resume-from is inclusive, so redo the site from the top.
+    assert psh.resume_point(sites, "b", emailed=False) == "b"
+    # Emailed: resuming AT it would send that owner a duplicate monthly report (SPEC 3.5.3).
+    assert psh.resume_point(sites, "b", emailed=True) == "c"
+    # Emailed, and it was the last site: nothing remains to resume.
+    assert psh.resume_point(sites, "c", emailed=True) is None
