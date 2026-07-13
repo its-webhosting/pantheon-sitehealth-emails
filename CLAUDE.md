@@ -168,7 +168,7 @@ when the source was disabled, malformed, or failed):
 | Phase | Guaranteed new keys (beyond `site`/`notices`/`sections`/`attachments`) |
 |---|---|
 | `site_pre` | — (fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
-| `site_post_traffic` | `traffic_rows`, `start_date`, `end_date` |
+| `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version`/`drupal_version` (str; `"unknown"` — NOT None — when that framework's version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed |
 | `site_pre_render` | everything above (full-report path only; no consumer yet — the documented seam for future report-shaping hooks) |
@@ -285,6 +285,36 @@ defs near the top of the script). Backend is chosen by the `[Database]` TOML sec
 new traffic rows are inserted while existing ones are skipped, not updated (`ON CONFLICT DO
 NOTHING` on sqlite via the `sqlite_insert` import, `INSERT IGNORE` on mysql).
 
+**Connection resilience.** The DB is remote (RDS) and the path crosses NAT/firewall middleboxes
+that reap idle flows, so the engine sets `pool_pre_ping=True` / `pool_recycle=1800` (MySQL only;
+sqlite kwargs stay `{}`) and the sessionmaker sets `expire_on_commit=False`. The load-bearing piece
+is `load_traffic_rows()`'s **commit after a read-only SELECT**: it releases the connection before
+the multi-minute per-site gather, without which the session holds an idle in-transaction connection
+that gets reaped and dies at the next query with MySQL error 2013 — **do not remove it**
+(`test_load_traffic_rows_releases_the_connection` guards it). It returns plain `TrafficRow` data,
+not ORM rows, because a rollback expires live ORM objects and a later read would emit an unretried
+SELECT. DB work runs through `db_retry(session, unit, what=…, site=…)`, which retries **whole
+idempotent units of work** (`update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`,
+`build_traffic_table_rows`) and NEVER a statement with pending writes — a rollback discards them,
+so a statement-level retry would commit a partial write set. It catches `OperationalError` only
+(every flavor alike — no error-code sniffing). On a second failure it raises
+`DatabaseUnavailableError`; that (and a `KeyboardInterrupt`) is caught once around the site loop,
+where `abort_run()` drops the failed site from `site_results` (it is written mid-gather, so it
+would otherwise ship as a success), flushes the artifacts via `finish_run()`, prints a command
+rebuilt from `sys.argv` (`--resume-from` for `--all`; a re-run command listing the remaining sites
+otherwise, since `--resume-from` requires `--all`), and exits 1 (database) or 130 (Ctrl-C). **A
+Ctrl-C that lands after a site's report was already sent resumes at the NEXT site** and keeps that
+site's results entry — resuming inclusively would mail its owner a duplicate report.
+`finish_run()` also writes a `_run` key into `-results.json` (`aborted_at`, `reason`,
+`sites_completed_this_run`, `db_reconnects_this_run`, `reconnects_by_site`, and on a resumed run
+the prior run's block under `previous`). **The e2e goldens cover neither stdout nor the
+artifacts**, so `tests/integration/test_finish_run.py`, `tests/integration/test_abort_run.py`, and
+`tests/e2e/test_abort_e2e.py` (which drives a DB failure through the real `main()` via
+`tests/shims/dbshim`) are the only cover for that code. Note `abort_run()` sets SIGINT to
+`SIG_IGN` so a second Ctrl-C cannot truncate the flush — an in-process test that calls it **must**
+`monkeypatch.setattr(psh.signal, "signal", …)`, or the rest of the pytest session silently ignores
+Ctrl-C. See `development/2026-07-13-db-connection-resilience/SPEC.md`.
+
 ### Configuration (`pantheon-sitehealth-emails.toml`)
 
 The active config is a symlink to `pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml`
@@ -305,6 +335,15 @@ tool stays reusable by other institutions.
   (technically non-idiomatic) house style — follow the surrounding code.
 - There is an active TODO list in `README.md` describing planned work (daily traffic alerts,
   Cloudflare/security scoring, moving capture into the portal app, better error handling).
+- **`git diff -w` is not proof a re-indent of this file was whitespace-only.** `main()`'s per-site
+  loop builds notice HTML/plaintext from multi-line `f"""..."""` literals whose continuation lines
+  deliberately start at column 0, not at the surrounding code's indent (grep `f"""` in the loop
+  body). A mechanical re-indent of a block containing one of these — e.g. wrapping the loop in a
+  `try:` — must NOT shift those interior lines: doing so adds leading whitespace to the rendered
+  email, a real behavior change, and `git diff -w` hides it completely, because a line that only
+  gained leading whitespace is exactly what `-w` is designed to ignore. The goldens are what would
+  actually catch it. Anyone re-indenting a block here should compare ASTs/token streams, or just
+  trust the goldens — not eyeball `git diff -w`.
 
 ## Testing
 
@@ -376,6 +415,14 @@ Non-obvious things the harness relies on:
   interpreter startup (before the program imports anything) and replace `dns.resolver.resolve`,
   reading its zone from the `DNS_SHIM_ZONE` JSON file env var — the 4th e2e golden below is what
   needs it.
+- **`tests/shims/dbshim`** is `dnsshim`'s counterpart for the database: `sitecustomize.py`, active
+  only when `DB_SHIM_FAIL` is set (otherwise inert even when the directory is on `PYTHONPATH`),
+  patches `sqlalchemy.orm.Session.get` to raise `OperationalError`, simulating MySQL error 2013
+  inside whichever `db_retry()` unit happens to call it first (in practice `update_traffic_rows()`'s
+  `session.merge()`, not `build_traffic_table_rows()` as the name might suggest — `Session._merge()`
+  calls `get()` internally). `tests/e2e/test_abort_e2e.py` is the only test that drives this through
+  the real subprocess `main()`; it is not one of the byte-golden e2e tests below (no snapshot — it
+  asserts exit code, stdout content, and the printed re-run command).
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
   and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots

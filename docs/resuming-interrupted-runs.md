@@ -58,12 +58,31 @@ processed, so a typo can never quietly skip the entire run:
 --resume-from: site 'mystie-example' was not found among the 507 sites for org ...
 ```
 
+## Aborting mid-run
+
+A run can also end deliberately, before the loop reaches the last site: an unrecoverable database
+error (one that survives a single automatic retry) or a Ctrl-C now aborts the run on purpose
+instead of dying with a traceback or silently discarding completed work. When that happens the run:
+
+- writes `-notices.csv`/`-results.json` for exactly the sites that finished (the site it was
+  processing when it died is dropped from the results — that entry is written mid-gather and would
+  otherwise look like a success; a Ctrl-C that lands *after* that site's report was already emailed
+  is the one exception, since dropping it there would just make you re-send the same report);
+- prints the exact command to continue, rebuilt from the original invocation so it carries the same
+  flags (`--resume-from SITE_NAME` for an `--all` run — see above; a re-run command listing the
+  remaining sites for an explicit-`SITE` run, since `--resume-from` requires `--all`); and
+- exits 1 for a database failure, 130 for Ctrl-C.
+
+See `CLAUDE.md`'s **Database** section for the mechanism (`db_retry`, `DatabaseUnavailableError`,
+`abort_run()`, `finish_run()`).
+
 ## Summary artifacts and the overlap caveat
 
 A full report run writes two summary files at the end, named for today's date:
-`YYYYMMDD-notices.csv` and `YYYYMMDD-results.json`. They are written only after the loop
-completes, so an interrupted run leaves no partial files behind — but a resumed run would
-otherwise cover only the sites it processed. When `--resume-from` is given, the resumed run
+`YYYYMMDD-notices.csv` and `YYYYMMDD-results.json`. Normally they are written once, after the loop
+completes — but the deliberate abort above also triggers this same write on its way out, so neither
+a database failure nor a Ctrl-C leaves the run with *no* files at all. A resumed run's own files
+would otherwise cover only the sites it processed: when `--resume-from` is given, the resumed run
 instead **appends** its rows to the CSV and **merges** its entries into the JSON, so the combined
 files describe both runs.
 

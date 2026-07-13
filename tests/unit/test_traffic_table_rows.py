@@ -71,8 +71,9 @@ def test_build_traffic_table_rows_is_idempotent_under_retry(psh, monkeypatch):
     # The claim db_retry()'s whole design rests on (SPEC 3.3.1).  The failure MUST land while an
     # earlier month's overage row is already pending -- that is the ONLY position where a rollback
     # could discard writes and a naive retry could commit a partial write set.  The gets are:
-    #   1: the pre-loop get (:3280)   2: February's get (:3343, BEFORE February's add)
-    #   3: March's get (:3343, AFTER February's add -- pending writes exist)
+    #   1: the pre-loop session.get, before the for-month loop starts
+    #   2: February's session.get, inside the loop, BEFORE that iteration's session.add()
+    #   3: March's session.get, inside the loop, AFTER February's session.add() -- pending writes exist
     # An earlier draft of this test raised on call 2, where session.new is empty: it proved
     # nothing.  The assert below fails loudly if the fixture ever drifts back to that position.
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
@@ -104,9 +105,11 @@ def test_build_traffic_table_rows_is_idempotent_under_retry(psh, monkeypatch):
 @pytest.mark.unit
 def test_build_traffic_table_rows_for_a_zero_traffic_site(psh):
     # The real zero-traffic shape (SPEC 3.7): main() pre-seeds visits_by_month to 0 for every
-    # month in the window (:2848-2853), so an EMPTY dict is unreachable -- do not test for it.
-    # With no traffic rows, plan_on_day falls back to {end_date: current_plan} (:2880) and
-    # site_plan_start is the report month, so months before it hit the `continue` at :3297.
+    # month in the window (the while-loop just before it reads the traffic rows), so an EMPTY
+    # dict is unreachable -- do not test for it. With no traffic rows, plan_on_day falls back to
+    # {end_date: current_plan} (main()'s "brand-new site with no traffic history yet" branch) and
+    # site_plan_start is the report month, so months before it hit build_traffic_table_rows()'s
+    # `if ymd1 < site_plan_start: continue`.
     session = make_session(psh)
     rows = psh.build_traffic_table_rows(
         session,
