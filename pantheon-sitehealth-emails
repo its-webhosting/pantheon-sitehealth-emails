@@ -980,6 +980,132 @@ def estimate_month_visits(visits_by_month, dates, last_day, end_day) -> int:
     return estimate
 
 
+def build_traffic_table_rows(
+    session,
+    site: dict,
+    visits_by_month: dict,
+    plan_on_day: dict,
+    plan_info: dict,
+    site_plan_start: datetime.date,
+    first_plan_day: datetime.date,
+    last_plan_day: datetime.date,
+    start_date: datetime.date,
+    end_date: datetime.date,
+    overage_block_size: int,
+    overage_block_cost: float,
+) -> dict:
+    """Build the report's per-month traffic table and persist overage-protection state.
+
+    Idempotent, so db_retry() may re-run it after a rollback: every local (traffic_table_rows,
+    op_remaining, old_plan) is reset on entry, and the PantheonOverageProtection rows are
+    get-or-create by primary key.  Extracting this block out of main() is what makes that true --
+    see SPEC 3.3.1 for what a statement-level retry would corrupt instead.
+    """
+    traffic_table_rows = {}
+    d = (start_date.replace(day=1) - datetime.timedelta(days=15)).replace(day=1)
+    op = session.get(
+        PantheonOverageProtection, {"site_id": site["id"], "month": d}
+    )
+    op_remaining = 0 if op is None else op.months_remaining
+    old_plan = None
+    for month in visits_by_month.keys():
+        ymd = datetime.date.fromisoformat(month + "-15")
+        ymd1 = ymd.replace(day=1)
+        if ymd < first_plan_day:
+            ymd = first_plan_day
+        if ymd > last_plan_day:
+            ymd = last_plan_day
+        if ymd1 < start_date:
+            ymd1 = start_date
+        if ymd1 > end_date:
+            ymd1 = end_date.replace(day=1)
+        if ymd1 < site_plan_start:
+            continue
+        d = ymd if ymd >= first_plan_day else first_plan_day
+        plan = plan_on_day[d]
+        if ymd1 == site_plan_start and plan != "Basic":
+            op_remaining = 4
+        if old_plan in ("Sandbox", "Basic") and plan not in ("Sandbox", "Basic"):
+            op_remaining = 4
+        old_plan = plan
+        traffic_table_rows[month] = {}
+        traffic_table_rows[month]["month"] = datetime.datetime.strptime(
+            month, "%Y-%m"
+        ).strftime("%B %Y")
+        traffic_table_rows[month]["visitors"] = f"{visits_by_month[month]:,.0f}"
+        traffic_table_rows[month]["plan"] = plan
+        traffic_limit = int(plan_info[plan]["traffic_limit"])
+        traffic_table_rows[month]["plan-limit"] = f"{traffic_limit:,.0f}"
+        traffic_table_rows[month]["upgrade-at"] = (
+            f"{plan_info[plan]['upgrade_at']:,.0f}"
+        )
+        traffic_table_rows[month]["next-plan"] = plan_info[plan]["upgrade_to"]
+        downgrade_to = plan_info[plan]["downgrade_to"]
+        if downgrade_to is not None:
+            downgrade_at = plan_info[downgrade_to]["upgrade_at"]
+            traffic_table_rows[month]["downgrade-at"] = f"{downgrade_at:,.0f}"
+            traffic_table_rows[month]["previous-plan"] = downgrade_to
+        else:
+            traffic_table_rows[month]["downgrade-at"] = "-"
+            traffic_table_rows[month]["previous-plan"] = "-"
+        overage = max(visits_by_month[month] - traffic_limit, 0)
+        n_blocks = overage_blocks(overage, overage_block_size)
+        overage_cost = n_blocks * overage_block_cost
+        overage_text = f"{overage:,.0f}"
+        overage_blocks_text = f"{n_blocks:,.0f}"
+        overage_cost_text = f"${overage_cost:,.0f}"
+        overage_protection_status = "-"
+        # Overage protection started retroactively on 2024-01-01
+        if month >= "2024-01" and plan != "Basic":
+            overage_protection_status = ""
+            if ymd.month == 1:
+                op_remaining = 4
+                overage_protection_status = "Set to 4 months, "
+            op_used = False
+            if overage > 0 and op_remaining > 0:
+                op_remaining -= 1
+                op_used = True
+            op = session.get(
+                PantheonOverageProtection, {"site_id": site["id"], "month": ymd1}
+            )
+            if op is None:
+                op = PantheonOverageProtection(
+                    site_id=site["id"],
+                    month=ymd1,
+                    months_remaining=op_remaining,
+                    used_this_month=op_used,
+                )
+                session.add(op)
+            else:
+                op.months_remaining = op_remaining
+                op.used_this_month = op_used
+            if op_used:
+                overage_protection_status += f"used 1 month, "
+                overage_cost_text = (
+                    '$0 (<span style="font-size:smaller;">waived '
+                    + overage_cost_text
+                    + ")</span>"
+                )
+            overage_protection_status += (
+                f"1 month remaining"
+                if op_remaining == 1
+                else f"{op_remaining} months remaining"
+            )
+        else:
+            op_remaining = 0
+            if plan != "Basic":
+                overage_text = "-"
+                overage_blocks_text = "-"
+                overage_cost_text = "-"
+        traffic_table_rows[month]["overage"] = overage_text
+        traffic_table_rows[month]["overage-blocks"] = overage_blocks_text
+        traffic_table_rows[month]["overage-cost"] = overage_cost_text
+        traffic_table_rows[month]["overage-protection"] = overage_protection_status
+
+    session.commit()  # save the changes we made to the pantheon_overage_protection table
+    return traffic_table_rows
+
+
 def plan_costs(
     plan_info,
     plan_names,
@@ -3423,109 +3549,26 @@ remove PHP {new_php} sometime after September 30, 2026.
         #         sc.debug(r)
         #     sc.debug('-----')
 
-        traffic_table_rows = {}
-        d = (start_date.replace(day=1) - datetime.timedelta(days=15)).replace(day=1)
-        op = db_session.get(
-            PantheonOverageProtection, {"site_id": site["id"], "month": d}
-        )
-        op_remaining = 0 if op is None else op.months_remaining
         site_plan_start = plan_over_time[0]["start"].replace(day=1)
-        old_plan = None
-        for month in visits_by_month.keys():
-            ymd = datetime.date.fromisoformat(month + "-15")
-            ymd1 = ymd.replace(day=1)
-            if ymd < first_plan_day:
-                ymd = first_plan_day
-            if ymd > last_plan_day:
-                ymd = last_plan_day
-            if ymd1 < start_date:
-                ymd1 = start_date
-            if ymd1 > end_date:
-                ymd1 = end_date.replace(day=1)
-            if ymd1 < site_plan_start:
-                continue
-            d = ymd if ymd >= first_plan_day else first_plan_day
-            plan = plan_on_day[d]
-            if ymd1 == site_plan_start and plan != "Basic":
-                op_remaining = 4
-            if old_plan in ("Sandbox", "Basic") and plan not in ("Sandbox", "Basic"):
-                op_remaining = 4
-            old_plan = plan
-            traffic_table_rows[month] = {}
-            traffic_table_rows[month]["month"] = datetime.datetime.strptime(
-                month, "%Y-%m"
-            ).strftime("%B %Y")
-            traffic_table_rows[month]["visitors"] = f"{visits_by_month[month]:,.0f}"
-            traffic_table_rows[month]["plan"] = plan
-            traffic_limit = int(plan_info[plan]["traffic_limit"])
-            traffic_table_rows[month]["plan-limit"] = f"{traffic_limit:,.0f}"
-            traffic_table_rows[month]["upgrade-at"] = (
-                f"{plan_info[plan]['upgrade_at']:,.0f}"
-            )
-            traffic_table_rows[month]["next-plan"] = plan_info[plan]["upgrade_to"]
-            downgrade_to = plan_info[plan]["downgrade_to"]
-            if downgrade_to is not None:
-                downgrade_at = plan_info[downgrade_to]["upgrade_at"]
-                traffic_table_rows[month]["downgrade-at"] = f"{downgrade_at:,.0f}"
-                traffic_table_rows[month]["previous-plan"] = downgrade_to
-            else:
-                traffic_table_rows[month]["downgrade-at"] = "-"
-                traffic_table_rows[month]["previous-plan"] = "-"
-            overage = max(visits_by_month[month] - traffic_limit, 0)
-            n_blocks = overage_blocks(overage, overage_block_size)
-            overage_cost = n_blocks * overage_block_cost
-            overage_text = f"{overage:,.0f}"
-            overage_blocks_text = f"{n_blocks:,.0f}"
-            overage_cost_text = f"${overage_cost:,.0f}"
-            overage_protection_status = "-"
-            # Overage protection started retroactively on 2024-01-01
-            if month >= "2024-01" and plan != "Basic":
-                overage_protection_status = ""
-                if ymd.month == 1:
-                    op_remaining = 4
-                    overage_protection_status = "Set to 4 months, "
-                op_used = False
-                if overage > 0 and op_remaining > 0:
-                    op_remaining -= 1
-                    op_used = True
-                op = db_session.get(
-                    PantheonOverageProtection, {"site_id": site["id"], "month": ymd1}
-                )
-                if op is None:
-                    op = PantheonOverageProtection(
-                        site_id=site["id"],
-                        month=ymd1,
-                        months_remaining=op_remaining,
-                        used_this_month=op_used,
-                    )
-                    db_session.add(op)
-                else:
-                    op.months_remaining = op_remaining
-                    op.used_this_month = op_used
-                if op_used:
-                    overage_protection_status += f"used 1 month, "
-                    overage_cost_text = (
-                        '$0 (<span style="font-size:smaller;">waived '
-                        + overage_cost_text
-                        + ")</span>"
-                    )
-                overage_protection_status += (
-                    f"1 month remaining"
-                    if op_remaining == 1
-                    else f"{op_remaining} months remaining"
-                )
-            else:
-                op_remaining = 0
-                if plan != "Basic":
-                    overage_text = "-"
-                    overage_blocks_text = "-"
-                    overage_cost_text = "-"
-            traffic_table_rows[month]["overage"] = overage_text
-            traffic_table_rows[month]["overage-blocks"] = overage_blocks_text
-            traffic_table_rows[month]["overage-cost"] = overage_cost_text
-            traffic_table_rows[month]["overage-protection"] = overage_protection_status
-
-        db_session.commit()  # save the changes we made to the pantheon_overage_protection table
+        traffic_table_rows = db_retry(
+            db_session,
+            lambda: build_traffic_table_rows(
+                db_session,
+                site,
+                visits_by_month,
+                plan_on_day,
+                plan_info,
+                site_plan_start,
+                first_plan_day,
+                last_plan_day,
+                start_date,
+                end_date,
+                overage_block_size,
+                overage_block_cost,
+            ),
+            what=f"building the traffic table for {site['name']}",
+            site=site["name"],
+        )
 
         sc.debug(traffic_table_rows)
 
@@ -3547,12 +3590,17 @@ remove PHP {new_php} sometime after September 30, 2026.
         if len(v) > 4:
 
             def op_lookup(month):
-                return db_session.get(
-                    PantheonOverageProtection,
-                    {
-                        "site_id": site["id"],
-                        "month": datetime.date.fromisoformat(month + "-01"),
-                    },
+                return db_retry(
+                    db_session,
+                    lambda: db_session.get(
+                        PantheonOverageProtection,
+                        {
+                            "site_id": site["id"],
+                            "month": datetime.date.fromisoformat(month + "-01"),
+                        },
+                    ),
+                    what=f"looking up overage protection for {site['name']} {month}",
+                    site=site["name"],
                 )
 
             cost_same, costs_median, costs_best, median_visitors = plan_costs(
