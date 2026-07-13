@@ -1262,17 +1262,15 @@ def load_traffic_rows(session, site: dict, start_date, end_date) -> list:
     Returns plain TrafficRow data rather than ORM rows, so that a later db_retry() rollback --
     which expires every live ORM object -- cannot turn a downstream attribute read into an
     unretried SELECT.  See development/2026-07-13-db-connection-resilience/SPEC.md 3.1, 3.3.2.
+
+    The TrafficRow list is built BEFORE the commit, on purpose: a default session (unlike
+    main()'s, which sets expire_on_commit=False) expires every loaded ORM object on commit, and
+    reading r.site_id etc. from an expired object triggers a lazy-refresh SELECT that opens a new
+    transaction -- silently reintroducing the very connection-holding bug this function exists to
+    fix. Materializing first makes "the connection is released on return" true unconditionally,
+    independent of expire_on_commit.
     """
-    rows = (
-        session.query(PantheonTraffic)
-        .filter(
-            PantheonTraffic.site_id == site["id"],
-            PantheonTraffic.traffic_date.between(start_date, end_date),
-        )
-        .all()
-    )
-    session.commit()
-    return [
+    rows = [
         TrafficRow(
             site_id=r.site_id,
             traffic_date=r.traffic_date,
@@ -1281,8 +1279,15 @@ def load_traffic_rows(session, site: dict, start_date, end_date) -> list:
             pages_served=r.pages_served,
             cache_hits=r.cache_hits,
         )
-        for r in rows
+        for r in session.query(PantheonTraffic)
+        .filter(
+            PantheonTraffic.site_id == site["id"],
+            PantheonTraffic.traffic_date.between(start_date, end_date),
+        )
+        .all()
     ]
+    session.commit()  # releases the connection -- see the docstring; MUST NOT be removed
+    return rows
 
 
 def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:

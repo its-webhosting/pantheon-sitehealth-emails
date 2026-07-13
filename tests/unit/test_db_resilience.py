@@ -169,3 +169,37 @@ def test_load_traffic_rows_releases_the_connection(psh):
     assert rows[0].visits == 10
     assert rows[0].traffic_date == datetime.date(2026, 3, 1)
     assert rows[0].site_plan == "Basic"
+
+
+@pytest.mark.unit
+def test_load_traffic_rows_releases_the_connection_with_default_session(psh):
+    # Same regression as above, but with a DEFAULT sessionmaker (expire_on_commit=True, the
+    # SQLAlchemy default -- no flag passed). If load_traffic_rows() materializes the TrafficRow
+    # list AFTER the commit instead of before, reading r.site_id etc. from the now-expired ORM
+    # rows triggers a lazy-refresh SELECT that opens a fresh transaction, so the connection is
+    # NOT actually released -- reintroducing the MySQL-2013 bug this function exists to fix. The
+    # prior test alone can't catch that: it builds its session with expire_on_commit=False, which
+    # papers over exactly this failure mode.
+    engine = db.create_engine("sqlite://")
+    psh.Base.metadata.create_all(engine)
+    session = db.orm.sessionmaker(bind=engine)()
+    session.add(
+        psh.PantheonTraffic(
+            site_id="s1",
+            traffic_date=datetime.date(2026, 3, 1),
+            site_plan="Basic",
+            visits=10,
+            pages_served=20,
+            cache_hits=5,
+        )
+    )
+    session.commit()
+
+    rows = psh.load_traffic_rows(
+        session, {"id": "s1"}, datetime.date(2026, 3, 1), datetime.date(2026, 3, 31)
+    )
+
+    assert session.in_transaction() is False  # connection returned to the pool
+    assert rows[0].visits == 10
+    assert rows[0].traffic_date == datetime.date(2026, 3, 1)
+    assert rows[0].site_plan == "Basic"
