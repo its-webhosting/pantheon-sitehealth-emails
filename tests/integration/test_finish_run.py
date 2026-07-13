@@ -96,6 +96,28 @@ def test_finish_run_aborted_does_not_claim_success(psh, tmp_path, monkeypatch, r
 
 
 @pytest.mark.integration
+def test_finish_run_aborted_before_any_site_does_not_claim_success(
+    psh, tmp_path, monkeypatch, reset_sc,
+):
+    # An interrupt landing before the first site's body runs passes aborted_at=None (site_name is
+    # None), but reason is always set on an abort.  Branching on aborted_at is None (the old code)
+    # misreads this as a clean completion: it prints the green success line and writes a null
+    # `reason` into results.json, even though the process is about to exit 130/1.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    console = run(
+        psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
+        aborted_at=None, reason="interrupted",
+    )
+
+    output = console.export_text()
+    assert "Email sent for 2 of 2 sites" not in output   # the green success line
+    results = json.loads(list(tmp_path.glob("*-results.json"))[0].read_text())
+    assert results["_run"]["aborted_at"] is None
+    assert results["_run"]["reason"] == "interrupted"
+
+
+@pytest.mark.integration
 def test_finish_run_writes_artifacts_even_if_the_close_fails(psh, tmp_path, monkeypatch, reset_sc):
     # finish_run() is called FROM the abort path, on a session whose DB is by definition sick.  A
     # failing close() must cost neither the artifacts nor the engine dispose() (SPEC 3.3.3).

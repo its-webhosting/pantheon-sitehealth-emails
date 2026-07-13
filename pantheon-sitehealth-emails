@@ -1568,7 +1568,7 @@ def finish_run(
         # resumed run instead of being truncated to just the resumed subset.  (The console-only
         # totals printed here and below still cover only this run's sites.)
         resuming = sc.options.resume_from is not None
-        if aborted_at is None:
+        if reason is None:
             sc.console.print(
                 f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
                 + (f" (resumed from {sc.options.resume_from}).\n" if resuming else ".\n")
@@ -1735,10 +1735,7 @@ def abort_run(
     except (SQLAlchemyError, OSError) as e:  # the database is already sick; see finish_run()
         sc.console.print(f":warning: [yellow]Could not roll back the database session: {e}")
 
-    if emailed:
-        # The site completed -- its report went out.  Keep its results entry.
-        pass
-    else:
+    if not emailed:
         # site_results[site] is written DURING the gather, ~1400 lines before the failure point --
         # so the aborting site is already in there, while its notices (appended at the END of a
         # successful site) are not.  Drop it, so the artifacts contain exactly the sites that
@@ -1787,27 +1784,38 @@ def abort_run(
     if resume_site is None and emailed:
         sc.console.print("\n[bold]Every site was processed; nothing remains to resume.\n")
     elif sc.options.all:
-        command = (
-            resume_command(sys.argv, resume_site)
-            if resume_site is not None
-            else shlex.join(sys.argv)  # nothing to skip: re-run as invoked
-        )
-        sc.console.print(
-            f"\n[bold]The sites before {resume_site or site_name} were processed and their "
-            "results written.  Continue this run with:\n\n"
-            f"    {command}\n"
-        )
+        if site_name is None:
+            # The interrupt landed before any site was processed -- there is no "sites before X"
+            # to report, and {resume_site or site_name} would render as the literal word "None".
+            sc.console.print(
+                "\n[bold]No sites were processed.  Continue this run with:\n\n"
+                f"    {shlex.join(sys.argv)}\n"
+            )
+        else:
+            command = (
+                resume_command(sys.argv, resume_site)
+                if resume_site is not None
+                else shlex.join(sys.argv)  # nothing to skip: re-run as invoked
+            )
+            sc.console.print(
+                f"\n[bold]The sites before {resume_site or site_name} were processed and their "
+                "results written.  Continue this run with:\n\n"
+                f"    {command}\n"
+            )
     else:
         # --resume-from requires --all, so an explicit-SITE run gets a re-run command listing the
-        # sites it never reached.  sites_from_resume_point() is the same inclusive-slice helper the
-        # --resume-from path uses, reused here rather than reimplemented -- but only when the
-        # aborting site is one the operator actually asked for.
-        requested = sorted(sc.options.sites)
-        remaining = (
-            sites_from_resume_point(requested, resume_site)
-            if resume_site in requested
-            else requested
-        )
+        # sites it never reached.  The site loop iterates every ORG site (site_names) and `continue`s
+        # the ones not requested, so slicing the requested list at resume_site (an org site name) is
+        # wrong -- it is frequently not even a member of the requested list.  Instead, compute what
+        # the loop actually walked past in ORG order and drop that from the requested list: this is
+        # correct whether or not the aborting site was requested, and whether or not it was emailed.
+        if site_name in site_names:
+            i = site_names.index(site_name) + (1 if emailed else 0)
+            done = set(site_names[:i])  # every org site the loop already walked past
+            remaining = [s for s in sorted(sc.options.sites) if s not in done]
+        else:
+            # site_name is None: the interrupt landed before any site was processed.
+            remaining = sorted(sc.options.sites)
         sc.console.print(
             "\n[bold]Continue this run with:\n\n"
             f"    {rerun_command(sys.argv, sc.options.sites, remaining)}\n"

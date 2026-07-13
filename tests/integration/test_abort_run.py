@@ -4,6 +4,7 @@ nonzero.  In-process, because the subprocess safety interlock bans --all (CLAUDE
 See development/2026-07-13-db-connection-resilience/SPEC.md sections 3.5.1-3.5.4.
 """
 
+import re
 import signal
 
 import pytest
@@ -26,7 +27,10 @@ class FakeEngine:
         pass
 
 
-def abort(psh, monkeypatch, reset_sc, argv, reason, error, *, emailed=False, site_results=None):
+def abort(
+    psh, monkeypatch, reset_sc, argv, reason, error, *,
+    emailed=False, site_results=None, site_name="its-wws-test2",
+):
     console = recording_console(monkeypatch, reset_sc)
     reset_sc.options = psh.parse_args(argv[1:])
     monkeypatch.setattr(psh.sys, "argv", argv)
@@ -48,7 +52,7 @@ def abort(psh, monkeypatch, reset_sc, argv, reason, error, *, emailed=False, sit
     monkeypatch.setattr(psh, "finish_run", fake_finish_run)
     with pytest.raises(SystemExit) as excinfo:
         psh.abort_run(
-            FakeSession(), FakeEngine(), "its-wws-test2", reason, error,
+            FakeSession(), FakeEngine(), site_name, reason, error,
             emailed=emailed, site_names=SITE_NAMES,
             site_count=10, emails_sent=4, all_warnings=[],
             site_results=site_results if site_results is not None else {},
@@ -151,3 +155,49 @@ def test_abort_on_an_unrequested_site_does_not_crash(psh, monkeypatch, reset_sc)
     output = console.export_text()
     assert "Traceback" not in output
     assert "its-wws-test9" in output  # re-run what was actually requested
+
+
+@pytest.mark.integration
+def test_all_abort_before_any_site_does_not_say_none(psh, monkeypatch, reset_sc):
+    # site_name is None when the interrupt lands before the first site's body runs.  The old
+    # message interpolated `resume_site or site_name` unconditionally, which rendered the literal
+    # word "None" for the operator to paste nowhere.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+        site_name=None,
+    )
+    assert code == 130
+    output = console.export_text()
+    assert "before None" not in output
+    assert "No sites were processed" in output
+    assert "--all" in output  # the plain invocation, rebuilt from sys.argv
+
+
+@pytest.mark.integration
+def test_explicit_site_rerun_command_excludes_an_already_completed_site(
+    psh, monkeypatch, reset_sc,
+):
+    # Regression test: the site loop iterates every ORG site (its-wws-test1..3 here) and
+    # `continue`s the ones not requested, so the aborting site name is an ORG-order position, not
+    # an index into the requested list.  The old code fell into `else: remaining = requested`
+    # whenever the aborting site wasn't itself in the requested list's resume-point slice, which
+    # re-listed sites that had already completed -- including one whose report was JUST emailed.
+    # Org site list is SITE_NAMES = [test1, test2, test3]; only test1 and test3 were requested
+    # (test2 is a real org site the operator did not ask for -- the shape that triggers the bug).
+    argv = [
+        "./pantheon-sitehealth-emails", "--date", "2026-03-31",
+        "its-wws-test1", "its-wws-test3",
+    ]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+        emailed=True, site_name="its-wws-test1",
+        site_results={"its-wws-test1": {"framework": "wordpress"}},
+    )
+    assert code == 130
+    output = console.export_text()
+    match = re.search(r"Continue this run with:\n\n {4}(.+)\n", output)
+    assert match, f"no rerun command found in:\n{output}"
+    command = match.group(1)
+    assert "its-wws-test1" not in command  # already emailed -- must not be re-mailed
+    assert "its-wws-test3" in command
