@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "mcp__codegraph",
-      "mcp__chrome-devtools"
+      "mcp__chrome-devtools",
+      "mcp__codegraph__*"
     ]
   },
   "enabledMcpjsonServers": [
