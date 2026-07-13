@@ -25,32 +25,25 @@ the script can't reach from outside a live session, and (c) run the script.
    if it doesn't exist. If prompts weren't saved yet, remind the user that
    `NN-*.prompt.md` files and any `design-notes/` are part of the record.
 
-2. **Capture in-session-only data to gitignored `*.raw.txt` files** in the folder:
-   - **rtk gain** — if `rtk` is on PATH, run `rtk gain` and save its stdout to
-     `<dir>/rtk.raw.txt`. Skip if `rtk` is absent.
-   - **context-mode /ctx-stats** — if context-mode is configured (the
-     `mcp__plugin_context-mode_context-mode__ctx_stats` tool is available), call it
-     and save its output to `<dir>/ctx.raw.txt`. Skip if unavailable.
+2. **Capture in-session-only data to a gitignored `*.raw.txt` file** in the folder:
    - **/usage (dollar cost)** — you **cannot** invoke `/usage` yourself (it's a
      built-in CLI command, not a tool). Ask the user to run `/usage` and paste its
      output, then save that verbatim to `<dir>/usage.raw.txt`. This is the source of
      the cost figure — the script has no price table. If the user skips it, proceed;
      the cost section will just say it wasn't captured.
 
-   Use `command -v rtk` to test for rtk. These `.raw.txt` files are gitignored; the
-   script folds their contents into `statistics.md`.
+   The `.raw.txt` file is gitignored; the script folds its contents into
+   `statistics.md`.
 
 3. **Run the script.** From the repo root:
    ```
    python development/finalize-session.py --dir development/<YYYY-MM-DD-slug> \
-       [--rtk-capture development/<YYYY-MM-DD-slug>/rtk.raw.txt] \
-       [--ctx-capture development/<YYYY-MM-DD-slug>/ctx.raw.txt] \
        [--usage-capture development/<YYYY-MM-DD-slug>/usage.raw.txt] \
        [--label NN]
    ```
    It defaults to the newest session JSONL under `~/.claude/projects/-workspace/`.
    Pass `--label NN` only for a feature spanning multiple sessions (produces
-   `transcript-NN.md` / `statistics-NN.md`). Omit the capture flags you didn't create.
+   `transcript-NN.md` / `statistics-NN.md`). Omit `--usage-capture` if you didn't create it.
    This writes `transcript.md` (scrubbed, committed), `transcript.raw.md` (gitignored),
    and `statistics.md` (committed).
 

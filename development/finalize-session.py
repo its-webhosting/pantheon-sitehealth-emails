@@ -8,17 +8,16 @@ Two deterministic jobs (kept in code, not left to LLM judgment):
      write a secret-scrubbed copy (transcript.md, committed).
 
   B. Assemble statistics.md from the same JSONL (metadata, token usage, context)
-     plus optional captures that only the /archive-session skill can gather in a
-     live session (rtk gain, ctx-stats, and /usage for the dollar cost — Claude Code
-     estimates cost locally, so we embed its /usage output instead of pricing here).
+     plus the one capture only the /archive-session skill can gather in a live
+     session (/usage, for the dollar cost — Claude Code estimates cost locally, so
+     we embed its /usage output instead of pricing here).
 
 Standalone and testable: run it by hand against any session JSONL, or let the
 /archive-session skill drive it.  Stdlib only, no third-party deps.
 
 Usage:
   finalize-session.py --dir development/2026-07-03-daily-traffic-alerts \
-      [--jsonl ~/.claude/projects/-workspace/<id>.jsonl] \
-      [--rtk-capture <file>] [--ctx-capture <file>] [--usage-capture <file>] \
+      [--jsonl ~/.claude/projects/-workspace/<id>.jsonl] [--usage-capture <file>] \
       [--transcript-input <export.txt>] [--label "01"]
 
 --jsonl defaults to the newest *.jsonl under ~/.claude/projects/-workspace/.
@@ -203,7 +202,7 @@ def collect_stats(rows):
                 max_ctx=max_ctx, first=first, last=last)
 
 
-def render_stats(s, rtk_text, ctx_text, usage_text):
+def render_stats(s, usage_text):
     L = ["# Session statistics\n"]
 
     # Session metadata
@@ -252,21 +251,6 @@ def render_stats(s, rtk_text, ctx_text, usage_text):
              "exact live `/context` breakdown by component can't be reproduced "
              "post-hoc._\n")
 
-    # rtk gain (skill-supplied)
-    L.append("## rtk gain\n")
-    if rtk_text and rtk_text.strip():
-        L.append(f"_Cumulative rtk savings captured at archive time._\n")
-        L.append("```\n" + rtk_text.rstrip() + "\n```\n")
-    else:
-        L.append("_rtk not present / not captured for this session._\n")
-
-    # context-mode (skill-supplied)
-    L.append("## context-mode (/ctx-stats)\n")
-    if ctx_text and ctx_text.strip():
-        L.append("```\n" + ctx_text.rstrip() + "\n```\n")
-    else:
-        L.append("_context-mode not configured / not captured for this session._\n")
-
     return "\n".join(L) + "\n"
 
 
@@ -284,8 +268,6 @@ def main():
     ap.add_argument("--dir", required=True,
                     help="feature folder to write outputs into")
     ap.add_argument("--jsonl", help="session JSONL (default: newest)")
-    ap.add_argument("--rtk-capture", help="file with `rtk gain` output")
-    ap.add_argument("--ctx-capture", help="file with `/ctx-stats` output")
     ap.add_argument("--usage-capture", help="file with `/usage` output")
     ap.add_argument("--transcript-input",
                     help="pre-run /export text to scrub instead of rendering JSONL")
@@ -311,8 +293,7 @@ def main():
 
     # Job B: statistics
     stats = collect_stats(rows)
-    stats_md = render_stats(stats, _read(args.rtk_capture), _read(args.ctx_capture),
-                            _read(args.usage_capture))
+    stats_md = render_stats(stats, _read(args.usage_capture))
     stats_path = os.path.join(args.dir, f"statistics{sfx}.md")
     with open(stats_path, "w", encoding="utf-8") as fh:
         fh.write(scrub(stats_md))

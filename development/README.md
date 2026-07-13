@@ -58,8 +58,8 @@ Conventions:
 2. Hand-edit `SPEC.md`; add any `design-notes/`.
 3. Implement using the spec; save the implementation prompt as `02-implement.prompt.md`.
 4. Run **`/archive-session`** (the skill). It renders + scrubs `transcript.md`, writes
-   `statistics.md`, and scaffolds `analytics.md` — from the session JSONL plus captured
-   `rtk gain` / `/ctx-stats` output.
+   `statistics.md`, and scaffolds `analytics.md` — from the session JSONL plus the
+   captured `/usage` output.
 5. Optionally fill in `analytics.md`.
 6. Ask Claude to commit everything — the code **and** `development/<date-slug>/` — in a
    single commit (Claude writes the message).
@@ -71,7 +71,7 @@ The deterministic core the skill drives (also runnable by hand). It:
   unscrubbed `transcript.raw.md` (gitignored), then the scrubbed `transcript.md`;
 - assembles `statistics.md`: session metadata (duration, models, turns, tool-call
   counts), per-model token totals, an approximate context size, and the captured
-  `rtk gain` / `/ctx-stats` / `/usage` sections when present.
+  `/usage` section when present.
 
 **No price table.** The JSONL records no cost and there's no programmatic price
 source, so the script does not compute dollars. Instead the `/archive-session` skill
@@ -81,8 +81,8 @@ up to date here — Claude Code owns the pricing.
 
 ```
 python development/finalize-session.py --dir development/<date-slug> \
-    [--jsonl <path>] [--rtk-capture <file>] [--ctx-capture <file>] \
-    [--usage-capture <file>] [--transcript-input <export.txt>] [--label NN]
+    [--jsonl <path>] [--usage-capture <file>] \
+    [--transcript-input <export.txt>] [--label NN]
 ```
 
 `--transcript-input` scrubs a pre-run `/export` text instead of rendering the JSONL,
