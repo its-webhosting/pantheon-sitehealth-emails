@@ -1573,6 +1573,12 @@ def finish_run(
                 f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
                 + (f" (resumed from {sc.options.resume_from}).\n" if resuming else ".\n")
             )
+        elif aborted_at is None:
+            # An interrupt landing before the first site's body ran passes aborted_at=None --
+            # there is no "at X" to report (SPEC 3.5.4).
+            sc.console.print(
+                f"\n[bold yellow]Email sent for {emails_sent} sites before aborting.\n"
+            )
         else:
             sc.console.print(
                 f"\n[bold yellow]Email sent for {emails_sent} sites before aborting at "
@@ -1744,10 +1750,20 @@ def abort_run(
         site_results.pop(site_name, None)
 
     if reason == "database":
-        sc.console.print(
-            f"\n:exclamation: [bold red]FATAL: a database operation failed and could not be "
-            f"retried.  Aborting while processing [bold]{site_name}[/bold]:\n{error}"
-        )
+        if site_name is None:
+            # Reached before any site's body ran -- there is no "processing X" to name, and
+            # interpolating site_name here would render the literal word "None" (SPEC 3.5.4).
+            sc.console.print(
+                f"\n:exclamation: [bold red]FATAL: a database operation failed and could not "
+                f"be retried before any site was processed:\n{error}"
+            )
+        else:
+            sc.console.print(
+                f"\n:exclamation: [bold red]FATAL: a database operation failed and could not be "
+                f"retried.  Aborting while processing [bold]{site_name}[/bold]:\n{error}"
+            )
+    elif site_name is None:
+        sc.console.print("\n:hand: [bold yellow]Interrupted before any site was processed.")
     else:
         sc.console.print(
             f"\n:hand: [bold yellow]Interrupted while processing [bold]{site_name}[/bold]."
@@ -1814,12 +1830,23 @@ def abort_run(
             done = set(site_names[:i])  # every org site the loop already walked past
             remaining = [s for s in sorted(sc.options.sites) if s not in done]
         else:
-            # site_name is None: the interrupt landed before any site was processed.
+            # site_name is not a known org site -- in practice this means None (the interrupt
+            # landed before any site was processed).  Kept general, not assumed-None-only: this
+            # handler must not crash on any input (SPEC 3.5.4), and the guard above this whole
+            # if/elif/else already treats "not in site_names" as the general case, not a
+            # None-only one.
             remaining = sorted(sc.options.sites)
-        sc.console.print(
-            "\n[bold]Continue this run with:\n\n"
-            f"    {rerun_command(sys.argv, sc.options.sites, remaining)}\n"
-        )
+
+        # The org list being exhausted (resume_site is None and emailed, above) is the --all
+        # check for "nothing remains"; here the equivalent signal is an empty explicit-SITE
+        # remaining list -- e.g. the requested SITE was the last one processed before the abort.
+        if not remaining:
+            sc.console.print("\n[bold]Every site was processed; nothing remains to resume.\n")
+        else:
+            sc.console.print(
+                "\n[bold]Continue this run with:\n\n"
+                f"    {rerun_command(sys.argv, sc.options.sites, remaining)}\n"
+            )
 
     sys.exit(1 if reason == "database" else 130)
 

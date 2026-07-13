@@ -112,6 +112,7 @@ def test_finish_run_aborted_before_any_site_does_not_claim_success(
 
     output = console.export_text()
     assert "Email sent for 2 of 2 sites" not in output   # the green success line
+    assert "None" not in output   # aborted_at=None must not leak into the printed totals
     results = json.loads(list(tmp_path.glob("*-results.json"))[0].read_text())
     assert results["_run"]["aborted_at"] is None
     assert results["_run"]["reason"] == "interrupted"

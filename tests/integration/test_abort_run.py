@@ -139,6 +139,27 @@ def test_explicit_site_abort_prints_a_rerun_command_not_resume_from(psh, monkeyp
 
 
 @pytest.mark.integration
+def test_explicit_site_abort_with_nothing_remaining_prints_no_rerun_command(
+    psh, monkeypatch, reset_sc,
+):
+    # Org is [test1, test2, test3]; the operator only requested test1.  The abort lands AFTER
+    # test1's report was emailed, so the "nothing remains" guard (which only tests exhaustion of
+    # the ORG list, i.e. --all) does not fire, and the old code fell into the explicit-SITE branch
+    # with an empty `remaining` -- printing a bare "--date ... " command with no sites and no
+    # --all, which main() rejects the moment it's pasted.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "its-wws-test1"]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+        emailed=True, site_name="its-wws-test1",
+        site_results={"its-wws-test1": {"framework": "wordpress"}},
+    )
+    assert code == 130
+    output = console.export_text()
+    assert "Every site was processed; nothing remains to resume" in output
+    assert "Continue this run with" not in output  # no re-run command line at all
+
+
+@pytest.mark.integration
 def test_abort_on_an_unrequested_site_does_not_crash(psh, monkeypatch, reset_sc):
     # A non---all run iterates EVERY org site and `continue`s the unrequested ones, so a Ctrl-C
     # can land on a site the operator never asked for.  Slicing the requested list at that name
@@ -169,7 +190,7 @@ def test_all_abort_before_any_site_does_not_say_none(psh, monkeypatch, reset_sc)
     )
     assert code == 130
     output = console.export_text()
-    assert "before None" not in output
+    assert "None" not in output  # the whole abort path, not just the one message fixed before
     assert "No sites were processed" in output
     assert "--all" in output  # the plain invocation, rebuilt from sys.argv
 
