@@ -77,6 +77,20 @@ def test_site_notices_are_recorded_before_the_email_is_sent(psh):
     # The interrupt itself is not reachable from the harness (the subprocess interlock bans --all,
     # and the window is a single unsynchronizable instant), so the ORDER is what is pinned.
     source = inspect.getsource(psh.main)
-    append = source.index('for n in site_context["notices"]:')
-    send = source.index("if smtp_enabled:\n                smtp_connection = smtp_login()")
+    # The bare 'for n in site_context["notices"]:' substring is NOT unique: the --only-warn
+    # early-continue branch (well before the send, and unrelated to this bug) has its own copy,
+    # so source.index() on it alone can silently latch onto the wrong occurrence and
+    # source.count() on it is 2 today, not 1. Anchor on the next line too, which only appears at
+    # the real pre-send append site.
+    append_anchor = 'for n in site_context["notices"]:\n                fields = n["csv"].split(",")'
+    assert source.count(append_anchor) == 1, (
+        "expected exactly one notices-append-before-send block; "
+        "a duplicate would defeat the append < send check below"
+    )
+    append = source.index(append_anchor)
+    # Anchored on the call itself, not a two-line literal that embeds exact indentation: extracting
+    # the send into a helper keeps "smtp_login()" in the source but breaks a literal match on the
+    # surrounding "if smtp_enabled:\n                smtp_connection = ..." lines, and source.index()
+    # raising ValueError on that miss reads like a harness bug, not a signal that the send moved.
+    send = source.index("smtp_login()")
     assert append < send, "the notices append must precede the SMTP send"

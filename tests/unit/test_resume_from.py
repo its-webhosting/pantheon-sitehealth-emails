@@ -79,3 +79,26 @@ def test_merge_valid_json_but_not_an_object_warns_and_keeps_new(
     merged = psh.merge_prior_results(str(path), {"a": 1})
     assert merged == {"a": 1}
     assert "could not read existing" in capsys.readouterr().out
+
+
+def test_merge_malformed_file_warning_defaults_to_naming_results(psh, tmp_path, capsys):
+    # merge_prior_results() is also the reader for {ymd}-run.json (finish_run()); the default
+    # noun must still be right for its original caller, {ymd}-results.json.
+    path = tmp_path / "20260709-results.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    psh.merge_prior_results(str(path), {"a": 1})
+    assert "writing only this run's results." in capsys.readouterr().out
+
+
+def test_merge_malformed_file_warning_names_the_kind_of_content_when_given(psh, tmp_path, capsys):
+    # finish_run() reads {ymd}-run.json through this same helper; a malformed run.json must not be
+    # reported as "results" -- that is the file that failed to read, not the noun in a message
+    # written for the OTHER caller.
+    path = tmp_path / "20260709-run.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    psh.merge_prior_results(str(path), {}, what="run metadata")
+    output = capsys.readouterr().out
+    assert "writing only this run's run metadata." in output
+    assert "writing only this run's results." not in output

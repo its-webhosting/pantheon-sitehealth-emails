@@ -242,6 +242,63 @@ def test_finish_run_abort_does_not_truncate_an_earlier_runs_artifacts(
 
 
 @pytest.mark.integration
+def test_finish_run_migrates_legacy_run_key_into_previous_on_first_run_since_upgrade(
+    psh, tmp_path, monkeypatch, reset_sc,
+):
+    # The upgrade boundary: an older version wrote {ymd}-results.json with an inline "_run" key
+    # and never wrote a separate {ymd}-run.json (that split is what this feature added). If a run
+    # is resumed/aborted right after the upgrade, popping "_run" without carrying it forward would
+    # silently lose the prior run's reconnect evidence -- the exact thing "previous" exists to
+    # preserve.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    ymd = datetime.datetime.today().strftime("%Y%m%d")
+    (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-morning,some-notice,detail\n")
+    (tmp_path / f"{ymd}-results.json").write_text(
+        '{"its-wws-morning": {"plan": "Performance Small"}, '
+        '"_run": {"reason": "database", "db_reconnects_healed_this_run": 4}}'
+    )
+    # Deliberately no {ymd}-run.json -- this is the upgrade boundary.
+
+    run(
+        psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
+        aborted_at="its-wws-test1", reason="interrupted",
+    )
+
+    results = json.loads((tmp_path / f"{ymd}-results.json").read_text())
+    assert "_run" not in results   # still dropped from the site-keyed file
+
+    run_meta = json.loads((tmp_path / f"{ymd}-run.json").read_text())
+    assert run_meta["previous"] == {"reason": "database", "db_reconnects_healed_this_run": 4}
+
+
+@pytest.mark.integration
+def test_finish_run_prefers_run_json_over_a_legacy_run_key_when_both_exist(
+    psh, tmp_path, monkeypatch, reset_sc,
+):
+    # If {ymd}-run.json already exists, it is the authoritative prior-run record; a stale "_run"
+    # key surviving inside an old results.json must not override it.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    ymd = datetime.datetime.today().strftime("%Y%m%d")
+    (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-morning,some-notice,detail\n")
+    (tmp_path / f"{ymd}-results.json").write_text(
+        '{"its-wws-morning": {"plan": "Performance Small"}, "_run": {"reason": "stale-legacy"}}'
+    )
+    (tmp_path / f"{ymd}-run.json").write_text('{"reason": null, "sites_completed_this_run": 1}')
+
+    run(
+        psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
+        aborted_at="its-wws-test1", reason="interrupted",
+    )
+
+    run_meta = json.loads((tmp_path / f"{ymd}-run.json").read_text())
+    assert run_meta["previous"] == {"reason": None, "sites_completed_this_run": 1}
+
+
+@pytest.mark.integration
 def test_finish_run_completed_run_still_truncates(psh, tmp_path, monkeypatch, reset_sc):
     # The other half of the rule: a run that reaches the end owns the day's artifacts outright.
     # Without this, a re-run of the whole month would silently double every row.

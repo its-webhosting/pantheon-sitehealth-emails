@@ -429,3 +429,29 @@ def test_db_retry_names_the_error_when_a_disconnect_retry_also_fails(psh, monkey
 
     with pytest.raises(psh.DatabaseUnavailableError):
         psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
+
+
+@pytest.mark.unit
+def test_db_retry_records_a_failure_when_the_retry_raises_a_non_retryable_error(psh, monkeypatch):
+    # first_error is a genuine, retryable connection loss; the rollback succeeds; but the RETRY
+    # then raises a DIFFERENT, non-retryable DBAPIError (an unrelated data bug, e.g. a duplicate
+    # key hit only after reconnecting).  The comment above db_retry() promises every lost
+    # connection lands in exactly one of the two dicts -- before this fix, this path recorded
+    # neither: first_error's connection loss was never healed (the retry didn't return) AND never
+    # counted as a failure, because the guard re-raised before reaching either record call.
+    monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    session = FakeSession()
+    calls = []
+
+    def unit():
+        calls.append(1)
+        if len(calls) == 1:
+            raise _op_error()
+        raise IntegrityError("INSERT", {}, Exception("dup"))
+
+    with pytest.raises(IntegrityError):
+        psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
+    assert psh.db_reconnects_by_site == {}
+    assert psh.db_reconnect_failures_by_site == {"its-wws-test1": 1}

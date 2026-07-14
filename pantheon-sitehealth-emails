@@ -317,8 +317,8 @@ def run_terminus(command: list, input_data=None) -> (str, str, bool):
             output = stdout.decode("utf-8").strip()
             errors = stderr.decode("utf-8").strip()
             sc.console.print("[bold red]Terminus command timed out.")
-            sc.console.print("===== stdout:\n" + output)
-            sc.console.print("===== stderr:\n" + errors)
+            sc.console.print("===== stdout:\n" + escape(output))
+            sc.console.print("===== stderr:\n" + escape(errors))
             errors += "\n[ERROR] Terminus command timed out.\n"
             return output, errors, True
 
@@ -346,7 +346,7 @@ def run_terminus(command: list, input_data=None) -> (str, str, bool):
             p.returncode = 0
         else:
             errors = "\n".join(extra_errors) + "\n" + errors
-    sc.debug("Terminus output:\n", output, level=3)
+    sc.debug("Terminus output:\n", escape(output), level=3)
 
     if len(errors) > 0 and p.returncode == 0:
         lines = errors.split("\n")
@@ -367,11 +367,11 @@ def run_terminus(command: list, input_data=None) -> (str, str, bool):
         errors = "\n".join(filtered_lines)
     if len(errors) > 0:
         sc.console.print("Terminus errors:")
-        sc.console.print(errors)
+        sc.console.print(escape(errors))
 
     if p.returncode != 0:
         line = f"Terminus command failed with exit code {p.returncode}: {stderr}\n"
-        sc.console.print(f"[bold red][ERROR] {line}")
+        sc.console.print(f"[bold red][ERROR] {escape(line)}")
         errors += "\n" + line
         return output, errors, True
 
@@ -515,7 +515,7 @@ def fix_drush_output(output: str, errors: str) -> (str, str):
         errors = "\n".join(lines[:linenum]) + errors
         output = "\n".join(lines[linenum:])
 
-    sc.debug("Drush output:\n", output, "\nDrush errors:\n", errors, level=2)
+    sc.debug("Drush output:\n", escape(output), "\nDrush errors:\n", escape(errors), level=2)
 
     return output, errors
 
@@ -592,7 +592,7 @@ def get_old_metrics(
         # aborting the whole run.
         sc.console.print(
             f":exclamation: [bold red] ERROR: could not fetch {period} metrics for "
-            f"{site['name']}: {e}"
+            f"{site['name']}: {escape(str(e))}"
         )
         return []
     new_rows = []
@@ -833,7 +833,7 @@ def config_substitution(expr: str, path) -> str:
             result = best_match["func"](*func_args)
         except sc.ConfigSubstitutionError as e:
             sc.console.print(
-                f"[bold red]ERROR: configuration value for {path}: {e}"
+                f"[bold red]ERROR: configuration value for {path}: {escape(str(e))}"
             )
             sys.exit(1)
         if result is None:
@@ -1360,6 +1360,10 @@ def db_retry(session, unit, *, what: str, site: str = None):
             result = unit()
         except DBAPIError as retry_error:
             if not db_retryable(retry_error):
+                # Not a connection issue itself, but first_error's connection loss never got
+                # healed -- record it as a failure so it lands in a dict, not neither (the
+                # comment above promises every lost connection lands in exactly one).
+                record_db_reconnect(db_reconnect_failures_by_site, site)
                 raise  # a real bug surfacing on the retry: still not ours to rename
             record_db_reconnect(db_reconnect_failures_by_site, site)
             raise DatabaseUnavailableError(f"{what}: {retry_error}") from retry_error
@@ -1532,7 +1536,7 @@ def db_engine_args(db_config: dict) -> (str, dict):
     sys.exit(f"Unsupported database type: {db_config['type']}")
 
 
-def merge_prior_results(path: str, new_results: dict) -> dict:
+def merge_prior_results(path: str, new_results: dict, *, what: str = "results") -> dict:
     """
     Return the JSON dict already at path merged with new_results, which wins on key collision
     (a site processed by the resumed run supersedes any earlier entry for it).
@@ -1541,6 +1545,10 @@ def merge_prior_results(path: str, new_results: dict) -> dict:
     new_results alone, rather than crashing at the very end of an otherwise-complete run.
     "Malformed" covers valid JSON that is not an object (a hand-edited `[]` or `null`) as well as
     unparseable or unreadable content: both would otherwise blow up on merged.update() below.
+
+    `what` names, in the warning, the kind of content being merged/read -- this helper reads
+    both {ymd}-results.json ("results") and {ymd}-run.json ("run metadata"; see finish_run()),
+    and the warning must name whichever file actually failed to read.
     """
     merged = {}
     if os.path.exists(path):
@@ -1553,7 +1561,7 @@ def merge_prior_results(path: str, new_results: dict) -> dict:
         except (ValueError, OSError) as e:
             sc.console.print(
                 f":warning: [bold yellow]could not read existing {path} "
-                f"({escape(str(e))}); writing only this run's results."
+                f"({escape(str(e))}); writing only this run's {what}."
             )
             merged = {}
     merged.update(new_results)
@@ -1703,18 +1711,24 @@ def finish_run(
             )
             # A results.json written by an older version carries a "_run" metadata key, which is
             # exactly the bogus-site-row bug this split exists to remove.  Drop it on the way
-            # through; nothing writes it any more.
-            payload.pop("_run", None)
+            # through; nothing writes it any more -- but keep it: if this run is the FIRST since
+            # the upgrade (no {ymd}-run.json yet), this legacy key is the ONLY copy of the prior
+            # run's reconnect evidence, and dropping it here would silently lose the exact thing
+            # "previous" exists to preserve.  Migrated into run_meta["previous"] below.
+            legacy_run = payload.pop("_run", None)
             with open(results_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=4)
 
             run_path = f"{ymd}-run.json"
+            run_json_existed = os.path.exists(run_path)
             # Read the prior metadata first so this run's block can NEST the earlier run's under
             # "previous" -- an aborted run's block carries the reconnect evidence that prompted
             # the resume in the first place.  merge_prior_results() is just the reader here (with
             # its malformed-file handling); the file is then overwritten, not merged, because the
             # nesting IS the accumulation.
-            prior_run = merge_prior_results(run_path, {}) if accumulating else {}
+            prior_run = (
+                merge_prior_results(run_path, {}, what="run metadata") if accumulating else {}
+            )
             # "this_run" in the names, not "processed": the artifacts on disk describe the original
             # run plus this one, while these numbers describe only this one.  (An --only-warn run
             # emails nobody, so this counts sites processed, not sites emailed.)
@@ -1732,6 +1746,11 @@ def finish_run(
             }
             if prior_run:
                 run_meta["previous"] = prior_run
+            elif legacy_run is not None and not run_json_existed:
+                # First run since the upgrade: {ymd}-run.json didn't exist yet, so the only
+                # record of the prior run's reconnect evidence was the "_run" key we just popped
+                # out of results.json above.  Carry it forward instead of discarding it.
+                run_meta["previous"] = legacy_run
             with open(run_path, "w", encoding="utf-8") as f:
                 json.dump(run_meta, f, indent=4)
     else:
@@ -2264,7 +2283,7 @@ def main() -> None:
                     # rather than aborting the whole run (consistent with the other per-site
                     # terminus calls below).
                     sc.console.print(
-                        f":exclamation: [bold red] ERROR: could not fetch plan info for {site_name}: {errors}"
+                        f":exclamation: [bold red] ERROR: could not fetch plan info for {site_name}: {escape(errors)}"
                     )
                     continue
                 if "sku" not in site_plan_info:
@@ -2342,7 +2361,7 @@ and to find out what went wrong:
             if fatal or envs is None:
                 # Transient/undecodable failure: skip this site, don't abort the whole run.
                 sc.console.print(
-                    f":exclamation: [bold red] ERROR: could not fetch environments for {site_name}: {errors}"
+                    f":exclamation: [bold red] ERROR: could not fetch environments for {site_name}: {escape(errors)}"
                 )
                 continue
             if "live" not in envs or "initialized" not in envs["live"]:
@@ -2383,7 +2402,7 @@ and to find out what went wrong:
             metrics, errors, fatal = terminus("env:metrics", live_site, "--period=day")
             if fatal or metrics is None:
                 sc.console.print(
-                    f":exclamation: [bold red] ERROR: could not fetch metrics for {site_name}: {errors}"
+                    f":exclamation: [bold red] ERROR: could not fetch metrics for {site_name}: {escape(errors)}"
                 )
                 continue
 
@@ -2450,7 +2469,7 @@ and to find out what went wrong:
             domains, errors, fatal = terminus("domain:list", live_site)
             if fatal or domains is None:
                 sc.console.print(
-                    f":exclamation: [bold red] ERROR: could not fetch domains for {site_name}: {errors}"
+                    f":exclamation: [bold red] ERROR: could not fetch domains for {site_name}: {escape(errors)}"
                 )
                 continue
             if sc.options.verbose:
@@ -4348,7 +4367,7 @@ at the moment, it should be fixed to avoid possible future problems:
                 site_team, errors, fatal = terminus("site:team:list", site_id)
                 if fatal or site_team is None:
                     sc.console.print(
-                        f":exclamation: [bold red] ERROR: could not fetch team for {site_name}: {errors}"
+                        f":exclamation: [bold red] ERROR: could not fetch team for {site_name}: {escape(errors)}"
                     )
                     continue
                 recipients = ", ".join(
