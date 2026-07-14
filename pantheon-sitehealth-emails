@@ -45,6 +45,7 @@ import sqlalchemy as db
 from jinja2 import Template
 from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Polygon
+from rich.markup import escape
 from rich.padding import Padding
 from rich.pretty import pprint
 from sqlalchemy import (
@@ -417,7 +418,10 @@ def terminus(*args) -> (Any, str, bool):
         result = None
         errors += "\n" + output + "\n" + str(e)
     if errors != "":
-        sc.console.print(f"[bold red]Terminus error: {errors}")
+        # escape(): terminus's stderr is untrusted text, and rich would parse a bracketed
+        # lowercase-initial fragment in it as a style tag and DELETE it (or, on an unmatched
+        # closing tag, raise MarkupError).  Same defect class as the abort-path prints.
+        sc.console.print(f"[bold red]Terminus error: {escape(errors)}")
         if retry and "Invalid or expired session header: X-Pantheon-Session" in errors:
             sc.console.print("Sleeping for 5 seconds and then retrying...")
             time.sleep(5)
@@ -1271,10 +1275,22 @@ class DatabaseUnavailableError(RuntimeError):
     """
 
 
-# Reconnects healed by db_retry(), attributed to the site that caused them.  The single source
-# of truth: the run total is sum(db_reconnects_by_site.values()), so there is no second counter
-# to drift out of sync.  Reported on the console and in results.json's _run key (SPEC 3.6).
+# Reconnects HEALED by db_retry() -- the retry ran and succeeded -- attributed to the site that
+# caused them.  Counted only after the second attempt returns: counting the attempt instead would
+# let an aborted run report a reconnect it never actually made.
 db_reconnects_by_site = {}
+
+# Connection losses db_retry() could NOT heal, attributed the same way: the retry failed, or the
+# rollback before it did.  The counterpart of the dict above, and the reason it can be trusted --
+# every lost connection lands in exactly one of the two, so "0 healed" never means "nothing
+# happened".  Both are reported on the console and in {ymd}-run.json (SPEC 3.6).
+db_reconnect_failures_by_site = {}
+
+
+def record_db_reconnect(counter: dict, site: str) -> None:
+    """Attribute one reconnect (healed or failed) to `site`, or to "(no site)" outside the loop."""
+    key = site if site is not None else "(no site)"
+    counter[key] = counter.get(key, 0) + 1
 
 
 def db_retryable(error: DBAPIError) -> bool:
@@ -1328,23 +1344,31 @@ def db_retry(session, unit, *, what: str, site: str = None):
                 raise  # a real bug surfacing on the rollback: still not ours to rename
             # The rollback hit the wire and died too (the connection was not invalidated, so
             # SQLAlchemy really emitted a ROLLBACK).  Name it rather than let a raw
-            # DBAPIError escape past main()'s handler -- SPEC 3.3.3.
+            # DBAPIError escape past main()'s handler -- SPEC 3.3.3.  It is also the run's most
+            # definite connection loss, so it is COUNTED (as a failure): reporting zero here would
+            # tell the operator nothing went wrong on the very run that died of it.
+            record_db_reconnect(db_reconnect_failures_by_site, site)
             raise DatabaseUnavailableError(
                 f"{what}: rollback failed after {first_error}"
             ) from rollback_error
-        key = site if site is not None else "(no site)"
-        db_reconnects_by_site[key] = db_reconnects_by_site.get(key, 0) + 1
         sc.console.print(
-            f":warning: [bold yellow]Lost the database connection during {what}; "
+            f":warning: [bold yellow]Lost the database connection during {escape(what)}; "
             "reconnecting and retrying."
         )
         time.sleep(1)
         try:
-            return unit()
+            result = unit()
         except DBAPIError as retry_error:
             if not db_retryable(retry_error):
                 raise  # a real bug surfacing on the retry: still not ours to rename
+            record_db_reconnect(db_reconnect_failures_by_site, site)
             raise DatabaseUnavailableError(f"{what}: {retry_error}") from retry_error
+        # Counted HERE, not before the retry: a reconnect is a connection that came BACK.  An
+        # abort that reported "1 reconnect" alongside "reason: database" was claiming a heal that
+        # never happened -- and the operator reads this number to judge whether the connection
+        # fix is working.
+        record_db_reconnect(db_reconnects_by_site, site)
+        return result
 
 
 def update_traffic_rows(session, site: dict, metrics: dict, start_date, end_date) -> None:
@@ -1529,7 +1553,7 @@ def merge_prior_results(path: str, new_results: dict) -> dict:
         except (ValueError, OSError) as e:
             sc.console.print(
                 f":warning: [bold yellow]could not read existing {path} "
-                f"({e}); writing only this run's results."
+                f"({escape(str(e))}); writing only this run's results."
             )
             merged = {}
     merged.update(new_results)
@@ -1593,28 +1617,42 @@ def finish_run(
     two callers is what makes an aborted run's artifacts identical in shape to a completed run's.
 
     `aborted_at` / `reason` are None on a normal run.  When set, the totals say so instead of
-    claiming success, and both are recorded in results.json's `_run` key so the outcome outlives
-    the terminal (SPEC 3.6).
+    claiming success, and both are recorded in {ymd}-run.json so the outcome outlives the terminal
+    (SPEC 3.6).
+
+    The run metadata gets its OWN artifact rather than a `_run` key inside {ymd}-results.json:
+    results.json is consumed (monthly-report.txt) with `jq to_entries`, which enumerates every key
+    as a site -- a metadata key there silently becomes a bogus site row in the operator's monthly
+    stats.  {ymd}-results.json is site-keyed and nothing else.
     """
     # Two separate try blocks, deliberately: a failing close() must not skip dispose().  The
     # catches are narrow -- (SQLAlchemyError, OSError), not Exception -- so a TypeError from a
     # future edit still crashes loudly.  Neither failure may cost the operator the artifacts:
     # finish_run() is called from the abort path, on a session whose database is already sick
     # (SPEC 3.3.3).
+    # escape() on every interpolated exception, here and everywhere else this file prints one:
+    # rich parses `[parameters: (...)]` -- a lowercase-initial bracket, exactly what SQLAlchemy
+    # appends to a DBAPIError -- as a style tag and DELETES it, and an unmatched `[/x]` raises
+    # MarkupError from inside the very handler that exists so nothing is lost.
     try:
         db_session.close()
     except (SQLAlchemyError, OSError) as e:
-        sc.console.print(f":warning: [yellow]Could not close the database session: {e}")
+        sc.console.print(
+            f":warning: [yellow]Could not close the database session: {escape(str(e))}"
+        )
     try:
         db_engine.dispose()
     except (SQLAlchemyError, OSError) as e:
-        sc.console.print(f":warning: [yellow]Could not dispose the database engine: {e}")
+        sc.console.print(
+            f":warning: [yellow]Could not dispose the database engine: {escape(str(e))}"
+        )
 
     reconnects = sum(db_reconnects_by_site.values())
+    reconnect_failures = sum(db_reconnect_failures_by_site.values())
 
     # --update and --import-older-metrics `continue` before a report is ever built, so they have no
     # notices and no results to write.  Writing anyway would open {ymd}-notices.csv in "w" mode with
-    # an empty list and overwrite {ymd}-results.json with a bare _run block -- DESTROYING the
+    # an empty list and overwrite {ymd}-results.json with an empty object -- DESTROYING the
     # artifacts of a report run made earlier the same day.  Print the totals, write nothing.
     write_artifacts = not (sc.options.update or sc.options.import_older_metrics)
 
@@ -1655,34 +1693,47 @@ def finish_run(
                     f.write(n + "\n")
 
             results_path = f"{ymd}-results.json"
-            # Pull the prior payload first so this run's _run can NEST the earlier run's under
-            # "previous".  A plain merge would overwrite it -- and an aborted run's block is the
-            # one carrying the reconnect evidence that prompted the resume in the first place.
-            prior = merge_prior_results(results_path, {}) if accumulating else {}
-            # "this_run" in the names, not "processed": merge_prior_results() makes the FILE
-            # describe the original run plus this one, while these numbers describe only this one.
-            # (An --only-warn run emails nobody, so this counts sites processed, not sites emailed.)
-            run_meta = {
-                "aborted_at": aborted_at,
-                "reason": reason,
-                "sites_completed_this_run": len(site_results),
-                "db_reconnects_this_run": reconnects,
-                "reconnects_by_site": dict(db_reconnects_by_site),
-            }
-            if "_run" in prior:
-                run_meta["previous"] = prior["_run"]
-            site_results["_run"] = run_meta
-            # merge_prior_results() again rather than a hand-rolled {**prior, **site_results}: it
-            # owns the "new wins" rule AND the malformed-prior-file handling, and that logic must
-            # live in one place.  It re-reads the file; a second read of a small JSON file at the
-            # very end of a multi-hour run is not worth duplicating the semantics to avoid.
+            # merge_prior_results() rather than a hand-rolled {**prior, **site_results}: it owns
+            # the "new wins" rule AND the malformed-prior-file handling, and that logic must live
+            # in one place.
             payload = (
                 merge_prior_results(results_path, site_results)
                 if accumulating
                 else site_results
             )
+            # A results.json written by an older version carries a "_run" metadata key, which is
+            # exactly the bogus-site-row bug this split exists to remove.  Drop it on the way
+            # through; nothing writes it any more.
+            payload.pop("_run", None)
             with open(results_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=4)
+
+            run_path = f"{ymd}-run.json"
+            # Read the prior metadata first so this run's block can NEST the earlier run's under
+            # "previous" -- an aborted run's block carries the reconnect evidence that prompted
+            # the resume in the first place.  merge_prior_results() is just the reader here (with
+            # its malformed-file handling); the file is then overwritten, not merged, because the
+            # nesting IS the accumulation.
+            prior_run = merge_prior_results(run_path, {}) if accumulating else {}
+            # "this_run" in the names, not "processed": the artifacts on disk describe the original
+            # run plus this one, while these numbers describe only this one.  (An --only-warn run
+            # emails nobody, so this counts sites processed, not sites emailed.)
+            run_meta = {
+                "aborted_at": aborted_at,
+                "reason": reason,
+                "sites_completed_this_run": len(site_results),
+                # Healed vs. failed, never one ambiguous "reconnects" number: a run that aborted
+                # on the database healed NOTHING, and saying otherwise misleads the operator about
+                # the one thing this counter exists to answer.
+                "db_reconnects_healed_this_run": reconnects,
+                "db_reconnect_failures_this_run": reconnect_failures,
+                "reconnects_by_site": dict(db_reconnects_by_site),
+                "reconnect_failures_by_site": dict(db_reconnect_failures_by_site),
+            }
+            if prior_run:
+                run_meta["previous"] = prior_run
+            with open(run_path, "w", encoding="utf-8") as f:
+                json.dump(run_meta, f, indent=4)
     else:
         for n in all_warnings:
             sc.console.print(n)
@@ -1694,7 +1745,11 @@ def finish_run(
     sc.console.print(
         f"Total savings: ${sum([s['savings'] for s in site_savings]):,.2f}"
     )
-    sc.console.print(f"Database reconnects: {reconnects}")
+    # Both numbers, always: "Database reconnects: 1" used to mean "one retry was attempted",
+    # printed identically whether the connection came back or the run died of it.
+    sc.console.print(
+        f"Database reconnects: {reconnects} healed, {reconnect_failures} failed"
+    )
 
     sc.debug("Done!")
 
@@ -1835,7 +1890,9 @@ def abort_run(
     try:
         db_session.rollback()
     except (SQLAlchemyError, OSError) as e:  # the database is already sick; see finish_run()
-        sc.console.print(f":warning: [yellow]Could not roll back the database session: {e}")
+        sc.console.print(
+            f":warning: [yellow]Could not roll back the database session: {escape(str(e))}"
+        )
 
     if not emailed:
         # site_results[site] is written DURING the gather, ~1400 lines before the failure point --
@@ -1845,23 +1902,31 @@ def abort_run(
         # and rewrites the entry.  See SPEC 3.5.2.
         site_results.pop(site_name, None)
 
+    # escape() every interpolated exception.  A SQLAlchemy DBAPIError's message ends with
+    # `[SQL: ...]` and `[parameters: (...)]`; rich's markup parser reads the lowercase-initial
+    # `[parameters: ...]` as a style tag and DELETES it from the output -- silently dropping the
+    # bound values from the very message the operator has to debug.  An unmatched `[/...]` in an
+    # error is worse: it raises MarkupError HERE, after SIGINT was ignored and BEFORE finish_run(),
+    # losing every artifact this function exists to save.  The [bold] markup around the site name
+    # is ours and stays live.
     if reason == "database":
         if site_name is None:
             # Reached before any site's body ran -- there is no "processing X" to name, and
             # interpolating site_name here would render the literal word "None" (SPEC 3.5.4).
             sc.console.print(
                 f"\n:exclamation: [bold red]FATAL: a database operation failed and could not "
-                f"be retried before any site was processed:\n{error}"
+                f"be retried before any site was processed:\n{escape(str(error))}"
             )
         else:
             sc.console.print(
                 f"\n:exclamation: [bold red]FATAL: a database operation failed and could not be "
-                f"retried.  Aborting while processing [bold]{site_name}[/bold]:\n{error}"
+                f"retried.  Aborting while processing [bold]{escape(site_name)}[/bold]:\n"
+                f"{escape(str(error))}"
             )
     elif reason == "fatal":
         # The traceback (or the SystemExit message) follows when we re-raise below; this line is
         # what ties it to the site that was in flight and tells the operator the artifacts are safe.
-        detail = f"{type(error).__name__}: {error}"
+        detail = escape(f"{type(error).__name__}: {error}")
         if site_name is None:
             sc.console.print(
                 f"\n:exclamation: [bold red]FATAL: the run failed before any site was "
@@ -1870,13 +1935,13 @@ def abort_run(
         else:
             sc.console.print(
                 f"\n:exclamation: [bold red]FATAL: aborting while processing "
-                f"[bold]{site_name}[/bold]:\n{detail}"
+                f"[bold]{escape(site_name)}[/bold]:\n{detail}"
             )
     elif site_name is None:
         sc.console.print("\n:hand: [bold yellow]Interrupted before any site was processed.")
     else:
         sc.console.print(
-            f"\n:hand: [bold yellow]Interrupted while processing [bold]{site_name}[/bold]."
+            f"\n:hand: [bold yellow]Interrupted while processing [bold]{escape(site_name)}[/bold]."
             + (
                 "  Its report had already been sent, so resuming will start at the next site."
                 if emailed
@@ -4556,6 +4621,17 @@ an additional pro-rated bill or credit in the following month.
             with open(f"build/{site['name']}.eml", "wb") as f:
                 f.write(msg.as_bytes(policy=SMTP))
 
+            # BEFORE the send, not after: a Ctrl-C between send_message() and this loop -- a window
+            # that includes smtp_connection.quit(), a network round-trip -- used to set
+            # site_emailed=True and so advance the resume point PAST this site, and its notices
+            # then never reached {ymd}-notices.csv on any run, even though its owner had the email
+            # describing them.  Appending first downgrades that to at worst a duplicate CSV row on
+            # a re-run, which docs/resuming-interrupted-runs.md already documents as tolerable.
+            for n in site_context["notices"]:
+                fields = n["csv"].split(",")
+                fields.insert(1, contacts)
+                all_warnings.append(",".join(fields))
+
             # The send is gated on [SMTP].enabled; when disabled we still write the .eml above.
             if smtp_enabled:
                 smtp_connection = smtp_login()
@@ -4563,11 +4639,6 @@ an additional pro-rated bill or credit in the following month.
                 emails_sent += 1
                 site_emailed = True
                 smtp_connection.quit()
-
-            for n in site_context["notices"]:
-                fields = n["csv"].split(",")
-                fields.insert(1, contacts)
-                all_warnings.append(",".join(fields))
 
             plt.close(fig)  # needed to free up memory when sc.options.all is True
 

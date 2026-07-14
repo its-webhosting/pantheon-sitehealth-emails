@@ -41,7 +41,10 @@ def test_database_failure_aborts_the_run_and_prints_a_rerun_command(tmp_path):
     # The retry ran once, gave up, and the run aborted through the named path -- not a traceback.
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "Traceback" not in proc.stderr
-    assert "Database reconnects: 1" in proc.stdout   # db_retry retried, then raised
+    # The retry did NOT heal the connection -- the run died of it.  Reporting "1 reconnect" here
+    # (what the attempt-counting version printed) told the operator a reconnect succeeded on the
+    # very run that aborted because none did.
+    assert "Database reconnects: 0 healed, 1 failed" in proc.stdout
     assert E2E_SITE in proc.stdout
     # A single-site run gets a re-run command, never --resume-from (which requires --all).
     assert "--resume-from" not in proc.stdout

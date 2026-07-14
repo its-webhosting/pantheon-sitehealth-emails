@@ -305,15 +305,33 @@ rebuilt from `sys.argv` (`--resume-from` for `--all`; a re-run command listing t
 otherwise, since `--resume-from` requires `--all`), and exits 1 (database) or 130 (Ctrl-C). **A
 Ctrl-C that lands after a site's report was already sent resumes at the NEXT site** and keeps that
 site's results entry — resuming inclusively would mail its owner a duplicate report.
-`finish_run()` also writes a `_run` key into `-results.json` (`aborted_at`, `reason`,
-`sites_completed_this_run`, `db_reconnects_this_run`, `reconnects_by_site`, and on a resumed run
-the prior run's block under `previous`). **The e2e goldens cover neither stdout nor the
+`finish_run()` also writes the run metadata — `aborted_at`, `reason`, `sites_completed_this_run`,
+`db_reconnects_healed_this_run`, `db_reconnect_failures_this_run`, `reconnects_by_site`,
+`reconnect_failures_by_site`, and on a resumed/aborted run the prior run's whole block under
+`previous` — to its **own** artifact, `{ymd}-run.json`. It must **never** go back into
+`{ymd}-results.json`: `monthly-report.txt` reads that file with `jq to_entries`, which enumerates
+every key as a site, so a metadata key there becomes a bogus site row in the operator's monthly
+stats (silently: off-by-one site count, phantom empty-framework CMS bucket). **`-results.json` is
+site-keyed and nothing else.** Same write gate and accumulate/truncate rules as the other two
+artifacts. The two reconnect counters are **healed vs. failed** and both are printed
+(`Database reconnects: N healed, M failed`): `db_retry()` counts a heal only after the retry
+*returns*, and counts a failure when the retry or the pre-retry rollback dies — an attempt-counting
+version reported "1 reconnect" on the run that aborted *because* nothing reconnected, and zero on
+the rollback failure, the most definite connection loss there is. **Every `sc.console.print()` that
+interpolates an exception must `rich.markup.escape()` it**: rich reads `[parameters: (…)]` — the
+tail SQLAlchemy appends to every DBAPIError — as a style tag and *deletes* it, and an unmatched
+`[/…]` raises `MarkupError` inside `abort_run()` after SIGINT is ignored and before the flush.
+**The e2e goldens cover neither stdout nor the
 artifacts**, so `tests/integration/test_finish_run.py`, `tests/integration/test_abort_run.py`, and
 `tests/e2e/test_abort_e2e.py` (which drives a DB failure through the real `main()` via
 `tests/shims/dbshim`) are the only cover for that code. Note `abort_run()` sets SIGINT to
 `SIG_IGN` so a second Ctrl-C cannot truncate the flush — an in-process test that calls it **must**
 `monkeypatch.setattr(psh.signal, "signal", …)`, or the rest of the pytest session silently ignores
-Ctrl-C. See `development/2026-07-13-db-connection-resilience/SPEC.md`.
+Ctrl-C. In the site loop, a site's notices are appended to `all_warnings` **before** the SMTP
+send, not after: a Ctrl-C in the send→append window (which includes `smtp_connection.quit()`, a
+network round-trip) set `emailed=True`, advancing the resume point past the site, and its notices
+then never reached `-notices.csv` on any run. See
+`development/2026-07-13-db-connection-resilience/SPEC.md`.
 
 ### Configuration (`pantheon-sitehealth-emails.toml`)
 

@@ -64,7 +64,7 @@ A run can also end deliberately, before the loop reaches the last site: an unrec
 error (one that survives a single automatic retry) or a Ctrl-C now aborts the run on purpose
 instead of dying with a traceback or silently discarding completed work. When that happens the run:
 
-- writes `-notices.csv`/`-results.json` for exactly the sites that finished (the site it was
+- writes `-notices.csv`/`-results.json`/`-run.json` for exactly the sites that finished (the site it was
   processing when it died is dropped from the results — that entry is written mid-gather and would
   otherwise look like a success; a Ctrl-C that lands *after* that site's report was already emailed
   is the one exception, since dropping it there would just make you re-send the same report);
@@ -78,13 +78,31 @@ See `CLAUDE.md`'s **Database** section for the mechanism (`db_retry`, `DatabaseU
 
 ## Summary artifacts and the overlap caveat
 
-A full report run writes two summary files at the end, named for today's date:
-`YYYYMMDD-notices.csv` and `YYYYMMDD-results.json`. Normally they are written once, after the loop
+A full report run writes three summary files at the end, named for today's date:
+
+| File | Contents |
+|---|---|
+| `YYYYMMDD-notices.csv` | one raw line per notice, per site |
+| `YYYYMMDD-results.json` | **site-keyed and nothing else** — one entry per site that completed |
+| `YYYYMMDD-run.json` | how the run itself went (see below) |
+
+`YYYYMMDD-run.json` records `aborted_at`, `reason` (`null`, `"database"`, `"interrupted"` or
+`"fatal"`), `sites_completed_this_run`, and the database-reconnect counters:
+`db_reconnects_healed_this_run` / `reconnects_by_site` (a lost connection the automatic retry got
+back) and `db_reconnect_failures_this_run` / `reconnect_failures_by_site` (one it did not — the
+retry, or the rollback before it, failed too). The same two numbers are printed at the end of every
+run as `Database reconnects: N healed, M failed`.
+
+This metadata lives in its **own** file, not in `results.json`, because `results.json` is consumed
+by iterating its keys as site names (`jq to_entries` in `monthly-report.txt`): a metadata key there
+would silently show up as an extra "site" in the monthly stats.
+
+Normally these files are written once, after the loop
 completes — but the deliberate abort above also triggers this same write on its way out, so neither
 a database failure nor a Ctrl-C leaves the run with *no* files at all. A resumed run's own files
 would otherwise cover only the sites it processed: when `--resume-from` is given, the resumed run
-instead **appends** its rows to the CSV and **merges** its entries into the JSON, so the combined
-files describe both runs.
+instead **appends** its rows to the CSV, **merges** its entries into the results JSON, and nests
+the earlier run's metadata under `previous` in `run.json`, so the combined files describe both runs.
 
 An **aborted** run appends and merges too, whether or not it was resumed. Otherwise a run that dies
 partway would truncate the files of a run that *completed* earlier the same day — destroying the
@@ -94,8 +112,10 @@ Two consequences worth knowing:
 
 - **Resume from at or after the point of interruption.** If you resume from a site *earlier* than
   where the previous run stopped, the CSV will contain duplicate rows for the overlapping sites
-  (its raw lines are not de-duplicated). The JSON is keyed by site name, so it keeps one entry
-  per site, with the resumed run's entry winning.
+  (its raw lines are not de-duplicated). The same is true of a site that was interrupted after its
+  report went out but before the run ended: its notices are recorded before the email is sent, so
+  a re-run can duplicate those rows rather than lose them. The results JSON is keyed by site name,
+  so it keeps one entry per site, with the resumed run's entry winning.
 - **The console totals cover only the resumed run.** The "Email sent for N of M sites" line and
   the "Total savings" block at the end of the run are not persisted anywhere and are not
   accumulated across runs.

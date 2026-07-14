@@ -72,6 +72,7 @@ def _op_error():
 def test_db_retry_heals_a_lost_connection(psh, monkeypatch):
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})  # never assign: psh is session-scoped
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     session = FakeSession()
     calls = []
 
@@ -88,14 +89,16 @@ def test_db_retry_heals_a_lost_connection(psh, monkeypatch):
     assert len(calls) == 2         # the unit was re-run from scratch
     assert session.rollbacks == 1  # ... after a rollback, which is what makes that safe
     # Attributed, not just counted: an operator seeing 37 reconnects needs to know WHICH sites
-    # (SPEC 3.6, audit question 4).
+    # (SPEC 3.6, audit question 4).  A HEAL, counted only because the retry actually returned.
     assert psh.db_reconnects_by_site == {"its-wws-test1": 1}
+    assert psh.db_reconnect_failures_by_site == {}
 
 
 @pytest.mark.unit
 def test_db_retry_raises_named_error_when_the_retry_also_fails(psh, monkeypatch):
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     session = FakeSession()
 
     def unit():
@@ -105,6 +108,11 @@ def test_db_retry_raises_named_error_when_the_retry_also_fails(psh, monkeypatch)
         psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
     assert "loading traffic rows" in str(excinfo.value)
     assert isinstance(excinfo.value.__cause__, OperationalError)  # original error survives
+    # The retry did not heal anything, so it is NOT a reconnect.  The old code incremented before
+    # the retry ran, so the aborted run's metadata claimed `"reason": "database"` AND
+    # `"db_reconnects_this_run": 1` -- a heal that never happened.
+    assert psh.db_reconnects_by_site == {}
+    assert psh.db_reconnect_failures_by_site == {"its-wws-test1": 1}
 
 
 @pytest.mark.unit
@@ -114,6 +122,7 @@ def test_db_retry_names_the_error_when_the_rollback_itself_fails(psh, monkeypatc
     # as a raw OperationalError past main()'s handler (SPEC 3.3.3).
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     session = FakeSession(rollback_raises=True)
 
     def unit():
@@ -121,6 +130,11 @@ def test_db_retry_names_the_error_when_the_rollback_itself_fails(psh, monkeypatc
 
     with pytest.raises(psh.DatabaseUnavailableError):
         psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
+    # The run's most DEFINITE connection loss -- it never even got to the retry.  The old code
+    # raised before the increment, so this case reported ZERO reconnects: nothing went wrong,
+    # said the counter, on the run that died of exactly this.
+    assert psh.db_reconnects_by_site == {}
+    assert psh.db_reconnect_failures_by_site == {"its-wws-test1": 1}
 
 
 @pytest.mark.unit
@@ -131,6 +145,7 @@ def test_db_retry_does_not_rename_a_non_retryable_rollback_failure(psh, monkeypa
     # to DatabaseUnavailableError and routed to the "exit 1, safe to resume" path.
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     rollback_bug = IntegrityError("ROLLBACK", {}, Exception("duplicate key"))
     session = FakeSession(rollback_raises=True, rollback_error=rollback_bug)
 
@@ -140,6 +155,9 @@ def test_db_retry_does_not_rename_a_non_retryable_rollback_failure(psh, monkeypa
     with pytest.raises(IntegrityError) as excinfo:
         psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
     assert excinfo.value is rollback_bug
+    # A data bug is not a connection loss, so it is counted as neither.
+    assert psh.db_reconnects_by_site == {}
+    assert psh.db_reconnect_failures_by_site == {}
 
 
 @pytest.mark.unit
@@ -148,6 +166,7 @@ def test_db_retry_never_retries_a_data_bug(psh, monkeypatch):
     # failure into a quiet wrong one, so it must propagate untouched (SPEC 3.3).
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     session = FakeSession()
     calls = []
 
@@ -379,6 +398,7 @@ def test_db_retry_heals_a_disconnect_that_is_not_an_operational_error(psh, monke
     # artifacts.  Retry on connection_invalidated, not on a class name.
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     session = FakeSession()
     calls = []
 
@@ -401,6 +421,7 @@ def test_db_retry_names_the_error_when_a_disconnect_retry_also_fails(psh, monkey
     # routes it to the artifact-flushing abort path instead of a traceback.
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
     session = FakeSession()
 
     def unit():

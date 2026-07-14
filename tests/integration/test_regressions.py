@@ -10,6 +10,7 @@ regressed by the offline e2e in tests/e2e/ — it renders under the plugin-disab
 which crashed on the pre-fix code.
 """
 import importlib.util
+import inspect
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -62,3 +63,20 @@ def test_check_umich_disabled_import_does_not_crash(psh, reset_sc):
     # The disabled (else) branch ran — it only prints — so no site_pre hooks were registered
     # (the enabled branch would have added three). This confirms the fixed path executed.
     assert sc.hooks["site_pre"] == []
+
+
+def test_site_notices_are_recorded_before_the_email_is_sent(psh):
+    # A Ctrl-C between send_message() and the notices append -- a window that includes
+    # smtp_connection.quit(), a NETWORK ROUND-TRIP -- landed with site_emailed already True, so
+    # abort_run() kept the site's results entry and advanced the resume point to the NEXT site.
+    # The resumed run never revisited it, and that site's notices never reached {ymd}-notices.csv
+    # on ANY run -- even though its owner had already received the email describing them.
+    # Permanent, silent loss.  Recording the notices FIRST downgrades it to at worst a duplicate
+    # CSV row on a re-run, which docs/resuming-interrupted-runs.md documents as tolerable.
+    #
+    # The interrupt itself is not reachable from the harness (the subprocess interlock bans --all,
+    # and the window is a single unsynchronizable instant), so the ORDER is what is pinned.
+    source = inspect.getsource(psh.main)
+    append = source.index('for n in site_context["notices"]:')
+    send = source.index("if smtp_enabled:\n                smtp_connection = smtp_login()")
+    assert append < send, "the notices append must precede the SMTP send"

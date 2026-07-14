@@ -36,6 +36,7 @@ def abort(
     reset_sc.options = psh.parse_args(argv[1:])
     monkeypatch.setattr(psh.sys, "argv", argv)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
 
     # abort_run() sets SIGINT to SIG_IGN, which is PROCESS-GLOBAL and restored by no fixture:
     # without this patch, the rest of the pytest session would silently ignore Ctrl-C
@@ -343,3 +344,55 @@ def test_fatal_after_the_email_was_sent_keeps_the_site_in_the_results(psh, monke
     )
     assert "its-wws-test2" in captured["site_results"]
     assert "--resume-from its-wws-test3" in console.export_text()
+
+
+# A real SQLAlchemy DBAPIError's str() ends like this: the statement, then the bound values.
+SQLALCHEMY_TAIL = (
+    "(MySQLdb.OperationalError) (2013, 'Lost connection to MySQL server during query')\n"
+    "[SQL: SELECT pantheon_overage_protection.site_id FROM pantheon_overage_protection "
+    "WHERE site_id = %s AND month = %s]\n"
+    "[parameters: ('abc-123-def', datetime.date(2025, 6, 1))]"
+)
+
+
+@pytest.mark.integration
+def test_the_database_error_is_printed_with_its_parameters_intact(psh, monkeypatch, reset_sc):
+    # rich's markup tag regex is r"\[([a-z#/@][^[]*?)]", so `[parameters: (...)]` -- lowercase
+    # initial -- parses as a STYLE TAG, resolves to nothing, and rich DELETES the text.  The
+    # operator got the SQL (capital S in `[SQL:` saves it) with the bound values silently gone,
+    # from exactly the single-execute SELECT most likely to hit a stale connection.  escape() it.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "database",
+        psh.DatabaseUnavailableError(f"loading overage protection: {SQLALCHEMY_TAIL}"),
+        width=300,
+    )
+    assert code == 1
+    output = console.export_text()
+    assert "[parameters: ('abc-123-def', datetime.date(2025, 6, 1))]" in output
+    assert "[SQL: SELECT pantheon_overage_protection.site_id" in output
+    assert "its-wws-test2" in output      # our own [bold] markup around the site name still works
+
+
+@pytest.mark.integration
+def test_a_markup_hostile_error_does_not_crash_the_flush(psh, monkeypatch, reset_sc):
+    # An unmatched closing tag in interpolated text (`[/param]`) makes rich raise MarkupError --
+    # INSIDE abort_run(), after SIGINT was set to SIG_IGN and BEFORE finish_run() ran.  The one
+    # thing this function is documented to be incapable of: the operator gets a traceback and NO
+    # artifacts at all.  The same applies on the fatal path, which interpolates any exception at
+    # all, so both are covered.
+    for reason, error, fragment in (
+        (
+            "database",
+            psh.DatabaseUnavailableError("loading rows: [/parameters] [bad"),
+            "[/parameters] [bad",
+        ),
+        ("fatal", SystemExit("Bailing out: [/bold] unterminated"), "[/bold] unterminated"),
+    ):
+        console, captured, _code = abort(
+            psh, monkeypatch, reset_sc,
+            ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"],
+            reason, error, width=300,
+        )
+        assert captured["ran"] is True             # no MarkupError: the artifacts were flushed
+        assert fragment in console.export_text()   # ... and the error is printed verbatim
