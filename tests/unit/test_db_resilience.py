@@ -7,7 +7,12 @@ import datetime
 
 import pytest
 import sqlalchemy as db
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import (
+    IntegrityError,
+    InterfaceError,
+    OperationalError,
+    ProgrammingError,
+)
 
 
 @pytest.mark.unit
@@ -319,3 +324,67 @@ def test_resume_point_skips_a_site_whose_report_was_already_emailed(psh):
     assert psh.resume_point(sites, "b", emailed=True) == "c"
     # Emailed, and it was the last site: nothing remains to resume.
     assert psh.resume_point(sites, "c", emailed=True) is None
+
+
+def _invalidated_interface_error():
+    """A reaped connection as mysqlclient really delivers it: errno 0 -> InterfaceError.
+
+    SQLAlchemy's MySQLdb dialect calls this a disconnect (is_disconnect() matches "(0, '')") and
+    invalidates the connection -- but InterfaceError is a SIBLING of OperationalError under
+    DBAPIError, not a subclass, so a hardcoded `except OperationalError` never sees it.
+    """
+    return InterfaceError(
+        "SELECT 1", {}, Exception("(0, '')"), connection_invalidated=True
+    )
+
+
+@pytest.mark.unit
+def test_db_retryable_classifies_by_invalidation_not_by_class(psh):
+    assert psh.db_retryable(_invalidated_interface_error()) is True
+    assert psh.db_retryable(_op_error()) is True                      # deadlocks etc. still retried
+    assert psh.db_retryable(IntegrityError("INSERT", {}, Exception("dup"))) is False
+    # A ProgrammingError(2014) IS a disconnect (CR_COMMANDS_OUT_OF_SYNC: the connection was reaped
+    # mid-result-set); a ProgrammingError that is a real SQL bug is not.
+    assert psh.db_retryable(
+        ProgrammingError("SELECT 1", {}, Exception("(2014, ...)"), connection_invalidated=True)
+    ) is True
+    assert psh.db_retryable(ProgrammingError("SELCT 1", {}, Exception("syntax"))) is False
+
+
+@pytest.mark.unit
+def test_db_retry_heals_a_disconnect_that_is_not_an_operational_error(psh, monkeypatch):
+    # THE bug: a reaped connection can arrive as InterfaceError (errno 0) or ProgrammingError
+    # (2014).  Neither is an OperationalError, so neither was retried, neither was caught by
+    # main()'s handler, and the run died with a bare traceback -- losing every completed site's
+    # artifacts.  Retry on connection_invalidated, not on a class name.
+    monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    session = FakeSession()
+    calls = []
+
+    def unit():
+        calls.append(1)
+        if len(calls) == 1:
+            raise _invalidated_interface_error()
+        return "rows"
+
+    result = psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
+    assert result == "rows"
+    assert len(calls) == 2
+    assert session.rollbacks == 1
+    assert psh.db_reconnects_by_site == {"its-wws-test1": 1}
+
+
+@pytest.mark.unit
+def test_db_retry_names_the_error_when_a_disconnect_retry_also_fails(psh, monkeypatch):
+    # And when the retry fails too, it must still become the NAMED error, so main()'s handler
+    # routes it to the artifact-flushing abort path instead of a traceback.
+    monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    session = FakeSession()
+
+    def unit():
+        raise _invalidated_interface_error()
+
+    with pytest.raises(psh.DatabaseUnavailableError):
+        psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")

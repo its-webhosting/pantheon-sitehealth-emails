@@ -57,7 +57,7 @@ from sqlalchemy import (
     insert,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import CHAR
 
@@ -1277,6 +1277,24 @@ class DatabaseUnavailableError(RuntimeError):
 db_reconnects_by_site = {}
 
 
+def db_retryable(error: DBAPIError) -> bool:
+    """Is this DBAPI error one db_retry() may roll back and re-run?
+
+    NOT a hardcoded class list.  SQLAlchemy's MySQLdb dialect classifies a lost connection by
+    error code, not by exception class: mysqlclient raises InterfaceError for errno 0 and
+    ProgrammingError for CR_COMMANDS_OUT_OF_SYNC (2014, a connection reaped mid-result-set), and
+    both are SIBLINGS of OperationalError under DBAPIError, not subclasses.  What every disconnect
+    DOES share is connection_invalidated -- SQLAlchemy sets it from the dialect's is_disconnect().
+    So retry on that, plus OperationalError (a deadlock, a lock-wait timeout or too-many-connections
+    does not invalidate the connection but is still worth one retry -- SPEC 2.2).
+
+    Everything else -- an IntegrityError, a genuine ProgrammingError bug -- is a real bug: it is a
+    DBAPIError but neither an OperationalError nor an invalidated connection, so it propagates
+    untouched and stays loud.
+    """
+    return isinstance(error, OperationalError) or error.connection_invalidated
+
+
 def db_retry(session, unit, *, what: str, site: str = None):
     """Run `unit()`; on a database failure, roll back and re-run it exactly once.
 
@@ -1290,21 +1308,25 @@ def db_retry(session, unit, *, what: str, site: str = None):
     would emit a fresh SELECT outside any unit, and therefore outside any retry.  This is why
     load_traffic_rows() returns plain TrafficRow data (SPEC 3.3.2).
 
-    Only OperationalError is retried -- a lost connection, but also a deadlock, a lock-wait
-    timeout, or too-many-connections, which MySQLdb surfaces through the same class.  We
-    deliberately do not sniff error codes to tell them apart (SPEC 2.2); the abort message says
-    "a database operation failed" and prints the underlying error, which names the real cause.
-    IntegrityError, ProgrammingError and friends are real bugs and must stay loud.
+    What is retried is decided by db_retryable(), not by an exception class: an OperationalError
+    (a lost connection, but also a deadlock, a lock-wait timeout, or too-many-connections -- we
+    deliberately do not sniff codes to tell those apart, SPEC 2.2), or ANY DBAPIError whose
+    connection was invalidated.  A reaped connection can arrive as an InterfaceError or even a
+    ProgrammingError(2014); those are not OperationalError subclasses, and retrying them is the
+    whole point of this function.  A DBAPIError that is neither -- an IntegrityError, a real
+    ProgrammingError bug -- is a bug and must stay loud, so it is re-raised untouched.
     """
     try:
         return unit()
-    except OperationalError as first_error:
+    except DBAPIError as first_error:
+        if not db_retryable(first_error):
+            raise
         try:
             session.rollback()
-        except OperationalError as rollback_error:
+        except DBAPIError as rollback_error:
             # The rollback hit the wire and died too (the connection was not invalidated, so
             # SQLAlchemy really emitted a ROLLBACK).  Name it rather than let a raw
-            # OperationalError escape past main()'s handler -- SPEC 3.3.3.
+            # DBAPIError escape past main()'s handler -- SPEC 3.3.3.
             raise DatabaseUnavailableError(
                 f"{what}: rollback failed after {first_error}"
             ) from rollback_error
@@ -1317,7 +1339,9 @@ def db_retry(session, unit, *, what: str, site: str = None):
         time.sleep(1)
         try:
             return unit()
-        except OperationalError as retry_error:
+        except DBAPIError as retry_error:
+            if not db_retryable(retry_error):
+                raise  # a real bug surfacing on the retry: still not ours to rename
             raise DatabaseUnavailableError(f"{what}: {retry_error}") from retry_error
 
 
@@ -1597,6 +1621,13 @@ def finish_run(
         # resumed run instead of being truncated to just the resumed subset.  (The console-only
         # totals printed here and below still cover only this run's sites.)
         resuming = sc.options.resume_from is not None
+        # An ABORTED run accumulates too, for the same reason it flushes at all: the artifacts on
+        # disk may belong to an earlier, COMPLETED run of the same day (the monthly --all --for-real
+        # run in the morning, a Ctrl-C'd dry run in the afternoon).  Truncating them would destroy
+        # a good run's record to make room for a partial one's.  Only a run that reaches the end
+        # legitimately truncates; the worst case here is duplicate rows on a re-run, which
+        # docs/resuming-interrupted-runs.md already documents as tolerable.
+        accumulating = resuming or reason is not None
         if reason is None:
             sc.console.print(
                 f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
@@ -1616,17 +1647,16 @@ def finish_run(
         if write_artifacts:
             ymd = datetime.datetime.today().strftime("%Y%m%d")
             with open(
-                f"{ymd}-notices.csv", "a" if resuming else "w", encoding="utf-8"
+                f"{ymd}-notices.csv", "a" if accumulating else "w", encoding="utf-8"
             ) as f:
                 for n in all_warnings:
                     f.write(n + "\n")
 
             results_path = f"{ymd}-results.json"
-            # On a resumed run, pull the prior payload first so this run's _run can NEST the
-            # aborted run's under "previous".  A plain merge would overwrite it -- and the aborted
-            # run's block is the one carrying the reconnect evidence that prompted the resume in
-            # the first place.
-            prior = merge_prior_results(results_path, {}) if resuming else {}
+            # Pull the prior payload first so this run's _run can NEST the earlier run's under
+            # "previous".  A plain merge would overwrite it -- and an aborted run's block is the
+            # one carrying the reconnect evidence that prompted the resume in the first place.
+            prior = merge_prior_results(results_path, {}) if accumulating else {}
             # "this_run" in the names, not "processed": merge_prior_results() makes the FILE
             # describe the original run plus this one, while these numbers describe only this one.
             # (An --only-warn run emails nobody, so this counts sites processed, not sites emailed.)
@@ -1646,7 +1676,7 @@ def finish_run(
             # very end of a multi-hour run is not worth duplicating the semantics to avoid.
             payload = (
                 merge_prior_results(results_path, site_results)
-                if resuming
+                if accumulating
                 else site_results
             )
             with open(results_path, "w", encoding="utf-8") as f:
@@ -1760,10 +1790,16 @@ def abort_run(
 ) -> None:
     """Report an aborted run, flush its artifacts, print how to finish it, and exit.  Never returns.
 
-    `reason` is "database" (exit 1) or "interrupted" (exit 130, the conventional SIGINT code).
-    `emailed` says whether the aborting site's report was already sent.  Every caller passes the
-    real value: a report that has gone out must never be re-sent by the resumed run, whichever
-    failure aborted the run after the send.
+    `reason` is "database" (exit 1), "interrupted" (exit 130, the conventional SIGINT code), or
+    "fatal" -- anything else that escaped the site loop (a SystemExit("Bailing out."), an SMTP
+    hiccup on site 250 of 300, a KeyError from changed terminus JSON).  A fatal RE-RAISES the
+    original exception after the flush, so its traceback -- or a SystemExit's own code and message
+    -- reaches the operator unchanged.  Nothing is swallowed.
+
+    This is the ONE flush path, so every exit has the same invariants: the aborting site is popped
+    from the results unless its report was already emailed, and a runnable continuation command is
+    printed.  `emailed` says whether that report went out; every caller passes the real value,
+    because a report that has gone out must never be re-sent by the resumed run.
 
     This function runs when things are ALREADY broken, so it must not be able to crash: every input
     it slices on is guarded (SPEC 3.5.4).
@@ -1797,6 +1833,20 @@ def abort_run(
             sc.console.print(
                 f"\n:exclamation: [bold red]FATAL: a database operation failed and could not be "
                 f"retried.  Aborting while processing [bold]{site_name}[/bold]:\n{error}"
+            )
+    elif reason == "fatal":
+        # The traceback (or the SystemExit message) follows when we re-raise below; this line is
+        # what ties it to the site that was in flight and tells the operator the artifacts are safe.
+        detail = f"{type(error).__name__}: {error}"
+        if site_name is None:
+            sc.console.print(
+                f"\n:exclamation: [bold red]FATAL: the run failed before any site was "
+                f"processed:\n{detail}"
+            )
+        else:
+            sc.console.print(
+                f"\n:exclamation: [bold red]FATAL: aborting while processing "
+                f"[bold]{site_name}[/bold]:\n{detail}"
             )
     elif site_name is None:
         sc.console.print("\n:hand: [bold yellow]Interrupted before any site was processed.")
@@ -1839,9 +1889,17 @@ def abort_run(
         if site_name is None:
             # The interrupt landed before any site was processed -- there is no "sites before X"
             # to report, and {resume_site or site_name} would render as the literal word "None".
+            # soft_wrap=True on EVERY print that emits a copy-pasteable command.  sc.console is a
+            # bare Console(), so on a non-tty -- cron, nohup, a redirect, i.e. exactly how a
+            # multi-hour --all run is launched -- rich falls back to width 80 and puts a REAL
+            # newline in the output.  These commands are longer than that, and bash treats the
+            # newline as a command separator: the operator pastes it and the first line re-parses
+            # as a complete `--all --for-real` run with no --resume-from, re-mailing every owner
+            # who already got their report.
             sc.console.print(
                 "\n[bold]No sites were processed.  Continue this run with:\n\n"
-                f"    {shlex.join(sys.argv)}\n"
+                f"    {shlex.join(sys.argv)}\n",
+                soft_wrap=True,
             )
         else:
             command = (
@@ -1852,7 +1910,8 @@ def abort_run(
             sc.console.print(
                 f"\n[bold]The sites before {resume_site or site_name} were processed and their "
                 "results written.  Continue this run with:\n\n"
-                f"    {command}\n"
+                f"    {command}\n",
+                soft_wrap=True,  # never wrap a command; see above
             )
     else:
         # --resume-from requires --all, so an explicit-SITE run gets a re-run command listing the
@@ -1881,8 +1940,14 @@ def abort_run(
         else:
             sc.console.print(
                 "\n[bold]Continue this run with:\n\n"
-                f"    {rerun_command(sys.argv, sc.options.sites, remaining)}\n"
+                f"    {rerun_command(sys.argv, sc.options.sites, remaining)}\n",
+                soft_wrap=True,  # never wrap a command; see above
             )
+
+    if reason == "fatal":
+        # Re-raise, do not exit: a SystemExit keeps its own code and message, and anything else
+        # keeps its traceback.  The flush above is all this path adds.
+        raise error
 
     sys.exit(1 if reason == "database" else 130)
 
@@ -4484,42 +4549,34 @@ an additional pro-rated bill or credit in the following month.
 
             # TODO: % Pages Cached -- should be Cloudflare
             # TODO: CSV attachment
-    except (DatabaseUnavailableError, OperationalError) as e:
-        # OperationalError as well as the named error: a database failure raised OUTSIDE a unit
-        # of work (a future code path, an expired-row lazy load) must still land on the named
-        # abort path with the artifacts flushed, rather than as a bare traceback (SPEC 3.3.3).
+    except BaseException as e:
+        # ONE flush path for every way out of the site loop, because finish_run() is the only
+        # writer of the run's artifacts and main() has no `finally`.  Enumerating exception classes
+        # is what let an SMTP hiccup on site 250 of 300, a php inliner failure, a SystemExit
+        # ("Bailing out.") or a KeyError from changed terminus JSON discard 249 sites' work.
+        #
+        # Only the OUTCOME differs by class, and that is what `reason` selects: a database failure
+        # exits 1, an interrupt exits 130, and everything else is re-raised by abort_run() with its
+        # traceback (or its SystemExit code and message) intact.  Nothing is swallowed.
+        #
+        # A DBAPIError is a database abort only when it is one db_retry() would have retried; an
+        # IntegrityError is a data bug and belongs on the fatal path, with its traceback.
+        if isinstance(e, DatabaseUnavailableError) or (
+            isinstance(e, DBAPIError) and db_retryable(e)
+        ):
+            # A database failure raised OUTSIDE a unit of work (a future code path, an expired-row
+            # lazy load) must still land on the named abort path (SPEC 3.3.3).
+            reason = "database"
+        elif isinstance(e, KeyboardInterrupt):
+            reason = "interrupted"
+        else:
+            reason = "fatal"
         abort_run(
-            db_session, db_engine, site_name, "database", e,
+            db_session, db_engine, site_name, reason, e,
             emailed=site_emailed,
             site_names=site_names, site_count=site_count, emails_sent=emails_sent,
             all_warnings=all_warnings, site_results=site_results, site_savings=site_savings,
         )
-    except KeyboardInterrupt as e:
-        abort_run(
-            db_session, db_engine, site_name, "interrupted", e,
-            emailed=site_emailed,
-            site_names=site_names, site_count=site_count, emails_sent=emails_sent,
-            all_warnings=all_warnings, site_results=site_results, site_savings=site_savings,
-        )
-    except SystemExit:
-        # sys.exit("Bailing out.") inside the loop (an unknown/missing plan SKU, a missing live
-        # environment) raises SystemExit, a BaseException the handlers above do not catch.  Without
-        # this, an hour of completed sites' notices and results is discarded on the way out.  Flush
-        # them, then RE-RAISE so the original exit code and message are preserved -- this is not an
-        # abort_run() path: there is nothing to retry and no resume command to offer, because the
-        # bad site would just bail out again.
-        finish_run(
-            db_session,
-            db_engine,
-            site_count,
-            emails_sent,
-            all_warnings,
-            site_results,
-            site_savings,
-            aborted_at=site_name,
-            reason="fatal",
-        )
-        raise
 
     finish_run(
         db_session,

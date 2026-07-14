@@ -48,13 +48,18 @@ def patch_resolve(monkeypatch, zone, calls=None):
     monkeypatch.setattr(dns_classify, "resolve", make_resolver(zone, calls))
 
 
-def recording_console(monkeypatch, sc):
+def recording_console(monkeypatch, sc, width=200):
     """Replace sc.console with a wide recording Console; read it back with export_text().
 
     NOT capsys: rich wraps at width 80 on a non-tty, so a substring assertion on capsys output
     breaks as soon as a message grows and the wrap lands mid-phrase.  width=200 + record=True is
     the pattern the repo already uses (tests/integration/test_plugin_cloudflare_fqdns.py:73-75).
+
+    `width` exists so a test can deliberately reproduce PRODUCTION's console: the real sc.console
+    is a bare Console(), which on a non-tty (cron, nohup, a redirect -- how every --all run is
+    launched) is 80 columns wide and hard-wraps.  The wide default here is what made the suite blind
+    to a wrapped, dangerous-to-paste resume command.
     """
-    console = Console(file=io.StringIO(), record=True, width=200)
+    console = Console(file=io.StringIO(), record=True, width=width)
     monkeypatch.setattr(sc, "console", console)
     return console

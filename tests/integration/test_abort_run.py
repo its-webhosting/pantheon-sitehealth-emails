@@ -30,8 +30,9 @@ class FakeEngine:
 def abort(
     psh, monkeypatch, reset_sc, argv, reason, error, *,
     emailed=False, site_results=None, site_name="its-wws-test2",
+    expect=SystemExit, width=200,
 ):
-    console = recording_console(monkeypatch, reset_sc)
+    console = recording_console(monkeypatch, reset_sc, width=width)
     reset_sc.options = psh.parse_args(argv[1:])
     monkeypatch.setattr(psh.sys, "argv", argv)
     monkeypatch.setattr(psh, "db_reconnects_by_site", {})
@@ -50,7 +51,7 @@ def abort(
         captured["ran"] = True
 
     monkeypatch.setattr(psh, "finish_run", fake_finish_run)
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(expect) as excinfo:
         psh.abort_run(
             FakeSession(), FakeEngine(), site_name, reason, error,
             emailed=emailed, site_names=SITE_NAMES,
@@ -59,7 +60,8 @@ def abort(
             site_savings=[],
         )
     assert (signal.SIGINT, signal.SIG_IGN) in signals_set  # the flush is protected
-    return console, captured, excinfo.value.code
+    captured["raised"] = excinfo.value          # the fatal path re-raises rather than exiting
+    return console, captured, getattr(excinfo.value, "code", None)
 
 
 @pytest.mark.integration
@@ -242,3 +244,102 @@ def test_explicit_site_rerun_command_excludes_an_already_completed_site(
     command = match.group(1)
     assert "its-wws-test1" not in command  # already emailed -- must not be re-mailed
     assert "its-wws-test3" in command
+
+
+@pytest.mark.integration
+def test_resume_command_is_never_wrapped_on_a_narrow_console(psh, monkeypatch, reset_sc):
+    # sc.console is a bare Console(), so on a NON-TTY -- cron, nohup, systemd, any redirect, i.e.
+    # exactly how a multi-hour --all run is launched -- rich falls back to width 80 and inserts a
+    # REAL newline into the output.  This command is longer than 80 columns, and bash treats that
+    # newline as a command separator: the first line re-parses as a complete, valid
+    # `--all --for-real` run with NO --resume-from, so an operator pasting it restarts from the
+    # first site and re-emails every owner who already received their report.  Print it soft-wrapped.
+    argv = [
+        "./pantheon-sitehealth-emails", "-v", "--config", "pantheon-sitehealth-emails.toml",
+        "--date", "20260731", "--all", "--for-real", "--resume-from", "its-wws-test1",
+    ]
+    console, _captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "database", psh.DatabaseUnavailableError("boom"),
+        width=80,   # production's real width on a non-tty
+    )
+    assert code == 1
+    expected = psh.resume_command(argv, "its-wws-test2")
+    assert len(expected) > 80                      # the case the wrap would have broken
+    output = console.export_text()
+    assert any(expected in line for line in output.splitlines()), (
+        f"the resume command was wrapped across lines:\n{output}"
+    )
+
+
+@pytest.mark.integration
+def test_rerun_command_is_never_wrapped_on_a_narrow_console(psh, monkeypatch, reset_sc):
+    # The explicit-SITE branch prints a command too, and it is the one that grows with every site
+    # left to redo -- so it wraps even sooner than the --resume-from one.
+    argv = [
+        "./pantheon-sitehealth-emails", "--config", "pantheon-sitehealth-emails.toml",
+        "--date", "20260731", "--for-real",
+        "its-wws-test1", "its-wws-test2", "its-wws-test3",
+    ]
+    console, _captured, _code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(), width=80,
+    )
+    expected = psh.rerun_command(argv, ["its-wws-test1", "its-wws-test2", "its-wws-test3"],
+                                 ["its-wws-test2", "its-wws-test3"])
+    assert len(expected) > 80
+    output = console.export_text()
+    assert any(expected in line for line in output.splitlines()), (
+        f"the re-run command was wrapped across lines:\n{output}"
+    )
+
+
+@pytest.mark.integration
+def test_fatal_systemexit_flushes_pops_the_site_and_keeps_its_exit_code(psh, monkeypatch, reset_sc):
+    # sys.exit("Bailing out.") inside the loop (an unknown plan SKU, a missing live environment)
+    # and smtp_login()'s sys.exit() both fire AFTER site_results[site] was written mid-gather.  The
+    # old handler called finish_run() directly and skipped the pop, shipping the failed site in
+    # results.json as a success.  One flush path, one set of invariants: pop, flush, re-raise.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, captured, code = abort(
+        psh, monkeypatch, reset_sc, argv, "fatal", SystemExit("Bailing out."),
+        site_results={
+            "its-wws-test1": {"framework": "wordpress"},
+            "its-wws-test2": {"framework": "wordpress"},  # the site that died
+        },
+    )
+    assert code == "Bailing out."                       # the ORIGINAL exit code/message survives
+    assert captured["ran"] is True                      # artifacts flushed
+    assert captured["reason"] == "fatal"
+    assert list(captured["site_results"].keys()) == ["its-wws-test1"]   # aborting site popped
+    assert "--resume-from its-wws-test2" in console.export_text()
+
+
+@pytest.mark.integration
+def test_fatal_exception_is_reraised_after_the_flush(psh, monkeypatch, reset_sc):
+    # An SMTPServerDisconnected on site 250 of 300, a CalledProcessError from the php inliner, a
+    # KeyError from changed terminus JSON: all used to escape main() with no handler at all, losing
+    # every completed site's artifacts.  Flush -- and then re-raise, so the traceback still reaches
+    # the operator.  Nothing is swallowed.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    error = RuntimeError("the php inliner died")
+    _console, captured, _code = abort(
+        psh, monkeypatch, reset_sc, argv, "fatal", error,
+        expect=RuntimeError,
+        site_results={"its-wws-test2": {"framework": "wordpress"}},
+    )
+    assert captured["raised"] is error                  # the original exception, re-raised
+    assert captured["ran"] is True
+    assert captured["site_results"] == {}               # the aborting site was popped
+
+
+@pytest.mark.integration
+def test_fatal_after_the_email_was_sent_keeps_the_site_in_the_results(psh, monkeypatch, reset_sc):
+    # The pop-unless-emailed rule holds on the fatal path too: a site whose report really went out
+    # completed, and the resumed run must start at the NEXT site or its owner gets a second copy.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    console, captured, _code = abort(
+        psh, monkeypatch, reset_sc, argv, "fatal", SystemExit(1),
+        emailed=True,
+        site_results={"its-wws-test2": {"framework": "wordpress"}},
+    )
+    assert "its-wws-test2" in captured["site_results"]
+    assert "--resume-from its-wws-test3" in console.export_text()

@@ -86,6 +86,10 @@ would otherwise cover only the sites it processed: when `--resume-from` is given
 instead **appends** its rows to the CSV and **merges** its entries into the JSON, so the combined
 files describe both runs.
 
+An **aborted** run appends and merges too, whether or not it was resumed. Otherwise a run that dies
+partway would truncate the files of a run that *completed* earlier the same day — destroying the
+record of what was actually mailed. Only a run that reaches the end truncates.
+
 Two consequences worth knowing:
 
 - **Resume from at or after the point of interruption.** If you resume from a site *earlier* than

@@ -171,3 +171,54 @@ def test_finish_run_writes_artifacts_even_if_the_close_fails(psh, tmp_path, monk
     )
     assert list(tmp_path.glob("*-results.json")) != []
     assert engine.disposed is True
+
+
+@pytest.mark.integration
+def test_finish_run_abort_does_not_truncate_an_earlier_runs_artifacts(
+    psh, tmp_path, monkeypatch, reset_sc,
+):
+    # The monthly `--all --for-real` run completes in the morning; that afternoon the operator
+    # Ctrl-Cs a fresh (non-resumed) `--all` dry run after two sites.  The abort path used to decide
+    # append-vs-truncate on --resume-from alone, so it opened {ymd}-notices.csv in "w" mode and
+    # overwrote {ymd}-results.json -- DESTROYING the morning's record of what was actually mailed.
+    # Before the abort path flushed at all, an interrupt wrote nothing and was harmless; it must
+    # stay harmless.  An abort ACCUMULATES; only a run that reaches the end truncates.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    ymd = datetime.datetime.today().strftime("%Y%m%d")
+    (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-morning,some-notice,detail\n")
+    (tmp_path / f"{ymd}-results.json").write_text(
+        '{"its-wws-morning": {"plan": "Performance Small"}, "_run": {"reason": null}}'
+    )
+
+    run(
+        psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
+        aborted_at="its-wws-test1", reason="interrupted",
+    )
+
+    notices = (tmp_path / f"{ymd}-notices.csv").read_text().splitlines()
+    assert notices == [
+        "its-wws-morning,some-notice,detail",       # the completed run's rows SURVIVE
+        "its-wws-test1,some-notice,detail",         # ... and this run's are appended
+    ]
+    results = json.loads((tmp_path / f"{ymd}-results.json").read_text())
+    assert results["its-wws-morning"] == {"plan": "Performance Small"}   # not overwritten
+    assert results["its-wws-test1"] == {"plan": "Basic"}
+    assert results["_run"]["reason"] == "interrupted"
+    assert results["_run"]["previous"] == {"reason": None}   # the earlier run's block is nested
+
+
+@pytest.mark.integration
+def test_finish_run_completed_run_still_truncates(psh, tmp_path, monkeypatch, reset_sc):
+    # The other half of the rule: a run that reaches the end owns the day's artifacts outright.
+    # Without this, a re-run of the whole month would silently double every row.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    ymd = datetime.datetime.today().strftime("%Y%m%d")
+    (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-stale,old-notice,detail\n")
+    (tmp_path / f"{ymd}-results.json").write_text('{"its-wws-stale": {"plan": "Basic"}}')
+
+    run(psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"])
+
+    assert (tmp_path / f"{ymd}-notices.csv").read_text() == "its-wws-test1,some-notice,detail\n"
+    assert "its-wws-stale" not in json.loads((tmp_path / f"{ymd}-results.json").read_text())
