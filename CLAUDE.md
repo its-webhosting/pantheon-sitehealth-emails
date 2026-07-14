@@ -384,6 +384,17 @@ tool stays reusable by other institutions.
 
 ## Conventions & gotchas
 
+- **`pantheon-sitehealth-emails.py` is a committed symlink to `pantheon-sitehealth-emails`, and
+  exists only so CodeGraph can index the main program.** It is NOT a second copy and NOT the file
+  to edit — edit `pantheon-sitehealth-emails`. CodeGraph picks a parser by file extension
+  (`path.extname()`), so an extension-less file is silently skipped: before this symlink existed,
+  the index held 117 files and **zero symbols from the ~4,600-line core program**, so every
+  `codegraph_explore` answered from `check/`/`plugin/`/`tests/` while blind to the file being
+  edited. The symlink is tracked (not git-ignored) on purpose — a git-ignored one would vanish on
+  a fresh clone and the blindness would return silently. Known limitation that remains: the tests
+  import the program via `SourceFileLoader` on the **dash** name, so CodeGraph cannot link tests
+  to its symbols and reports "no covering tests found" for them; the symbol index and call graph
+  are unaffected.
 - Generated artifacts land in `build/` (git-ignored); `database.db`, `fqdns.json`, and the
   `.eml`/`.html`/`.txt` outputs are working data, not source. `fqdns.json` is now **program-
   generated** by the cloudflare plugin (was produced by a standalone script); it is git-ignored
