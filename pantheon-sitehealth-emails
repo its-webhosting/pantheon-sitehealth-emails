@@ -153,6 +153,21 @@ class TrafficRow(NamedTuple):
     cache_hits: int
 
 
+class OverageProtectionRow(NamedTuple):
+    """A pantheon_overage_protection row, detached from the ORM.
+
+    Plain data for the same reason as TrafficRow: load_overage_protection_window() snapshots the
+    site's whole window in one unit of work, and plan_costs() reads it minutes later, after other
+    db_retry() units may have rolled back (which expires every live ORM object).  The attribute
+    names match PantheonOverageProtection's.
+    """
+
+    site_id: str
+    month: datetime.date
+    months_remaining: int
+    used_this_month: bool
+
+
 #
 # Global initialization:
 #
@@ -1470,27 +1485,44 @@ def load_traffic_rows(session, site: dict, start_date, end_date) -> list:
     return rows
 
 
-def load_overage_protection(session, site: dict, month: str):
-    """Read a month's overage-protection row for a site, then RELEASE the connection.
+def load_overage_protection_window(session, site: dict, start_date, end_date) -> dict:
+    """Snapshot a site's overage-protection rows for the report window in ONE query.
+
+    Returns {month (a date, day=1) -> OverageProtectionRow}, for plan_costs()' op_lookup to read
+    as a plain dict.  A missing month is simply absent from the dict, so op_lookup's `.get()`
+    returns None exactly where the old per-month Session.get() did.
+
+    One query, not ~91.  plan_costs() asks for the overage state once per candidate plan PER
+    MONTH (~7 non-Basic plans x ~13 months), and a Session.get() that misses is never negatively
+    cached, so it re-SELECTs every time -- and a Basic-plan site, which has no rows at all, missed
+    on every single call.  Each of those was its own db_retry() unit against a remote RDS over the
+    WAN: pool checkout + pre-ping probe + SELECT + COMMIT.  A snapshot is equivalent because
+    nothing writes to pantheon_overage_protection between build_traffic_table_rows()' commit and
+    plan_costs()' reads.
 
     The commit is load_traffic_rows()' commit, for the same reason and with the same rule: it MUST
-    NOT be removed.  A Session.get() that MISSES the identity map emits a real SELECT, which
-    autobegins a transaction nothing else would close -- and misses are the common case here (a
-    Basic-plan site never loads an overage row during the traffic table, months before the plan
-    start or before 2024-01 have none, and a get() that returns None is never cached, so it
-    re-SELECTs for every candidate plan).  The session would then hold that connection, idle in a
-    transaction, through matplotlib, the Jinja render, the php inliner, the SMTP send and the NEXT
-    site's terminus calls -- exactly the reaped-idle-flow bug this change exists to fix.
-
-    Returning the ORM object after the commit is safe because main()'s session sets
-    expire_on_commit=False and plan_costs() reads op.used_this_month immediately.
+    NOT be removed.  Even a read autobegins a transaction, and without the commit the session
+    would hold that connection, idle, through matplotlib, the Jinja render, the php inliner, the
+    SMTP send and the NEXT site's terminus calls -- exactly the reaped-idle-flow bug this change
+    exists to fix.  The rows are materialized as plain data BEFORE the commit, so that holds
+    regardless of expire_on_commit (see load_traffic_rows()).
     """
-    op = session.get(
-        PantheonOverageProtection,
-        {"site_id": site["id"], "month": datetime.date.fromisoformat(month + "-01")},
-    )
+    rows = {
+        r.month: OverageProtectionRow(
+            site_id=r.site_id,
+            month=r.month,
+            months_remaining=r.months_remaining,
+            used_this_month=r.used_this_month,
+        )
+        for r in session.query(PantheonOverageProtection)
+        .filter(
+            PantheonOverageProtection.site_id == site["id"],
+            PantheonOverageProtection.month.between(start_date.replace(day=1), end_date),
+        )
+        .all()
+    }
     session.commit()  # releases the connection -- see the docstring; MUST NOT be removed
-    return op
+    return rows
 
 
 def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:
@@ -1523,9 +1555,14 @@ def db_engine_args(db_config: dict) -> (str, dict):
             f"{db_config['host']}:{db_config['port']}/{db_config['name']}"
         )
         # The database is remote (RDS) and the network path crosses NAT/firewall middleboxes
-        # that reap idle flows.  pool_pre_ping validates a connection at pool checkout and
-        # transparently replaces a reaped one; pool_recycle retires connections before any
-        # plausible middlebox idle timeout.  Deliberately hardcoded rather than configurable:
+        # that reap idle flows.  pool_pre_ping is the LOAD-BEARING setting: it validates the
+        # connection at pool checkout and transparently replaces a reaped one -- it is the only
+        # thing here that actually defends against the reaping this whole change exists to fix.
+        # pool_recycle does NOT: it bounds a connection's total AGE since creation (SQLAlchemy
+        # compares time.time() - starttime at checkout), not its idle time, so a NAT gateway with
+        # a 350s idle timeout can reap a connection nowhere near 1800s old.  It is a cheap
+        # backstop against long-lived-connection problems, nothing more.  Do not weaken or drop
+        # pool_pre_ping on the strength of it.  Deliberately hardcoded rather than configurable:
         # development/2026-07-13-db-connection-resilience/SPEC.md section 2.2.
         return conn_str, {
             "pool_size": 10,
@@ -1605,6 +1642,8 @@ sc.umich_enabled = umich_enabled
 sc.cloudflare_enabled = cloudflare_enabled
 sc.terminus = terminus      # check packages: Pantheon calls (e.g. domain:dns) go through this
 sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
+sc.db_engine_args = db_engine_args  # plugin/umich/portal.py: ONE URL builder, ONE set of pool
+                                    # settings for every database this program connects to
 
 
 def finish_run(
@@ -1920,6 +1959,11 @@ def abort_run(
         # completed end-to-end.  --resume-from is inclusive, so the resumed run redoes this site
         # and rewrites the entry.  See SPEC 3.5.2.
         site_results.pop(site_name, None)
+        # site_savings is appended to just as early, so the same rule applies to it: leaving the
+        # aborting site in would make the epilogue's "Sites with savings" / "Total savings" count
+        # the very site it is telling the operator to redo -- and the resumed run would count it
+        # again.  A list of dicts, not a dict, hence the filter rather than a pop.
+        site_savings[:] = [s for s in site_savings if s.get("site") != site_name]
 
     # escape() every interpolated exception.  A SQLAlchemy DBAPIError's message ends with
     # `[SQL: ...]` and `[parameters: (...)]`; rich's markup parser reads the lowercase-initial
@@ -2010,15 +2054,16 @@ def abort_run(
                 soft_wrap=True,
             )
         else:
-            command = (
-                resume_command(sys.argv, resume_site)
-                if resume_site is not None
-                else shlex.join(sys.argv)  # nothing to skip: re-run as invoked
-            )
+            # resume_site is necessarily set here: an --all run only ever aborts on a site the
+            # loop is iterating, so site_name is in site_names and resume_point() returned None
+            # only if the emailed site was the last one -- which the "nothing remains" branch
+            # above already consumed.  There is deliberately NO shlex.join(sys.argv) fallback: a
+            # command without --resume-from would re-process and, on --for-real, re-mail every
+            # owner who already has their report.
             sc.console.print(
-                f"\n[bold]The sites before {resume_site or site_name} were processed and their "
+                f"\n[bold]The sites before {resume_site} were processed and their "
                 "results written.  Continue this run with:\n\n"
-                f"    {command}\n",
+                f"    {resume_command(sys.argv, resume_site)}\n",
                 soft_wrap=True,  # never wrap a command; see above
             )
     else:
@@ -4127,12 +4172,22 @@ remove PHP {new_php} sometime after September 30, 2026.
             months_until_recommendations = 0 if len(v) > 4 else 5 - len(v)
             if len(v) > 4:
 
+                # One ranged query for the whole window, snapshotted as plain data; plan_costs()
+                # then does ~91 dict lookups instead of ~91 committed round trips to a remote
+                # RDS.  Safe because nothing writes to pantheon_overage_protection between
+                # build_traffic_table_rows()' commit (above) and plan_costs()' reads (below).
+                overage_protection = db_retry(
+                    db_session,
+                    lambda: load_overage_protection_window(
+                        db_session, site, start_date, end_date
+                    ),
+                    what=f"loading overage protection for {site['name']}",
+                    site=site["name"],
+                )
+
                 def op_lookup(month):
-                    return db_retry(
-                        db_session,
-                        lambda: load_overage_protection(db_session, site, month),
-                        what=f"looking up overage protection for {site['name']} {month}",
-                        site=site["name"],
+                    return overage_protection.get(
+                        datetime.date.fromisoformat(month + "-01")
                     )
 
                 cost_same, costs_median, costs_best, median_visitors = plan_costs(

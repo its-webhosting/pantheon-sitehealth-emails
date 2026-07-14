@@ -62,7 +62,14 @@ def portal_module(psh):
 def test_setup_portal_db_overrides_config_and_populates(portal_module, reset_sc, tmp_path, monkeypatch):
     sc = reset_sc
     engine = _build_portal_db(tmp_path / "portal.db")
-    monkeypatch.setattr(portal_module.db, "create_engine", lambda *a, **k: engine)
+    engine_args = {}
+
+    def fake_create_engine(conn_str, **kwargs):
+        engine_args["conn_str"] = conn_str
+        engine_args["kwargs"] = kwargs
+        return engine
+
+    monkeypatch.setattr(portal_module.db, "create_engine", fake_create_engine)
 
     sc.config = {
         "UMich": {"portal": {"db": {"user": "u", "password": "p", "host": "h", "port": 3306, "name": "n"}}},
@@ -91,6 +98,12 @@ def test_setup_portal_db_overrides_config_and_populates(portal_module, reset_sc,
     assert len(fired) == 1
     # The plan_info substitution now resolves against the loaded data.
     assert portal_module.plan_info("Performance Small", "cost") == "1925"
+    # The portal engine is built by the SAME helper as the traffic DB (sc.db_engine_args), so
+    # there is one URL builder and one set of pool settings -- no hand-rolled second builder to
+    # drift, and no unprotected connection (pool_pre_ping).
+    assert engine_args["conn_str"] == "mysql+mysqldb://u:p@h:3306/n"
+    assert engine_args["kwargs"]["pool_pre_ping"] is True
+    assert engine_args["kwargs"]["echo"] is False
 
 
 def test_plan_info_before_setup_defers(portal_module):

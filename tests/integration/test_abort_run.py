@@ -29,7 +29,7 @@ class FakeEngine:
 
 def abort(
     psh, monkeypatch, reset_sc, argv, reason, error, *,
-    emailed=False, site_results=None, site_name="its-wws-test2",
+    emailed=False, site_results=None, site_savings=None, site_name="its-wws-test2",
     expect=SystemExit, width=200,
 ):
     console = recording_console(monkeypatch, reset_sc, width=width)
@@ -46,9 +46,12 @@ def abort(
 
     captured = {}
 
-    def fake_finish_run(_session, _engine, _site_count, _emails_sent, _warnings, results, *_a, **kw):
+    def fake_finish_run(
+        _session, _engine, _site_count, _emails_sent, _warnings, results, savings, *_a, **kw
+    ):
         captured.update(kw)
         captured["site_results"] = results
+        captured["site_savings"] = savings
         captured["ran"] = True
 
     monkeypatch.setattr(psh, "finish_run", fake_finish_run)
@@ -58,7 +61,7 @@ def abort(
             emailed=emailed, site_names=SITE_NAMES,
             site_count=10, emails_sent=4, all_warnings=[],
             site_results=site_results if site_results is not None else {},
-            site_savings=[],
+            site_savings=site_savings if site_savings is not None else [],
         )
     assert (signal.SIGINT, signal.SIG_IGN) in signals_set  # the flush is protected
     captured["raised"] = excinfo.value          # the fatal path re-raises rather than exiting
@@ -94,6 +97,36 @@ def test_abort_drops_the_failed_site_from_the_results(psh, monkeypatch, reset_sc
         },
     )
     assert list(captured["site_results"].keys()) == ["its-wws-test1"]
+
+
+def savings(*sites):
+    return [{"site": s, "savings": 100.0, "current_plan": "P", "recommended_plan": "B"}
+            for s in sites]
+
+
+@pytest.mark.integration
+def test_abort_drops_the_failed_site_from_the_savings(psh, monkeypatch, reset_sc):
+    # site_savings.append() happens well before the send, like site_results -- so without the same
+    # drop, the epilogue's "Sites with savings" / "Total savings" would count the very site the
+    # abort is telling the operator to redo, and the resumed run would count it AGAIN.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    _console, captured, _code = abort(
+        psh, monkeypatch, reset_sc, argv, "database", psh.DatabaseUnavailableError("boom"),
+        site_savings=savings("its-wws-test1", "its-wws-test2"),  # test2 is the site that died
+    )
+    assert [s["site"] for s in captured["site_savings"]] == ["its-wws-test1"]
+
+
+@pytest.mark.integration
+def test_abort_keeps_the_savings_of_a_site_whose_report_was_emailed(psh, monkeypatch, reset_sc):
+    # Same rule as site_results: an emailed site really did complete, so its savings stay counted.
+    argv = ["./pantheon-sitehealth-emails", "--date", "2026-03-31", "--all"]
+    _console, captured, _code = abort(
+        psh, monkeypatch, reset_sc, argv, "interrupted", KeyboardInterrupt(),
+        emailed=True,
+        site_savings=savings("its-wws-test1", "its-wws-test2"),
+    )
+    assert [s["site"] for s in captured["site_savings"]] == ["its-wws-test1", "its-wws-test2"]
 
 
 @pytest.mark.integration

@@ -249,45 +249,112 @@ def test_load_traffic_rows_releases_the_connection_with_default_session(psh):
     assert rows[0].site_plan == "Basic"
 
 
-@pytest.mark.unit
-def test_load_overage_protection_releases_the_connection_on_a_miss(psh):
-    # The mirror of test_load_traffic_rows_releases_the_connection, for the OTHER per-site read.
-    # A Session.get() that MISSES the identity map emits a real SELECT, which autobegins a
-    # transaction; without the commit the session then holds that connection, idle in a
-    # transaction, through matplotlib, the render, the php inliner, the SMTP send and the NEXT
-    # site's terminus calls -- the reaped-idle-flow bug all over again.  Misses are the common
-    # case: a get() that returns None is never cached, so every candidate plan re-SELECTs.
+def op_window_session(psh, rows=()):
+    """A DEFAULT sessionmaker (expire_on_commit=True) seeded with overage-protection rows.
+
+    Default on purpose: if load_overage_protection_window() materialized its plain rows AFTER the
+    commit, the expired ORM objects would lazy-refresh with a fresh SELECT -- reopening a
+    transaction and silently un-releasing the connection.  expire_on_commit=False would paper
+    over exactly that.
+    """
     engine = db.create_engine("sqlite://")
     psh.Base.metadata.create_all(engine)
-    session = db.orm.sessionmaker(bind=engine, expire_on_commit=False)()
+    session = db.orm.sessionmaker(bind=engine)()
+    for month, months_remaining, used in rows:
+        session.add(
+            psh.PantheonOverageProtection(
+                site_id="s1",
+                month=month,
+                months_remaining=months_remaining,
+                used_this_month=used,
+            )
+        )
+    session.commit()
+    return session
 
-    op = psh.load_overage_protection(session, {"id": "s1"}, "2026-03")
 
-    assert op is None                          # nothing in the table: a guaranteed miss
+@pytest.mark.unit
+def test_load_overage_protection_window_empty_releases_the_connection(psh):
+    # The common case: a Basic-plan site has NO overage-protection rows at all
+    # (build_traffic_table_rows() writes none for Basic).  It must cost ONE query, not ~91 misses,
+    # and -- like every other unit -- it must leave no transaction open: the session would
+    # otherwise hold that connection, idle, through matplotlib, the render, the php inliner, the
+    # SMTP send and the NEXT site's terminus calls (the reaped-idle-flow bug).
+    session = op_window_session(psh)
+
+    window = psh.load_overage_protection_window(
+        session, {"id": "s1"}, datetime.date(2025, 4, 1), datetime.date(2026, 3, 31)
+    )
+
+    assert window == {}
     assert session.in_transaction() is False   # connection returned to the pool
 
 
 @pytest.mark.unit
-def test_load_overage_protection_row_is_readable_after_the_commit(psh):
-    # The commit must not cost the caller the row: plan_costs() reads op.used_this_month straight
-    # after the lookup, and main()'s session sets expire_on_commit=False for exactly this reason.
-    engine = db.create_engine("sqlite://")
-    psh.Base.metadata.create_all(engine)
-    session = db.orm.sessionmaker(bind=engine, expire_on_commit=False)()
+def test_load_overage_protection_window_snapshots_plain_rows_in_range(psh):
+    session = op_window_session(
+        psh,
+        [
+            (datetime.date(2025, 3, 1), 4, False),   # BEFORE the window
+            (datetime.date(2025, 4, 1), 3, True),
+            (datetime.date(2026, 3, 1), 2, False),
+            (datetime.date(2026, 4, 1), 1, True),    # AFTER the window
+        ],
+    )
+
+    window = psh.load_overage_protection_window(
+        session, {"id": "s1"}, datetime.date(2025, 4, 1), datetime.date(2026, 3, 31)
+    )
+
+    assert sorted(window) == [datetime.date(2025, 4, 1), datetime.date(2026, 3, 1)]
+    row = window[datetime.date(2025, 4, 1)]
+    # Plain data, not live ORM rows: a db_retry rollback expires ORM objects, and plan_costs()
+    # reads this snapshot minutes later -- an expired row would emit an unretried SELECT.
+    assert isinstance(row, psh.OverageProtectionRow)
+    assert not isinstance(row, psh.PantheonOverageProtection)
+    assert row.used_this_month is True
+    assert row.months_remaining == 3
+    assert window[datetime.date(2026, 3, 1)].used_this_month is False
+    assert session.in_transaction() is False
+
+
+@pytest.mark.unit
+def test_load_overage_protection_window_is_scoped_to_the_site(psh):
+    session = op_window_session(psh, [(datetime.date(2026, 3, 1), 2, True)])
     session.add(
         psh.PantheonOverageProtection(
-            site_id="s1",
+            site_id="other",
             month=datetime.date(2026, 3, 1),
-            months_remaining=2,
-            used_this_month=True,
+            months_remaining=0,
+            used_this_month=False,
         )
     )
     session.commit()
 
-    op = psh.load_overage_protection(session, {"id": "s1"}, "2026-03")
+    window = psh.load_overage_protection_window(
+        session, {"id": "s1"}, datetime.date(2025, 4, 1), datetime.date(2026, 3, 31)
+    )
 
-    assert op.used_this_month is True
-    assert session.in_transaction() is False
+    assert list(window) == [datetime.date(2026, 3, 1)]
+    assert window[datetime.date(2026, 3, 1)].site_id == "s1"
+
+
+@pytest.mark.unit
+def test_op_lookup_over_the_window_matches_the_old_session_get(psh):
+    # The dict-backed op_lookup main() now injects into plan_costs(): a present month yields the
+    # row, a missing month yields None -- exactly what Session.get() returned.
+    window = psh.load_overage_protection_window(
+        op_window_session(psh, [(datetime.date(2026, 3, 1), 2, True)]),
+        {"id": "s1"},
+        datetime.date(2025, 4, 1),
+        datetime.date(2026, 3, 31),
+    )
+
+    def op_lookup(month):
+        return window.get(datetime.date.fromisoformat(month + "-01"))
+
+    assert op_lookup("2026-03").used_this_month is True
+    assert op_lookup("2025-12") is None
 
 
 @pytest.mark.unit

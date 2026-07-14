@@ -15,9 +15,13 @@ def setup_portal_db():
     sc.debug('Getting information from portal database')
     portal_sites = {}
     db_info = sc.config['UMich']['portal']['db']
-    portal_db_engine = db.create_engine(f'mysql+mysqldb://{db_info["user"]}:{db_info["password"]}@'
-                                        f'{db_info["host"]}:{db_info["port"]}/{db_info["name"]}',
-                                        echo=True if sc.options.verbose >= 2 else False)
+    # Same URL builder and same pool settings (pool_pre_ping et al.) as the traffic database: two
+    # hand-rolled builders drift.  The portal DB section has no `type` key -- it is always MySQL --
+    # so supply it here rather than requiring it in the config.
+    conn_str, engine_kwargs = sc.db_engine_args({**db_info, 'type': 'mysql'})
+    portal_db_engine = db.create_engine(conn_str,
+                                        echo=True if sc.options.verbose >= 2 else False,
+                                        **engine_kwargs)
 
     with portal_db_engine.connect() as connection:
         metadata = db.MetaData()
