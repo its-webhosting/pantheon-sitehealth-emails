@@ -1324,6 +1324,8 @@ def db_retry(session, unit, *, what: str, site: str = None):
         try:
             session.rollback()
         except DBAPIError as rollback_error:
+            if not db_retryable(rollback_error):
+                raise  # a real bug surfacing on the rollback: still not ours to rename
             # The rollback hit the wire and died too (the connection was not invalidated, so
             # SQLAlchemy really emitted a ROLLBACK).  Name it rather than let a raw
             # DBAPIError escape past main()'s handler -- SPEC 3.3.3.
@@ -1526,7 +1528,7 @@ def merge_prior_results(path: str, new_results: dict) -> dict:
         # json.JSONDecodeError is a ValueError, so this catches an unparseable file too.
         except (ValueError, OSError) as e:
             sc.console.print(
-                f":warning: [bold yellow]--resume-from: could not read existing {path} "
+                f":warning: [bold yellow]could not read existing {path} "
                 f"({e}); writing only this run's results."
             )
             merged = {}
@@ -1771,6 +1773,28 @@ def rerun_command(argv: list, original_sites: list, remaining_sites: list) -> st
         args.append(arg)
         previous = arg
     return shlex.join(args + list(remaining_sites))
+
+
+def abort_reason(error: BaseException) -> str:
+    """Classify an exception escaping the site loop into an abort reason.
+
+    "database" -> exit 1;  "interrupted" -> exit 130;  "fatal" -> re-raise the original error.
+
+    A DBAPIError is a database abort only when it is one db_retry() would have retried
+    (db_retryable() is the single source of truth for that -- SPEC 2.2); an IntegrityError or
+    other non-retryable DBAPIError is a data bug and belongs on the fatal path, with its
+    traceback.
+    """
+    if isinstance(error, DatabaseUnavailableError) or (
+        isinstance(error, DBAPIError) and db_retryable(error)
+    ):
+        # A database failure raised OUTSIDE a unit of work (a future code path, an expired-row
+        # lazy load) must still land on the named abort path (SPEC 3.3.3).
+        return "database"
+    elif isinstance(error, KeyboardInterrupt):
+        return "interrupted"
+    else:
+        return "fatal"
 
 
 def abort_run(
@@ -4559,18 +4583,7 @@ an additional pro-rated bill or credit in the following month.
         # exits 1, an interrupt exits 130, and everything else is re-raised by abort_run() with its
         # traceback (or its SystemExit code and message) intact.  Nothing is swallowed.
         #
-        # A DBAPIError is a database abort only when it is one db_retry() would have retried; an
-        # IntegrityError is a data bug and belongs on the fatal path, with its traceback.
-        if isinstance(e, DatabaseUnavailableError) or (
-            isinstance(e, DBAPIError) and db_retryable(e)
-        ):
-            # A database failure raised OUTSIDE a unit of work (a future code path, an expired-row
-            # lazy load) must still land on the named abort path (SPEC 3.3.3).
-            reason = "database"
-        elif isinstance(e, KeyboardInterrupt):
-            reason = "interrupted"
-        else:
-            reason = "fatal"
+        reason = abort_reason(e)
         abort_run(
             db_session, db_engine, site_name, reason, e,
             emailed=site_emailed,

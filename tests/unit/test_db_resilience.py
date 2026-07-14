@@ -53,14 +53,15 @@ def test_db_engine_args_unsupported_type_exits(psh):
 class FakeSession:
     """Minimal stand-in: records rollbacks so the retry contract can be asserted."""
 
-    def __init__(self, rollback_raises=False):
+    def __init__(self, rollback_raises=False, rollback_error=None):
         self.rollbacks = 0
         self.rollback_raises = rollback_raises
+        self.rollback_error = rollback_error
 
     def rollback(self):
         self.rollbacks += 1
         if self.rollback_raises:
-            raise _op_error()
+            raise self.rollback_error if self.rollback_error is not None else _op_error()
 
 
 def _op_error():
@@ -120,6 +121,25 @@ def test_db_retry_names_the_error_when_the_rollback_itself_fails(psh, monkeypatc
 
     with pytest.raises(psh.DatabaseUnavailableError):
         psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
+
+
+@pytest.mark.unit
+def test_db_retry_does_not_rename_a_non_retryable_rollback_failure(psh, monkeypatch):
+    # The rollback guard must use db_retryable(), the SAME predicate as everywhere else in this
+    # function -- not treat every DBAPIError from rollback() as a database outage. A genuine bug
+    # (e.g. an IntegrityError) surfacing from rollback() must propagate untouched, not be renamed
+    # to DatabaseUnavailableError and routed to the "exit 1, safe to resume" path.
+    monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    rollback_bug = IntegrityError("ROLLBACK", {}, Exception("duplicate key"))
+    session = FakeSession(rollback_raises=True, rollback_error=rollback_bug)
+
+    def unit():
+        raise _op_error()
+
+    with pytest.raises(IntegrityError) as excinfo:
+        psh.db_retry(session, unit, what="loading traffic rows", site="its-wws-test1")
+    assert excinfo.value is rollback_bug
 
 
 @pytest.mark.unit
