@@ -33,7 +33,8 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROGRAM = REPO_ROOT / "pantheon-sitehealth-emails"
 TESTS_DIR = REPO_ROOT / "tests"
-SHIM_DIR = TESTS_DIR / "shims"
+SHIM_DIR = TESTS_DIR / "shims"          # on PATH: the fake `terminus`
+PYSHIM_DIR = SHIM_DIR / "pyshim"        # on PYTHONPATH: the ONE sitecustomize (DNS + DB shims)
 FIXTURES = TESTS_DIR / "fixtures"
 CONFIG_DIR = FIXTURES / "config"
 TERMINUS_FIXTURES = FIXTURES / "terminus"
@@ -234,7 +235,7 @@ def build_rendered_report(work, *, site=E2E_SITE, site_id=E2E_SITE_ID, fixtures_
     ForbiddenFlagError via run_program if a forbidden flag ever slips in.  `site`/`site_id`/
     `fixtures_dir` select the site to render and which recorded fixtures to replay.
     `extra_env` is forwarded to the render subprocess (the CDN-change golden uses it to put
-    tests/shims/dnsshim on PYTHONPATH, which shims DNS in that subprocess).
+    tests/shims/pyshim on PYTHONPATH, whose sitecustomize shims DNS in that subprocess).
     """
     # --create-tables exits non-zero by design (sys.exit("Tables created.")); just ensure
     # the schema file appears.
@@ -427,8 +428,12 @@ def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300, fixtur
     env["MPLBACKEND"] = "Agg"
     if extra_env:
         # PYTHONPATH is PREPENDED, not replaced: a plain dict.update would silently drop an
-        # inherited PYTHONPATH (or a second shim dir a future caller adds), and the imports it
-        # provided would vanish with no error.  PATH above is prepended for the same reason.
+        # inherited PYTHONPATH and the imports it provided would vanish with no error.  PATH above
+        # is prepended for the same reason.  Note this is NOT how you add a shim: there is exactly
+        # ONE shim dir (PYSHIM_DIR) because site.py imports exactly one `sitecustomize` module --
+        # a second shim dir with a second sitecustomize.py would be silently ignored.  Add a new
+        # shim as a module inside pyshim/, imported by its sitecustomize and gated on its own env
+        # var (see tests/shims/pyshim/sitecustomize.py).
         extra_pythonpath = extra_env.get("PYTHONPATH")
         env.update(extra_env)
         if extra_pythonpath and os.environ.get("PYTHONPATH"):

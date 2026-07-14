@@ -287,22 +287,46 @@ NOTHING` on sqlite via the `sqlite_insert` import, `INSERT IGNORE` on mysql).
 
 **Connection resilience.** The DB is remote (RDS) and the path crosses NAT/firewall middleboxes
 that reap idle flows, so the engine sets `pool_pre_ping=True` / `pool_recycle=1800` (MySQL only;
-sqlite kwargs stay `{}`) and the sessionmaker sets `expire_on_commit=False`. The load-bearing piece
-is `load_traffic_rows()`'s **commit after a read-only SELECT**: it releases the connection before
-the multi-minute per-site gather, without which the session holds an idle in-transaction connection
+sqlite kwargs stay `{}`) and the sessionmaker sets `expire_on_commit=False`. Both the URL and those
+kwargs come from **`db_engine_args(db_config)`** — the one engine builder, also exposed as
+`sc.db_engine_args` and used by `plugin/umich/portal.py`, so every database this program opens gets
+the same pool settings. The load-bearing piece
+is the **commit after a read-only SELECT** in `load_traffic_rows()` and
+`load_overage_protection_window()`: it releases the connection before the multi-minute per-site
+gather, without which the session holds an idle in-transaction connection
 that gets reaped and dies at the next query with MySQL error 2013 — **do not remove it**
-(`test_load_traffic_rows_releases_the_connection` guards it). It returns plain `TrafficRow` data,
-not ORM rows, because a rollback expires live ORM objects and a later read would emit an unretried
-SELECT. DB work runs through `db_retry(session, unit, what=…, site=…)`, which retries **whole
+(`test_load_traffic_rows_releases_the_connection` guards it). Both return plain data
+(`TrafficRow` / `OverageProtectionRow` NamedTuples), not ORM rows, because a rollback expires live
+ORM objects and a later read would emit an unretried
+SELECT. `load_overage_protection_window()` snapshots the whole report window in **one** ranged
+query and hands `plan_costs()` a dict-backed `op_lookup(month)`; the cost model is therefore
+DB-free, where it used to do ~91 uncached per-month `Session.get()`s (each its own committed
+round trip over the WAN, and a Basic-plan site — no rows at all — missed on every one).
+DB work runs through `db_retry(session, unit, what=…, site=…)`, which retries **whole
 idempotent units of work** (`update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`,
-`build_traffic_table_rows`) and NEVER a statement with pending writes — a rollback discards them,
-so a statement-level retry would commit a partial write set. It catches `OperationalError` only
-(every flavor alike — no error-code sniffing). On a second failure it raises
-`DatabaseUnavailableError`; that (and a `KeyboardInterrupt`) is caught once around the site loop,
-where `abort_run()` drops the failed site from `site_results` (it is written mid-gather, so it
-would otherwise ship as a success), flushes the artifacts via `finish_run()`, prints a command
+`build_traffic_table_rows`, `load_overage_protection_window`) and NEVER a statement with pending
+writes — a rollback discards them,
+so a statement-level retry would commit a partial write set. What it retries is decided by
+**`db_retryable(e)`** = `isinstance(e, OperationalError) or e.connection_invalidated`, **not** by an
+exception class list: SQLAlchemy's mysqldb dialect classifies a lost connection by error *code*, so
+a reaped connection can arrive as an `InterfaceError` or a `ProgrammingError(2014)` — siblings of
+`OperationalError` under `DBAPIError`, not subclasses — and what they all share is
+`connection_invalidated`. `OperationalError` is retried on top of that (a deadlock or lock-wait
+timeout does not invalidate the connection but is worth one retry). Anything else (an
+`IntegrityError`, a real `ProgrammingError` bug) propagates untouched and stays loud.
+On a second failure `db_retry()` raises
+`DatabaseUnavailableError`. **`main()` wraps the site loop in a single `except BaseException:`** —
+enumerating classes is what let an SMTP hiccup on site 250 of 300 discard 249 sites' work — and
+`abort_reason(e)` classifies it into exactly three outcomes: `"database"` (a
+`DatabaseUnavailableError`, or any `DBAPIError` `db_retryable()` would have retried, raised outside
+a unit) → exit 1; `"interrupted"` (`KeyboardInterrupt`) → exit 130; `"fatal"` (everything else) →
+`abort_run()` **re-raises the original error after the flush**, so a `SystemExit` keeps its own code
+and message and anything else keeps its traceback. There is no `except SystemExit:` clause and
+nothing is swallowed. On every one of the three, `abort_run()` drops the failed site from
+`site_results` (it is written mid-gather, so it
+would otherwise ship as a success), flushes the artifacts via `finish_run()`, and prints a command
 rebuilt from `sys.argv` (`--resume-from` for `--all`; a re-run command listing the remaining sites
-otherwise, since `--resume-from` requires `--all`), and exits 1 (database) or 130 (Ctrl-C). **A
+otherwise, since `--resume-from` requires `--all`). **A
 Ctrl-C that lands after a site's report was already sent resumes at the NEXT site** and keeps that
 site's results entry — resuming inclusively would mail its owner a duplicate report.
 `finish_run()` also writes the run metadata — `aborted_at`, `reason`, `sites_completed_this_run`,
@@ -317,14 +341,29 @@ artifacts. The two reconnect counters are **healed vs. failed** and both are pri
 (`Database reconnects: N healed, M failed`): `db_retry()` counts a heal only after the retry
 *returns*, and counts a failure when the retry or the pre-retry rollback dies — an attempt-counting
 version reported "1 reconnect" on the run that aborted *because* nothing reconnected, and zero on
-the rollback failure, the most definite connection loss there is. **Every `sc.console.print()` that
-interpolates an exception must `rich.markup.escape()` it**: rich reads `[parameters: (…)]` — the
-tail SQLAlchemy appends to every DBAPIError — as a style tag and *deletes* it, and an unmatched
-`[/…]` raises `MarkupError` inside `abort_run()` after SIGINT is ignored and before the flush.
+the rollback failure, the most definite connection loss there is.
+
+**Two rich gotchas, both shipped as bugs once.** (1) `sc.console` has markup enabled, so **every
+`sc.console.print()` interpolating text the program did not author must
+`rich.markup.escape()` it** — exception text, terminus/WP/Drush stderr, anything from the outside.
+Rich reads any `[lowercase…]` fragment as a style tag and silently *deletes* it: `[parameters: (…)]`
+(the tail SQLAlchemy appends to every `DBAPIError`) and `[warning]`/`[notice]` from command stderr
+vanish from the very message the operator has to debug — and an unmatched `[/…]` raises
+`MarkupError`, which inside `abort_run()` fires after SIGINT is ignored and before the flush,
+losing every artifact that function exists to save. (2) `sc.console` is a bare `Console()`, so on a
+**non-tty** — cron, `nohup`, a redirect, i.e. how every multi-hour `--all` run is actually
+launched — rich falls back to **width 80 and hard-wraps**, inserting a real newline. That silently
+broke the copy-pasteable resume command: bash treats the newline as a command separator, and the
+wrapped first line re-parsed as a complete `--all --for-real` run **without** `--resume-from` —
+pasting it re-mailed every owner who already had their report. Use **`soft_wrap=True` on every
+print that emits a command meant to be copied**. Tests must reproduce the production width, not
+hide the bug: `recording_console(monkeypatch, sc, width=…)` takes a `width` for exactly that (its
+wide default is what made the suite blind to this).
+
 **The e2e goldens cover neither stdout nor the
 artifacts**, so `tests/integration/test_finish_run.py`, `tests/integration/test_abort_run.py`, and
-`tests/e2e/test_abort_e2e.py` (which drives a DB failure through the real `main()` via
-`tests/shims/dbshim`) are the only cover for that code. Note `abort_run()` sets SIGINT to
+`tests/e2e/test_abort_e2e.py` (which drives a DB failure through the real `main()` via the
+`dbshim`) are the only cover for that code. Note `abort_run()` sets SIGINT to
 `SIG_IGN` so a second Ctrl-C cannot truncate the flush — an in-process test that calls it **must**
 `monkeypatch.setattr(psh.signal, "signal", …)`, or the rest of the pytest session silently ignores
 Ctrl-C. In the site loop, a site's notices are appended to `all_warnings` **before** the SMTP
@@ -385,6 +424,12 @@ Non-obvious things the harness relies on:
 - **Two mock seams.** All Pantheon/WP/Drush I/O funnels through `run_terminus()` — monkeypatch it
   for in-process tests, or use the PATH-shim fake `terminus` (`tests/shims/terminus`, record/replay)
   for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
+- **The suite must stay green on a sqlite-only install.** `[mysql]` is an optional extra and the
+  setup line above sanctions dropping it, so a test needing a real MySQL engine
+  (`tests/integration/test_db_credentials.py`, which drives `db_retry()` against a URL that really
+  contains a password) must `pytest.importorskip("MySQLdb")` at module level:
+  `create_engine("mysql+mysqldb://…")` imports the DBAPI eagerly, so without the guard it is a hard
+  ERROR in `--fast`, not a skip.
 - **Safety interlock.** `run_program()` in conftest is the only sanctioned way to run the program
   in a subprocess; it raises `ForbiddenFlagError` if `--all`/`-a`/`--for-real` appear (including
   argparse abbreviations like `--fo` and short bundles like `-av` — it fails closed), and
@@ -427,20 +472,27 @@ Non-obvious things the harness relies on:
   `monkeypatch`) to register their cleanup: `monkeypatch.delitem(..., raising=False)` on a key that
   does not exist yet records no undo entry, so a package created later by `from . import chain`
   would leak into the next test's `sys.modules` — these purge by module-name prefix instead.
-  `tests/shims/dnsshim/sitecustomize.py` is the subprocess counterpart: `run_program()` launches
-  the real program in a subprocess, so an in-process `monkeypatch` of `dns_classify.resolve` cannot
-  reach it. Putting this directory on `PYTHONPATH` makes Python auto-import `sitecustomize` at
-  interpreter startup (before the program imports anything) and replace `dns.resolver.resolve`,
-  reading its zone from the `DNS_SHIM_ZONE` JSON file env var — the 4th e2e golden below is what
-  needs it.
-- **`tests/shims/dbshim`** is `dnsshim`'s counterpart for the database: `sitecustomize.py`, active
-  only when `DB_SHIM_FAIL` is set (otherwise inert even when the directory is on `PYTHONPATH`),
-  patches `sqlalchemy.orm.Session.get` to raise `OperationalError`, simulating MySQL error 2013
-  inside whichever `db_retry()` unit happens to call it first (in practice `update_traffic_rows()`'s
-  `session.merge()`, not `build_traffic_table_rows()` as the name might suggest — `Session._merge()`
-  calls `get()` internally). `tests/e2e/test_abort_e2e.py` is the only test that drives this through
-  the real subprocess `main()`; it is not one of the byte-golden e2e tests below (no snapshot — it
-  asserts exit code, stdout content, and the printed re-run command).
+  `recording_console` also takes a **`width=`** — use it to reproduce production's 80-column
+  non-tty console (see the rich wrap gotcha under Database).
+- **Subprocess shims: ONE `sitecustomize`, in `tests/shims/pyshim/` (`conftest.PYSHIM_DIR`).**
+  `run_program()` launches the real program in a subprocess, so an in-process `monkeypatch` cannot
+  reach it; putting that directory on `PYTHONPATH` makes Python auto-import `sitecustomize` at
+  interpreter startup, before the program imports anything. `site.py` imports **exactly one** module
+  by that name (whichever dir wins on `sys.path`), so the shims are **modules inside** pyshim, each
+  self-activating from its own env var and imported by the single `sitecustomize.py` — `dnsshim.py`
+  (`DNS_SHIM_ZONE`, a JSON zone file; replaces `dns.resolver.resolve`; the 4th e2e golden needs it)
+  and `dbshim.py` (`DB_SHIM_FAIL`; patches `sqlalchemy.orm.Session.get` to raise `OperationalError`,
+  simulating MySQL 2013 inside whichever `db_retry()` unit calls it first — in practice
+  `update_traffic_rows()`'s `session.merge()`, since `Session._merge()` calls `get()` internally,
+  not `build_traffic_table_rows()` as the name suggests). **Add a new shim as another module here,
+  never as a second shim directory**: two `sitecustomize.py` files means one silently never runs —
+  no error, no warning — and an e2e test whose assertions are `not in`-shaped then passes green
+  against a run that did nothing. `tests/integration/test_shim_composability.py` fails if anyone
+  reintroduces that shape (and proves both shims can be active at once). With neither env var set
+  the directory is inert, which matters because `PYTHONPATH` is inherited by the PATH-based fake
+  `terminus` (a Python script too). `tests/e2e/test_abort_e2e.py` is the only test that drives the
+  DB shim through the real subprocess `main()`; it is not one of the byte-golden e2e tests below (no
+  snapshot — it asserts exit code, stdout content, and the printed re-run command).
 - **Offline e2e determinism.** The shim-backed run uses `tests/fixtures/config/minimal.toml`,
   seeded traffic, `--date 2026-03-31` (a mid-year date avoids the U-M contract-year-end path),
   and a `domain:list` fixture reduced to the platform domain (so no live DNS). Golden snapshots
@@ -451,7 +503,7 @@ Non-obvious things the harness relies on:
   `[UMich]` section + generic `[Email]`) that proves the P8 config-driven email headers/msgid and that the
   U-M-guarded doc-URL checks don't appear for a non-U-M run, and the **Pantheon CDN-change**
   golden (`tests/e2e/test_golden_cdn_change.py`, `tests/fixtures/terminus-cdnchange/`, DNS shimmed
-  via `tests/shims/dnsshim`) driving `check/pantheon_cdn_change` through the real `main()`. It has
+  via the `dnsshim` in `tests/shims/pyshim`) driving `check/pantheon_cdn_change` through the real `main()`. It has
   two deliberate scope limits, both asserted in the test rather than left implicit: it covers only
   the public-DNS detection source (`[Cloudflare]` stays disabled, since enabling it would make a
   setup hook call the live Cloudflare API), and it pins the **generic** notice copy

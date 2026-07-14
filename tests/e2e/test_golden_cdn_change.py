@@ -2,7 +2,7 @@
 
 The other three goldens have platform-only domain:list fixtures, so they can only prove this
 check stays SILENT.  This one gives its-wws-test1 a CUSTOM domain that is CNAME'd to the legacy
-Pantheon GCDN, and shims DNS in the subprocess (tests/shims/dnsshim), so the whole path runs:
+Pantheon GCDN, and shims DNS in the subprocess (tests/shims/pyshim), so the whole path runs:
 
     main() -> terminus domain:list -> dns_classify.classify_domains -> stuff_dns_contract
            -> invoke_hooks("site_post_dns") -> check.pantheon_cdn_change
@@ -33,7 +33,7 @@ from conftest import (
 pytestmark = pytest.mark.e2e
 
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "terminus-cdnchange"
-DNS_SHIM = REPO_ROOT / "tests" / "shims" / "dnsshim"
+DNS_SHIM = REPO_ROOT / "tests" / "shims" / "pyshim"   # one shim dir; DNS_SHIM_ZONE activates the DNS shim
 
 CUSTOM = "cdn-change.example.edu"
 TARGET = "live-its-wws-test1.pantheonsite.io"

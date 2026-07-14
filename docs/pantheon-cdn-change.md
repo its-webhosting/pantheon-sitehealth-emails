@@ -178,7 +178,7 @@ depended on, not part of the temporary check itself:
   a check package reaches those core helpers; other checks may come to depend on them.
 - `tests/helpers/` (`dnsfake.py`, `checkload.py`) — the shared fake DNS resolver, recording
   console, and standalone check-package loader are reusable by any future check.
-- `tests/shims/dnsshim` — the subprocess DNS shim, useful for any future e2e test that needs
+- `tests/shims/pyshim/dnsshim.py` — the subprocess DNS shim, useful for any future e2e test that needs
   deterministic DNS answers in a subprocess run.
 - The `plugin/cloudflare/fqdns.py` comment correction (that `origins` are consumed, not just
   `zone_id` reserved for later) — leave it corrected even after this check is gone, since a

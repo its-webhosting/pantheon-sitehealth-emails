@@ -1,9 +1,10 @@
 """Make the traffic DB fail inside a subprocess run, for tests/e2e/test_abort_e2e.py.
 
 Python auto-imports sitecustomize at interpreter startup, before the program imports anything --
-the same trick tests/shims/dnsshim uses to replace dns.resolver.resolve.  Active only when
-DB_SHIM_FAIL is set, so putting this directory on PYTHONPATH is otherwise inert (it is inherited
-by the PATH-based fake `terminus`, which is a Python script too).
+the same trick dnsshim.py uses to replace dns.resolver.resolve, and it is that one sitecustomize
+(see sitecustomize.py) which imports this module.  Active only when DB_SHIM_FAIL is set, so having
+the shim directory on PYTHONPATH is otherwise inert (it is inherited by the PATH-based fake
+`terminus`, which is a Python script too).
 
 Session.get() is the seam: sessionmaker builds a runtime SUBCLASS of Session and does not override
 get(), so patching the base class here reaches the program's session.  Note the first call to fire

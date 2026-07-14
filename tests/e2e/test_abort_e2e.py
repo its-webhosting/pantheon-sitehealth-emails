@@ -3,8 +3,9 @@ failure, runs the epilogue, and prints a command to continue.  `git diff -w` is 
 this is a test.
 
 A subprocess run cannot be reached by an in-process monkeypatch, so -- exactly as the DNS tests do
-with tests/shims/dnsshim -- tests/shims/dbshim goes on PYTHONPATH via run_program(extra_env=...)
-and patches sqlalchemy.orm.Session.get to raise OperationalError.  Single site: the safety
+-- the shim directory tests/shims/pyshim goes on PYTHONPATH via run_program(extra_env=...) and its
+sitecustomize activates dbshim (DB_SHIM_FAIL), which patches sqlalchemy.orm.Session.get to raise
+OperationalError.  Composable with the DNS shim: same directory, separate env var.  Single site: the safety
 interlock bans --all (CLAUDE.md).
 """
 import pytest
@@ -14,7 +15,7 @@ from conftest import (
     E2E_SITE,
     E2E_SMTP_USERNAME,
     MINIMAL_CONFIG,
-    SHIM_DIR,
+    PYSHIM_DIR,
     make_workdir,
     run_program,
     seed_traffic,
@@ -33,7 +34,7 @@ def test_database_failure_aborts_the_run_and_prints_a_rerun_command(tmp_path):
          "--config", str(MINIMAL_CONFIG)],
         cwd=work,
         extra_env={
-            "PYTHONPATH": str(SHIM_DIR / "dbshim"),
+            "PYTHONPATH": str(PYSHIM_DIR),
             "DB_SHIM_FAIL": "1",
         },
     )

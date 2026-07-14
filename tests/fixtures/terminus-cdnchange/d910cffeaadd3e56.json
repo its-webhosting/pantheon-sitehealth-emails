@@ -15,5 +15,5 @@
   "stdout": "{\"live-its-wws-test1.pantheonsite.io\": {\"id\": \"live-its-wws-test1.pantheonsite.io\", \"type\": \"platform\", \"primary\": false, \"deletable\": false, \"status\": \"OK\"}, \"cdn-change.example.edu\": {\"id\": \"cdn-change.example.edu\", \"type\": \"custom\", \"primary\": true, \"deletable\": true, \"status\": \"OK\"}}",
   "stderr": "",
   "recorded": "2026-07-04",
-  "_scrubbed": "one synthetic custom domain ADDED for the CDN-change golden; DNS is shimmed (tests/shims/dnsshim)"
+  "_scrubbed": "one synthetic custom domain ADDED for the CDN-change golden; DNS is shimmed (tests/shims/pyshim)"
 }

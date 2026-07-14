@@ -73,6 +73,12 @@ instead of dying with a traceback or silently discarding completed work. When th
   remaining sites for an explicit-`SITE` run, since `--resume-from` requires `--all`); and
 - exits 1 for a database failure, 130 for Ctrl-C.
 
+**Any other** error that escapes the site loop — an SMTP failure on site 250 of 300, unexpected
+Terminus JSON — gets the same flush and the same continue command, and is then re-raised with its
+traceback (and, for a deliberate bail-out, its own exit code and message) intact. Nothing is
+swallowed: `run.json`'s `reason` records which of the three it was (`"database"`, `"interrupted"`,
+`"fatal"`).
+
 See `CLAUDE.md`'s **Database** section for the mechanism (`db_retry`, `DatabaseUnavailableError`,
 `abort_run()`, `finish_run()`).
 

@@ -3,7 +3,8 @@
 run_program() launches the real program in a subprocess, so an in-process monkeypatch of
 dns_classify.resolve cannot reach it.  Python imports `sitecustomize` at interpreter startup if it
 is importable, so putting this directory on PYTHONPATH replaces dnspython's resolver BEFORE the
-program imports anything -- the same philosophy as the PATH-based fake `terminus` shim.
+program imports anything -- the same philosophy as the PATH-based fake `terminus` shim.  This
+module is imported by that one sitecustomize (see sitecustomize.py for why there is only one).
 
 Zone file (JSON, named by the DNS_SHIM_ZONE env var):
 
