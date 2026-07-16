@@ -31,7 +31,8 @@ head all-addon-updates.csv | perl -a -n -F, -e 'printf("%5d %s\n", $F[3], $F[0])
 grep ,not-behind-cloudflare ${TODAY}-notices.csv | wc -l
 grep ,not-behind-cloudflare ${TODAY}-notices.csv | sort | perl -a -n -F, -e 'printf("%-30s %-65s %s", $F[0], $F[1], join(" ", @F[3..$#F]));'
 # other Cloudflare problems:
-grep cloudflare ${TODAY}-notices.csv | grep -v ,not-behind-cloudflare | wc -l
+grep cloudflare ${TODAY}-notices.csv | grep -v ,not-behind-cloudflare | grep -v ,cloudflare-cache, | wc -l
+#grep cloudflare ${TODAY}-notices.csv | grep -v ,not-behind-cloudflare | wc -l
 
 # drupal 7 sites with pending updates:
 #grep ,drupal, all-sites.csv | cut -f1 -d, | xargs -n1 -I{} grep {} all-addon-updates.csv | sort -r -n -k4 -t, | perl -a -n -F, -e 'printf("%5d %-30s %s\n", $F[3], $F[0], $F[1]);'
@@ -39,4 +40,30 @@ grep cloudflare ${TODAY}-notices.csv | grep -v ,not-behind-cloudflare | wc -l
 # Drupal 7 EOL sites:
 grep drupal7-eol ${TODAY}-notices.csv | sort | perl -a -n -F, -e 'printf("%-30s %-65s\n", $F[0], $F[1]);'
 
+
+# Sites that need DNS changes for Pantheon GCDN (Fastly -> Cloudflare),
+# Replace CNAME records with A and AAAA records
+grep ,pantheon-cdn-change, ${TODAY}-notices.csv | cut -d, -f4- | tr ',' '\n' > /tmp/gcdn-sites.txt
+
+for site in $(cat /tmp/gcdn-sites.txt) ; do
+    #echo === $site
+    line=$(host "${site}" | head -1)
+    #echo $line
+    pantheonsite=" is an alias for .*\.pantheonsite\.io"
+    if [[ $line =~ $pantheonsite ]] ; then
+        echo "${site},dns"
+    else
+        cname=" is an alias for "
+        if [[ $line =~ $cname ]] ; then
+            cloudflare="\.cloudflare\.net"
+            if [[ $line =~ $cloudflare ]] ; then
+                echo "${site},cloudflare"
+            else
+                : || echo "${site},none"
+            fi
+        else
+            echo "${site},cloudflare"
+        fi
+    fi
+done > ~/Desktop/gcdn-action.csv
 
