@@ -36,10 +36,14 @@ The subagent should return:
 **Step 2: Fix and re-dispatch**
 
 If the reviewer returns issues:
-1. For each simple issue with an obvious and low-risk/low-impact solution, fix the in the document on disk (use Edit tool)
-2. For other issues, interview me relentlessly and in detail using the AskUserQuestion tool until we reach a shared understanding on how to fix each issue.  Present multiple options for fixing the issue, ask about technical implementation, expansion opportunities, edge cases, concerns, tradeoffs, and other potential problems/issues/oversights. Don't ask obvious questions, dig into the hard parts I might not have considered.
-3. No issues required interviewing me (all issues were simple and fixed automatically), end the review here.
-4. Otherwise, re-dispatch the reviewer subagent with the updated document (maximum 3 iterations total)
+1. For each simple issue with an obvious and low-risk/low-impact solution, fix it in the document on disk (use Edit tool)
+2. For every other issue — and always when the fix is not obvious, contradicts a previously made decision, or would create new problems for me or for users of the software — interview me with the `/grilling` skill until we reach a shared understanding on how to fix each issue. Present multiple options for fixing the issue, ask about technical implementation, expansion opportunities, edge cases, concerns, tradeoffs, and other potential problems/issues/oversights. Don't ask obvious questions, dig into the hard parts I might not have considered.
+
+These are defects in a *document*, not runtime bugs — do NOT reach for `/diagnosing-bugs` here. It gates on a red-capable command that drives the bug's code path, which cannot exist for a spec defect. Debugging belongs to `prompts/debugging-standards.md`, on a real failure.
+
+If no issues required interviewing me (all issues were simple and fixed automatically), end the review here.
+
+Otherwise, re-dispatch the reviewer subagent with the updated document (maximum 3 iterations total)
 
 **Convergence guard:** If the reviewer returns the same issues on consecutive iterations (the fix didn't resolve them or the reviewer disagrees with the fix), stop the loop and persist those issues as "Reviewer Concerns" in the document(s) rather than looping further.
 

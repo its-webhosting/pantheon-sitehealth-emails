@@ -1,16 +1,28 @@
-# Prompt: add tests for a change
+# Prompt: backfill tests for existing untested code
 
-Reusable prompt for keeping the test suite current. Run this after making a code change,
-or fold it into the change's own prompt, to ensure that any additional tests that were
-not added during development get added after the fact.
+Reusable prompt for **covering code that has no tests** — code written before this project
+adopted test-first development, or otherwise inherited. CodeGraph reports "no covering tests
+found" across much of the core program; this prompt is how that debt gets paid down.
+
+**This is NOT the path for new work.** New work is test-first at the seams the spec declares
+(`mattpocock-skills:tdd`, see `prompts/implementation-standards.md`) — tests that "didn't get
+added during development" are a mandate violation to fix at the source, not to launder through
+this prompt. Writing tests in bulk against code that already exists is
+[horizontal slicing](../prompts/implementation-standards.md): the tests verify what the code
+*does* rather than what it *should* do, and they never had a chance to catch the bug. That is
+an acceptable price for covering untested legacy code, and not for anything else.
+
+Because these tests cannot go red first, be adversarial in the one way that's still available:
+for every assertion, ask whether it would **fail** if the behavior were wrong, and derive the
+expected value from an independent source of truth — the spec, a worked example, a known-good
+literal — never by rerunning the code and pasting what it printed.
 
 ---
 
-I just changed `<describe the change / paste the diff>`.
+I want to backfill tests for `<name the untested function/module/path>`.
 
-Design and implement the appropriate tests for it that did not get added during development,
-following the existing harness in `tests/` (see `tests/README.md` and
-`development/2026-07-04-test-harness/SPEC.md`):
+Design and implement the appropriate tests for it, following the existing harness in `tests/`
+(see `tests/README.md` and `development/2026-07-04-test-harness/SPEC.md`):
 
 1. Pick the right tier(s) by what changed:
    - pure/in-process logic → `tests/unit/` (add a Hypothesis property test if the function is

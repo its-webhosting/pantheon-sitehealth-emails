@@ -25,7 +25,9 @@ explodes, and ensure that what ships, ships at the highest possible standard.
    baseline and make it bulletproof. *Separately*, present each expansion you see as its
    own `AskUserQuestion` so I can cherry-pick. Neutral posture: state the opportunity, its
    effort, and its risk, then let me decide. Accepted expansions join the plan's scope;
-   rejected ones go to an explicit **"NOT in scope"** list.
+   rejected ones go to an explicit **"NOT in scope"** list. Keep the *picker* cheap — one
+   question per expansion. Once I accept one whose shape isn't settled, that's when to go
+   deep with the `/grilling` skill.
 
 ## Prime Directives
 
@@ -55,7 +57,12 @@ explodes, and ensure that what ships, ships at the highest possible standard.
 10. **Optimize for the 6-month future, not just today.** If the plan solves today's problem
     but creates next quarter's nightmare, say so explicitly.
 11. **Terminology stays clear and consistent** — within the new design and across the
-    existing codebase. Fix any terminology problems you find.
+    existing codebase. Fix any terminology problems you find. Use the `/domain-modeling`
+    skill to do it: challenge terms that conflict with the glossary, sharpen fuzzy ones, and
+    write each resolution into `CONTEXT.md` **the moment it crystallizes** — don't batch
+    them. `CONTEXT.md` is a domain glossary and nothing else; implementation detail belongs
+    in `CLAUDE.md` (`docs/agents/domain.md` states the split). The `superpowers` host does
+    not know about this skill — this directive is what invokes it, so don't wait to be asked.
 12. **Scrap it and do this instead.** You have standing permission to table a problematic
     part — or the whole original design — when there's a fundamentally better approach. I'd
     rather hear it now.
@@ -101,6 +108,16 @@ The spec the skill writes must clear this bar:
 - Each rule stated once and cross-referenced elsewhere (DRY).
 - Intent ("why") attached to every rule, requirement, or decision that looks arbitrary.
 - Acceptance criteria = exact commands + expected output, run and pasted, never summarized.
+- **Seams under test are named and agreed — in the spec, before any implementation.** This is
+  load-bearing, not a nicety: implementation is test-first (`mattpocock-skills:tdd`, per
+  `prompts/implementation-standards.md`), that skill forbids a test at an unconfirmed seam,
+  and implementer subagents have fresh context and cannot ask me. **The spec is the only
+  place a seam can be agreed.** For each behavior: name the seam, prefer an existing one
+  (`run_terminus`, `dns_classify.resolve`, `httpseam.fetch`/`sleep`, `egress.probe`, the
+  pure-helper defs), and use the highest one that reaches the behavior. Fewer seams is better.
+  Where a core `main()` change has no seam above the e2e golden, either name the pure helper
+  to extract — that extraction is in scope — or state explicitly why no seam is worth making.
+  Silence is not an option a reviewer should accept.
 - "Tests are load-bearing" NEVER-block included; golden/fixture regeneration requires a
   reviewed diff.
 - Checklists with quoted evidence, never self-graded numeric gates (see *Selecting a

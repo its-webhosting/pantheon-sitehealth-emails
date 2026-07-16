@@ -14,6 +14,10 @@
 *.csv
 *-results.json
 
+# Agent working state: tickets and wayfinding maps are ephemeral.
+# Specs/plans are NOT here — they belong in development/ (see docs/agents/issue-tracker.md)
+/.scratch/
+
 # Claude development archive: keep scrubbed artifacts, never raw exports or logs
 /development/**/*.raw.txt
 /development/**/*.raw.md

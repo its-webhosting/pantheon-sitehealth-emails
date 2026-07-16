@@ -426,6 +426,19 @@ fixtures call `python tests/tools/record.py --drupal` directly. Tiers are pytest
 
 **When you change the program, add/adjust the appropriate tests in the same change**
 
+**This project is test-first**, at seams agreed in the spec before implementation. The loop is
+`mattpocock-skills:tdd` — *not* `superpowers:test-driven-development`, which
+`superpowers:subagent-driven-development` would otherwise default implementer subagents to;
+`prompts/implementation-standards.md` carries the override and must be injected, or the default
+wins silently. Two consequences worth stating here: **refactoring is not part of the red→green
+loop** (it belongs to review), and where a core `main()` change has no seam above the e2e
+golden, **extracting a pure helper is part of the change** — that is where `overage_blocks`,
+`plan_costs`, and `sites_from_resume_point` came from. The exhaustive carve-outs from
+test-first are new goldens/snapshots and recorded fixtures, whose expected values are
+necessarily derived from a run; an *existing* golden going red is a signal and is never
+refreshed to green. Backfilling tests for already-untested code is a different job with a
+different prompt (`prompts/add-tests-for-change.prompt.md`).
+
 Non-obvious things the harness relies on:
 - **The script is imported, not re-parsed.** `tests/conftest.py` loads the extension-less
   `pantheon-sitehealth-emails` via `importlib`/`SourceFileLoader` (fixture `psh`). Argparse was
@@ -566,10 +579,69 @@ work, and cite it by name rather than re-deriving the conventions:
 `new-feature-standards.md` (how features get specced),
 `implementation-standards.md` (the standards layered on `superpowers:subagent-driven-development`;
 the intended invocation is "implement everything per the spec doc(s), adhering to the standards in
-`prompts/implementation-standards.md`"), `adversarial-review.md`, `add-tests-for-change.prompt.md`,
+`prompts/implementation-standards.md`"), `debugging-standards.md` (the standards layered on
+`mattpocock-skills:diagnosing-bugs` — for **runtime** failures; document defects go to
+`adversarial-review.md` instead), `adversarial-review.md`, `add-tests-for-change.prompt.md`,
 `refresh-fixtures.prompt.md`, and `update-claude-md.md`. Note
 `development/2026-07-04-test-harness/` contains **stale copies** of two of these — `prompts/` is
 the source of truth.
+
+`prompts/` holds the *standards* (the bar to hold work to); **`docs/agents/`** holds the *wiring*
+the installed skills read (where issues live, which glossary to read, the triage vocabulary). See
+**Agent skills** below.
+
+## Agent skills
+
+**`superpowers` is the host process; `mattpocock-skills` supplies tools, not a pipeline.**
+The `prompts/` standards overlays are written against `superpowers:brainstorming` and
+`superpowers:subagent-driven-development` — those own the flow. Matt's `grill-with-docs` →
+`to-spec` → `to-tickets` → `implement` is a *competing* pipeline for the same span: don't
+run it as the host, or the overlays end up layered on a process that isn't running.
+Two of its skills conflict outright with rules here — `implement` ends "commit your work to
+the current branch" (**Other / General** says commit only when asked), and `to-spec` writes
+the spec to the issue tracker rather than to `development/` (see **Issue tracker** below).
+
+Matt's skills split by frontmatter into ones I can invoke and ones only you can type:
+
+- **Model-invocable** (a `prompts/` file may cite these as instructions): `/grilling`,
+  `/diagnosing-bugs`, `/tdd`, `/codebase-design`, `/domain-modeling`, `/prototype`,
+  `/research`, `/resolving-merge-conflicts`.
+- **User-typed only** (`disable-model-invocation: true` — a repo file telling me to use one
+  is a **no-op that reads like an instruction**, so never write one): `/grill-with-docs`,
+  `/to-spec`, `/to-tickets`, `/implement`, `/improve-codebase-architecture`, `/triage`,
+  `/wayfinder`, `/ask-matt`.
+
+When to reach for the user-typed ones here:
+
+- **`/improve-codebase-architecture`** — hunting expansion opportunities. Nothing else in
+  this repo does this; it's the main reason Matt's set is installed.
+- **`/grill-with-docs`** — sharpening a big feature before `superpowers:brainstorming`.
+- **`/triage`**, **`/wayfinder`**, **`/to-tickets`** — no current use: there's no issue
+  inflow, and this is a mature codebase rather than a foggy greenfield.
+
+Two skill names are **ambiguous** — say which you mean:
+
+- **`/tdd`** — `mattpocock-skills:tdd` is the one this project uses (see **Testing**);
+  `superpowers:test-driven-development` is a different, stricter skill and is overridden here.
+- **`/code-review`** — both Claude Code and `mattpocock-skills` define it. Or use
+  `prompts/adversarial-review.md`.
+
+### Issue tracker
+
+Specs and plans live under `development/<YYYY-MM-DD-slug>/` per
+`prompts/new-feature-standards.md` — that is canonical and takes precedence.
+`.scratch/<feature-slug>/` holds only ephemeral ticket files, and only if you use Matt's
+tracker skills. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name.
+See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (neither exists yet;
+`/domain-modeling` creates them lazily). See `docs/agents/domain.md`.
 
 ## Development archive (`development/`)
 

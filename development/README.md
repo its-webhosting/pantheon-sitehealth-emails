@@ -53,7 +53,7 @@ Conventions:
 
 1. Create `development/<date-slug>/`; save the design prompt as `01-design.prompt.md`.
    The design run writes `SPEC.md` into that folder. (Per the project's
-   `new-feature-design.prompt-template.md`, the spec is written to the same directory
+   `new-feature-standards.md`, the spec is written to the same directory
    as the initial prompt.)
 2. Hand-edit `SPEC.md`; add any `design-notes/`.
 3. Implement using the spec; save the implementation prompt as `02-implement.prompt.md`.

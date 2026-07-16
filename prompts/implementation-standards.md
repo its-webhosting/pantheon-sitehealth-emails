@@ -35,6 +35,20 @@ subset (same curation principle the skill applies to context).
 is a human decision — surface the finding beside the plan text and ask which governs. Fold
 it into the skill's pre-flight plan scan; don't silently "fix" the plan.
 
+**TDD override.** The skill defaults implementer subagents to
+`superpowers:test-driven-development`. This project uses **`mattpocock-skills:tdd`** instead
+— inject it by name in every implementer brief, because **the host's default wins silently if
+you don't**. The two differ in ways that decide the work here:
+
+- **Test only at pre-agreed seams.** Matt's skill forbids a test at an unconfirmed seam and
+  tells the implementer to confirm seams *with the user* — an implementer subagent has fresh
+  context and cannot. So **the spec declares the seams** (§ *Spec & internal-doc quality bar*
+  in `new-feature-standards.md`) and you copy them into the brief verbatim. A task whose spec
+  names no seam is `NEEDS_CONTEXT`, not a licence to pick one.
+- **Refactoring is not part of the red→green loop.** It belongs to review
+  (`prompts/adversarial-review.md`), not the implementer's cycle. Superpowers' TDD puts it
+  inside the loop; here it doesn't go there.
+
 ## Directives at implementation time
 
 Your Prime Directives (`prompts/new-feature-standards.md`), re-expressed as what the
@@ -83,8 +97,10 @@ implementer does **in code** — inject the ones each task touches:
 
 The bar the task reviewer verifies against. A task is done only when **all** hold:
 
-- Tests for the change added/adjusted in the same commit, at the right tier, and **run with
+- Tests for the change **written first at the spec's declared seam, watched fail for the
+  right reason**, then added/adjusted in the same commit at the right tier, and **run with
   the command and output pasted** — evidence, never "should pass" or a summarized "green."
+  (Carve-outs in § Test discipline are the exhaustive exceptions.)
 - House style matched (§ Fresh-context trap); no unrequested scope, no gold-plating.
 - Directives for the touched paths satisfied (§ Directives) — named errors, shadow paths,
   observability, secrets handled.
@@ -94,6 +110,27 @@ The bar the task reviewer verifies against. A task is done only when **all** hol
 
 ## Test discipline
 
+- **Test-first, at the seams the spec declares.** Write the failing test, **watch it fail for
+  the right reason**, then write the minimal code to pass. A test that passes the moment you
+  write it is testing existing behavior — fix the test, don't move on. One seam, one test,
+  one minimal implementation per cycle (vertical slices, not all-tests-then-all-code).
+- **No seam above the golden? Make one — or say why not, in the spec.** If a core `main()`
+  change has no honest seam, extracting a pure module-level helper is **part of the change**;
+  that is how `overage_blocks`, `plan_costs`, `sites_from_resume_point` and the rest came to
+  exist, behavior-preserving with the goldens byte-identical. The escape hatch is explicit and
+  lives in the spec ("no seam is worth making here, because…") — never a silent skip. If you
+  discover mid-task that the seam the spec named doesn't hold, that is
+  `DONE_WITH_CONCERNS`/`BLOCKED`, not an improvised seam.
+- **Carve-outs from test-first — exhaustive, not illustrative.** These are the only places
+  red→green is structurally impossible, because the expected value is derived from the code
+  that just ran:
+  1. **A new golden or syrupy snapshot** (`--update-goldens`) — written after, with the
+     initial content reviewed byte-by-byte as if it were the assertion, because it is.
+  2. **Recorded fixtures** (`--record`, `tests/tools/record.py`) — captured from live
+     Pantheon; they are inputs, not tests.
+
+  Nothing else is carved out. And the carve-out is *creation only*: **an existing golden going
+  red is a signal**, never refreshed to green (see the load-bearing rule below).
 - **Tests are load-bearing.** Never weaken an assertion, add a `sleep`/retry, or loosen a
   matcher to turn a test green. A failing test is a signal to fix the code, not the test.
 - **Right tier, `./run-tests --fast` as the inner loop.** Match the change to its tier
@@ -110,9 +147,10 @@ The bar the task reviewer verifies against. A task is done only when **all** hol
 - **No silent deviation.** If the plan is wrong or underspecified, the implementer surfaces
   it via the skill's `DONE_WITH_CONCERNS`/`BLOCKED`/`NEEDS_CONTEXT` status — it never
   quietly changes the plan's intent or invents scope.
-- **Root cause, not symptom.** On a failure or surprising behavior, debug systematically
-  (`superpowers:systematic-debugging`) to the actual cause. Never mask it with a catch-all,
-  a retry-until-green, or a broadened exception.
+- **Root cause, not symptom.** On a failure or surprising behavior, debug systematically to
+  the actual cause — `/diagnosing-bugs`, under the standards in
+  `prompts/debugging-standards.md`, which maps its feedback-loop gate onto this repo's real
+  loops. Never mask a failure with a catch-all, a retry-until-green, or a broadened exception.
 - **Right-sized diff.** The smallest change that cleanly expresses the task — but don't
   compress a necessary rewrite into a minimal patch. If the foundation the task sits on is
   broken, raise it (Prime Directive #12) rather than building on it.

@@ -30,6 +30,7 @@
     "feature-dev@claude-plugins-official": true,
     "cloudflare@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
-    "security-guidance@claude-plugins-official": true
+    "security-guidance@claude-plugins-official": true,
+    "mattpocock-skills@mattpocock": true
   }
 }
