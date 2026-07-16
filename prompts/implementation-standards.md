@@ -35,11 +35,6 @@ subset (same curation principle the skill applies to context).
 is a human decision — surface the finding beside the plan text and ask which governs. Fold
 it into the skill's pre-flight plan scan; don't silently "fix" the plan.
 
-**TDD override.** The skill defaults subagents to `test-driven-development`. This project
-does **not** — `CLAUDE.md` states tests *follow* the change. Tell each implementer so
-explicitly. Test-first ordering is optional here; what is non-negotiable is that the change
-ships **with** its tests in the same commit (§ DoD).
-
 ## Directives at implementation time
 
 Your Prime Directives (`prompts/new-feature-standards.md`), re-expressed as what the

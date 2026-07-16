@@ -421,9 +421,10 @@ pytest): `./run-tests --fast` is the offline inner loop; `./run-tests` adds the 
 `--llm` gives terse machine-parseable output; `--coverage`, `--update-goldens`, and
 `--record` do what they say. Any other argument is passed straight through to pytest.
 `--record` short-circuits to `tests/tools/record.py` and forwards **no** arguments — for Drupal
-fixtures call `python tests/tools/record.py --drupal` directly. Tiers are pytest marks: `unit`, `integration`, `e2e`, `live`,
-`render`, `email`, `slow`. **When you change the program, add/adjust the appropriate tests in
-the same change** (this project does not do TDD — tests follow the change).
+fixtures call `python tests/tools/record.py --drupal` directly. Tiers are pytest marks: `unit`,
+`integration`, `e2e`, `live`, `render`, `email`, `slow`.
+
+**When you change the program, add/adjust the appropriate tests in the same change**
 
 Non-obvious things the harness relies on:
 - **The script is imported, not re-parsed.** `tests/conftest.py` loads the extension-less

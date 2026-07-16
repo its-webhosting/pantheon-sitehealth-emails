@@ -1,14 +1,16 @@
 # Prompt: add tests for a change
 
-Reusable prompt for keeping the suite current (this project adds tests *with* each change, not
-TDD-first). Run this after making a code change, or fold it into the change's own prompt.
+Reusable prompt for keeping the test suite current. Run this after making a code change,
+or fold it into the change's own prompt, to ensure that any additional tests that were
+not added during development get added after the fact.
 
 ---
 
 I just changed `<describe the change / paste the diff>`.
 
-Design and implement the appropriate tests for it, following the existing harness in `tests/`
-(see `tests/README.md` and `development/2026-07-04-test-harness/SPEC.md`):
+Design and implement the appropriate tests for it that did not get added during development,
+following the existing harness in `tests/` (see `tests/README.md` and
+`development/2026-07-04-test-harness/SPEC.md`):
 
 1. Pick the right tier(s) by what changed:
    - pure/in-process logic → `tests/unit/` (add a Hypothesis property test if the function is

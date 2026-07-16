@@ -123,9 +123,9 @@ Read `CLAUDE.md` for the conventions a design must respect here:
 - Self-registering `plugin/` (data sources/integrations) and `check/` (report sections)
   packages, wired through the ordered `sc.PHASES` seams and their per-phase data contract.
   New integrations go in a package, not the core.
-- **Tests follow the change** (not TDD): add/adjust the right tier under `tests/` in the
-  same change; run with `./run-tests` (`--fast` for the offline loop). Respect the safety
-  interlock — no `--all`/`--for-real`/live `--create-tables` in tests.
+- **Tests**: add/adjust the right tier under `tests/`; run with `./run-tests`
+  (`--fast` for the offline loop). Respect the safety interlock — no
+  `--all`/`--for-real`/live `--create-tables` in tests.
 - **Prefer the Pantheon API over `terminus`** for new code unless `terminus` is clearly
   better (missing endpoints, materially simpler/cleaner, better results).
 - Keep institution-specific logic behind config flags / the `umich` plugin+check packages
