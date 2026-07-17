@@ -314,3 +314,50 @@ LLM_SUMMARY passed=727 failed=0 error=0 skipped=1 xfailed=0 xpassed=0
 warnings, 0 informations` (`uvx pyright`, reading `[tool.pyright]`). Whole-tree baseline
 for the ledger is Task 5's line item.
 
+
+#### Task 3 addendum (review Minor 1): pyright gate red on its guarding condition
+
+```
+$ printf 'x: int = "s"\n' >> psh/cli.py && ./run-tests --fast --llm   (excerpt)
+  /workspace/psh/cli.py:10:10 - error: Type "Literal['s']" is not assignable to declared type "int"
+1 error, 0 warnings, 0 informations
+Type gate FAILED (pyright, campaign ratchet) -- fix the type findings above.
+$ git checkout -- psh/cli.py   # reverted; git status clean
+```
+
+### Task 5 (pyright whole-tree baseline; CAMPAIGN.md amendments; ledger; final gate)
+
+**Whole-tree pyright baseline (informational, measured OUTSIDE the scoped `[tool.pyright]`).**
+The gate config scopes pyright to `psh/` minus `_legacy.py`; the baseline measures the entire
+first-party tree instead. pyright roots a project at the config file's directory and ignores
+`include` entries outside that root, and a config's `exclude` (the gate's `psh/_legacy.py`) still
+applies even to paths passed on the command line — so a scratchpad-rooted config cannot reach
+`/workspace`, and CLI path args cannot re-include `_legacy.py`. The reproducible form is therefore a
+repo-root config (written, measured, removed), which overrides `[tool.pyright]` entirely:
+
+```
+$ cd /workspace && printf '{"include":["psh","script_context.py","dns_classify.py","check","plugin","tests"],"typeCheckingMode":"standard"}\n' > pyright-wholetree.json && pyright --project pyright-wholetree.json 2>/dev/null | tail -1; rm -f pyright-wholetree.json
+220 errors, 0 warnings, 0 informations
+```
+
+118 files analyzed. By area: `tests/` 139, `psh/_legacy.py` 36, `check/` 21, `plugin/` 18,
+`script_context.py` 5, `dns_classify.py` 1 (`check/` + `plugin/` = 39, which is where README's old
+unverified "39" figure came from). Deterministic across runs. pyright 1.1.411.
+
+**Final gate — full `./run-tests --llm` (live tier ran; goldens byte-identical):**
+
+```
+$ ./run-tests --llm 2>&1 | tail -8
+LLM_SUMMARY passed=729 failed=0 error=0 skipped=1 xfailed=0 xpassed=0
+--------------------------- snapshot report summary ----------------------------
+25 snapshots passed.
+729 passed, 1 skipped in 28.72s
+Linting (ruff, narrow PD set) ...
+Linting (ruff-broad.toml, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+The 2 tests deselected in the fast tier (live Pantheon) ran and passed here (727 + 2 = 729), so
+the live tier was available this session — no §16 fallback needed. All three gates green (narrow
+ruff, broad ruff via `ruff-broad.toml`, pyright standard), 25 snapshots (the four e2e goldens
+included) byte-identical.

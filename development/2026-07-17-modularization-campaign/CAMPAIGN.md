@@ -329,7 +329,7 @@ Wave 4: I14 closing sweep
 
 | Inc | Scope (blocks / functions) | Delivers |
 |---|---|---|
-| **I0** | — (no logic moves) | `psh/` skeleton + pyproject console-script + thin shim; conftest `import psh` rework (same collected-test count gate); ratchet config (§13) with rule sets pinned; pyright baseline measured; `LEDGER.md` started; README TODO edits (§15 dispositions); CLAUDE.md pointer to campaign |
+| **I0** | — (no logic moves) | `psh/` skeleton + thin shim (console-script dropped — see LEDGER I0 amendment); conftest `import psh` rework (same collected-test count gate); ratchet config (§13) with rule sets pinned; pyright baseline measured; `LEDGER.md` started; README TODO edits (§15 dispositions); CLAUDE.md pointer to campaign |
 | **I1** | B36, B40, B41, B47 (URLs), B48, B50/B51 (codes), dead code | §10 fixes, each test-first |
 | **I2** | 302–597 wrappers | `psh/gateway.py`, `GatewayResult`, sc re-exports + façade test; no-subprocess-outside-gateway house rule |
 | **I3** | 792–934, 1209–1253, 1608–1648 (`umich_enabled`/`cloudflare_enabled`) | `psh/configuration.py`; `Notice` class + code-uniqueness registry test |
@@ -371,13 +371,14 @@ is not in the ledger or README, it does not exist (PD#9).
 **Session flow per increment:** read the §7 documents → write the increment SPEC.md in
 `development/<date>-mod-I<N>-<slug>/` citing CAMPAIGN.md sections by number →
 `superpowers:writing-plans` → subagent-driven implementation → `/code-review` → full
-`./run-tests` → one commit (code + dev folder) → `/archive-session` → ledger entry.
+`./run-tests` → per-task commits, each green; the increment's final commit includes the dev
+folder → `/archive-session` → ledger entry.
 
 ## 13. Lint/type ratchet
 
 Mechanism (pinned here; exact rule lists pinned by I0's spec): `pyproject.toml` gets the
-broad ruff `extend-select` with `per-file-ignores` grandfathering exactly the remnant
-(`pantheon-sitehealth-emails.py`) and not-yet-moved files; each increment deletes its
+broad ruff `extend-select` with a `ruff-broad.toml exclude` grandfathering exactly the remnant
+(`psh/_legacy.py`) and not-yet-moved files; each increment deletes its
 files from the grandfather list. pyright runs in `./run-tests` from I0 with
 `executionEnvironments`: strict-leaning for `psh/` + moved checks, basic/off for the
 remnant. The four existing narrow rules (`E722`, `BLE001`, `S105`, `S106`) remain global
