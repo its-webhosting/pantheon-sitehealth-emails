@@ -8,7 +8,9 @@
   },
   "enabledMcpjsonServers": [
     "codegraph",
-    "chrome-devtools"
+    "chrome-devtools",
+    "cloudflare-api",
+    "cloudflare-docs"
   ],
   "hooks": {
     "UserPromptSubmit": [
