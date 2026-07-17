@@ -257,14 +257,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
-* add SendGrid API support as an alternative to SMTP
-* finish implementing better secrets handling
-    * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
-    * SSH and key (ssh-agent for now, something else later?)
-    * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
-    * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
-    * [ok] AWS credentials (set in environment for now)
 * rework everything from ~3,700 line script into a combination of checks (in the `checks` directory), plugins (where appropriate), and other Python files/packages
   * refactor the program to take the most advatage of the program's check framework,plugin framework, and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality under `./checks` and `./plugins` wherever it is appropriate. Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
   * possibly (check with Claude): expand the hooks/phases (possibly adding producer/consumer dependenencies for DAG ordering)
@@ -273,6 +265,14 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.
 * Add pyright to `./run-tests`. Deferred: `pyright` over `check/` + `plugin/` alone reports 39 errors, and they are pyright disagreeing with three *documented* architectural choices — the `-> (str, str, bool)` house style ("Tuple expression not allowed in type expression"), the runtime-exposed `sc.*` callables ("`umich_enabled` is not a known attribute of module `script_context`"), and `sc.options` being a dict. Clearing them means annotating `script_context.py` or blanket-ignoring, on soon-to-move code. Note the **LSP half already works and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens, and the committed `pantheon-sitehealth-emails.py` symlink is what exposes the extension-less main script to it (as it does for ruff and CodeGraph).
 * update dependencies
+* * git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
+* add SendGrid API support as an alternative to SMTP
+* finish implementing better secrets handling
+    * Terminus machine token (filesystem for now, AWS Secrets Manager later?)
+    * SSH and key (ssh-agent for now, something else later?)
+    * UMich Kerberos password --> replace with SendGrid API key in AWS Secrets Manager
+    * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
+    * [ok] AWS credentials (set in environment for now)
 * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
 * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
 * switch to Pantheon API where possible (make sure `Connection: keep-alive` request header is sent)
