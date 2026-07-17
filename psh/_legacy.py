@@ -2105,6 +2105,86 @@ def abort_run(
     sys.exit(1 if reason == "database" else 130)
 
 
+def build_smell_notices(site_name, wp_smell, drush_smell, composer_smell):
+    """Return the list of smell notice dicts (possibly empty) for one site."""
+    notices = []
+    if wp_smell != "":
+        notices.append(
+            {
+                "type": "info",
+                "icon": "&#x1F50E;",  # magnifying glass
+                "csv": f"{site_name},wp-smell,{json.dumps(wp_smell).replace(',', '\\,')}",
+                "short": "PHP code problems",
+                "message": f"""
+<p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site_name}</strong>.
+Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+<pre>{html.escape(wp_smell)}</pre>
+""",
+                "text": f"""
+The "wp" (WP CLI) command is reporting PHP code problems with
+{site_name}. Even if this is not breaking anything at
+the moment, it should be fixed to avoid possible future problems:
+
+----- START WP CLI REPORTED PROBLEMS -----
+{wp_smell}
+----- END OF WP CLI REPORTED PROBLEMS -----
+
+    """,
+            }
+        )
+
+    if drush_smell != "":
+        notices.append(
+            {
+                "type": "info",
+                "icon": "&#x1F50E;",  # magnifying glass
+                "csv": f"{site_name},drush-smell,{json.dumps(drush_smell).replace(',', '\\,')}",
+                "short": "PHP code problems",
+                "message": f"""
+<p>The <code>drush</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
+if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+<pre>{html.escape(drush_smell)}</pre>
+""",
+                "text": f"""
+The "drush" command is reporting PHP code problems with
+{site_name}. Even if this is not breaking anything
+at the moment, it should be fixed to avoid possible future problems:
+
+----- START DRUSH REPORTED PROBLEMS -----
+{drush_smell}
+----- END OF DRUSH REPORTED PROBLEMS -----
+
+""",
+            }
+        )
+
+    if composer_smell != "":
+        notices.append(
+            {
+                "type": "info",
+                "icon": "&#x1F50E;",  # magnifying glass
+                "csv": f"{site_name},composer-smell,{json.dumps(composer_smell).replace(',', '\\,')}",
+                "short": "PHP code problems",
+                "message": f"""
+        <p>The <code>composer</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
+        if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+        <pre>{html.escape(composer_smell)}</pre>
+        """,
+                "text": f"""
+        The "composer" command is reporting PHP code problems with
+        {site_name}. Even if this is not breaking anything
+        at the moment, it should be fixed to avoid possible future problems:
+
+        ----- START COMPOSER REPORTED PROBLEMS -----
+        {composer_smell}
+        ----- END OF COMPOSER REPORTED PROBLEMS -----
+
+        """,
+            }
+        )
+    return notices
+
+
 def main() -> None:
 
     sc.debug(f"Loading configuration from {sc.options.config}")
@@ -4237,80 +4317,9 @@ be moved to a lower plan between June 16 - 30 each year.
                     year=estimate_start_date.year + 1
                 ) - datetime.timedelta(days=1)
 
-            if wp_smell != "":
-                site_context.add_notice(
-                    {
-                        "type": "info",
-                        "icon": "&#x1F50E;",  # magnifying glass
-                        "csv": f"{site['name']},wp-smell,{json.dumps(wp_smell).replace(',', '\\,')}",
-                        "short": "PHP code problems",
-                        "message": f"""
-<p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site["name"]}</strong>.
-Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(wp_smell)}</pre>
-""",
-                        "text": f"""
-The "wp" (WP CLI) command is reporting PHP code problems with
-{site["name"]}. Even if this is not breaking anything at
-the moment, it should be fixed to avoid possible future problems:
-
------ START WP CLI REPORTED PROBLEMS -----
-{wp_smell}
------ END OF WP CLI REPORTED PROBLEMS -----
-
-    """,
-                    }
-                )
-
-            if drush_smell != "":
-                site_context.add_notice(
-                    {
-                        "type": "info",
-                        "icon": "&#x1F50E;",  # magnifying glass
-                        "csv": f"{site['name']},drush-smell,{json.dumps(drush_smell).replace(',', '\\,')}",
-                        "short": "PHP code problems",
-                        "message": f"""
-<p>The <code>drush</code> command is reporting PHP code problems with <strong>{site["name"]}</strong>. Even
-if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(drush_smell)}</pre>
-""",
-                        "text": f"""
-The "drush" command is reporting PHP code problems with
-{site["name"]}. Even if this is not breaking anything
-at the moment, it should be fixed to avoid possible future problems:
-
------ START DRUSH REPORTED PROBLEMS -----
-{drush_smell}
------ END OF DRUSH REPORTED PROBLEMS -----
-
-""",
-                    }
-                )
-
-                if composer_smell != "":
-                    site_context.add_notice(
-                        {
-                            "type": "info",
-                            "icon": "&#x1F50E;",  # magnifying glass
-                            "csv": f"{site['name']},composer-smell,{json.dumps(composer_smell).replace(',', '\\,')}",
-                            "short": "PHP code problems",
-                            "message": f"""
-        <p>The <code>composer</code> command is reporting PHP code problems with <strong>{site["name"]}</strong>. Even
-        if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-        <pre>{html.escape(drush_smell)}</pre>
-        """,
-                            "text": f"""
-        The "composer" command is reporting PHP code problems with
-        {site["name"]}. Even if this is not breaking anything
-        at the moment, it should be fixed to avoid possible future problems:
-
-        ----- START COMPOSER REPORTED PROBLEMS -----
-        {composer_smell}
-        ----- END OF COMPOSER REPORTED PROBLEMS -----
-
-        """,
-                        }
-                    )
+            site_context.add_notices(
+                build_smell_notices(site["name"], wp_smell, drush_smell, composer_smell)
+            )
 
             sc.debug("===== Notices:\n", site_context["notices"])
             sc.debug("===== Sections:\n", site_context["sections"])
