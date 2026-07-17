@@ -257,10 +257,16 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
+* **Modularization campaign in progress** — see
+  [`development/2026-07-17-modularization-campaign/CAMPAIGN.md`](development/2026-07-17-modularization-campaign/CAMPAIGN.md)
+  (frozen architecture) and its `LEDGER.md` (cross-increment state). Items tagged **(campaign)**
+  below are being absorbed by it as it runs; items tagged **(post-campaign)** wait until it
+  finishes, because each one moves the rendered-email goldens the campaign holds byte-identical.
+
 * ~~Add ruff for linting~~ — **done, narrowly** (2026-07-16). `[tool.ruff.lint]` in `pyproject.toml` selects only `E722`, `BLE001`, `S105`, `S106` — each one mechanizes a directive that already existed in prose (`prompts/directives.md` PD#2, PD#6), so nothing there is new policy. It runs in `./run-tests` (a gate) and in `.claude/hooks/ruff-check.sh` (advisory, at edit time). Both read `pyproject.toml`; neither passes `--select`. Two follow-ups, deliberately deferred:
-  * **Broaden the rule set** to roughly `E,F,W,I,UP,B`, plus formatting. Deferred until *after* the modularization campaign: `ruff check .` on the default set reports ~55 findings today (F541/E741/F841/…), which is a triage-and-fix effort of its own — and it lands on the very file the campaign is about to restructure. Do it when the diff surface is smaller.
+  * **Broaden the rule set** **(campaign)** — now being executed by the modularization campaign's lint/type ratchet rather than deferred. `ruff check .` on the default set reports **45 findings** (measured 2026-07-17: 26 F541, 8 E741, 4 E713, 3 F841, 2 F401, 1 E402, 1 E712); the campaign goes further, gating every un-grandfathered file under `ruff-broad.toml` (`select = ALL` minus a shrinking exclude list) plus `[tool.pyright]`, per CAMPAIGN.md §13. Each increment deletes its files from the grandfather list and cleans them as they move, so the finding surface shrinks with the remnant.
   * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.
-* Add pyright to `./run-tests`. Deferred: `pyright` over `check/` + `plugin/` alone reports 39 errors, and they are pyright disagreeing with three *documented* architectural choices — the `-> (str, str, bool)` house style ("Tuple expression not allowed in type expression"), the runtime-exposed `sc.*` callables ("`umich_enabled` is not a known attribute of module `script_context`"), and `sc.options` being a dict. Clearing them means annotating `script_context.py` or blanket-ignoring, on soon-to-move code. Note the **LSP half already works and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens, and the committed `pantheon-sitehealth-emails.py` symlink is what exposes the extension-less main script to it (as it does for ruff and CodeGraph).
+* ~~Add pyright to `./run-tests`~~ **(campaign)** — **done**: `./run-tests` now runs pyright as a gate (standard mode, scope `psh/` minus `_legacy.py`, per `[tool.pyright]`; CAMPAIGN.md §13). The old "39 errors over `check/` + `plugin/`" figure was an unverified planning claim and is **superseded** — the whole-tree pyright baseline is measured in campaign increment I0 and recorded in `LEDGER.md`, not here. The disagreements that figure described (the `-> (str, str, bool)` house style, the runtime-exposed `sc.*` callables, `sc.options` as a dict) are cleaned per-module as the campaign moves code, not annotated in place on the remnant. The **LSP half already worked and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens; the program body now lives in `psh/_legacy.py`, a normal `.py` file that pyright/ruff/CodeGraph index natively, and the committed `pantheon-sitehealth-emails.py` symlink now only exposes the thin extension-less shim.
 * update dependencies
 * * git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
 * add SendGrid API support as an alternative to SMTP
@@ -271,14 +277,14 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
     * Cloudflare credentials (special read-only token from AWS Secrets Manager?)
     * [ok] AWS credentials (set in environment for now)
 * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
-* Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
+* Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings) **(post-campaign — needs a deliberate golden refresh)**
 * switch to Pantheon API where possible (make sure `Connection: keep-alive` request header is sent)
 * parallelize where safe and possible, both within a single site (careful about data dependencies!) as well as handling a predefinied number of multiple sites in parallel (when run with `--all` or multiple sites explicitly specified)
 * add everything to its-webhosting/terraform-infra repo that should be there
 
 * Check Live environment (not Dev) for the version of PHP, Drupal/WordPress, and all the plugins/modules/themes and if everything is up to date there then skip asking Pantheon about updates pending in the Dev environment.  This way, site owners that are not using the Pantheon WebOps workflow won't be getting wrong information.
 
-* Report on environment lock (no notice, just a report section)
+* Report on environment lock (no notice, just a report section) **(post-campaign — becomes a ~50-line check/ package)**
 
 * Send daily traffic alerts
   * A comparison of the site's month-to-date visits count compared to a prorated version of that site's monthly limit. If they are at or below zero at any point in the month, flag for extra visibility.
@@ -296,7 +302,7 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 * Add a Cloudflare score to SiteLens: DNS, cache headers for pages/assets/api, check internals (SSL Full/Strict, WAF not disabled, ...)
 
-* Attach data as CSV
+* Attach data as CSV **(post-campaign — needs a deliberate golden refresh)**
 
 * See if we can get a better recommendation by using AI -- either a customized LLM, or a specifically trained DNN
 

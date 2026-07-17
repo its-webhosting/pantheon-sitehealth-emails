@@ -12,8 +12,11 @@ Web Hosting Services and is written to be reusable by other institutions via a c
 
 ## Commands
 
-The whole tool is one executable script, `./pantheon-sitehealth-emails` (run it directly;
-it has a `#!/usr/bin/env python` shebang and expects the venv active). There is no build
+The whole tool is invoked through one executable, `./pantheon-sitehealth-emails` (run it
+directly; it has a `#!/usr/bin/env python` shebang and expects the venv active). It is now a
+thin shim that calls `psh.cli.main()`; the program body lives in the `psh` package
+(`psh/_legacy.py` until the modularization campaign finishes carving it into `psh/` modules —
+see **Modularization campaign** under Architecture). Invocation is unchanged. There is no build
 step; for the test suite see **Testing** below.
 
 ```bash
@@ -67,6 +70,21 @@ See `docs/env-and-smtp-configuration.md` and `docs/email-configuration.md`.
 README warning: Terminus does not work with PHP 8.4 — use PHP 8.3 or earlier.
 
 ## Architecture
+
+### Modularization campaign (in progress)
+
+The several-thousand-line main script is being modularized into a `psh/` core package,
+self-registering `check/`/`plugin/` packages, and a ~250–400-line `main()` orchestrator, across
+15 increments (I0–I14), while the four e2e goldens stay byte-identical. Until it completes, the
+program body lives in `psh/_legacy.py` and the sections below describe the **pre-campaign** layout
+(this file is rewritten wholesale at I14, not incrementally). Anyone starting an increment session
+reads, in full, that increment's governing documents in
+`development/2026-07-17-modularization-campaign/`: **`CAMPAIGN.md`** (the frozen architecture,
+decisions, and invariants — increment specs cite it by section number and re-derive nothing),
+**`LEDGER.md`** (append-only cross-increment record — how each increment learns what the last one
+actually did), **`BLOCKMAP.md`** (the B1–B60 functional map of `main()` that all scope
+assignments reference), plus this `CLAUDE.md`. Architecture changes are amendments: edit
+`CAMPAIGN.md` *and* append a `LEDGER.md` entry — never a silent divergence.
 
 ### Single-module core + `script_context` shared state
 
@@ -385,18 +403,22 @@ tool stays reusable by other institutions.
 ## Conventions & gotchas
 
 - **`pantheon-sitehealth-emails.py` is a committed symlink to `pantheon-sitehealth-emails`. It is
-  NOT a second copy and NOT the file to edit — edit `pantheon-sitehealth-emails`.** It exists
-  because **three** tools key off the file extension and were therefore blind to the
-  extension-less main program: **CodeGraph** (picks a parser by `path.extname()`), **`pyright-lsp`**
-  (binds `.py`/`.pyi`), and **ruff**. One symlink fixes all three; deleting it silently re-blinds
-  all three. What that blindness looked like: before the symlink, the CodeGraph index held 117
-  files and **zero symbols from the ~4,600-line core program**, so every `codegraph_explore`
-  answered from `check/`/`plugin/`/`tests/` while blind to the file being edited. The symlink is
-  tracked (not git-ignored) on purpose — a git-ignored one would vanish on
-  a fresh clone and the blindness would return silently. Known limitation that remains: the tests
-  import the program via `SourceFileLoader` on the **dash** name, so CodeGraph cannot link tests
-  to its symbols and reports "no covering tests found" for them; the symbol index and call graph
-  are unaffected.
+  NOT a second copy and NOT the file to edit.** Since the modularization campaign's I0, the
+  extension-less `pantheon-sitehealth-emails` is a thin (~17-line) shim that calls `psh.cli.main()`;
+  the program body lives in **`psh/_legacy.py`**, a normal `.py` file that **CodeGraph, pyright, and
+  ruff index natively** (all three key off the `.py` extension). So the symlink's original reason —
+  three tools blind to the several-thousand-line *extension-less* core program — is dissolved for
+  the program body; the symlink now only keeps those three tools seeing the extension-less **shim**
+  itself. It stays tracked (not git-ignored) on purpose — a git-ignored one would vanish on a fresh
+  clone. Do not delete it. **Verified 2026-07-17** via `codegraph explore "psh/_legacy.py main"`:
+  CodeGraph now indexes `psh/_legacy.py`'s symbols natively (42 symbols, verbatim line-numbered
+  source returned) — the old "117 files, zero symbols from the core program" blindness is gone. One
+  limitation persists: `main` (`psh/_legacy.py:2108`) still reports "no covering tests found", but
+  **not** for the reason the old note gave. Tests no longer load the program via `SourceFileLoader`
+  on the dash name (that mechanism is gone — `tests/conftest.py` now does a normal
+  `importlib.import_module("psh._legacy")`); the cause now is that this dynamic import happens
+  inside a conftest fixture, which is not a static import edge CodeGraph can follow. The symbol
+  index and call graph are unaffected.
 - Generated artifacts land in `build/` (git-ignored); `database.db`, `fqdns.json`, and the
   `.eml`/`.html`/`.txt` outputs are working data, not source. `fqdns.json` is now **program-
   generated** by the cloudflare plugin (was produced by a standalone script); it is git-ignored
@@ -417,15 +439,26 @@ tool stays reusable by other institutions.
 
 ## Testing
 
-**`./run-tests` lints before it tests, and gates on it.** It currently runs ruff over the tree with the
-**narrow** rule set from `pyproject.toml` — `E722`, `BLE001`, `S105`, `S106`, each of which
-mechanizes a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy —
-and refuses to run pytest on a finding. Ruff's default rule set is **not** currently adopted (it reports
-~55 unrelated findings; but broadening will be done at a future point to be deteremined.
-`[tool.ruff]` deliberately pins **no `target-version`**: ruff infers it from
-`requires-python`, and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program
-actually uses. `.claude/hooks/ruff-check.sh` runs the same rule set at edit time (advisory, via
-`PostToolUse`); both read `pyproject.toml`, neither passes `--select`.
+**`./run-tests` lints and type-checks before it tests, and gates on all of it.** It runs **three
+gates** in order, each aborting on the first failure so a later gate's green never hides an
+earlier gate's red (PD#1):
+
+1. **ruff, narrow PD set** (`pyproject.toml`: `E722`, `BLE001`, `S105`, `S106`) — each mechanizes
+   a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy; runs over the
+   **whole tree**, including the files the campaign grandfathers.
+2. **ruff, broad campaign ratchet** (`ruff-broad.toml`: `select = ALL` minus a grandfathered
+   exclude list — `psh/_legacy.py`, `script_context.py`, `dns_classify.py`, `check/`, `plugin/`,
+   `tests/`, `development/`; CAMPAIGN.md §13). Each increment un-grandfathers its files by deleting
+   them from that list.
+3. **pyright, standard mode** over `psh/` minus `_legacy.py` (`[tool.pyright]`); a missing pyright
+   binary is a **hard failure**, never a silent skip (PD#1/PD#14).
+
+Both `[tool.ruff]` and `ruff-broad.toml` deliberately pin **no `target-version`**: ruff infers it
+from `requires-python`, and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program
+actually uses. `.claude/hooks/ruff-check.sh` runs **both** ruff passes at edit time (advisory, via
+`PostToolUse`, with `--force-exclude` and a repo-root `cd` so an edited grandfathered file honors
+the exclude list) but **not** pyright (edit-time latency; `./run-tests` carries the type gate). No
+pass passes `--select` — the config files are the single source of truth.
 
 There is a pytest harness under `tests/` (built 2026-07; design in
 `development/2026-07-04-test-harness/SPEC.md`). Run it with `./run-tests` (wrapper over
@@ -452,8 +485,11 @@ refreshed to green. Backfilling tests for already-untested code is a different j
 different prompt (`prompts/add-tests-for-change.prompt.md`).
 
 Non-obvious things the harness relies on:
-- **The script is imported, not re-parsed.** `tests/conftest.py` loads the extension-less
-  `pantheon-sitehealth-emails` via `importlib`/`SourceFileLoader` (fixture `psh`). Argparse was
+- **The script is imported, not re-parsed.** `tests/conftest.py` imports the program as
+  `psh._legacy` via a normal `importlib.import_module("psh._legacy")` (the repo root is on
+  `sys.path` because the suite runs as `python -m pytest`, cwd = repo root); the `psh` fixture
+  exposes that module. `SourceFileLoader` is **no longer** used for the program — it remains only
+  in `tests/helpers/checkload.py`, for loading `check/` packages standalone. Argparse was
   refactored into `build_arg_parser()`/`parse_args()`; `sc.options` is set by the caller, so a
   test sets it (the `reset_sc` autouse fixture does) before calling functions. `MPLBACKEND=Agg`
   must be set before the load (conftest does this) because the module imports `matplotlib.pyplot`
