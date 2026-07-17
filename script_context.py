@@ -6,6 +6,7 @@ from typing import Any
 from rich.console import Console
 
 import html2text
+from psh.notice import Notice, Severity   # noqa: F401 -- Severity re-exported as sc.Severity for check/plugin packages
 
 
 options: argparse.Namespace = argparse.Namespace()  # parsed CLI options; set by parse_args() caller
@@ -142,11 +143,12 @@ class SiteContext(dict):
     def __init__(self, site: dict):
         super().__init__(site=site, notices=[], sections=[], attachments=[])
 
-    def add_notice(self, notice: dict) -> None:
-        """
-        Add a notice, filling in the icon (from 'type'), the plaintext 'text' (via html2text),
-        and honoring notice['order'] ('prepend'/'first' -> front of the list, else append).
-        """
+    def add_notice(self, notice) -> None:      # notice: Notice | dict
+        """Add a notice (Notice or legacy dict), filling icon (from 'type'), plaintext 'text' (via
+        html2text), and honoring order ('prepend'/'first' -> front).  A Notice is projected to the
+        legacy dict first (dict form retired in I14, CAMPAIGN.md §6)."""
+        if isinstance(notice, Notice):
+            notice = self._notice_to_dict(notice)
         if 'message' not in notice:
             console.print(f'[bold red]ERROR: Notice is missing the "message" key: {notice}')
             sys.exit(1)
@@ -159,6 +161,25 @@ class SiteContext(dict):
             self['notices'].insert(0, notice)
         else:
             self['notices'].append(notice)
+
+    def _notice_to_dict(self, notice: Notice) -> dict:
+        """Project a Notice onto the legacy notice dict.  csv is built from the site name + code (the
+        two-field form; extra-csv-field notices stay dicts until their adopting increment).  icon /
+        text / non-default order are set only when present so the stored dict is byte-identical to the
+        legacy one and add_notice's fill logic supplies icon/text identically."""
+        d = {
+            "type": str(notice.severity),
+            "csv": f"{self['site']['name']},{notice.code}",
+            "short": notice.short,
+            "message": notice.html,
+        }
+        if notice.icon:
+            d["icon"] = notice.icon
+        if notice.text:
+            d["text"] = notice.text
+        if notice.order != "append":
+            d["order"] = notice.order
+        return d
 
     def add_notices(self, notices: list) -> None:
         """Add each notice dict returned by a builder (wp_error/drush_error/check_*module)."""

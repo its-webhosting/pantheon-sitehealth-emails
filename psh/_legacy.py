@@ -324,6 +324,9 @@ from psh.gateway import (
     wp_error,
     wp_eval,
 )
+from psh.notice import Notice, Severity, registry
+
+registry.register("no-domains", description="paid plan with no custom domains connected")
 
 
 def get_old_metrics(
@@ -2342,23 +2345,22 @@ and to find out what went wrong:
             if isinstance(domains, dict):
                 if len(custom_domains) == 0:
                     site_context.add_notice(
-                        {
-                            "type": "alert",
-                            "icon": "&#x1F6A8;",  # police car light
-                            "csv": f"{site['name']},no-domains",
-                            "short": f"no domains connected",
-                            "message": f"""
+                        Notice(
+                            severity=Severity.ALERT,
+                            code="no-domains",
+                            short="no domains connected",
+                            html=f"""
                 <p>{site["name"]} is on a paid plan but does not have any custom domains connected.  Either connect
                 a domain through which people will access the site or downgrade the site's plan to Sandbox to save
                 money.</p>
                 """,
-                            "text": f"""
+                            text=f"""
                 {site["name"]} is on a paid plan but does not have
                 any custom domains connected. Either connect a domain through
                 which people will access the ste or downgrade the site's plan
                 to Sandbox to save money.
                 """,
-                        }
+                        )
                     )
                 if (
                     len(custom_domains) > 1

@@ -160,7 +160,7 @@ def test_only_the_gateway_spawns_a_subprocess():
 # standalone)."  sc.db_engine_args is exposed in the same block (CLAUDE.md § Database).
 SC_FACADE_NAMES = ("escape_url", "check_wordpress_plugin", "check_drupal_module",
                    "umich_enabled", "cloudflare_enabled", "terminus", "fqdn_re",
-                   "db_engine_args")
+                   "db_engine_args", "Notice", "Severity")
 
 
 def test_documented_sc_facade_names_exist(reset_sc):
@@ -177,6 +177,12 @@ def test_documented_sc_facade_names_exist(reset_sc):
     above).  Red was demonstrated by temporarily commenting out `sc.db_engine_args =
     db_engine_args` in psh/_legacy.py, which made this test fail naming db_engine_args.
     Verified, then reverted.
+
+    (campaign-I3) A second RED demonstration for "Notice"/"Severity": temporarily removed
+    `Severity` from the `from psh.notice import Notice, Severity` line in script_context.py
+    (Notice/Severity reach sc via that module-level import, not a `sc.Notice = ...`
+    assignment); the test failed with `AssertionError: sc is missing documented facade names
+    ['Severity']`.  Verified, then reverted.
     """
     sc = reset_sc
     missing = [name for name in SC_FACADE_NAMES if not hasattr(sc, name)]
