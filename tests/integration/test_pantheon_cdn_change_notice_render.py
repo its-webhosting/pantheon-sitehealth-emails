@@ -61,7 +61,7 @@ def test_notice_renders_through_the_real_template(psh, notices, findings, reset_
     built = notices.cdn_change_notice(SITE, findings, umich=True, before_cutoff=True)
     ctx = reset_sc.SiteContext({"name": SITE})
     ctx.add_notice(dict(built))
-    template = Template((Path(psh.__file__).parent / "email_template.html").read_text())
+    template = Template((Path(psh.__file__).resolve().parents[1] / "email_template.html").read_text())
     html_body = template.render(site_name=SITE, notices=ctx["notices"], sections=[], news=[])
     assert 'class="responsive-table site-updates"' in html_body     # the table survived
     assert "occb.bus.umich.edu" in html_body and "23.185.0.4" in html_body

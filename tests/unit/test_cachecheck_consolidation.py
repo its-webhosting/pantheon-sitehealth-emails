@@ -17,7 +17,7 @@ _CACHED = {}
 
 def _load(psh):
     if "m" not in _CACHED:
-        path = Path(psh.__file__).parent / "check" / "cloudflare" / "notices.py"
+        path = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare" / "notices.py"
         loader = SourceFileLoader("cachecheck_notices_probe", str(path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)

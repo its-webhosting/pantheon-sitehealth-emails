@@ -55,7 +55,7 @@ def test_terminus_retry_does_not_loop_forever(psh, monkeypatch):
 def test_check_umich_disabled_import_does_not_crash(psh, reset_sc):
     sc = reset_sc
     sc.config = {}  # UMich absent -> the module's else branch runs sc.console.print(...)
-    init = Path(psh.__file__).parent / "check" / "umich" / "__init__.py"
+    init = Path(psh.__file__).resolve().parents[1] / "check" / "umich" / "__init__.py"
     loader = SourceFileLoader("check_umich_probe", str(init))
     spec = importlib.util.spec_from_loader("check_umich_probe", loader)
     module = importlib.util.module_from_spec(spec)

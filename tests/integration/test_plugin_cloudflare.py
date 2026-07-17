@@ -54,7 +54,7 @@ def load_ips(psh, monkeypatch):
     fake_pkg.CloudflareError = FakeCloudflareError
     monkeypatch.setitem(sys.modules, "cloudflare", fake_pkg)
 
-    path = Path(psh.__file__).parent / "plugin" / "cloudflare" / "ips.py"
+    path = Path(psh.__file__).resolve().parents[1] / "plugin" / "cloudflare" / "ips.py"
     loader = SourceFileLoader("cloudflare_ips_probe", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)

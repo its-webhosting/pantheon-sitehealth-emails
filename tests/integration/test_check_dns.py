@@ -8,7 +8,7 @@ pytestmark = pytest.mark.integration
 
 
 def _load_init(psh, monkeypatch, probe_name="dns_check_probe"):
-    pkg_dir = Path(psh.__file__).parent / "check" / "dns"
+    pkg_dir = Path(psh.__file__).resolve().parents[1] / "check" / "dns"
     spec = importlib.util.spec_from_file_location(
         probe_name, str(pkg_dir / "__init__.py"),
         submodule_search_locations=[str(pkg_dir)])

@@ -13,7 +13,7 @@ def notices(psh, reset_sc, monkeypatch):
     # reset_sc does not track escape_url, so a leaked identity stub would pollute other suites
     # (e.g. check/cloudflare's escaping tests).
     monkeypatch.setattr(reset_sc, "escape_url", lambda u: u)
-    path = Path(psh.__file__).parent / "check" / "dns" / "notices.py"
+    path = Path(psh.__file__).resolve().parents[1] / "check" / "dns" / "notices.py"
     spec = importlib.util.spec_from_file_location("dns_notices_probe", str(path))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

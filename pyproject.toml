@@ -48,7 +48,12 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
+# Deps-only install, on purpose: the program is repo-rooted (CWD-relative check/,
+# plugin/, templates, config symlink), so installing psh into site-packages would
+# create a stale shadow copy -- a silent-failure hazard.  packages = [] stops
+# setuptools auto-discovery from picking up psh/ now that it exists.
 py-modules = []
+packages = []
 
 [tool.ruff]
 # NO target-version.  Ruff infers it from `requires-python`, and that is load-bearing:
@@ -89,9 +94,8 @@ markers = [
 ]
 
 [tool.coverage.run]
-# The program under test is a single extension-less file, so use an include glob,
-# not `source` (which expects package names/dirs).  This measures the IN-PROCESS
-# tiers (unit/integration); e2e/live run main() in a subprocess that coverage does
-# not see unless COVERAGE_PROCESS_START plumbing is enabled (see tests/README.md).
-include = ["*/pantheon-sitehealth-emails"]
+# Program code now lives in the psh package plus two top-level modules; measure all
+# three (the old single-file include glob would match only the 7-line shim).
+# In-process tiers only; see tests/README.md for the subprocess-coverage caveat.
+include = ["*/psh/*", "*/script_context.py", "*/dns_classify.py"]
 

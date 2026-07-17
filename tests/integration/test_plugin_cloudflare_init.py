@@ -24,7 +24,7 @@ ENABLED_CONFIG = {"Cloudflare": {"enabled": True, "api_token": "t0ken"}}
 
 
 def _load_init(psh, monkeypatch, probe_name="cf_plugin_probe"):
-    pkg_dir = Path(psh.__file__).parent / "plugin" / "cloudflare"
+    pkg_dir = Path(psh.__file__).resolve().parents[1] / "plugin" / "cloudflare"
     spec = importlib.util.spec_from_file_location(
         probe_name,
         str(pkg_dir / "__init__.py"),

@@ -21,7 +21,7 @@ TS = datetime.datetime(2026, 3, 20, 10, 30)
 
 @pytest.fixture
 def sitelens(psh):
-    path = Path(psh.__file__).parent / "check" / "umich" / "sitelens.py"
+    path = Path(psh.__file__).resolve().parents[1] / "check" / "umich" / "sitelens.py"
     loader = SourceFileLoader("umich_sitelens_probe", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)

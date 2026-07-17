@@ -21,7 +21,7 @@ def fqdns(psh, monkeypatch):
     fake_pkg.CloudflareError = type("CloudflareError", (Exception,), {})
     monkeypatch.setitem(sys.modules, "cloudflare", fake_pkg)
 
-    path = Path(psh.__file__).parent / "plugin" / "cloudflare" / "fqdns.py"
+    path = Path(psh.__file__).resolve().parents[1] / "plugin" / "cloudflare" / "fqdns.py"
     loader = SourceFileLoader("cloudflare_fqdns_probe", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)

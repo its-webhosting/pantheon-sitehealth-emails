@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 def _package_dir(psh, package):
-    return Path(psh.__file__).parent / "check" / package
+    return Path(psh.__file__).resolve().parents[1] / "check" / package
 
 
 def _purge(probe):

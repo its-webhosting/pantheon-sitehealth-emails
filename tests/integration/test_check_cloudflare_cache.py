@@ -28,7 +28,7 @@ CONFIG = {"Cloudflare": {"enabled": True,
 @pytest.fixture
 def cache(psh, monkeypatch):
     """Load cache.py under a probe package so its relative imports resolve."""
-    pkg_dir = Path(psh.__file__).parent / "check" / "cloudflare"
+    pkg_dir = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare"
     package = types.ModuleType("cf_cache_pkg")
     package.__path__ = [str(pkg_dir)]
     monkeypatch.setitem(sys.modules, "cf_cache_pkg", package)

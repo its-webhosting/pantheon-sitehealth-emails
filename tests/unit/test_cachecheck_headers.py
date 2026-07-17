@@ -19,7 +19,7 @@ YEAR = "max-age=31536000"
 
 @pytest.fixture(scope="module")
 def hdrs(psh):
-    path = Path(psh.__file__).parent / "check" / "cloudflare" / "headers.py"
+    path = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare" / "headers.py"
     loader = SourceFileLoader("cachecheck_headers_probe", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -346,7 +346,7 @@ _CACHED = {}
 def _load(psh):
     # Hypothesis @given can't take function-scoped fixtures; cache the module manually.
     if "m" not in _CACHED:
-        path = Path(psh.__file__).parent / "check" / "cloudflare" / "headers.py"
+        path = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare" / "headers.py"
         loader = SourceFileLoader("cachecheck_headers_probe2", str(path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)

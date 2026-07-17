@@ -22,7 +22,7 @@ _CACHED = {}
 
 def _notices_module(psh):
     if "m" not in _CACHED:
-        path = Path(psh.__file__).parent / "check" / "cloudflare" / "notices.py"
+        path = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare" / "notices.py"
         loader = SourceFileLoader("cachecheck_notices_render_probe", str(path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)
@@ -80,7 +80,7 @@ def test_notice_renders_through_the_real_template(psh, reset_sc):
     ctx = reset_sc.SiteContext({"name": SITE})
     ctx.add_notice(dict(out[0]))
     from jinja2 import Template
-    template = Template((Path(psh.__file__).parent / "email_template.html").read_text())
+    template = Template((Path(psh.__file__).resolve().parents[1] / "email_template.html").read_text())
     html_body = template.render(site_name=SITE, notices=ctx["notices"], sections=[],
                                 news=[])
     assert "Cloudflare caching:" in html_body

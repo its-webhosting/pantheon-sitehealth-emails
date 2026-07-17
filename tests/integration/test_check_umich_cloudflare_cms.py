@@ -18,7 +18,7 @@ SITE = "its-wws-test1"
 
 @pytest.fixture
 def cms(psh):
-    path = Path(psh.__file__).parent / "check" / "umich" / "cloudflare_cms.py"
+    path = Path(psh.__file__).resolve().parents[1] / "check" / "umich" / "cloudflare_cms.py"
     loader = SourceFileLoader("umich_cloudflare_cms_probe", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)

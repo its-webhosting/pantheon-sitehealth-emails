@@ -38,7 +38,7 @@ def egress(psh, monkeypatch):
     fake_cf.CloudflareError = FakeCloudflareError
     monkeypatch.setitem(sys.modules, "cloudflare", fake_cf)
 
-    pkg_dir = Path(psh.__file__).parent / "check" / "cloudflare"
+    pkg_dir = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare"
     package = types.ModuleType("cf_egress_pkg")
     package.__path__ = [str(pkg_dir)]
     monkeypatch.setitem(sys.modules, "cf_egress_pkg", package)

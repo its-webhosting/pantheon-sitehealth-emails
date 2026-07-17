@@ -3,9 +3,8 @@
 See development/2026-07-04-test-harness/SPEC.md and tests/README.md for the design.
 
 Key facts this file encodes:
-  * The program under test is an extension-less file, so it is loaded via importlib +
-    SourceFileLoader, once, cached in a session-scoped fixture (avoids re-registering
-    the SQLAlchemy models).
+  * The program under test is imported as the module psh._legacy, once, cached in a
+    session-scoped fixture (avoids re-registering the SQLAlchemy models).
   * matplotlib.pyplot is imported at the top of that module, so MPLBACKEND must be set
     to "Agg" in the environment BEFORE the load — done here at conftest import time.
   * script_context (`sc`) holds process-global mutable state; the reset_sc autouse
@@ -21,7 +20,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
@@ -84,11 +82,11 @@ _main_module = None
 def _load_main_module():
     global _main_module
     if _main_module is None:
-        loader = SourceFileLoader("psh_main", str(PROGRAM))
-        spec = importlib.util.spec_from_loader("psh_main", loader)
-        module = importlib.util.module_from_spec(spec)
-        loader.exec_module(module)
-        _main_module = module
+        # Normal import: run-tests execs `python -m pytest` with cwd = repo root,
+        # which puts the repo root on sys.path -- the same mechanism that resolves
+        # `import script_context`.  (MPLBACKEND is pinned above, before this ever
+        # runs, because psh._legacy imports matplotlib.pyplot at its top.)
+        _main_module = importlib.import_module("psh._legacy")
     return _main_module
 
 

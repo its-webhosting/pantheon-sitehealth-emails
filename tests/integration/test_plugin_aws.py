@@ -38,7 +38,7 @@ def load_get_secret(psh, monkeypatch):
 
     def _load(response):
         calls = []
-        path = Path(psh.__file__).parent / "plugin" / "aws" / "get_secret.py"
+        path = Path(psh.__file__).resolve().parents[1] / "plugin" / "aws" / "get_secret.py"
         loader = SourceFileLoader("aws_get_secret_probe", str(path))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         module = importlib.util.module_from_spec(spec)

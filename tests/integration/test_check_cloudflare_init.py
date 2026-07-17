@@ -28,7 +28,7 @@ ENABLED_CONFIG = {
 
 
 def _load_init(psh, monkeypatch, probe_name="cf_check_probe", search_dir=None):
-    pkg_dir = Path(psh.__file__).parent / "check" / "cloudflare"
+    pkg_dir = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare"
     spec = importlib.util.spec_from_file_location(
         probe_name,
         str(pkg_dir / "__init__.py"),

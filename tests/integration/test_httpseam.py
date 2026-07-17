@@ -21,7 +21,7 @@ FQDN = "www.example.edu"
 @pytest.fixture
 def httpseam(psh, monkeypatch):
     """Load httpseam.py under a probe package so its relative import (.pages) resolves."""
-    pkg_dir = Path(psh.__file__).parent / "check" / "cloudflare"
+    pkg_dir = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare"
     package = types.ModuleType("cf_seam_pkg")
     package.__path__ = [str(pkg_dir)]
     monkeypatch.setitem(sys.modules, "cf_seam_pkg", package)

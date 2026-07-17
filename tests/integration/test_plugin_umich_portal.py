@@ -51,7 +51,7 @@ def _build_portal_db(path):
 
 @pytest.fixture
 def portal_module(psh):
-    path = Path(psh.__file__).parent / "plugin" / "umich" / "portal.py"
+    path = Path(psh.__file__).resolve().parents[1] / "plugin" / "umich" / "portal.py"
     loader = SourceFileLoader("umich_portal_probe", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
