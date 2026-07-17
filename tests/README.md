@@ -60,7 +60,9 @@ plus the Drupal live/e2e cases).
 - Get the program module from the `psh` fixture (it's imported once; don't import it yourself).
 - `sc.options` is pre-set by the autouse `reset_sc` fixture (which also isolates `sc` global
   state between tests). Request `reset_sc` if you need the `sc` module object.
-- For in-process Pantheon calls, `monkeypatch.setattr(psh, "run_terminus", fake)`.
+- For in-process Pantheon calls, `monkeypatch.setattr(gateway, "run_terminus", fake)` (request the
+  `gateway` fixture for the `psh.gateway` module) — since I2 the wrappers resolve `run_terminus` in
+  the gateway namespace, so patching `psh.run_terminus` would not intercept them.
 - To run the whole program, use the `program_runner` fixture (or the session-scoped
   `rendered_report` / `rendered_report_drupal` fixtures, which run the offline pipeline once per
   site and expose the artifacts). **Never** invoke the program except through `run_program` — it

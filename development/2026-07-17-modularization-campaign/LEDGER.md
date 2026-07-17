@@ -175,3 +175,57 @@ empty).
 - **Open questions for I2:** none new — proceed per I0's notes (un-grandfather the
   wrapper functions from `ruff-broad.toml`, clean to broad set + pyright standard,
   replace house-style tuple hints, `GatewayResult`, façade test).
+
+## I2 — gateway extraction (2026-07-17, commits `7044b12` (Task 1), `0141f76` (Task 2), house-rule-scope fix + closing docs commit)
+
+Spec/plan: `development/2026-07-17-mod-I2-gateway/` (SPEC.md carries the pasted acceptance
+results). Two per-task code commits, each green, plus a whole-branch-review follow-up commit
+(the `ENVIRON_SCOPE` widening below) and this closing docs commit (CLAUDE.md / tests/README.md /
+gateway docstrings / memory / this ledger entry). Full suite (live tier present) at close =
+**755 passed / 1 skipped** (the 1 skip is `test_db_credentials.py`'s `importorskip("MySQLdb")`
+on a sqlite-only install), all three gates; four goldens byte-identical across the increment
+(`git diff 8b1466b -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** the eleven Terminus/WP/Drush subprocess-facing wrapper defs (the 302–597 wrapper
+  region of `psh/_legacy.py` **minus** `escape_url`, which §3.1 assigns to `psh/render.py`/I12) →
+  `psh/gateway.py`: `run_terminus`, `TerminusError`, `terminus`, `terminus_data`, `wp`, `wp_eval`,
+  `wp_error`, `fix_drush_output`, `drush`, `drush_php_script`, `drush_error`. `psh/_legacy.py`
+  re-imports all eleven (plus `GatewayResult`), so its ~54 call sites and the `sc` exposure block
+  resolve unchanged. Logic and the two column-0 `f"""` notice literals (`wp_error`/`drush_error`)
+  moved byte-for-byte (Invariant 8; extracted-block diff pasted empty in the Task 1 report).
+- **Deviations from CAMPAIGN.md:** the SPEC's §Broad-ruff-findings table enumerated **seven**
+  findings on the moved code; the actual count was **EIGHT**. Wrapping `run_terminus`'s literal
+  `return … True`/`return … False` statements in the `GatewayResult(...)` constructor introduced an
+  `FBT003` (Boolean-positional-value-in-function-call) the spec did not foresee. Resolved
+  **behavior-preservingly** by constructing with the `fatal=` keyword (`GatewayResult(output,
+  errors, fatal=True)`) — no `ruff-broad.toml` ignore-list change (that would be a §13 amendment)
+  and no `# noqa`. The other seven dispositions landed exactly as specced.
+- **Ratchet (§13):** nothing was deleted from `ruff-broad.toml`'s `extend-exclude` this increment.
+  The wrappers moved to a **new** file (`psh/gateway.py`), which is gated by the broad ruff set +
+  pyright standard from birth (it was never in the exclude list). So LEDGER I0's "un-grandfather the
+  wrapper functions from `ruff-broad.toml`" open-question was a **no-op for the exclude list** — its
+  premise (functions cleaned in place inside an excluded file) didn't apply once they moved to a
+  fresh gated file; the cleaning obligation is discharged by gateway.py being born under the full
+  gate (`uvx ruff check --config ruff-broad.toml psh/gateway.py` → All checks passed!; pyright 0
+  errors). Recorded per SPEC §Ratchet.
+- **Contract/config/sc additions:** `GatewayResult` NamedTuple `(result, errors, fatal)` introduced
+  in `psh/gateway.py`, re-exported via the `_legacy` import. **No new `sc` name** (no check/plugin
+  references the type — it is unpacked positionally; adding it would be dead façade surface,
+  CAMPAIGN.md §17 Q4). **No new contract keys.** New `gateway` conftest fixture and two house-rule
+  instruments (no-`subprocess.Popen`-outside-gateway; documented-`sc`-façade-names-exist).
+- **Discovered tasks (dispositions):**
+  - The `wp`/`wp_eval`/`drush`/`drush_php_script` docstrings said "Returns a 3-tuple" after the
+    move → **fixed here** (Task 3): updated to "Returns a GatewayResult (result, errors, fatal)".
+    Doc-accuracy only, no logic change; gateway.py re-passed ruff-broad + pyright with 0 findings.
+  - **`ENVIRON_SCOPE` house-rule was blind to the program body** (whole-branch review finding).
+    `tests/unit/test_house_rules.py`'s PD#6 `os.environ` guard scoped to `check`/`plugin`/
+    `dns_classify.py`/`script_context.py`/the 17-line shim — but **not** `psh/`, where the program
+    body has lived since campaign I0. A direct `os.environ` read added to `psh/_legacy.py` or
+    `psh/gateway.py` (the largest feature-code files) would have passed silently (PD#1/PD#6/PD#14 —
+    an instrument blind to what it guards). Latent (grep found no offender) and **pre-existing**
+    (introduced at I0's file move, not by I2's tasks), but I2 owns this test file and I2's own
+    `_scoped_sources(scope)` parameterization made the fix one word → **fixed here**: added `"psh"`
+    to `ENVIRON_SCOPE`, with the new red demonstration (adding `os.environ` to `psh/_legacy.py`
+    fails naming it) observed, reverted, and recorded in the test docstring. Suite stayed green.
+- **Open questions for I3:** none new — proceed per CAMPAIGN.md §11 row I3 (`psh/configuration.py`;
+  `Notice` class + code-uniqueness registry test).

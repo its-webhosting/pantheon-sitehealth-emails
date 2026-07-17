@@ -189,7 +189,7 @@ def wp(siteenv: str, *args) -> GatewayResult:
     """
     Run a "wp" command through Terminus and return the result as JSON.
 
-    Returns a 3-tuple (result, errors, fatal); result is None on JSON-decode failure.
+    Returns a GatewayResult (result, errors, fatal); result is None on JSON-decode failure.
     """
     command = ["wp", siteenv, "--", *args, "--format=json"]
     output, errors, fatal = run_terminus(command)
@@ -205,7 +205,7 @@ def wp_eval(siteenv: str, *args) -> GatewayResult:
     """
     Run a "wp eval" command through Terminus and return the result as a string.
 
-    Returns a 3-tuple (output, errors, fatal).
+    Returns a GatewayResult (output, errors, fatal).
     """
     command = ["wp", siteenv, "--", "eval", *args]
     output, errors, fatal = run_terminus(command)
@@ -264,7 +264,7 @@ def drush(siteenv: str, *args) -> GatewayResult:
     """
     Run a "drush" command through Terminus and return the result as a JSON object.
 
-    Returns a 3-tuple (result, errors, fatal); result is None on JSON-decode failure.
+    Returns a GatewayResult (result, errors, fatal); result is None on JSON-decode failure.
     """
     command = ["drush", siteenv, "--", *args, "--format=json"]
     output, errors, fatal = run_terminus(command)
@@ -281,7 +281,7 @@ def drush_php_script(siteenv: str, script: str) -> GatewayResult:
     """
     Run a "drush php:script" command through Terminus and return the result as a JSON object.
 
-    Returns a 3-tuple (result, errors, fatal); result is None on JSON-decode failure.
+    Returns a GatewayResult (result, errors, fatal); result is None on JSON-decode failure.
     """
     command = ["drush", siteenv, "--", "php:script", "--format=json", "-"]
     output, errors, fatal = run_terminus(command, script)

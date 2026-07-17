@@ -89,7 +89,10 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 ### Single-module core + `script_context` shared state
 
 Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-The one carved-out exception is **`dns_classify.py`**, the DNS engine: it resolves each
+Two modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
+transport seam — see the **Terminus/WP/Drush wrappers** bullet). The other is
+**`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
 those facts into the `site_post_dns` data-contract keys (below). It is a pure data producer —
@@ -205,7 +208,9 @@ when the source was disabled, malformed, or failed):
   defaults are no-ops for them; every notice needs a `csv` key (`site,code,...`) — several report
   paths read `n["csv"]`. Site-phase hooks receive the `SiteContext` and call these methods directly
   (see `check/umich/sitelens.py`); tests build one with `sc.SiteContext({"name": ...})`.
-- **Terminus/WP/Drush wrappers**: `run_terminus()` is the low-level subprocess call (5-min
+- **Terminus/WP/Drush wrappers**: these eleven defs live in **`psh/gateway.py`** (moved there in
+  I2; `psh/_legacy.py` re-imports them, so call sites and the `sc` exposure block resolve
+  unchanged). `run_terminus()` is the low-level subprocess call (5-min
   timeout, returns `(stdout, stderr, fatal)`). `terminus()` wraps it for JSON with a
   session-expiry retry and **returns `(result, errors, fatal)`** (`result` is `None` on a JSON
   decode failure). Call sites that index into the result use `terminus_data(...)`, which raises
@@ -213,7 +218,9 @@ when the source was disabled, malformed, or failed):
   abort; per-site calls skip that site). `wp()`/`wp_eval()` and `drush()`/`drush_php_script()`
   run WordPress and Drupal commands on a `site.env` remotely (all return 3-tuples too);
   `wp_error()`/`drush_error()` build alert notices from command failures. Prefer these wrappers
-  over calling `terminus` directly.
+  over calling `terminus` directly. `run_terminus`/`terminus`/`wp`/`wp_eval`/`drush`/
+  `drush_php_script` return a **`GatewayResult`** NamedTuple `(result, errors, fatal)` — still a
+  `tuple` subclass, so positional unpacking and `== (a, b, c)` comparisons are unchanged.
 - **Email/SMTP config**: sender identity and the mail server come from the optional
   `[Email]`/`[SMTP]` config sections (`from`/`reply_to`/`bcc`/`dry_run_to`/
   `dry_run_username_domain`/`msgid_domain`, `host`/`port`); when a key is absent the default is
@@ -498,8 +505,13 @@ Non-obvious things the harness relies on:
   must be set before the load (conftest does this) because the module imports `matplotlib.pyplot`
   at the top.
 - **Two mock seams.** All Pantheon/WP/Drush I/O funnels through `run_terminus()` — monkeypatch it
-  for in-process tests, or use the PATH-shim fake `terminus` (`tests/shims/terminus`, record/replay)
-  for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
+  for in-process tests at **`psh.gateway.run_terminus`** (via the `gateway` conftest fixture), NOT
+  `psh.run_terminus`: since I2 the wrappers live in `psh/gateway.py` and resolve `run_terminus` in
+  the gateway module's namespace, so patching the remnant's imported binding would not intercept
+  them (a silent test defect, PD#14). Module-singleton patches are unaffected — `psh.time.sleep`
+  and `psh.subprocess.Popen` mutate shared module objects both gateway and `_legacy` import, so
+  they apply without repointing. Or use the PATH-shim fake `terminus` (`tests/shims/terminus`,
+  record/replay) for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
 - **The suite must stay green on a sqlite-only install.** `[mysql]` is an optional extra and the
   setup line above sanctions dropping it, so a test needing a real MySQL engine
   (`tests/integration/test_db_credentials.py`, which drives `db_retry()` against a URL that really
