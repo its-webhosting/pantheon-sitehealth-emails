@@ -3442,6 +3442,11 @@ not get blocked.
                 sc.console.print(
                     f":exclamation: [bold red] ATTENTION: unknown framework for {site['name']}: {site['framework']}"
                 )
+                site_results[site["name"]] = {
+                    "framework": site["framework"],
+                    "version": "unknown",
+                    "plan_name": site["plan_name"],
+                }
 
             # Per-phase data contract (see CLAUDE.md): WP/Drush gather results are guaranteed
             # present from site_post_gather onward.  NOTE: the *_version values are the string

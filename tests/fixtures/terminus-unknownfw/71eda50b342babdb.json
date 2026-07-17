@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "upstream:updates:list",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "upstream:updates:list",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e.live",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "[]\n",
+  "stderr": "2026-07-04 14:13:25 UTC[+0000] [warning] There are no available updates for this site.\n",
+  "recorded": "2026-07-04"
+}

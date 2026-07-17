@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "env:list",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e",
+    "--fields=id,created,domain,connection_mode,locked,initialized,php_version,php_runtime_generation",
+    "--format=json"
+  ],
+  "full_argv": [
+    "--no-ansi",
+    "--no-interaction",
+    "env:list",
+    "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e",
+    "--fields=id,created,domain,connection_mode,locked,initialized,php_version,php_runtime_generation",
+    "--format=json"
+  ],
+  "returncode": 0,
+  "stdout": "{\n    \"test-mark\": {\n        \"id\": \"test-mark\",\n        \"created\": 1770474271,\n        \"domain\": \"test-mark-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"test-md\": {\n        \"id\": \"test-md\",\n        \"created\": 1767719908,\n        \"domain\": \"test-md-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"test\": {\n        \"id\": \"test\",\n        \"created\": 1693852015,\n        \"domain\": \"test-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"autopilot\": {\n        \"id\": \"autopilot\",\n        \"created\": 1706532918,\n        \"domain\": \"autopilot-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.1\",\n        \"php_runtime_generation\": 2\n    },\n    \"dev\": {\n        \"id\": \"dev\",\n        \"created\": 1693852012,\n        \"domain\": \"dev-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"live\": {\n        \"id\": \"live\",\n        \"created\": 1693852015,\n        \"domain\": \"live-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    },\n    \"test-jpr\": {\n        \"id\": \"test-jpr\",\n        \"created\": 1767719998,\n        \"domain\": \"test-jpr-its-wws-test1.pantheonsite.io\",\n        \"connection_mode\": \"git\",\n        \"locked\": false,\n        \"initialized\": true,\n        \"php_version\": \"8.2\",\n        \"php_runtime_generation\": 2\n    }\n}\n",
+  "stderr": "",
+  "recorded": "2026-07-04"
+}

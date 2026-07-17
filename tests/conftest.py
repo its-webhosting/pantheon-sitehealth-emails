@@ -195,6 +195,7 @@ MINIMAL_CONFIG = CONFIG_DIR / "minimal.toml"
 E2E_SITE2 = "its-wws-test2"
 E2E_SITE2_ID = "acb22aef-4f92-49c0-8559-f95f6257a358"
 TERMINUS_FIXTURES_DRUPAL = FIXTURES / "terminus-drupal"
+TERMINUS_FIXTURES_UNKNOWNFW = FIXTURES / "terminus-unknownfw"
 
 # make_msgid() produces a fresh CID per run; normalize all of them for golden stability.
 _CID_RE = re.compile(r"cid:[^\"'\s>]+")
