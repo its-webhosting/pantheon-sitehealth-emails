@@ -6,132 +6,50 @@ the design in sections → write & review the spec → hand off to `writing-plan
 defines the *bar* and the *judgment* to apply inside that flow. Where they overlap, the
 skill owns the process; this file owns the standards.
 
-## Posture
-
-You are a senior software architect (12+ years of Python CLI tooling, REST APIs, WebOps,
-and WordPress/Drupal hosting) whose judgment produces better solutions and higher-quality
-code than 99% of developers.
-
-You are not here to rubber-stamp my intention or reach for the quickest/easiest/obvious
-design. You are here to make the feature extraordinary, catch every landmine before it
-explodes, and ensure that what ships, ships at the highest possible standard.
+> **Read `prompts/directives.md` first.** It is the Spine: the Posture, the 14 Prime
+> Directives, the Engineering Preferences, and the spec quality bar — the single copy.
+> This file adds only what is specific to designing a feature; it does not restate a rule
+> from there. Directives are cited here **by number**.
 
 ## Two things the skill does not tell you to do
 
 1. **Verify load-bearing claims.** Independently confirm the facts a design rests on —
    from the prompt, documentation, code, and anything I assert in this session — rather
-   than trusting them.
+   than trusting them. Confirm them against the **authority**, not against an artifact's
+   appearance: a directory listing is not a plugin manifest, a tool's shape is not its
+   documented contract, and a number you recall is not a number you measured. This is where
+   designs here fail most often.
 2. **Surface expansion opportunities, one at a time.** Hold my feature description as the
    baseline and make it bulletproof. *Separately*, present each expansion you see as its
    own `AskUserQuestion` so I can cherry-pick. Neutral posture: state the opportunity, its
    effort, and its risk, then let me decide. Accepted expansions join the plan's scope;
-   rejected ones go to an explicit **"NOT in scope"** list. Keep the *picker* cheap — one
-   question per expansion. Once I accept one whose shape isn't settled, that's when to go
-   deep with the `/grilling` skill.
-
-## Prime Directives
-
-1. **Zero silent failures.** Every failure mode must be visible — to the system, the team,
-   and the user. A failure that can happen silently is a critical defect in the plan.
-2. **Every error has a name.** Never "handle errors." Name the specific exception class,
-   what triggers it, what catches it, what the operator/user sees, and whether it's tested.
-   Catch-all handling (`except Exception`, bare `except`) is a code smell — call it out.
-3. **Data flows have shadow paths.** Every flow has a happy path plus three shadows: nil
-   input, empty/zero-length input, and upstream error. Trace all four for every new flow.
-4. **Interactions have edge cases.** Map them: interrupted run (Ctrl-C mid-site), slow or
-   failing Terminus/WP/Drush/API/SMTP calls, session expiry, stale DB or cached state.
-5. **Observability is scope, not an afterthought.** New code paths need structured logging
-   at the right verbosity (`-v`/`-vv`/`-vvv`), failures surfaced actionably to the operator,
-   and clear dry-run visibility. New report sections, notices, and runbook steps are
-   first-class deliverables, not post-launch cleanup.
-6. **Security is not optional.** New code paths get threat-modeled. Route secrets through
-   config `<{secret env …}>` substitutions, never read them from the environment directly.
-7. **Runs are not atomic.** A run can die partway — a site fails, a session expires, SMTP
-   drops. Plan for partial states: idempotent DB writes, resumability (`--resume-from`),
-   safe re-runs, and the `--for-real`/dry-run gate as the primary blast-radius control.
-8. **Diagrams are mandatory.** No non-trivial flow goes undiagrammed — ASCII art for every
-   new data flow, state machine, processing pipeline, dependency graph, and decision tree,
-   in the design and in code comments. Stale diagrams are worse than none; updating them is
-   part of the change.
-9. **Everything deferred is written down.** Vague intentions are lies.
-10. **Optimize for the 6-month future, not just today.** If the plan solves today's problem
-    but creates next quarter's nightmare, say so explicitly.
-11. **Terminology stays clear and consistent** — within the new design and across the
-    existing codebase. Fix any terminology problems you find. Use the `/domain-modeling`
-    skill to do it: challenge terms that conflict with the glossary, sharpen fuzzy ones, and
-    write each resolution into `CONTEXT.md` **the moment it crystallizes** — don't batch
-    them. `CONTEXT.md` is a domain glossary and nothing else; implementation detail belongs
-    in `CLAUDE.md` (`docs/agents/domain.md` states the split). The `superpowers` host does
-    not know about this skill — this directive is what invokes it, so don't wait to be asked.
-12. **Scrap it and do this instead.** You have standing permission to table a problematic
-    part — or the whole original design — when there's a fundamentally better approach. I'd
-    rather hear it now.
-13. **Update memory** with relevant findings and decisions.
-
-## Engineering Preferences
-
-- **DRY** — flag repetition aggressively.
-- **Well-tested is non-negotiable** — I'd rather have too many tests than too few. But
-  each test must serve a real purpose / provide benefit, don't test just for the sake
-  of an increased coverage metric.
-- **"Engineered enough"** — neither under-engineered (fragile, hacky) nor over-engineered
-  (premature abstraction, needless complexity).
-- **More edge cases, not fewer** — thoughtfulness over speed.
-- **Explicit over clever.**
-- **Right-sized diff** — favor the smallest design diff that cleanly expresses the change,
-  but don't compress a necessary rewrite into a minimal alteration. If the foundation is
-  broken, invoke Prime Directive #12.
+   rejected ones go to an explicit **"NOT in scope"** list, with the reasoning preserved so
+   a later session doesn't re-litigate them. Keep the *picker* cheap — one question per
+   expansion. Once I accept one whose shape isn't settled, that's when to go deep with the
+   `/grilling` skill.
 
 ## Selecting a solution
 
 The skill already generates 2–3 approaches; this is the rubric for judging them. Evaluate
 each option against the factors below using a **checklist backed by quoted evidence** —
-from these standards *and* from industry best practice — **not** a self-graded number. For
-each factor, note how important it is relative to the others. Refine any option that fails
-a factor and re-evaluate (up to three passes). Select on the weight of evidence across
+from the Spine's standards *and* from industry best practice — **not** a self-graded number.
+For each factor, note how important it is relative to the others. Refine any option that
+fails a factor and re-evaluate (up to three passes). Select on the weight of evidence across
 factors; use professional judgment to break ties and secure the best outcome.
 
 Factors: **Correctness · Completeness · Ability to implement · Maintainability ·
 Robustness/fragility · Clarity · Security · Testing · Observability.**
 
-## Spec & internal-doc quality bar
+## Where the spec goes
 
-The spec the skill writes must clear this bar:
-
-- Glossary at top; every term of art used exactly once per concept; no typos in terms,
-  keys, or names.
-- MUST / SHOULD / MAY / NEVER defined and used consistently.
-- Every gate/precondition in one canonical table; no negation chains in prose.
-- Every list marked exhaustive or illustrative; no open-ended denylists.
-- Every referenced file has a path a fresh session can resolve.
-- Config shown as an actual file snippet, not notation.
-- Each rule stated once and cross-referenced elsewhere (DRY).
-- Intent ("why") attached to every rule, requirement, or decision that looks arbitrary.
-- Acceptance criteria = exact commands + expected output, run and pasted, never summarized.
-- **Seams under test are named and agreed — in the spec, before any implementation.** This is
-  load-bearing, not a nicety: implementation is test-first (`mattpocock-skills:tdd`, per
-  `prompts/implementation-standards.md`), that skill forbids a test at an unconfirmed seam,
-  and implementer subagents have fresh context and cannot ask me. **The spec is the only
-  place a seam can be agreed.** For each behavior: name the seam, prefer an existing one
-  (`run_terminus`, `dns_classify.resolve`, `httpseam.fetch`/`sleep`, `egress.probe`, the
-  pure-helper defs), and use the highest one that reaches the behavior. Fewer seams is better.
-  Where a core `main()` change has no seam above the e2e golden, either name the pure helper
-  to extract — that extraction is in scope — or state explicitly why no seam is worth making.
-  Silence is not an option a reviewer should accept.
-- "Tests are load-bearing" NEVER-block included; golden/fixture regeneration requires a
-  reviewed diff.
-- Checklists with quoted evidence, never self-graded numeric gates (see *Selecting a
-  solution*).
-- Reviewer runs with fresh context and sees only the artifact.
-- Human approval gates are structural STOPs (exact-phrase unlock), not list items.
-- Stable rules live in `CLAUDE.md`; other documents carry only task-specific material.
-- Closing audit questions queued for after implementation.
-
-Create the spec/plan and other documents produced under `development/`,
-in the same subdirectory as the prompt if the prompt came from a file or
-creating a new subdirectory named with a proper date and slug if the prompt
-did not come from a file; this is instead of putting the files under
+Create the spec/plan and other documents produced under `development/`, in the same
+subdirectory as the prompt if the prompt came from a file, or in a new subdirectory named
+with a proper date and slug if it did not. This is instead of putting the files under
 `docs/superpowers`.
+
+**Commit the spec before implementation begins.** Without a committed baseline there is no
+diff, and "did this section shrink?" or "what changed since review?" become unanswerable —
+which is PD#14 (§ Spine) applied to the document itself.
 
 ## This project's context
 

@@ -577,6 +577,7 @@ Recorded because `new-feature-standards.md` § "Two things the skill does not te
 | 15 | §4.4: showed `"PostToolUse"` as a top-level `settings.json` key | **Silently inert.** Hooks nest under `"hooks"`, beside `UserPromptSubmit`. A top-level key is accepted and does nothing — no error, no warning — and §11 #4 pipes into the script directly, so it **cannot** detect the misregistration. Now shown nested; #4e asserts the registration. | Adversarial review round 3 |
 | 16 | §5.1: "strip the Posture paragraph — it is the remaining 2 duplicated lines" | **Would have deleted a standard.** That Posture is 5 lines; only 13–14 are duplicated. Lines 15–17 are unique and carry the **execution-bar rule** ("would this survive adversarial review"). §11 #5 counts only *duplicated* lines, so it would have reported **green** after the deletion. | Adversarial review round 3 |
 | 17 | §5.2(b): verify the verbatim quote with `grep -qF` | **Broken in both directions** — and it was round 2's own fix, shipped unexecuted. `directives.md` hard-wraps and grep is line-oriented, so an **honest** quote spanning a wrap exits 1 (false red); a multi-line `-F` pattern matches if **any** line matches, so a clause with one real line and two invented ones exits 0 (false green). Both reproduced. Now normalizes whitespace on both sides. | Adversarial review round 3 |
+| 21 | §13: "§4 … Lands first because §11's 'before' numbers are pinned to today's tree" | **Reason does not hold.** §5 edits only markdown and cannot move a ruff count, so §4-first was not required — and it had an unnamed cost: §5 creates `psh-implementer`, so §4's subagents would have been dispatched by the curation mechanism §5 replaces. Order revised to §3+§5 → §4, authorized before implementation. | Caught at implementation start, checking §13's stated reason against what §5 actually touches |
 | 19 | §7.3: exempt a **named list of CLAUDE.md sections** (draft 1), then a **bare predicate** (draft 2) | **Both over-broad.** The list measured **~288 of 728 lines (~40%)** and was unbounded (it must grow with every new section). The bare predicate was plausibly *wider still* — it covers both rich gotchas, `db_retryable`, the SELECT commit, `expire_on_commit`, `TrafficRow`-not-ORM, the two-`sitecustomize` trap, the goldens trap, the `.py` symlink, `html_to_text`, the re-indent trap, the `-results.json` metadata; 2 of 3 worked examples were EXEMPT. Now bounded by a **discharge condition**: exempt *unless a named test already guards the defect*. | Adversarial review rounds 1 and 2 |
 | 20 | §7.3: used the **per-phase data contract table** as the example of prose that retires | **Backwards.** Packages are the contract's *consumers*, so modularization makes it **more** load-bearing — §7.2's invariant list already says "the per-phase data contract is honored." It is now the table's cautionary EXEMPT row. | Adversarial review round 1 |
 | 18 | §4.6: "~271 lines … ≈ 11k tokens" | Wrong three ways (95+171=266; `directives.md` is ~108 per §5.1; the real total is ~4.7k tokens) — in the paragraph whose whole rhetorical weight is *"that rationale is arithmetically false."* | Adversarial review round 3 |
@@ -826,22 +827,30 @@ Traced for each new flow.
 
 Prerequisites are real, not stylistic.
 
+**Revised 2026-07-16, authorized by the user before implementation began.** The original
+order put §4 first, reasoning that §11's "before" numbers are pinned to today's tree. That
+reason does not hold: **§5 edits only markdown and cannot move a ruff count.** The two are
+independent on that axis, and §4-first had a cost the spec never named — §5 is what creates
+`psh-implementer`, so §4's subagents would have been dispatched by the very curation
+mechanism §5 exists to replace. §9 #21.
+
 ```
-  §4 Mechanize          Independent. Lands first because §11's "before"
-  (ruff, requires-      numbers (17 ruff findings) are pinned to today's
-   python, house        tree -- measure against a moving one and the
-   rules, hook,         acceptance criteria stop being red-capable.
-   run-tests)
-        │
-        │  NOT a prerequisite for §5 -- the read list is affordable
-        │  either way.  §4.6, §9 #18.
-        ▼
   §3 Directives         PD#8 revised, PD#14 added.
         │               MUST land WITH §5 -- the overlays cite directives
         │               BY NUMBER, so a split leaves dangling references.
         ▼
   §5 prompts/           Spine + deltas + read list + .claude/agents/.
         │               Depends on §3 (content).  Real dependency.
+        │
+        │  The mechanism now EXISTS, so everything after this point is
+        │  implemented THROUGH it -- dogfooded on real work before
+        │  anything depends on it.
+        ▼
+  §4 Mechanize          ruff, requires-python, README, house rules, hook,
+  (dispatched via       run-tests.  §11's before-numbers (17 ruff findings,
+   psh-implementer)     55 dup lines) remain valid: §3/§5 touch no Python,
+        │               and §5's own effect on the dup count is what §11 #5
+        │               measures.
         ▼
   §7 Process            §7.3's DoD cites §5's Spine and §3's PD#14 by
         │               name.  Must follow both.

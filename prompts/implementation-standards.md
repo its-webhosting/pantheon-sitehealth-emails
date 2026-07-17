@@ -8,27 +8,52 @@ file owns the standards. Nothing here restates skill mechanics (model selection,
 review-package/task-brief scripts, the progress ledger, status handling) — read the skill
 for those.
 
-## Posture
+> **Read `prompts/directives.md` first** — the Spine. This file does not restate a rule from
+> it; it says what those rules mean **in code**, and cites them by number.
 
-You are a senior software architect (12+ years of Python CLI tooling, REST APIs, WebOps,
-and WordPress/Drupal hosting) whose judgment produces better solutions and higher-quality
-code than 99% of developers. During execution the bar is not "does the task pass its
-reviewer" — it is **"would this survive adversarial review"** (`prompts/adversarial-review.md`).
-Build to that bar the first time so the fix loop stays short.
+## Posture — during execution
+
+The bar is not "does the task pass its reviewer" — it is **"would this survive adversarial
+review"** (`prompts/adversarial-review.md`). Build to that bar the first time so the fix
+loop stays short.
 
 ## How this overlay is applied (read first)
 
 You are the **controller**. Implementer and reviewer subagents have fresh context: they
-never see this file, the spec conversation, or `CLAUDE.md` unless you put it in front of
-them. **An un-injected standard does not exist.** Your job is to fold the standards each
-task actually touches into that task's dispatch — not the whole file, only the relevant
-subset (same curation principle the skill applies to context).
+never see this file, the spec conversation, or `CLAUDE.md` unless it reaches them somehow.
+**An un-injected standard does not exist.**
 
-| Dispatch | What you inject from this file |
-|---|---|
-| **Implementer brief** | The house-style rules the task will trip (§ Fresh-context trap), the error/shadow/observability/security directives for the code paths it touches (§ Directives), the exact test tier and the load-bearing-tests rule (§ Test discipline), and the Definition of Done (§ DoD). |
-| **Reviewer constraints-block** | The same binding requirements, stated as *what the code must do* — the reviewer's attention lens. Copy exact spec values verbatim. Do **not** tell the reviewer what to downgrade or ignore; that is the skill's rule and it holds. |
-| **Fix-subagent dispatch** | Only the standard(s) the finding implicates, plus the covering test files. |
+**Dispatch every code-touching subagent as `psh-implementer`, and every reviewer as
+`psh-reviewer`** (`.claude/agents/`). Those agent definitions carry the read list, so the
+standards arrive as **configuration** rather than as prose you must remember to paste:
+
+```
+Before doing anything, read IN FULL:
+  1. prompts/directives.md               (the standards spine)
+  2. prompts/implementation-standards.md (implementation bar + house style)
+  3. CLAUDE.md — the sections the task touches
+  4. the task brief and the spec named in the dispatch
+```
+
+`superpowers:subagent-driven-development`'s template dispatches `Subagent
+(general-purpose)`. **Override it**, here in the same way and place this file already
+overrides the TDD default. Fix-subagents are code-touching and dispatch as
+`psh-implementer` too.
+
+> **Why not curate.** An earlier version of this file told the controller to inject "not the
+> whole file, only the relevant subset." That makes standards delivery depend on the
+> controller's judgment at the moment its context is fullest and momentum highest — which is
+> exactly when standards got dropped. A fixed list removes the judgment. The Spine is small
+> enough (≤9 KB) that reading it in full costs nothing worth optimizing: the whole read list
+> is ~4.7k tokens per dispatch.
+
+**Every task report MUST cite the Spine directives it applied — by number — and quote a
+verbatim clause from each.** Grep the quotes against `prompts/directives.md`; a paraphrase
+fails. This is the only observable that separates "read the standards" from "did not," and
+PD#14 forbids an instrument that cannot go red.
+
+**Do not tell a reviewer what to downgrade or ignore.** That is the skill's rule and it
+holds regardless of how inconvenient a finding is.
 
 **Plan-vs-standards conflict.** If the plan mandates something this file treats as a defect
 (a catch-all handler, a test that asserts nothing, `terminus` where a wrapper exists), that
@@ -71,8 +96,10 @@ implementer does **in code** — inject the ones each task touches:
    substitutions — never read from the environment, never logged, never committed.
    Threat-model any new outbound HTTP/subprocess path; route it through the existing
    monkeypatchable seams.
-7. **Update the diagram comment when you change the flow it describes.** A stale ASCII
-   diagram in a docstring/comment is worse than none; updating it is part of the change.
+7. **Where a diagram exists in a comment or docstring, updating it is part of changing the
+   flow it describes** — a stale ASCII diagram is worse than none. Writing one in code is
+   REQUIRED only where the flow is **non-local** (spans files, packages, or phase seams);
+   the design/spec is where diagrams are mandatory (PD#8).
 8. **Everything deferred is written down** — as a `README.md` TODO or a named follow-up, in
    the same commit. Vague intentions are lies.
 9. **Terminology stays consistent** with the surrounding code and the spec's glossary. Fix
@@ -107,6 +134,16 @@ The bar the task reviewer verifies against. A task is done only when **all** hol
 - Diagram comments and `README.md` TODO updated; memory updated with any non-obvious gotcha
   or decision.
 - No debug cruft (stray prints, commented-out code, temp files) left behind.
+- **The report cites the Spine directives applied — by number, with a verbatim quote from
+  each** (§ How this overlay is applied).
+- **`CLAUDE.md` prose that existed to explain logic this task moved into a package is
+  deleted in the same commit.** Report the line-count delta. **EXEMPT:** prose recording a
+  shipped defect's root cause and its non-obvious repair — **unless a named test already
+  guards that defect**, in which case it reduces to a one-line pointer at that test. Prose
+  is not exempt merely for being old, long, or architectural. *Intent:* much of `CLAUDE.md`
+  stands in for structure the code doesn't express, and retires with it; defect knowledge
+  does not, and deleting a line of it re-opens a closed defect. Where a test guards the
+  defect, the test is the durable record — it can go red; prose cannot.
 
 ## Test discipline
 
@@ -164,7 +201,7 @@ The bar the task reviewer verifies against. A task is done only when **all** hol
 
 ## This project's context
 
-Read `CLAUDE.md` for the conventions every change must respect — the single-file core plus
+Read `prompts/directives.md` for the standards and `CLAUDE.md` for the conventions every change must respect — the single-file core plus
 self-registering `plugin/`/`check/` packages, the `sc.PHASES` seams and per-phase data
 contract, the test harness and its interlock, the Pantheon-API preference, and keeping
 institution-specific logic behind config flags / the `umich` packages so the tool stays
