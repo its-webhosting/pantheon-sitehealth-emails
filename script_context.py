@@ -1,13 +1,15 @@
 
+import argparse
 import sys
+from typing import Any
 
 from rich.console import Console
 
 import html2text
 
 
-options     = {}  # the parsed command line options
-config      = {}  # the parsed pantheon-sitehealth-emails.toml file
+options: argparse.Namespace = argparse.Namespace()  # parsed CLI options; set by parse_args() caller
+config: dict[str, Any] = {}                          # parsed pantheon-sitehealth-emails.toml
 plugin      = {}  # imported plugins (Python modules)
 check       = {}  # imported site checks (Python modules)
 news        = []  # list of news items to be displayed

@@ -110,3 +110,15 @@ def test_file_missing_news_key_exits(psh, reset_sc, tmp_path):
     reset_sc.config = {"News": {"folder": str(tmp_path)}}
     with pytest.raises(SystemExit):
         psh.load_news_items()
+
+
+def test_folder_items_sorted_by_filename(psh, reset_sc, tmp_path):
+    # Pin the within-folder sort order BEFORE the glob->Path.glob conversion (SPEC §New tests #4).
+    # Files created in a non-lexical order; a dropped sorted() would surface OS readdir order.
+    for name, msg in (("c.toml", "CCC"), ("a.toml", "AAA"), ("b.toml", "BBB")):
+        (tmp_path / name).write_text(
+            f'[News.item]\ntype = "info"\nmessage = "{msg}"\n'
+        )
+    reset_sc.config = {"News": {"folder": str(tmp_path)}}
+    psh.load_news_items()
+    assert [n["message"] for n in reset_sc.news] == ["AAA", "BBB", "CCC"]
