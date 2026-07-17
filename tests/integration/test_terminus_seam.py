@@ -11,8 +11,8 @@ from conftest import E2E_SITE_ID
 pytestmark = pytest.mark.integration
 
 
-def test_terminus_parses_json_from_monkeypatched_run_terminus(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", lambda *a, **k: ('{"framework": "wordpress"}', "", False))
+def test_terminus_parses_json_from_monkeypatched_run_terminus(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", lambda *a, **k: ('{"framework": "wordpress"}', "", False))
     # terminus() returns (result, errors, fatal) (P3).
     result, errors, fatal = psh.terminus("site:info", "its-wws-test1")
     assert result == {"framework": "wordpress"}
@@ -20,10 +20,10 @@ def test_terminus_parses_json_from_monkeypatched_run_terminus(psh, monkeypatch):
     assert fatal is False
 
 
-def test_terminus_empty_output_yields_none_result(psh, monkeypatch):
+def test_terminus_empty_output_yields_none_result(psh, gateway, monkeypatch):
     # json.loads("") raises JSONDecodeError; terminus() now returns result=None (not "") and
     # records the decode detail in errors (P3), instead of silently swallowing it.
-    monkeypatch.setattr(psh, "run_terminus", lambda *a, **k: ("", "", False))
+    monkeypatch.setattr(gateway, "run_terminus", lambda *a, **k: ("", "", False))
     result, errors, fatal = psh.terminus("env:info", "x")
     assert result is None
     assert errors != ""

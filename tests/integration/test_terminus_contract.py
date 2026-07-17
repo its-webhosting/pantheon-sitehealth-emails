@@ -17,16 +17,52 @@ def _run(output, errors="", fatal=False):
     return lambda *a, **k: (output, errors, fatal)
 
 
-def test_wellformed_returns_result_empty_errors_not_fatal(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _run('{"sku": "plan-basic"}'))
+def _fake_popen(stdout: bytes, stderr: bytes, returncode: int):
+    class _FakeProcess:
+        def __init__(self, *args, **kwargs):
+            self.returncode = returncode
+
+        def communicate(self, input=None, timeout=None):
+            return stdout, stderr
+
+        def kill(self):
+            pass
+
+    return _FakeProcess
+
+
+def test_run_terminus_returns_gatewayresult(psh, reset_sc, monkeypatch):
+    # run_terminus returns a GatewayResult (a NamedTuple) whose .result/.errors/.fatal fields
+    # carry the 3-tuple.  subprocess.Popen is faked so no terminus subprocess spawns.
+    monkeypatch.setattr(psh.subprocess, "Popen", _fake_popen(b"stdout text", b"", 0))
+    res = psh.run_terminus(["site:info", "its-wws-test1"])
+    assert isinstance(res, psh.GatewayResult)
+    assert res.result == "stdout text"
+    assert res.errors == ""
+    assert res.fatal is False
+    assert (res.result, res.errors, res.fatal) == res  # tuple-subclass: positional unpack intact
+
+
+def test_terminus_returns_gatewayresult(psh, gateway, monkeypatch):
+    # terminus wraps run_terminus's GatewayResult in its own GatewayResult of parsed JSON.
+    monkeypatch.setattr(gateway, "run_terminus", _run('{"sku": "plan-basic"}'))
+    res = psh.terminus("plan:info", "its-wws-test1")
+    assert isinstance(res, psh.GatewayResult)
+    assert res.result == {"sku": "plan-basic"}
+    assert res.errors == ""
+    assert res.fatal is False
+
+
+def test_wellformed_returns_result_empty_errors_not_fatal(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _run('{"sku": "plan-basic"}'))
     result, errors, fatal = psh.terminus("plan:info", "its-wws-test1")
     assert result == {"sku": "plan-basic"}
     assert errors == ""
     assert fatal is False
 
 
-def test_decode_failure_returns_none_and_keeps_errors(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _run("not json", errors="boom"))
+def test_decode_failure_returns_none_and_keeps_errors(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _run("not json", errors="boom"))
     result, errors, fatal = psh.terminus("plan:info", "x")
     assert result is None          # was "" pre-fix (silently swallowed)
     assert "boom" in errors        # original stderr preserved
@@ -34,43 +70,43 @@ def test_decode_failure_returns_none_and_keeps_errors(psh, monkeypatch):
     assert fatal is False
 
 
-def test_fatal_flag_propagates(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _run('{"ok": 1}', fatal=True))
+def test_fatal_flag_propagates(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _run('{"ok": 1}', fatal=True))
     result, errors, fatal = psh.terminus("env:metrics", "x")
     assert fatal is True
 
 
-def test_terminus_data_returns_result_on_success(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _run('{"ok": 1}'))
+def test_terminus_data_returns_result_on_success(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _run('{"ok": 1}'))
     assert psh.terminus_data("site:info", "x") == {"ok": 1}
 
 
-def test_terminus_data_raises_on_decode_failure(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _run("garbage", errors="bad"))
+def test_terminus_data_raises_on_decode_failure(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _run("garbage", errors="bad"))
     with pytest.raises(psh.TerminusError) as exc:
         psh.terminus_data("plan:info", "x")
     assert "plan:info" in str(exc.value)  # names the command
     assert "bad" in exc.value.errors
 
 
-def test_terminus_data_raises_on_fatal(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _run('{"ok": 1}', errors="timeout", fatal=True))
+def test_terminus_data_raises_on_fatal(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _run('{"ok": 1}', errors="timeout", fatal=True))
     with pytest.raises(psh.TerminusError):
         psh.terminus_data("env:metrics", "x")
 
 
-def test_get_old_metrics_returns_empty_on_failure_not_type_error(psh, reset_sc, monkeypatch):
+def test_get_old_metrics_returns_empty_on_failure_not_type_error(psh, gateway, reset_sc, monkeypatch):
     # get_old_metrics() indexes metrics["timeseries"]; pre-fix a decode failure made metrics
     # "" and this raised TypeError far from the cause.  Now terminus_data() raises
     # TerminusError, which get_old_metrics catches and returns [] (older-metrics import is
     # best-effort) -- no TypeError, and one bad site does not abort the whole run.
-    monkeypatch.setattr(psh, "run_terminus", _run("not json", errors="decode boom"))
+    monkeypatch.setattr(gateway, "run_terminus", _run("not json", errors="decode boom"))
     result = psh.get_old_metrics("its-wws-test1.live", {"name": "its-wws-test1"},
                                  "month", datetime.date(2026, 3, 31))
     assert result == []
 
 
-def test_session_expiry_retries_once_then_returns(psh, monkeypatch):
+def test_session_expiry_retries_once_then_returns(psh, gateway, monkeypatch):
     calls = {"n": 0}
 
     def flaky(command, input_data=None):
@@ -79,7 +115,7 @@ def test_session_expiry_retries_once_then_returns(psh, monkeypatch):
             return ("", "Invalid or expired session header: X-Pantheon-Session", False)
         return ('{"ok": 1}', "", False)
 
-    monkeypatch.setattr(psh, "run_terminus", flaky)
+    monkeypatch.setattr(gateway, "run_terminus", flaky)
     monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
     result, errors, fatal = psh.terminus("org:site:list", "org")
     assert result == {"ok": 1}

@@ -19,7 +19,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def test_terminus_retries_on_expired_session(psh, monkeypatch):
+def test_terminus_retries_on_expired_session(psh, gateway, monkeypatch):
     calls = {"n": 0}
 
     def fake_run_terminus(command, input_data=None):
@@ -28,7 +28,7 @@ def test_terminus_retries_on_expired_session(psh, monkeypatch):
             return ("", "Invalid or expired session header: X-Pantheon-Session", False)
         return ('{"ok": 1}', "", False)
 
-    monkeypatch.setattr(psh, "run_terminus", fake_run_terminus)
+    monkeypatch.setattr(gateway, "run_terminus", fake_run_terminus)
     monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
 
     result, errors, fatal = psh.terminus("org:site:list", "some-org")
@@ -38,14 +38,14 @@ def test_terminus_retries_on_expired_session(psh, monkeypatch):
     assert calls["n"] == 2  # original + one retry (pre-fix this path raised on the tuple)
 
 
-def test_terminus_retry_does_not_loop_forever(psh, monkeypatch):
+def test_terminus_retry_does_not_loop_forever(psh, gateway, monkeypatch):
     calls = {"n": 0}
 
     def always_expired(command, input_data=None):
         calls["n"] += 1
         return ("", "Invalid or expired session header: X-Pantheon-Session", False)
 
-    monkeypatch.setattr(psh, "run_terminus", always_expired)
+    monkeypatch.setattr(gateway, "run_terminus", always_expired)
     monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
 
     psh.terminus("org:site:list", "some-org")

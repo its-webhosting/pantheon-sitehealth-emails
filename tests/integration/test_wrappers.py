@@ -19,47 +19,47 @@ def _fake(output, errors="", fatal=False, record=None):
     return run_terminus
 
 
-def test_wp_parses_json_three_tuple(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _fake('{"active": true}'))
+def test_wp_parses_json_three_tuple(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _fake('{"active": true}'))
     result, errors, fatal = psh.wp("its-wws-test1.live", "plugin", "list")
     assert result == {"active": True}
     assert errors == ""
     assert fatal is False
 
 
-def test_wp_bad_json_returns_none_and_keeps_errors(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _fake("this is not json"))
+def test_wp_bad_json_returns_none_and_keeps_errors(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _fake("this is not json"))
     result, errors, fatal = psh.wp("its-wws-test1.live", "plugin", "list")
     assert result is None
     assert "this is not json" in errors
 
 
-def test_wp_eval_strips_and_three_tuple(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _fake("6.4.2\n", errors="  warn \n"))
+def test_wp_eval_strips_and_three_tuple(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _fake("6.4.2\n", errors="  warn \n"))
     output, errors, fatal = psh.wp_eval("its-wws-test1.live", "echo $wp_version;")
     assert output == "6.4.2"
     assert errors == "warn"
     assert fatal is False
 
 
-def test_drush_parses_json_three_tuple(psh, monkeypatch):
-    monkeypatch.setattr(psh, "run_terminus", _fake('{"drupal": 10}'))
+def test_drush_parses_json_three_tuple(psh, gateway, monkeypatch):
+    monkeypatch.setattr(gateway, "run_terminus", _fake('{"drupal": 10}'))
     result, errors, fatal = psh.drush("its-wws-test2.live", "core:status")
     assert result == {"drupal": 10}
     assert fatal is False
 
 
-def test_drush_moves_leading_noise_to_errors(psh, monkeypatch):
+def test_drush_moves_leading_noise_to_errors(psh, gateway, monkeypatch):
     # Drush sometimes prints warnings before the JSON body; fix_drush_output relocates them.
-    monkeypatch.setattr(psh, "run_terminus", _fake('[warning] deprecated\n{"drupal": 10}'))
+    monkeypatch.setattr(gateway, "run_terminus", _fake('[warning] deprecated\n{"drupal": 10}'))
     result, errors, fatal = psh.drush("its-wws-test2.live", "core:status")
     assert result == {"drupal": 10}
     assert "[warning] deprecated" in errors
 
 
-def test_drush_php_script_passes_script_as_input(psh, monkeypatch):
+def test_drush_php_script_passes_script_as_input(psh, gateway, monkeypatch):
     record = {}
-    monkeypatch.setattr(psh, "run_terminus", _fake('{"ok": 1}', record=record))
+    monkeypatch.setattr(gateway, "run_terminus", _fake('{"ok": 1}', record=record))
     result, _errors, _fatal = psh.drush_php_script("its-wws-test2.live", "return ['ok'=>1];")
     assert result == {"ok": 1}
     assert record["input"] == "return ['ok'=>1];"  # script piped as stdin, not argv

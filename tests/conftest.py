@@ -96,6 +96,19 @@ def psh():
     return _load_main_module()
 
 
+@pytest.fixture
+def gateway(psh):
+    """The psh.gateway module (psh._legacy has already imported it).
+
+    After the I2 gateway extraction the wrappers (terminus/wp/drush) resolve run_terminus in
+    THIS module's namespace, so the in-process seam for anything routed through them is
+    monkeypatch.setattr(gateway, "run_terminus", fake) -- not setattr(psh, ...), which rebinds
+    only the remnant's name (SPEC §Seams, PD#14).
+    """
+    import psh.gateway
+    return psh.gateway
+
+
 # ── Global-state isolation ──────────────────────────────────────────────────────────
 _SC_ATTRS = (
     "options",
