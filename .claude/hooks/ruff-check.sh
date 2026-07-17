@@ -81,10 +81,9 @@ case "$ABS" in
     *) exit 0 ;;
 esac
 
-# --- Lint.  No --select here ON PURPOSE: ruff walks up from the file to /workspace's
-# pyproject.toml, so the hook and ./run-tests share ONE rule set.  Duplicating the flags
-# would be a second source of truth, and two sources drift.
-# `ruff` is not on PATH in this environment; uvx is.
+# --- Binary resolution: same fallback as ./run-tests's ruff_argv() -- the hook and the gate
+# MUST agree on the binary just as they agree on the rule sets (existing invariant, now
+# covering BOTH ruff passes below).  `ruff` is not on PATH in this environment; uvx is.
 if command -v ruff >/dev/null 2>&1; then
     RUFF=(ruff)
 elif command -v uvx >/dev/null 2>&1; then
@@ -93,14 +92,30 @@ else
     exit 0   # Upstream error: no linter.  Advisory hook, so stay quiet and let ./run-tests gate.
 fi
 
-OUT="$("${RUFF[@]}" check --quiet --output-format concise -- "$ABS" 2>&1)" && STATUS=0 || STATUS=$?
+# --- Lint.  TWO ruff passes, mirroring ./run-tests (they share the binary above and each
+# pass's config; no --select on either -- the config files are the single source of truth):
+#   1. NARROW PD set from pyproject.toml (ruff walks up from the file to find it).  Applies to
+#      EVERY file, including the ratchet's grandfathered ones -- no --force-exclude here.
+#   2. BROAD campaign ratchet from ruff-broad.toml (CAMPAIGN.md section 13).  Run in a subshell
+#      cd'd to the repo root, with --force-exclude, so an edit to a grandfathered file
+#      (psh/_legacy.py, script_context.py, dns_classify.py, check/, plugin/, tests/) honors
+#      ruff-broad.toml's exclude list instead of drowning in findings: an explicit CLI path
+#      bypasses the exclude WITHOUT --force-exclude, and the exclude patterns resolve relative
+#      to cwd (hence the cd).  ruff-broad.toml owns what is grandfathered -- no second list here.
+# Pyright is deliberately NOT run in this hook: its startup cost is too high for edit-time
+# latency, and ./run-tests carries the type gate.  That asymmetry (both ruff passes here,
+# pyright only in the gate) is intentional.
+NARROW="$("${RUFF[@]}" check --quiet --output-format concise -- "$ABS" 2>&1)" || true
+BROAD="$(cd "$REPO_ROOT" && "${RUFF[@]}" check --config "$REPO_ROOT/ruff-broad.toml" \
+    --force-exclude --quiet --output-format concise -- "$ABS" 2>&1)" || true
 
-[ "$STATUS" -eq 0 ] && exit 0   # clean: emit NOTHING.
-[ -n "$OUT" ] || exit 0
+OUT="$(printf '%s\n%s\n' "$NARROW" "$BROAD" | sed '/^[[:space:]]*$/d')"
+[ -n "$OUT" ] || exit 0   # both passes clean: emit NOTHING.
 
-emit "ruff findings in the file you just edited (project rule set; see pyproject.toml).
+emit "ruff findings in the file you just edited (project rule sets: the narrow PD set in
+pyproject.toml + the broad campaign ratchet in ruff-broad.toml).
 These mechanize prompts/directives.md PD#2 (every error has a name) and PD#6 (secrets never
-hardcoded).  Fix them now, or add a noqa WITH AN INLINE REASON if the code is deliberate --
-a bare noqa is a silent failure.
+hardcoded), plus the campaign's best-practice ratchet (CAMPAIGN.md section 13).  Fix them now,
+or add a noqa WITH AN INLINE REASON if the code is deliberate -- a bare noqa is a silent failure.
 
 ${OUT}"

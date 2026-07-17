@@ -1,0 +1,43 @@
+# The modularization campaign's ratchet (CAMPAIGN.md section 13) -- ruff pass 2.
+# Pass 1 is pyproject.toml's narrow PD-rule set, which runs EVERYWHERE including
+# the files excluded here; run-tests and .claude/hooks/ruff-check.sh run BOTH
+# passes.  This file dies at I14 when its settings merge into pyproject.toml.
+#
+# select = ALL, minus the ignores below, gates every file NOT excluded.  An
+# increment "un-grandfathers" a file by deleting it from exclude.  Adding an
+# ignore requires a justification comment here and a LEDGER.md entry.
+
+# Same inference rule as pyproject.toml: no target-version (PD#14 -- pinning it
+# masks the 3.12-only f-string syntax detection).
+extend-exclude = [
+    # Grandfathered until their increment moves/cleans them:
+    "psh/_legacy.py",       # the remnant; shrinks I2-I13, dies I14
+    "script_context.py",    # facade; cleaned when I4 moves the hook engine
+    "dns_classify.py",      # cleaned if/when moved (I14 MAY, CAMPAIGN section 3.1)
+    "check/",               # cleaned as I8-I10 restructure them
+    "plugin/",              # cleaned as increments touch them
+    "tests/",               # cleaned per-increment alongside their code
+    "development/",         # historical archive, never linted
+]
+
+[lint]
+select = ["ALL"]
+ignore = [
+    # -- Formatter territory (no autoformatter is adopted; these fight hand style):
+    "COM812",  # trailing-comma
+    "ISC001",  # implicit str concat (conflicts with COM812 tooling advice)
+    "E501",    # line length -- house style has long notice literals; revisit at I14
+    "Q000", "Q001", "Q002", "Q003",  # quote style
+    # -- Owned by pyright, not ruff:
+    "ANN",     # type annotations -- pyright gates typing (pyproject [tool.pyright])
+    # -- Deliberate house practice:
+    "TD002", "TD003", "FIX002",  # TODOs are tracked in README/ledger, not as issues
+    "EM101", "EM102",  # message-in-raise is accepted; PD#2 covers the real risk
+    "TRY003",  # long exception messages in-line -- same rationale as EM
+    "D",       # docstring convention undecided -- README TODO (see Task 4)
+    "CPY001",  # no per-file copyright headers in this repo
+]
+
+[lint.per-file-ignores]
+# (none yet -- tests/ is excluded wholesale above; when an increment
+# un-grandfathers a test file, add S101 etc. HERE with justification)

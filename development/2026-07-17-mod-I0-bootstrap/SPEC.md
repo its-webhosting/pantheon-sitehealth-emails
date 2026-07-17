@@ -211,3 +211,106 @@ usage: pantheon-sitehealth-emails [-h] [--all] [--resume-from SITE_NAME]
 exit=0
 ```
 
+### Task 3 (lint/type ratchet: ruff-broad.toml + pyright + run-tests + edit hook, run 2026-07-17)
+
+**Settled details (T5, decided empirically against ruff 0.15.22 / pyright 1.1.411):**
+
+1. *CPY001* is recognized by ruff 0.15.22 but is a **preview** rule ("This rule is in
+   preview... The `--preview` flag is required for use"), so it cannot fire under our
+   non-preview `select=["ALL"]`. Ruff accepts it in `ignore` with **no warning or error**
+   (`ruff check --config ruff-broad.toml psh/` emitted no selector warnings). The intent
+   (no per-file copyright headers, documented + suppressed) holds, so the line is **kept
+   verbatim** — no adjustment needed. Every other ignore code (COM812, ISC001, E501,
+   Q000–Q003, ANN, TD002/TD003, FIX002, EM101/EM102, TRY003, D) is a stable, recognized
+   rule/prefix.
+2. `psh/cli.py`, `psh/__init__.py`, and the shim **pass the broad pass out of the box**
+   (`All checks passed!`, exit 0) — no INP001 on the shim (repo root is a project root and
+   `psh/` is a proper package), no D-rule interplay (D is ignored). No fixes or ignores
+   were added to the new files.
+
+**Demo 1 — unused import in `psh/cli.py` → broad pass FAILS (F401):**
+
+```
+$ printf '\nimport os  # noqa-free deliberate violation\n' >> psh/cli.py
+$ ./run-tests --fast --llm 2>&1 | head -8
+warning: Invalid `# noqa` directive on psh/cli.py:11: expected `:` followed by a comma-separated list of codes (e.g., `# noqa: F401, F841`).
+All checks passed!
+warning: Invalid `# noqa` directive on psh/cli.py:11: expected `:` followed by a comma-separated list of codes (e.g., `# noqa: F401, F841`).
+psh/cli.py:11:8: F401 [*] `os` imported but unused
+Found 1 error.
+[*] 1 fixable with the `--fix` option.
+
+Broad lint gate FAILED (ruff-broad.toml, campaign ratchet) -- fix the findings
+```
+(Narrow pass "All checks passed!"; broad pass then reports F401 and aborts before pytest.
+The cosmetic "Invalid `# noqa` directive" warning is from the brief's verbatim comment
+text containing the substring "noqa"; it does not affect the F401 finding.)
+
+**Demo 2 — same unused import in `psh/_legacy.py` → broad pass stays GREEN (grandfathered):**
+
+```
+$ printf '\nimport os  # noqa-free deliberate violation\n' >> psh/_legacy.py
+$ ./run-tests --fast --llm 2>&1 | head -8
+warning: Invalid `# noqa` directive on psh/_legacy.py:4754: expected `:` followed by a comma-separated list of codes (e.g., `# noqa: F401, F841`).
+All checks passed!
+All checks passed!
+0 errors, 0 warnings, 0 informations
+...............................s........................................ [  9%]
+........................................................................ [ 19%]
+........................................................................ [ 29%]
+........................................................................ [ 39%]
+```
+(Both ruff passes "All checks passed!" — the broad pass excludes `_legacy.py`, the narrow
+pass ignores F401 — pyright "0 errors", and pytest proceeds. F401 in the grandfathered
+file did not fail any gate.)
+
+**Demo 3 — bare `except` in `psh/_legacy.py` → NARROW pass FAILS (E722, never grandfathered):**
+
+```
+$ printf '\ntry:\n    pass\nexcept:\n    pass\n' >> psh/_legacy.py
+$ ./run-tests --fast --llm 2>&1 | head -8
+psh/_legacy.py:4756:1: E722 Do not use bare `except`
+Found 1 error.
+
+Lint gate FAILED -- fix the findings above, or add a noqa WITH AN INLINE
+REASON if the code is deliberate (a bare noqa is a silent failure).
+These rules mechanize prompts/directives.md PD#2 and PD#6; they are not style.
+Linting (ruff, narrow PD set) ...
+```
+(The narrow PD set gates `_legacy.py` too — E722 fires and aborts before the broad/pyright
+passes. After each demo: `git checkout -- psh/cli.py psh/_legacy.py`; `git diff psh/`
+empty, confirming `_legacy.py` untouched.)
+
+**Extra red-capability (HARD RULE / PD#14) — missing pyright FAILS, never silently skips:**
+
+```
+$ python scratchpad/pyright_missing_demo.py   # ruff mocked present, pyright+uvx absent
+ERROR: neither `pyright` nor `uvx` is on PATH, so the type gate cannot run.
+       The suite is NOT green without it -- it is unverified.
+       Install it via `uv pip install .[test]` (adds pyright) or `pip install pyright`.
+...
+run_gates() returned: 1  (expect 1 -- FAIL, not a skip)
+PASS: missing pyright fails loudly with an actionable message.
+```
+
+**Step 6 — full verification (install brings in pyright; three gates then green fast tier):**
+
+```
+$ uv pip install .[test] 2>&1 | tail -1
+ ~ pantheon-sitehealth-emails==0.2.0 (from file:///workspace)
+
+$ ./run-tests --fast --llm 2>&1 | tail -6
+25 snapshots passed.
+727 passed, 1 skipped, 2 deselected in 26.80s
+Linting (ruff, narrow PD set) ...
+Linting (ruff-broad.toml, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+
+$ ./run-tests --fast --llm   # LLM_SUMMARY line:
+LLM_SUMMARY passed=727 failed=0 error=0 skipped=1 xfailed=0 xpassed=0
+```
+
+**pyright baseline (over the gated scope `psh/` minus `_legacy.py`):** `0 errors, 0
+warnings, 0 informations` (`uvx pyright`, reading `[tool.pyright]`). Whole-tree baseline
+for the ledger is Task 5's line item.
+

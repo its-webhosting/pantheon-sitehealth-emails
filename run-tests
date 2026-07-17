@@ -33,15 +33,32 @@ def ruff_argv():
     return None
 
 
-def run_ruff():
-    """The lint gate.  Returns an exit code; 0 means clean.
+def pyright_argv():
+    """How to invoke pyright here, or None.  Same fallback pattern as ruff_argv()."""
+    if shutil.which("pyright"):
+        return ["pyright"]
+    if shutil.which("uvx"):
+        return ["uvx", "pyright"]
+    return None
 
-    Runs the NARROW rule set from pyproject.toml (E722/BLE001/S105/S106) -- each of which
-    mechanizes a directive in prompts/directives.md.  No --select here: pyproject is the
-    single source of truth, and duplicating the flags would be a second one.
 
-    Output is `concise`, so a finding names the file, line, and rule.  "lint failed" is not
-    an acceptable diagnostic (PD#5: failures surfaced actionably to the operator).
+def run_gates():
+    """The lint + type gates.  Returns an exit code; 0 means every gate is clean.
+
+    Three gates run in order, each aborting the step on the first nonzero result -- exactly
+    like the single lint call this generalized -- so a later gate's green never hides an
+    earlier gate's red:
+      1. ruff, the NARROW PD rule set from pyproject.toml (E722/BLE001/S105/S106) -- each
+         mechanizes a directive in prompts/directives.md; runs EVERYWHERE, including the
+         files ruff-broad.toml grandfathers.
+      2. ruff, the BROAD campaign ratchet from ruff-broad.toml (select=ALL minus a
+         grandfathered exclude list; CAMPAIGN.md section 13).
+      3. pyright, standard mode over psh/ minus _legacy.py (pyproject [tool.pyright]).
+
+    Each gate prints a one-line label first, so a failure names its own gate (PD#1:
+    failures surfaced actionably to the operator).  No --select on either ruff pass: the
+    config files are the single source of truth, matching .claude/hooks/ruff-check.sh.
+    Output is `concise`, so a ruff finding names the file, line, and rule.
     """
     argv = ruff_argv()
     if argv is None:
@@ -56,7 +73,7 @@ def run_ruff():
         )
         return 1
 
-    print("Linting (ruff, narrow rule set from pyproject.toml) ...")
+    print("Linting (ruff, narrow PD set) ...")
     completed = subprocess.call(
         [*argv, "check", "--output-format", "concise", "."], cwd=str(ROOT)
     )
@@ -65,6 +82,41 @@ def run_ruff():
             "\nLint gate FAILED -- fix the findings above, or add a noqa WITH AN INLINE\n"
             "REASON if the code is deliberate (a bare noqa is a silent failure).\n"
             "These rules mechanize prompts/directives.md PD#2 and PD#6; they are not style.",
+            file=sys.stderr,
+        )
+        return completed
+
+    print("Linting (ruff-broad.toml, campaign ratchet) ...")
+    completed = subprocess.call(
+        [*argv, "check", "--config", "ruff-broad.toml", "--output-format", "concise", "."],
+        cwd=str(ROOT),
+    )
+    if completed != 0:
+        print(
+            "\nBroad lint gate FAILED (ruff-broad.toml, campaign ratchet) -- fix the findings\n"
+            "above, or add a justified ignore/noqa.  An increment un-grandfathers a file by\n"
+            "deleting it from ruff-broad.toml's exclude list, so a clean tree is the entry fee.",
+            file=sys.stderr,
+        )
+        return completed
+
+    print("Type-checking (pyright, campaign ratchet) ...")
+    pargv = pyright_argv()
+    if pargv is None:
+        # PD#1 again: pyright missing must FAIL, never silently skip -- a gate that does not
+        # run is the shim failure mode CLAUDE.md warns about (a green that was never earned).
+        print(
+            "ERROR: neither `pyright` nor `uvx` is on PATH, so the type gate cannot run.\n"
+            "       The suite is NOT green without it -- it is unverified.\n"
+            "       Install it via `uv pip install .[test]` (adds pyright) or `pip install pyright`.",
+            file=sys.stderr,
+        )
+        return 1
+    completed = subprocess.call([*pargv], cwd=str(ROOT))
+    if completed != 0:
+        print(
+            "\nType gate FAILED (pyright, campaign ratchet) -- fix the type findings above.\n"
+            "Scope is psh/ minus _legacy.py; it ratchets up as increments move typed code in.",
             file=sys.stderr,
         )
     return completed
@@ -80,11 +132,11 @@ def main(argv):
     if "--record" in ours:
         return subprocess.call([sys.executable, str(ROOT / "tests" / "tools" / "record.py")])
 
-    # Lint BEFORE pytest, and gate on it -- in --fast and full alike.  It runs in about a
-    # second, and a red gate here means the tree violates a directive, which no amount of
-    # green tests makes acceptable.  --record is exempt: it re-records fixtures from live
-    # Pantheon and never reaches this line.
-    rc = run_ruff()
+    # Lint AND type-check BEFORE pytest, and gate on them -- in --fast and full alike.  They
+    # run in a few seconds, and a red gate here means the tree violates a directive or the
+    # campaign ratchet, which no amount of green tests makes acceptable.  --record is exempt:
+    # it re-records fixtures from live Pantheon and never reaches this line.
+    rc = run_gates()
     if rc != 0:
         return rc
 

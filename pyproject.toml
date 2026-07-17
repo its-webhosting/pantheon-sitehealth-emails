@@ -41,6 +41,8 @@ test = [
     # canned responses around the httpx-based seam:
     "httpx",
     "beautifulsoup4",
+    # Campaign ratchet, type half (CAMPAIGN.md section 13): ./run-tests gates on pyright.
+    "pyright",
 ]
 
 [build-system]
@@ -64,9 +66,10 @@ packages = []
 
 [tool.ruff.lint]
 # NARROW BY DESIGN.  Every rule here mechanizes a standard that already exists in prose;
-# nothing here is new policy.  Ruff's default set is NOT adopted -- it reports 55
-# unrelated findings (F541/E741/F841/...).  Broadening is deferred until after the
-# modularization campaign; see the TODO in README.md.
+# nothing here is new policy.  This narrow set runs EVERYWHERE, including files the
+# campaign ratchet grandfathers.  The broad best-practice set lives in ruff-broad.toml
+# (campaign ratchet, CAMPAIGN.md section 13); both passes run in ./run-tests and the
+# edit-time hook.  The two files merge at campaign increment I14.
 select = [
     "E722",    # bare except        <- prompts/directives.md PD#2 "every error has a name"
     "BLE001",  # blind except       <- prompts/directives.md PD#2
@@ -79,6 +82,15 @@ select = [
 # substitution test).  All 5 current S105 hits are fixtures; none is a real secret.
 # Verified 2026-07-16.
 "tests/*" = ["S105", "S106"]
+
+[tool.pyright]
+# Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode at I0 because
+# psh/cli.py re-exports from the untyped legacy module; the strictness ratchets up as
+# increments move typed code in (ledger tracks).  _legacy.py is grandfathered like in
+# ruff-broad.toml.
+include = ["psh"]
+exclude = ["psh/_legacy.py"]
+typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
