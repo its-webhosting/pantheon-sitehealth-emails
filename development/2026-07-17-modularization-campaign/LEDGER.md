@@ -109,3 +109,6 @@ closing docs commit (ledger + CAMPAIGN amendments + SPEC acceptance + README pyr
   extend-select" and "executionEnvironments", both superseded by amendment 2 above);
   ledger reanchor note corrected to "22 test files plus checkload.py" (23 files total).
   Both changes doc-accuracy only.
+- Amendment (2026-07-17, final I0 code review, spec axis): D10's Decision cell still said
+  "console-script" after amendment 1 changed only §11 row I0 — CAMPAIGN.md briefly
+  self-contradicted. D10 cell now matches. Doc-accuracy only.

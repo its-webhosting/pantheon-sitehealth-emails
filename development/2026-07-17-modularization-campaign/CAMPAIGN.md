@@ -77,7 +77,7 @@ fixes in I1).
 | D7 | `--only-warn` plan rec | **In campaign** (I7) | Small, no golden impact, existing TODO |
 | D8 | Parallel-ready | **Design constraint only** (§3.4) | Near-free now; actual parallelism stays a README TODO |
 | D9 | CSV attachment / cached-% / env-lock | **README TODO** | Each changes rendered email → golden churn mid-campaign |
-| D10 | Packaging | **Real package + console-script + thin shim** (I0) | Dissolves the extension-less-script problem; normal imports for tests/pyright/ruff |
+| D10 | Packaging | **Real package + thin shim** (I0; console-script dropped — see LEDGER I0 amendment 1) | Dissolves the extension-less-script problem; normal imports for tests/pyright/ruff |
 
 ## 3. Target architecture
 
