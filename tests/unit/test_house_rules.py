@@ -24,8 +24,12 @@ REPO = Path(__file__).resolve().parent.parent.parent
 # test, test_shim_composability.py, and the fake terminus) that set up shims and fixtures.
 # An implementer who globs the repo gets red immediately and "fixes" it by loosening this
 # assertion -- turning the instrument into a lie.
+# "psh" is the program BODY (psh/_legacy.py + the modules the campaign carves out of it);
+# "pantheon-sitehealth-emails" is the thin shim.  Both are feature code -- the body moved into
+# psh/ at campaign I0, so the scope must name psh/ or this guard would be blind to the largest
+# feature-code files in the repo (added I2).
 ENVIRON_SCOPE = ("check", "plugin", "dns_classify.py", "script_context.py",
-                 "pantheon-sitehealth-emails")
+                 "pantheon-sitehealth-emails", "psh")
 
 # CLAUDE.md § Required runtime credentials: "Credentials are never read from the environment
 # by feature code: everything flows through config `<{env ...}>` / `<{secret env ...}>`
@@ -53,6 +57,11 @@ def test_only_two_files_read_os_environ_directly():
     RED DEMONSTRATION (PD#14, observed 2026-07-16): adding `os.environ` to a third file in
     scope -- e.g. check/dns/hook.py -- fails this test naming that file.  Verified, then
     reverted.  A green run here is only evidence because that red run happened.
+
+    RED DEMONSTRATION (PD#14, observed 2026-07-17, for the `psh` scope added at campaign I2):
+    adding `_x = os.environ` to psh/_legacy.py fails this test naming `psh/_legacy.py` -- the
+    program body, which was outside this scope until I2 and would otherwise have been an
+    unguarded silent hole (PD#6).  Verified, then reverted.
     """
     sources = _scoped_sources(ENVIRON_SCOPE)
     # Nil guard: an empty glob would make every assertion below vacuously true -- GREEN,
