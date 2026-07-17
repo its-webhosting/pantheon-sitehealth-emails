@@ -3565,74 +3565,6 @@ A variety of support options are available.
                     }
                 )
 
-            #         # September 2025 - April 2026:
-            #         # Check to see if the site needs to to a newer generation of the Pantheon PHP runtime:
-            #         runtime_upgrade_needed = {
-            #             'dev': (envs['dev']['php_runtime_generation'] < 2),
-            #             'test': (envs['test']['php_runtime_generation'] < 2),
-            #             'live': (envs['live']['php_runtime_generation'] < 2),
-            #         }
-            #         if any(runtime_upgrade_needed.values()):
-            #             update_table_rows = ''
-            #             update_bullet_list = ''
-            #             for env in ['dev', 'test', 'live']:
-            #                 background_color = '#CCCFCA' if env == 'test' else '#fff'
-            #                 env_name = env.capitalize()
-            #                 gen = 'Gen 1' if runtime_upgrade_needed[env] else 'Gen 2'
-            #                 status_html = '&#x26A0;&#xfe0f; Action needed: <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">upgrade ASAP</a>' if runtime_upgrade_needed[env] else '&#x2705; OK'
-            #                 status_text = '🚨️ Action needed: upgrade ASAP' if runtime_upgrade_needed[env] else '✅ OK'
-            #                 update_table_rows += f'''
-            # <tr style="background-color: {background_color};">
-            # <td><div class="rt-data-header rt-plan">Environment</div><div class="rt-data rt-plan">{env_name}</div></td>
-            # <td><div class="rt-data-header rt-plan"">Generation</div><div class="rt-data rt-plan">{gen}</div></td>
-            # <td><div class="rt-data-header rt-plan">Status</div><div class="rt-data rt-plan">{status_html}</div></td>
-            # </tr>
-            # '''
-            #                 update_bullet_list += f'''
-            # * {env_name} environment:
-            #   - Generation: {gen}
-            #   - Status: {status_text}
-            #
-            # '''
-            #             site_notices.append({
-            #                 'type': 'alert',
-            #                 'icon': '&#x1F6A8;',  # police car light
-            #                 'csv': f'{site["name"]},updates-needed-runtime,{runtime_upgrade_needed['dev']},{runtime_upgrade_needed['test']},{runtime_upgrade_needed['live']}',
-            #                 'short': f'Action required: upgrade to PHP Runtime Generation 2',
-            #                 'message': f'''
-            # <p><strong>{site['name']}</strong> has environments that need to be upgraded to <a href="https://docs.pantheon.io/php-runtime-generation-2">Pantheon Runtime
-            # Generation 2</a> ASAP.</p>
-            # <p>From April 6 - 17, 2026, Pantheon will move all opted-out sites to Generation 2.  ITS strongly recommends that you
-            # <a href="https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade">test your environments that are still
-            # on Generation 1 with Generation 2, resolve any issues, and then manually opt them in to Generation 2</a> before then
-            # in order to avoid any issues.  After April 6, it will not be possible to
-            # move sites back to Generation 1 even if the site is out of service due to issues with Generation 2.
-            # </p>
-            # <div class="container">
-            # <table class="responsive-table site-updates">
-            # <thead><th class="rt-plan">Environment</th><th class="rt-plan">Generation</th><th class="rt-plan">Status</th></thead>
-            # <tbody>{update_table_rows}</tbody>
-            # </table>
-            # </div>
-            # ''',
-            #                 'text': f'''
-            # {site['name']} has environments that need to be upgraded to Pantheon
-            # Runtime Generation 2.
-            # <https://docs.pantheon.io/php-runtime-generation-2>
-            #
-            # From April 6 - 17, 2026, Pantheon will move all remaining sites to
-            # Generation 2.  ITS strongly recommends that you test your
-            # environments that are still on Generation 1 with Generation 2,
-            # resolve any issues, and then manually opt them in to Generation 2
-            # <https://docs.pantheon.io/php-runtime-generation-2#how-to-upgrade>
-            # before then in order to avoid any issues.  After April 6, it will
-            # not be possible to move sites back to Generation 1 even if the
-            # site is out of service due to issues with Generation 2.
-            #
-            # {update_bullet_list}
-            # ''',
-            #             })
-
             # April 2026 - September 2026:
             # Check to see if a PHP version upgrade is needed
             if envs["live"]["php_version"] in ("7.4", "8.1"):
@@ -4104,7 +4036,6 @@ remove PHP {new_php} sometime after September 30, 2026.
                 fontsize="small",
             )
 
-            # plt.show()
             buf = io.BytesIO()
             fig.savefig(buf, format="png")
             buf.seek(0)
@@ -4122,15 +4053,6 @@ remove PHP {new_php} sometime after September 30, 2026.
             # TODO: If Performance small and below Basic upgrade + no New Relic + No Solr + No Redis + mem usage low --> Switch to Basic
 
             # Load the overage protection data we need for this site and date range:
-            # if sc.options.verbose > 1:
-            #     results = db_session.query(PantheonOverageProtection).filter(
-            #         PantheonOverageProtection.site_id == site['id'],
-            #         PantheonOverageProtection.month.between(start_date, end_date)
-            #     ).all()
-            #     sc.debug('=== Overage protection data:')
-            #     for r in results:
-            #         sc.debug(r)
-            #     sc.debug('-----')
 
             site_plan_start = plan_over_time[0]["start"].replace(day=1)
             traffic_table_rows = db_retry(
@@ -4211,8 +4133,6 @@ remove PHP {new_php} sometime after September 30, 2026.
                     savings = abs(
                         cost_same[site["plan_name"]] - costs_best[site_recommended_plan]
                     )
-                    extra_message = ""
-                    extra_text = ""
                     if site_current_plan_index > site_recommended_plan_index:
                         if site_recommended_plan == "Basic":
                             # Basic is a better deal, but only if the site owner isn't using Performance features
@@ -4233,21 +4153,6 @@ remove PHP {new_php} sometime after September 30, 2026.
                                 sc.console.print(f"cheapest plan excluding Basic: {alt}")
                                 if alt != site_current_plan:
                                     sc.console.log(f"Found a better plan: {alt}")
-                                    extra_message = f"""
-<p>Alternatively, you could switch the site to Pantheon's <strong>Basic</strong> plan for a savings of up to
-<strong>${savings:,.2f}</strong>, if you do not need any of the Performance plan features.
-If you want to switch to the <strong>Basic</strong> plan, please do so via the
-<a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">ITS Web Services Portal</a>
-before June 30.</p>
-"""
-                                    extra_text = f"""
-Alternatively, you could switch the site to Pantheon's Basic plan for
-a savings of up to ${savings:,.2f}, if you do not need any of the
-Performance plan features. If you want to switch to the Basic plan,
-please do so via the ITS Web Services Portal
-<https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
-before June 30.
-"""
                                     savings = abs(
                                         cost_same[site["plan_name"]] - costs_best[alt]
                                     )
@@ -4713,8 +4618,6 @@ an additional pro-rated bill or credit in the following month.
                 emails_sent += 1
                 site_emailed = True
                 smtp_connection.quit()
-
-            plt.close(fig)  # needed to free up memory when sc.options.all is True
 
             # TODO: % Pages Cached -- should be Cloudflare
             # TODO: CSV attachment
