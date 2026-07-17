@@ -361,6 +361,10 @@ Your report MUST cite, by number, the Spine directives you applied.
 
 `prompts/implementation-standards.md` MUST document dispatching with `subagent_type: "psh-implementer"`, in the same section that already overrides the TDD default — the established place this project changes a skill's default.
 
+> **REGISTRATION (MUST).** `.claude/agents/` is read at **session start**. An agent file created or renamed mid-session is **not dispatchable until the session reloads** — `subagent_type: "psh-implementer"` errors with *"Agent type not found."* §11 #4d greps the file, which proves only that the text exists; **registration is the evidence** (PD#14). §11 #4d-ii asserts it. Discovered by hitting it: the first dispatch after creating the agents failed. See §9 #22.
+>
+> **The dangerous failure is not the error — it is the fallback.** A controller that hits "not found" and quietly reverts to `general-purpose` gets the old curation problem with none of the signal. A dispatch that cannot use `psh-implementer` MUST stop and say so, never silently substitute.
+
 > **Honest limit.** `superpowers:subagent-driven-development`'s own template dispatches `Subagent (general-purpose)`, so the controller must still *choose* the custom type. That is a single uniform parameter, not a per-task curation judgment — a large reduction in failure surface, **not zero**. This is "less prose," not "code." Claiming otherwise would repeat §9's pattern.
 
 **(b) The report must cite the Spine *and quote it verbatim* — which makes "did it read?" observable.** Added to § Definition of Done (§7.3):
@@ -577,6 +581,7 @@ Recorded because `new-feature-standards.md` § "Two things the skill does not te
 | 15 | §4.4: showed `"PostToolUse"` as a top-level `settings.json` key | **Silently inert.** Hooks nest under `"hooks"`, beside `UserPromptSubmit`. A top-level key is accepted and does nothing — no error, no warning — and §11 #4 pipes into the script directly, so it **cannot** detect the misregistration. Now shown nested; #4e asserts the registration. | Adversarial review round 3 |
 | 16 | §5.1: "strip the Posture paragraph — it is the remaining 2 duplicated lines" | **Would have deleted a standard.** That Posture is 5 lines; only 13–14 are duplicated. Lines 15–17 are unique and carry the **execution-bar rule** ("would this survive adversarial review"). §11 #5 counts only *duplicated* lines, so it would have reported **green** after the deletion. | Adversarial review round 3 |
 | 17 | §5.2(b): verify the verbatim quote with `grep -qF` | **Broken in both directions** — and it was round 2's own fix, shipped unexecuted. `directives.md` hard-wraps and grep is line-oriented, so an **honest** quote spanning a wrap exits 1 (false red); a multi-line `-F` pattern matches if **any** line matches, so a clause with one real line and two invented ones exits 0 (false green). Both reproduced. Now normalizes whitespace on both sides. | Adversarial review round 3 |
+| 22 | §5.2: creating `.claude/agents/psh-*.md` makes them dispatchable | **Not until the session reloads.** `.claude/agents/` is read at session start; the first dispatch after creating them failed with *"Agent type 'psh-implementer' not found."* §11 #4d greps the file — a claim — and would never have caught it; **registration is the evidence**. Same defect as #15 (`settings.json` nesting): I wrote a criterion for that instance and did not generalize the class. §11 #4d-ii added. | Hitting it — the first dispatch through the new mechanism errored |
 | 21 | §13: "§4 … Lands first because §11's 'before' numbers are pinned to today's tree" | **Reason does not hold.** §5 edits only markdown and cannot move a ruff count, so §4-first was not required — and it had an unnamed cost: §5 creates `psh-implementer`, so §4's subagents would have been dispatched by the curation mechanism §5 replaces. Order revised to §3+§5 → §4, authorized before implementation. | Caught at implementation start, checking §13's stated reason against what §5 actually touches |
 | 19 | §7.3: exempt a **named list of CLAUDE.md sections** (draft 1), then a **bare predicate** (draft 2) | **Both over-broad.** The list measured **~288 of 728 lines (~40%)** and was unbounded (it must grow with every new section). The bare predicate was plausibly *wider still* — it covers both rich gotchas, `db_retryable`, the SELECT commit, `expire_on_commit`, `TrafficRow`-not-ORM, the two-`sitecustomize` trap, the goldens trap, the `.py` symlink, `html_to_text`, the re-indent trap, the `-results.json` metadata; 2 of 3 worked examples were EXEMPT. Now bounded by a **discharge condition**: exempt *unless a named test already guards the defect*. | Adversarial review rounds 1 and 2 |
 | 20 | §7.3: used the **per-phase data contract table** as the example of prose that retires | **Backwards.** Packages are the contract's *consumers*, so modularization makes it **more** load-bearing — §7.2's invariant list already says "the per-phase data contract is honored." It is now the table's cautionary EXEMPT row. | Adversarial review round 1 |
@@ -713,7 +718,16 @@ $ wc -c prompts/directives.md
 
 # 4d. The implementer agent exists and carries the read list (§5.2a).
 $ grep -c "prompts/directives.md" .claude/agents/psh-implementer.md .claude/agents/psh-reviewer.md
-#    EXPECT: >= 1 for BOTH (§5.2a, and F12's reviewer gap).
+#    EXPECT: >= 1 for BOTH (§5.2a, and the reviewer gap).
+
+# 4d-ii. The agents are REGISTERED, not merely present (§5.2).  #4d greps a file --
+#        that is a claim.  Dispatchability is the evidence (PD#14).  .claude/agents/
+#        is read at SESSION START, so this MUST be checked in a session that began
+#        after the files landed:
+#          dispatch a trivial task with subagent_type: "psh-implementer"
+#    EXPECT: it runs.  "Agent type not found" means the session predates the files.
+#    A controller that cannot dispatch psh-implementer MUST STOP -- never fall back
+#    to general-purpose, which is the curation problem with no signal.
 
 # 5. prompts/ duplication is gone.
 $ python3 - <<'EOF'
@@ -889,4 +903,5 @@ Per the quality bar. Not to be answered now.
 5. Is PD#14 being applied to *new* instruments, or only recited about the known ones?
 6. Was removing `security-guidance` felt at all — did `/security-review` + PD#6 + ruff `S105/S106` cover it?
 7. Was uninstalling `cloudflare` (§6.1) felt? Did the two lifted MCP servers (§6.2) cover `plugin/cloudflare/` and `check/cloudflare/` work, or was a skill missed?
-8. **§1c is only partially addressed** (§7.2 covers the Campaign; nothing covers the general case). Once the Campaign has produced LIGHT-eligible work in volume, does a tier model earn its place — or did thin increment specs (§7.2) already absorb the pain?
+8. **§4 was implemented inline, not through `psh-implementer`** — the agents could not register mid-session (§9 #22), and re-running the phase through them was judged not worth a session restart. So the mechanism shipped **un-dogfooded**: its first real use will be increment 1 of the Campaign. Watch that closely; §15 Q4 is the check.
+9. **§1c is only partially addressed** (§7.2 covers the Campaign; nothing covers the general case). Once the Campaign has produced LIGHT-eligible work in volume, does a tier model earn its place — or did thin increment specs (§7.2) already absorb the pain?

@@ -384,13 +384,15 @@ tool stays reusable by other institutions.
 
 ## Conventions & gotchas
 
-- **`pantheon-sitehealth-emails.py` is a committed symlink to `pantheon-sitehealth-emails`, and
-  exists only so CodeGraph can index the main program.** It is NOT a second copy and NOT the file
-  to edit — edit `pantheon-sitehealth-emails`. CodeGraph picks a parser by file extension
-  (`path.extname()`), so an extension-less file is silently skipped: before this symlink existed,
-  the index held 117 files and **zero symbols from the ~4,600-line core program**, so every
-  `codegraph_explore` answered from `check/`/`plugin/`/`tests/` while blind to the file being
-  edited. The symlink is tracked (not git-ignored) on purpose — a git-ignored one would vanish on
+- **`pantheon-sitehealth-emails.py` is a committed symlink to `pantheon-sitehealth-emails`. It is
+  NOT a second copy and NOT the file to edit — edit `pantheon-sitehealth-emails`.** It exists
+  because **three** tools key off the file extension and were therefore blind to the
+  extension-less main program: **CodeGraph** (picks a parser by `path.extname()`), **`pyright-lsp`**
+  (binds `.py`/`.pyi`), and **ruff**. One symlink fixes all three; deleting it silently re-blinds
+  all three. What that blindness looked like: before the symlink, the CodeGraph index held 117
+  files and **zero symbols from the ~4,600-line core program**, so every `codegraph_explore`
+  answered from `check/`/`plugin/`/`tests/` while blind to the file being edited. The symlink is
+  tracked (not git-ignored) on purpose — a git-ignored one would vanish on
   a fresh clone and the blindness would return silently. Known limitation that remains: the tests
   import the program via `SourceFileLoader` on the **dash** name, so CodeGraph cannot link tests
   to its symbols and reports "no covering tests found" for them; the symbol index and call graph
@@ -414,6 +416,16 @@ tool stays reusable by other institutions.
   trust the goldens — not eyeball `git diff -w`.
 
 ## Testing
+
+**`./run-tests` lints before it tests, and gates on it.** It runs ruff over the tree with the
+**narrow** rule set from `pyproject.toml` — `E722`, `BLE001`, `S105`, `S106`, each of which
+mechanizes a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy —
+and refuses to run pytest on a finding. Ruff's default rule set is **not** adopted (it reports
+~55 unrelated findings; broadening is a `README.md` TODO deferred until after the modularization
+campaign). `[tool.ruff]` deliberately pins **no `target-version`**: ruff infers it from
+`requires-python`, and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program
+actually uses. `.claude/hooks/ruff-check.sh` runs the same rule set at edit time (advisory, via
+`PostToolUse`); both read `pyproject.toml`, neither passes `--select`.
 
 There is a pytest harness under `tests/` (built 2026-07; design in
 `development/2026-07-04-test-harness/SPEC.md`). Run it with `./run-tests` (wrapper over
@@ -575,8 +587,15 @@ Non-obvious things the harness relies on:
 ## Reusable prompts (`prompts/`)
 
 `prompts/` holds the repo's own workflow prompts — read the relevant one before doing that kind of
-work, and cite it by name rather than re-deriving the conventions:
-`new-feature-standards.md` (how features get specced),
+work, and cite it by name rather than re-deriving the conventions.
+
+**`prompts/directives.md` is the Spine** and comes first: the ONE copy of the Posture, the 14
+Prime Directives, the Engineering Preferences, and the spec quality bar. Every other file in
+`prompts/` is a *delta* that cites directives **by number** and restates none of them. This
+matters because they used to live in two files and **drifted** — PD#11 gained a `/domain-modeling`
+mandate in one copy and not the other, and the adversarial reviewer read the stale one.
+
+The deltas: `new-feature-standards.md` (how features get specced),
 `implementation-standards.md` (the standards layered on `superpowers:subagent-driven-development`;
 the intended invocation is "implement everything per the spec doc(s), adhering to the standards in
 `prompts/implementation-standards.md`"), `debugging-standards.md` (the standards layered on
@@ -589,6 +608,23 @@ the source of truth.
 `prompts/` holds the *standards* (the bar to hold work to); **`docs/agents/`** holds the *wiring*
 the installed skills read (where issues live, which glossary to read, the triage vocabulary). See
 **Agent skills** below.
+
+### Dispatching subagents
+
+**`.claude/agents/psh-implementer.md` and `psh-reviewer.md`** carry the read list
+(`prompts/directives.md` + `prompts/implementation-standards.md` + `CLAUDE.md` + the brief), so
+the standards reach a fresh-context subagent as **configuration** rather than as prose the
+controller has to remember to paste. Dispatch every code-touching subagent (implementers and
+fix-subagents) as `psh-implementer` and every reviewer as `psh-reviewer`;
+`superpowers:subagent-driven-development`'s template says `general-purpose`, and
+`prompts/implementation-standards.md` overrides it. **A dispatch that cannot use them must stop
+and say so** — falling back to `general-purpose` restores the curation problem with none of the
+signal. Note `.claude/agents/` is read at **session start**: a newly added agent is not
+dispatchable until the session reloads.
+
+Every task report must cite the directives it applied **by number and with a verbatim quote**,
+grep-checkable against the Spine — that is the only observable separating "read the standards"
+from "didn't".
 
 ## Agent skills
 

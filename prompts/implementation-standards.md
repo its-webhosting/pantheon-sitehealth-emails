@@ -68,7 +68,7 @@ you don't**. The two differ in ways that decide the work here:
 - **Test only at pre-agreed seams.** Matt's skill forbids a test at an unconfirmed seam and
   tells the implementer to confirm seams *with the user* — an implementer subagent has fresh
   context and cannot. So **the spec declares the seams** (§ *Spec & internal-doc quality bar*
-  in `new-feature-standards.md`) and you copy them into the brief verbatim. A task whose spec
+  in `prompts/directives.md`) and you copy them into the brief verbatim. A task whose spec
   names no seam is `NEEDS_CONTEXT`, not a licence to pick one.
 - **Refactoring is not part of the red→green loop.** It belongs to review
   (`prompts/adversarial-review.md`), not the implementer's cycle. Superpowers' TDD puts it
@@ -76,13 +76,17 @@ you don't**. The two differ in ways that decide the work here:
 
 ## Directives at implementation time
 
-Your Prime Directives (`prompts/new-feature-standards.md`), re-expressed as what the
-implementer does **in code** — inject the ones each task touches:
+The Spine's Prime Directives (`prompts/directives.md`), re-expressed as what the implementer
+does **in code**. The implementer reads all of them via the read list above — this section is
+the translation, not a menu to pick from:
 
 1. **Every error has a name — in code.** Raise a named exception (this codebase uses
    `TerminusError` and friends), add the test that trips it, and wire the operator-visible
-   message at the right verbosity. `except Exception`/bare `except` is a review defect —
-   call it out, don't write it.
+   message at the right verbosity. `except Exception`/bare `except` **fails the lint gate**
+   (`BLE001`/`E722`) — you'll see it at edit time via the hook, and `./run-tests` blocks on
+   it. A deliberate catch-all carries `# noqa: BLE001` **with an inline reason** — a bare
+   `noqa` is itself a silent failure (PD#1). `main()`'s `except BaseException` is the worked
+   example: the reason cites why enumerating classes lost 249 sites' work.
 2. **Zero silent failures.** A code path that can fail without the system, the operator, or
    the run's exit status showing it is a defect, not a smaller version of done.
 3. **Shadow paths are written and tested.** For every new flow, implement and cover the

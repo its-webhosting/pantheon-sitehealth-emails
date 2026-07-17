@@ -1,7 +1,10 @@
 [project]
 name = "pantheon-sitehealth-emails"
 version = "0.2.0"
-requires-python = ">=3.11"
+# 3.12+, not 3.11: the program uses PEP 701 backslash escapes inside f-strings at
+# 5 sites (grep `\\,` in the notice builders), which are a SyntaxError at import on
+# 3.11.  This also drives ruff's target-version -- see [tool.ruff] below.
+requires-python = ">=3.12"
 dependencies = [
     "rich",
     "SQLAlchemy",
@@ -46,6 +49,31 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 py-modules = []
+
+[tool.ruff]
+# NO target-version.  Ruff infers it from `requires-python`, and that is load-bearing:
+# pinning target-version = "py312" here MASKS the 3.11-vs-PEP-701 defect entirely --
+# the 10 invalid-syntax errors simply vanish -- so a future session reverting
+# requires-python to ">=3.11" would get SILENCE instead of a failure.  The instrument
+# must stay red-capable.  See prompts/directives.md PD#14.
+
+[tool.ruff.lint]
+# NARROW BY DESIGN.  Every rule here mechanizes a standard that already exists in prose;
+# nothing here is new policy.  Ruff's default set is NOT adopted -- it reports 55
+# unrelated findings (F541/E741/F841/...).  Broadening is deferred until after the
+# modularization campaign; see the TODO in README.md.
+select = [
+    "E722",    # bare except        <- prompts/directives.md PD#2 "every error has a name"
+    "BLE001",  # blind except       <- prompts/directives.md PD#2
+    "S105",    # hardcoded password <- prompts/directives.md PD#6 "security is not optional"
+    "S106",    # hardcoded password <- prompts/directives.md PD#6
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures deliberately carry fake credentials (e.g. "hunter2" in a config
+# substitution test).  All 5 current S105 hits are fixtures; none is a real secret.
+# Verified 2026-07-16.
+"tests/*" = ["S105", "S106"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

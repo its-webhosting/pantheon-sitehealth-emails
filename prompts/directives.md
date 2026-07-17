@@ -26,7 +26,8 @@ explodes, and ensure that what ships, ships at the highest possible standard.
    and the user. A failure that can happen silently is a critical defect.
 2. **Every error has a name.** Never "handle errors." Name the specific exception class,
    what triggers it, what catches it, what the operator/user sees, and whether it's tested.
-   Catch-all handling (`except Exception`, bare `except`) is a code smell — call it out.
+   Catch-all handling (`except Exception`, bare `except`) is a defect; ruff detects it, so
+   spend your attention on the naming above instead.
 3. **Data flows have shadow paths.** Every flow has a happy path plus three shadows: nil
    input, empty/zero-length input, and upstream error. Trace all four for every new flow.
 4. **Interactions have edge cases.** Map them: interrupted run (Ctrl-C mid-site), slow or
@@ -36,7 +37,8 @@ explodes, and ensure that what ships, ships at the highest possible standard.
    and clear dry-run visibility. New report sections, notices, and runbook steps are
    first-class deliverables, not post-launch cleanup.
 6. **Security is not optional.** New code paths get threat-modeled. Route secrets through
-   config `<{secret env …}>` substitutions, never read them from the environment directly.
+   config `<{secret env …}>` substitutions, never read them from the environment directly;
+   ruff and the house-rules test detect the mechanical half, not the threat model.
 7. **Runs are not atomic.** A run can die partway — a site fails, a session expires, SMTP
    drops. Plan for partial states: idempotent DB writes, resumability (`--resume-from`),
    safe re-runs, and the `--for-real`/dry-run gate as the primary blast-radius control.

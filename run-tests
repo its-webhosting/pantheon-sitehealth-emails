@@ -11,11 +11,63 @@ Two audiences, one entry point (SPEC §5.8):
 
 Any other arguments (-k EXPR, -m MARK, paths, ...) are passed straight through to pytest.
 """
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def ruff_argv():
+    """How to invoke ruff here, or None if it cannot be invoked at all.
+
+    `ruff` is not necessarily on PATH (this repo installs deps with uv), so fall back to
+    `uvx ruff`.  Mirrors .claude/hooks/ruff-check.sh -- the two must agree on the binary
+    just as they agree on the rule set (both read pyproject.toml; neither passes --select).
+    """
+    if shutil.which("ruff"):
+        return ["ruff"]
+    if shutil.which("uvx"):
+        return ["uvx", "ruff"]
+    return None
+
+
+def run_ruff():
+    """The lint gate.  Returns an exit code; 0 means clean.
+
+    Runs the NARROW rule set from pyproject.toml (E722/BLE001/S105/S106) -- each of which
+    mechanizes a directive in prompts/directives.md.  No --select here: pyproject is the
+    single source of truth, and duplicating the flags would be a second one.
+
+    Output is `concise`, so a finding names the file, line, and rule.  "lint failed" is not
+    an acceptable diagnostic (PD#5: failures surfaced actionably to the operator).
+    """
+    argv = ruff_argv()
+    if argv is None:
+        # PD#1, zero silent failures: a gate that cannot run must not quietly stop gating.
+        # Skipping here would let E722/BLE001/S105 land while the suite still reported green
+        # -- an instrument that lies (PD#14).  Fail loudly and actionably instead.
+        print(
+            "ERROR: neither `ruff` nor `uvx` is on PATH, so the lint gate cannot run.\n"
+            "       The suite is NOT green without it -- it is unverified.\n"
+            "       Install uv (see README.md) or `pip install ruff`.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("Linting (ruff, narrow rule set from pyproject.toml) ...")
+    completed = subprocess.call(
+        [*argv, "check", "--output-format", "concise", "."], cwd=str(ROOT)
+    )
+    if completed != 0:
+        print(
+            "\nLint gate FAILED -- fix the findings above, or add a noqa WITH AN INLINE\n"
+            "REASON if the code is deliberate (a bare noqa is a silent failure).\n"
+            "These rules mechanize prompts/directives.md PD#2 and PD#6; they are not style.",
+            file=sys.stderr,
+        )
+    return completed
 
 
 def main(argv):
@@ -27,6 +79,14 @@ def main(argv):
 
     if "--record" in ours:
         return subprocess.call([sys.executable, str(ROOT / "tests" / "tools" / "record.py")])
+
+    # Lint BEFORE pytest, and gate on it -- in --fast and full alike.  It runs in about a
+    # second, and a red gate here means the tree violates a directive, which no amount of
+    # green tests makes acceptable.  --record is exempt: it re-records fixtures from live
+    # Pantheon and never reaches this line.
+    rc = run_ruff()
+    if rc != 0:
+        return rc
 
     pytest_args = ["-p", "no:cacheprovider"]
 

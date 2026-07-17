@@ -4718,7 +4718,7 @@ an additional pro-rated bill or credit in the following month.
 
             # TODO: % Pages Cached -- should be Cloudflare
             # TODO: CSV attachment
-    except BaseException as e:
+    except BaseException as e:  # noqa: BLE001 -- DELIBERATE; see the comment below and CLAUDE.md § Database
         # ONE flush path for every way out of the site loop, because finish_run() is the only
         # writer of the run's artifacts and main() has no `finally`.  Enumerating exception classes
         # is what let an SMTP hiccup on site 250 of 300, a php inliner failure, a SystemExit

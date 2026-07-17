@@ -9,7 +9,13 @@ Code contributions are gratefully accepted!
 
 ## Installation
 
-Works with Python 3.13 and 3.12.  It should work with Python 3.11 but that has not been tested.  It will not work with Python 3.10 or earlier versions.
+Requires Python 3.12 or later; it works with 3.13 and 3.12.  It will **not** work with Python
+3.11 or earlier: the script uses backslash escapes inside f-strings ([PEP 701][pep701], new in
+3.12), so on 3.11 it fails immediately with `SyntaxError: f-string expression part cannot
+include a backslash`.  This is enforced by `requires-python` in `pyproject.toml`, which also
+drives ruff's syntax checking.
+
+[pep701]: https://peps.python.org/pep-0701/
 
 Running `brew install python@3.12` should work for macOS users.
 
@@ -262,7 +268,10 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 * rework everything from ~3,700 line script into a combination of checks (in the `checks` directory), plugins (where appropriate), and other Python files/packages
   * refactor the program to take the most advatage of the program's check framework,plugin framework, and configuration framework, moving checks, capabilities (such as fetching secrets from AWS versus another source), and other funtionality under `./checks` and `./plugins` wherever it is appropriate. Similarly, we will modify all parts of the program to modify the program's configuration framework. Document plugin system and config file as part of this.
   * possibly (check with Claude): expand the hooks/phases (possibly adding producer/consumer dependenencies for DAG ordering)
-* Add ruff for linting+formatting, switch from "house styles" to best-practice/standard Python styles
+* ~~Add ruff for linting~~ — **done, narrowly** (2026-07-16). `[tool.ruff.lint]` in `pyproject.toml` selects only `E722`, `BLE001`, `S105`, `S106` — each one mechanizes a directive that already existed in prose (`prompts/directives.md` PD#2, PD#6), so nothing there is new policy. It runs in `./run-tests` (a gate) and in `.claude/hooks/ruff-check.sh` (advisory, at edit time). Both read `pyproject.toml`; neither passes `--select`. Two follow-ups, deliberately deferred:
+  * **Broaden the rule set** to roughly `E,F,W,I,UP,B`, plus formatting. Deferred until *after* the modularization campaign: `ruff check .` on the default set reports ~55 findings today (F541/E741/F841/…), which is a triage-and-fix effort of its own — and it lands on the very file the campaign is about to restructure. Do it when the diff surface is smaller.
+  * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.
+* Add pyright to `./run-tests`. Deferred: `pyright` over `check/` + `plugin/` alone reports 39 errors, and they are pyright disagreeing with three *documented* architectural choices — the `-> (str, str, bool)` house style ("Tuple expression not allowed in type expression"), the runtime-exposed `sc.*` callables ("`umich_enabled` is not a known attribute of module `script_context`"), and `sc.options` being a dict. Clearing them means annotating `script_context.py` or blanket-ignoring, on soon-to-move code. Note the **LSP half already works and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens, and the committed `pantheon-sitehealth-emails.py` symlink is what exposes the extension-less main script to it (as it does for ruff and CodeGraph).
 * update dependencies
 * Implement SMTP testing, GMail testing (see test harness prompt for requirements)
 * Add % of traffic cached by _Cloudflare_ to traffic table (to show/maximize cost savings)
