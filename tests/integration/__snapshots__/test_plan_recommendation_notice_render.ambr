@@ -1,0 +1,60 @@
+# serializer version: 1
+# name: test_plan_recommendation_render[generic]
+  dict({
+    'csv': 's,its-recommends-plan,Performance Medium,Performance Small,1,234.50',
+    'icon': '&#x1F50E;',
+    'message': '''
+      
+      <p>Moving <strong>s</strong>
+      to Pantheon's <strong>Performance Small</strong> plan may save you up to <strong>$1,234.50</strong>
+      over the coming year if the site's traffic for the next 12 months is similar to the previous 12.</p>
+      <p>You may want to stay on the <strong>Performance Medium</strong> plan if the site has had one-time traffic spikes
+      or you think site traffic will be decreasing soon.</p>
+  
+    ''',
+    'short': 'plan change recommended',
+    'text': '''
+      
+      Moving s to Pantheon's Performance Small plan
+      may save you up to $1,234.50 over the coming year if the site's
+      traffic for the next 12 months is similar to the previous 12.
+      
+      You may want to stay on the Performance Medium plan if the site
+      has had one-time traffic spikes or you think site traffic will be
+      decreasing soon.
+  
+    ''',
+    'type': 'info',
+  })
+# ---
+# name: test_plan_recommendation_render[umich]
+  dict({
+    'csv': 's,its-recommends-plan,Performance Medium,Performance Small,1,234.50',
+    'icon': '&#x1F50E;',
+    'message': '''
+      
+      <p><a href="https://admin.webservices.umich.edu/sites/42/plan/">Moving <strong>s</strong>
+      to Pantheon's <strong>Performance Small</strong> plan</a> may save you up to <strong>$1,234.50</strong>
+      over the coming year if the site's traffic for the next 12 months is similar to the previous 12.</p>
+      <p>You may want to stay on the <strong>Performance Medium</strong> plan if the site has had one-time traffic spikes
+      or you think site traffic will be decreasing soon. Sites can move to higher plans any time, but can only be moved to
+      a lower plan between June 16 - 30 each year.</p>
+  
+    ''',
+    'short': 'plan change recommended',
+    'text': '''
+      
+      Moving s to Pantheon's Performance Small plan
+      <https://admin.webservices.umich.edu/sites/42/plan/>
+      may save you up to $1,234.50 over the coming year if the site's
+      traffic for the next 12 months is similar to the previous 12.
+      
+      You may want to stay on the Performance Medium plan if the site
+      has had one-time traffic spikes or you think site traffic will be
+      decreasing soon. Sites can move to higher plans any time, but can only
+      be moved to a lower plan between June 16 - 30 each year.
+  
+    ''',
+    'type': 'info',
+  })
+# ---

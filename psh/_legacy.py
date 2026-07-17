@@ -2339,6 +2339,56 @@ an additional pro-rated bill or credit in the following month.
     }
 
 
+def build_plan_recommendation_notice(site_name, current_plan, recommended_plan, savings,
+                                     portal_site_id, umich):
+    """The its-recommends-plan notice.  umich selects the U-M (portal-linked) or generic copy."""
+    if umich:
+        message = f"""
+<p><a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">Moving <strong>{site_name}</strong>
+to Pantheon's <strong>{recommended_plan}</strong> plan</a> may save you up to <strong>${savings:,.2f}</strong>
+over the coming year if the site's traffic for the next 12 months is similar to the previous 12.</p>
+<p>You may want to stay on the <strong>{current_plan}</strong> plan if the site has had one-time traffic spikes
+or you think site traffic will be decreasing soon. Sites can move to higher plans any time, but can only be moved to
+a lower plan between June 16 - 30 each year.</p>
+"""
+        text = f"""
+Moving {site_name} to Pantheon's {recommended_plan} plan
+<https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
+may save you up to ${savings:,.2f} over the coming year if the site's
+traffic for the next 12 months is similar to the previous 12.
+
+You may want to stay on the {current_plan} plan if the site
+has had one-time traffic spikes or you think site traffic will be
+decreasing soon. Sites can move to higher plans any time, but can only
+be moved to a lower plan between June 16 - 30 each year.
+"""
+    else:
+        message = f"""
+<p>Moving <strong>{site_name}</strong>
+to Pantheon's <strong>{recommended_plan}</strong> plan may save you up to <strong>${savings:,.2f}</strong>
+over the coming year if the site's traffic for the next 12 months is similar to the previous 12.</p>
+<p>You may want to stay on the <strong>{current_plan}</strong> plan if the site has had one-time traffic spikes
+or you think site traffic will be decreasing soon.</p>
+"""
+        text = f"""
+Moving {site_name} to Pantheon's {recommended_plan} plan
+may save you up to ${savings:,.2f} over the coming year if the site's
+traffic for the next 12 months is similar to the previous 12.
+
+You may want to stay on the {current_plan} plan if the site
+has had one-time traffic spikes or you think site traffic will be
+decreasing soon.
+"""
+    return {
+        "type": "info",
+        "icon": "&#x1F50E;",  # magnifying glass
+        "csv": f"{site_name},its-recommends-plan,{current_plan},{recommended_plan},{savings:,.2f}",
+        "short": "plan change recommended",
+        "message": message,
+        "text": text,
+    }
+
+
 def main() -> None:
 
     sc.debug(f"Loading configuration from {sc.options.config}")
@@ -4356,31 +4406,10 @@ A variety of support options are available.
                             )
                     else:
                         site_context.add_notice(
-                            {
-                                "type": "info",
-                                "icon": "&#x1F50E;",  # magnifying glass
-                                "csv": f"{site['name']},its-recommends-plan,{site['plan_name']},{site_recommended_plan},{savings:,.2f}",
-                                "short": "plan change recommended",
-                                "message": f"""
-<p><a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">Moving <strong>{site["name"]}</strong>
-to Pantheon's <strong>{site_recommended_plan}</strong> plan</a> may save you up to <strong>${savings:,.2f}</strong>
-over the coming year if the site's traffic for the next 12 months is similar to the previous 12.</p>
-<p>You may want to stay on the <strong>{site["plan_name"]}</strong> plan if the site has had one-time traffic spikes
-or you think site traffic will be decreasing soon. Sites can move to higher plans any time, but can only be moved to
-a lower plan between June 16 - 30 each year.</p>
-""",
-                                "text": f"""
-Moving {site["name"]} to Pantheon's {site_recommended_plan} plan
-<https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
-may save you up to ${savings:,.2f} over the coming year if the site's
-traffic for the next 12 months is similar to the previous 12.
-
-You may want to stay on the {site["plan_name"]} plan if the site
-has had one-time traffic spikes or you think site traffic will be
-decreasing soon. Sites can move to higher plans any time, but can only
-be moved to a lower plan between June 16 - 30 each year.
-""",
-                            }
+                            build_plan_recommendation_notice(
+                                site["name"], site["plan_name"], site_recommended_plan,
+                                savings, portal_site_id, umich_enabled(),
+                            )
                         )
                         site_savings.append(
                             {
