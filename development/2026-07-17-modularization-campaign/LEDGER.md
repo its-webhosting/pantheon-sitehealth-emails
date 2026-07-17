@@ -229,3 +229,112 @@ on a sqlite-only install), all three gates; four goldens byte-identical across t
     fails naming it) observed, reverted, and recorded in the test docstring. Suite stayed green.
 - **Open questions for I3:** none new — proceed per CAMPAIGN.md §11 row I3 (`psh/configuration.py`;
   `Notice` class + code-uniqueness registry test).
+
+## I3 — configuration module + `Notice` class (2026-07-17, commits `ed2698f` (Task 1), `d21a1d2` (Task 2), plus this closing docs commit)
+
+Spec/plan: `development/2026-07-17-mod-I3-config-notice/` (`SPEC.md` cites CAMPAIGN.md by
+section; task reports under `.superpowers/sdd/task-{1,2}-report.md` carry the pasted
+red/green evidence and pre-suppression ruff findings). Two per-task code commits, each
+green, plus this closing docs commit (CLAUDE.md / CAMPAIGN.md §3.1 amendment / this ledger
+entry). Full suite at close (`--fast`; **no live credentials in this environment**, so the
+live tier did not run — same caveat as prior increments where noted) = **761 passed / 1
+skipped / 2 deselected**, all three gates green, 27 snapshots; four goldens byte-identical
+across the increment (`git diff 45b8a88 -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** `config_substitution`, the DEFER machinery (`_DEFER_TAG` + the two compiled
+  regexes), `process_config`, `gate_disabled_sections`, `load_news_items`, `umich_enabled`,
+  and `cloudflare_enabled` (the six defs + DEFER machinery named in SPEC §Deliverable A) from
+  `psh/_legacy.py` into a new `psh/configuration.py`, re-imported back into `_legacy.py` (I2
+  gateway precedent — the ~11 existing tests calling `psh.process_config` etc. needed no
+  repoint). **New:** `psh/notice.py` (`Severity` StrEnum, frozen `Notice` dataclass,
+  `NoticeRegistry`, `DuplicateNoticeCodeError`, module `registry`) — pure, stdlib-only, no
+  `script_context` dependency. `SiteContext.add_notice` (`script_context.py`) now accepts a
+  `Notice` or the legacy dict via a new `_notice_to_dict` projection. The `no-domains` notice
+  (`psh/_legacy.py`, B29) was converted to construct a `Notice` end-to-end, with its code
+  registered once at module scope; its `html`/`text` f-string interiors (including the
+  pre-existing "the ste" typo) moved byte-for-byte.
+
+- **Deviations from CAMPAIGN.md:**
+  1. **New module `psh/notice.py`** — §3.1's module map is exhaustive and named no home for
+     the `Notice` type (§6 introduces the type without pinning a module). Handled as a
+     CAMPAIGN.md **amendment**, not a ledger-note-only, per §Preamble ("edit the document
+     *and* append a ledger entry"): this closing commit adds the one-row `psh/notice.py`
+     entry to §3.1 (`Notice`, `Severity`, `NoticeRegistry`, `DuplicateNoticeCodeError`,
+     `registry`) between the `psh/gateway.py` and `psh/db.py` rows.
+  2. **PoC converts `no-domains` (B29), out of I3's declared block scope** (§11 row I3 lists
+     only the config functions). Deliberate — §6 says the class is "adopted per increment",
+     the user chose `no-domains` as a PoC, and it is core-and-staying-core (CLAUDE.md: "remain
+     in core") so no later increment re-touches it. The notice's *home* is unchanged, only its
+     representation, so this is a **ledger note**, not a §3.1/architecture change.
+  3. **`sc.Notice`/`sc.Severity` reach `sc` via a module-level `from psh.notice import Notice,
+     Severity` import at the top of `script_context.py`, NOT the `sc.Notice = Notice` /
+     `sc.Severity = Severity` assignment pair the SPEC's §sc re-exports section showed** (added
+     "near the existing `sc.umich_enabled = …` lines" in `_legacy.py`). Task 2's dispatch
+     carried an explicit correction (surfaced by the Task 2 review, folded into the task
+     brief before implementation): a plain module-level import makes both names module
+     attributes automatically, so the assignment pair would have been a same-observable-effect
+     duplicate of the import — the DRY Engineering Preference favors the single mechanism. The
+     façade surface is identical either way (`hasattr(sc, "Notice")` etc. — pinned by
+     `test_documented_sc_facade_names_exist`), so this is a mechanism choice, not a behavior
+     change; recorded here because the SPEC's illustrative code block, read literally, would
+     have produced dead/duplicate assignment lines.
+
+- **Contract/config/sc additions:** `sc.Notice`, `sc.Severity` (mechanism above). **No new
+  contract keys** — no phase, `site_context` key, or config section was added; `Notice`
+  is a producer-side representation change only. `sc.register_notice_code`/`sc.registry` were
+  **NOT** added (SPEC §sc re-exports, D — deferred until a `check`/`plugin` package first
+  adopts `Notice`; the PoC imports `registry` from `psh.notice` directly, being core code).
+
+- **`script_context.py` typing fix:** `options`/`config` module globals, previously untyped
+  `= {}`, are now `options: argparse.Namespace = argparse.Namespace()` and
+  `config: dict[str, Any] = {}` (new `argparse`/`Any` imports) — the minimal fix pyright
+  standard mode needed to resolve `sc.options.verbose`/`sc.options.config` inside the moved
+  `psh/configuration.py`. No other name in `script_context.py` was retyped (it stays
+  grandfathered from the broad ruff ratchet; this is an out-of-gate, minimal, honest fix per
+  the SPEC's own instruction).
+
+- **Ratchet (§13):** both new files gated from birth — neither is nor was in
+  `ruff-broad.toml`'s `extend-exclude`. `uvx ruff check --config ruff-broad.toml
+  psh/configuration.py psh/notice.py` → "All checks passed!"; pyright standard mode over
+  `psh/` minus `_legacy.py` → 0 errors. Nothing deleted from `extend-exclude` (same as I2 —
+  the moved/new code lands in fresh gated files, not an un-grandfathered old one).
+
+- **Ruff/pyright dispositions actually applied (corrections to the SPEC's finding table,
+  both confirmed against real ruff/pyright output by the Task 1 implementer, not assumed):**
+  - **`PLR2004` lands on only the two `sc.options.verbose >= 2` comparisons**, not the
+    `> 1` one the SPEC's illustrative table also listed: ruff's default magic-value
+    allowlist already covers `-1, 0, 1`, so `> 1` never triggers the rule, and a `# noqa:
+    PLR2004` there is a live `RUF100` (unused-noqa) finding. Dropped from that line; kept
+    (with the SPEC's inline reason) on both `>= 2` lines.
+  - **`S101` (`Use of assert detected`) on both `best_match is not None` asserts** — a real
+    finding the SPEC's ruff-findings table didn't enumerate (that table covered the
+    moved-as-is code; the pyright-findings section separately *mandates* the asserts, but
+    neither section flagged the S101 the asserts themselves introduce). Resolved inline:
+    `# noqa: S101` with a reason (pyright type-narrowing only, not a security check).
+  - **`glob` and `Any` were in fact orphaned** in `psh/_legacy.py` by the move — the SPEC's
+    "expect none" prediction for orphaned imports was wrong for these two (`load_news_items`
+    was their only user); `tomllib`/`re`/`shlex`/`sys`/`escape`/`pprint` all had other live
+    users as predicted. Removed per the SPEC's own fallback instruction ("remove only what
+    this change orphans").
+  - All other dispositions (the `C901`/`PLR0912`/`PLR0915` triple noqa on
+    `config_substitution`, the `FBT002` keyword-only fix, `SIM118`, `PTH207`/`PTH123`) landed
+    exactly as the SPEC specified.
+
+- **Discovered tasks (dispositions):**
+  - **Extra-csv-field `Notice` modeling is deferred** (SPEC §Notice field set, by design —
+    not newly discovered here, but re-flagging its disposition for I4+): `Notice` currently
+    carries `severity, code, html, text, short, icon, order` — no `csv`/`csv_extra`. A notice
+    whose csv needs extra fields (e.g. `turned-off,{name}`, the `its-recommends-plan`
+    savings figure) stays a dict until the first increment that converts one, which MUST
+    amend CAMPAIGN.md §6 (add the field) via its own ledger entry — not silently widen
+    `Notice` here. Disposition: **first adopting increment** (candidates per LEDGER I1:
+    `check/addon_updates/` smells, I10; `annual-bill`/`annual-bill-in-progress`, I12; the
+    `its-recommends-plan` comma-in-csv issue, I7).
+  - No other discovered tasks — Task 1/Task 2's own reports found no further gaps beyond the
+    three ruff/pyright corrections recorded above.
+
+- **Open questions for I4:** none new beyond CAMPAIGN.md §11 row I4 (`psh/modules.py`:
+  `find_modules`, the hook engine, and the `consumes`/`produces` DAG additions §4 describes).
+  I4's spec author should note that `psh.notice.registry` is import-time-once metadata (same
+  contract as `sc.substitutions`/`sc.hooks`, per `psh/notice.py`'s own "Reload constraint"
+  docstring) — relevant if the DAG work touches module reload/re-registration semantics.

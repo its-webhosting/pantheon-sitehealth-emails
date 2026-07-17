@@ -89,9 +89,18 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 ### Single-module core + `script_context` shared state
 
 Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-Two modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+Four modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
 subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
-transport seam — see the **Terminus/WP/Drush wrappers** bullet). The other is
+transport seam — see the **Terminus/WP/Drush wrappers** bullet). **`psh/configuration.py`**
+(moved in I3) is the config engine — `process_config`/`config_substitution`/
+`gate_disabled_sections`/`load_news_items`/`umich_enabled`/`cloudflare_enabled` plus the DEFER
+machinery (see **Config substitutions** below) — re-imported by `psh/_legacy.py`, so call
+sites and the `sc.umich_enabled`/`sc.cloudflare_enabled` exposure assignments resolve
+unchanged (same import-back pattern I2 used for the gateway). **`psh/notice.py`** (new in I3)
+holds `Notice` (a frozen dataclass), `Severity` (a `StrEnum`), `NoticeRegistry`, and
+`DuplicateNoticeCodeError` — the typed replacement for the ad-hoc notice dict (see **Notices
+vs. news** below); it imports nothing from `script_context`, so both `sc` and every `psh/`
+module can import it without a cycle. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -99,7 +108,12 @@ those facts into the `site_post_dns` data-contract keys (below). It is a pure da
 presentation (notices) lives in `check/dns/`, not here. Cross-cutting state and helpers live
 in **`script_context.py`** (imported everywhere as
 `sc`): `sc.options` (parsed argv), `sc.config` (parsed TOML), `sc.plugin`/`sc.check`
-(loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.substitutions`, and
+(loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.substitutions`,
+`sc.Notice`/`sc.Severity` (the `Notice`/`Severity` names reach `sc` via a plain module-level
+`from psh.notice import Notice, Severity` at the **top** of `script_context.py` — a
+module-level import makes both names module attributes automatically, so this is NOT one of
+the explicit `sc.<name> = <name>` assignments in `_legacy.py`'s sc-exposure block, unlike
+`sc.umich_enabled`/`sc.cloudflare_enabled` above), and
 helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_news_item()`, `html_to_text()` (notice-adding
 is now a `SiteContext` method, below). **`html_to_text()` builds a fresh `HTML2Text` per call** —
 never reintroduce a shared instance: it is stateful, and sharing one made the first notice of a run
@@ -200,7 +214,19 @@ when the source was disabled, malformed, or failed):
   Sandbox skips). Add to it via its methods — `site_context.add_notice(notice)` /
   `.add_notices(list)` (builders: `wp_error`/`drush_error`/`check_wordpress_plugin`/`check_drupal_module`) / `.add_section(...)` /
   `.add_attachment(...)` — this is the **canonical** path (the old module-level
-  `sc.add_notice`/`add_notices` free functions were removed). `add_notice` fills in
+  `sc.add_notice`/`add_notices` free functions were removed). `add_notice` accepts either a
+  **`Notice`** (a frozen dataclass — `severity`/`code`/`html`/`text`/`short`/`icon`/`order`,
+  from `psh/notice.py`, re-exported as `sc.Notice`/`sc.Severity`) or the legacy notice dict; a
+  `Notice` is normalized to the exact legacy dict (`_notice_to_dict`) before the existing
+  fill logic runs unchanged, so both forms end up byte-identical for a notice whose csv is
+  the plain two-field form (`{site},{code}`) — a notice with *extra* csv fields (e.g.
+  `turned-off,{name}`) stays a dict until the increment that adopts it amends the field set
+  (`psh/notice.py`'s `Notice` carries no `csv`/`csv_extra` field yet). `code` is enforced
+  unique at import time by `psh.notice.registry` (`NoticeRegistry.register`, raising
+  `DuplicateNoticeCodeError` on a repeat — the bug class that once let two independent
+  notices share the `php-eol`/`annual-bill` codes, I1). The dict form is retired at I14;
+  I3 converts `no-domains` as the first (and, so far, only) `Notice`-based producer,
+  end-to-end through the three goldens that render it. `add_notice` fills in
   `icon` (from `type`), plaintext `text` (via `html2text`), and honors `order`
   (`prepend`/`first` → front). `add_news_item()` (still an `sc` function) adds an org-wide item to
   `sc.news` (config-inline `[News.<x>]` sub-tables + `*.toml` files in `[News].folder` are both
