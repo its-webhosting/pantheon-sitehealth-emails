@@ -417,12 +417,12 @@ tool stays reusable by other institutions.
 
 ## Testing
 
-**`./run-tests` lints before it tests, and gates on it.** It runs ruff over the tree with the
+**`./run-tests` lints before it tests, and gates on it.** It currently runs ruff over the tree with the
 **narrow** rule set from `pyproject.toml` — `E722`, `BLE001`, `S105`, `S106`, each of which
 mechanizes a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy —
-and refuses to run pytest on a finding. Ruff's default rule set is **not** adopted (it reports
-~55 unrelated findings; broadening is a `README.md` TODO deferred until after the modularization
-campaign). `[tool.ruff]` deliberately pins **no `target-version`**: ruff infers it from
+and refuses to run pytest on a finding. Ruff's default rule set is **not** currently adopted (it reports
+~55 unrelated findings; but broadening will be done at a future point to be deteremined.
+`[tool.ruff]` deliberately pins **no `target-version`**: ruff infers it from
 `requires-python`, and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program
 actually uses. `.claude/hooks/ruff-check.sh` runs the same rule set at edit time (advisory, via
 `PostToolUse`); both read `pyproject.toml`, neither passes `--select`.
