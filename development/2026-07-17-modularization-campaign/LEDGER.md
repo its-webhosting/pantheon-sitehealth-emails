@@ -112,3 +112,66 @@ closing docs commit (ledger + CAMPAIGN amendments + SPEC acceptance + README pyr
 - Amendment (2026-07-17, final I0 code review, spec axis): D10's Decision cell still said
   "console-script" after amendment 1 changed only §11 row I0 — CAMPAIGN.md briefly
   self-contradicted. D10 cell now matches. Doc-accuracy only.
+
+## I1 — known-bug fixes (2026-07-17, commits `5518de7..1ff9153` + closing docs commit)
+
+Spec/plan: `development/2026-07-17-mod-I1-bug-fixes/` (SPEC.md carries the pasted
+acceptance results). Six per-task commits, each green; full suite at close = 751 passed /
+1 skipped **including the live tier**, 27 snapshots, all three gates; four goldens
+byte-identical across the whole range (`git diff aa8afd1 -- tests/e2e/__snapshots__/`
+empty).
+
+- **Moved:** no blocks (fixes land in place in `psh/_legacy.py` per I0's open-question
+  note). Extracted five pure notice-builder helpers as consecutive module-level defs
+  above `main()` (preserved-bug-extraction pattern; every literal interior byte-verified
+  against the pre-move original by task reviewers AND the final review):
+  `build_smell_notices`, `build_php_eol_notice`, `build_annual_bill_upcoming_notice`,
+  `build_annual_bill_in_progress_notice`, `build_plan_recommendation_notice`. These
+  travel later: smells → I10, php-eol → I8, annual-bill → I12, plan-rec → I7.
+- **Fixed (CAMPAIGN §10 / BLOCKMAP §Bugs, all test-first with RED shown on old
+  behavior):** (1) B48 composer-smell nesting + wrong interpolated variable;
+  (2) B41 shared `php-eol` csv code → `php-eol-warning` (7.4/8.1) / `php-eol-alert`
+  (<8.2), following the `updates-*` suffix pattern; (3) B36 unknown-framework sites now
+  get a `site_results` entry (`version: "unknown"`, same 3-key row shape) — covered by a
+  new offline e2e (`tests/e2e/test_unknown_framework_e2e.py`) asserting the
+  `finish_run()` stdout pprint, since `-results.json` is written only on `--all` runs the
+  interlock bans; (4) B47 un-gated U-M portal URLs — two of the four named URL sites
+  (`extra_message`/`extra_text`) were **dead stores** (assigned, never read; §10's
+  4240/4248 refined — bug partially lived in dead code), deleted; the live
+  `its-recommends-plan` notice now selects U-M vs generic copy via `umich_enabled()`
+  (generic drops the portal anchor AND the June-16-30 downgrade-window sentence — U-M
+  billing policy, factually wrong elsewhere); both variants pinned by syrupy snapshots
+  (`test_plan_recommendation_notice_render`); (5) B50/B51 duplicate `annual-bill` code —
+  B51 now emits `annual-bill-in-progress`; B50 keeps `annual-bill`; B51's Aug-2026
+  deletion decision remains I12's; (6) dead code deleted (B40 Gen2 block, overage debug
+  query, `# plt.show()`, redundant second `plt.close(fig)` with its stale memory claim).
+- **Deviations from CAMPAIGN.md:** none.
+- **Contract/config/sc additions:** none. Sanctioned notice-csv value changes (§8 I1
+  exception): the three codes above. New **hand-maintained** fixture dir
+  `tests/fixtures/terminus-unknownfw/` (copy of `terminus/`, one framework value →
+  `"mystery"`, README states `--record` never refreshes it — Invariant 10, cdnchange
+  precedent) + conftest constant `TERMINUS_FIXTURES_UNKNOWNFW`.
+- **Discovered tasks (dispositions):**
+  - Template `email_template.{html,txt}` portal URLs render `sites/0/` in every non-U-M
+    run including the non-U-M golden (SPEC Obs. 1) → I12/I14 (goldens freeze it now;
+    already on CLAUDE.md's still-hardcoded-U-M list).
+  - `php_version < "8.2"` string comparison + KeyError if key absent (Obs. 2) → I8.
+  - B47 downgrade path: owner gets NO notice (dead `extra_message` was presumably meant
+    for this) and a non-Basic downgrade appends no `site_savings` entry (Obs. 3) → I7
+    decides intended behavior.
+  - Composer-smell literals carry baked-in 8-space indentation (Obs. 4) → I10.
+  - `its-recommends-plan` csv embeds `{savings:,.2f}` — thousands comma inside a
+    comma-separated field, variable column count (Obs. 5) → I7, or I3's `Notice`
+    class/code-registry work.
+  - Residual test gap (final-review triage): `main()`'s umich-only annual-bill call
+    sites have no runtime test (goldens are umich-disabled; interlock bans a U-M run) —
+    I12's spec author MUST cover this when relocating annual billing to `check/umich/`
+    at `site_pre_render`.
+- **Process note (PD#14 instance):** one implementer's report Write silently failed
+  against a stale `.superpowers/sdd/` report file from I0 and was misreported as
+  success; caught by the task reviewer (report content was for the wrong task). Stale
+  scratch reports are now purged before dispatch; future increments should start by
+  clearing `.superpowers/sdd/task-*-report.md` leftovers.
+- **Open questions for I2:** none new — proceed per I0's notes (un-grandfather the
+  wrapper functions from `ruff-broad.toml`, clean to broad set + pyright standard,
+  replace house-style tuple hints, `GatewayResult`, façade test).
