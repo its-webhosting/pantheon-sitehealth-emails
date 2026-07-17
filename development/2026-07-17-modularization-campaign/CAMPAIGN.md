@@ -376,12 +376,14 @@ folder → `/archive-session` → ledger entry.
 
 ## 13. Lint/type ratchet
 
-Mechanism (pinned here; exact rule lists pinned by I0's spec): `pyproject.toml` gets the
-broad ruff `extend-select` with a `ruff-broad.toml exclude` grandfathering exactly the remnant
+Mechanism (as shipped by I0; see LEDGER I0 amendment 2): TWO ruff configs —
+`pyproject.toml` `[tool.ruff.lint]` keeps the narrow PD-rule set running everywhere
+including the remnant, and `ruff-broad.toml` carries `select = ["ALL"]` minus a
+justified ignore list, with `extend-exclude` grandfathering exactly the remnant
 (`psh/_legacy.py`) and not-yet-moved files; each increment deletes its
-files from the grandfather list. pyright runs in `./run-tests` from I0 with
-`executionEnvironments`: strict-leaning for `psh/` + moved checks, basic/off for the
-remnant. The four existing narrow rules (`E722`, `BLE001`, `S105`, `S106`) remain global
+files from the grandfather list, and the two configs merge at I14. pyright runs in
+`./run-tests` from I0 via `[tool.pyright]` (standard mode, `psh/` minus `_legacy.py`),
+ratcheting toward strict as typed code moves in. The four existing narrow rules (`E722`, `BLE001`, `S105`, `S106`) remain global
 throughout — they mechanize PD#2/PD#6 and are never grandfathered. No
 `target-version` pin (CLAUDE.md: it masks the 3.12-only syntax detection).
 

@@ -84,7 +84,7 @@ closing docs commit (ledger + CAMPAIGN amendments + SPEC acceptance + README pyr
   contract keys, no `sc` names added or removed).
 
 - **Discovered tasks:**
-  - **`Path(psh.__file__).parent` as a repo-root proxy** — 25 sites across 23 test files (plus
+  - **`Path(psh.__file__).parent` as a repo-root proxy** — 25 sites across 23 files: 22 test files (plus
     `tests/helpers/checkload.py`) anchored repo paths on the program file's parent, which the
     move shifted from repo root to `psh/`. Fixed here, mechanically and minimally:
     `→ Path(psh.__file__).resolve().parents[1]` at exactly those sites. Proper cleanup lands
@@ -104,3 +104,8 @@ closing docs commit (ledger + CAMPAIGN amendments + SPEC acceptance + README pyr
     deletes them from `ruff-broad.toml` `extend-exclude` and must clean them to the broad set
     + pyright standard in the same change (§13 ratchet; §6 house-style tuple hints replaced).
   - `dns_classify.py` under `psh/` remains a MAY for I14 (unchanged from planning).
+- Amendment (2026-07-17, post-Task-5 review): CAMPAIGN.md §13 mechanism paragraph
+  rewritten to describe the SHIPPED two-config mechanism (it still said "pyproject gets
+  extend-select" and "executionEnvironments", both superseded by amendment 2 above);
+  ledger reanchor note corrected to "22 test files plus checkload.py" (23 files total).
+  Both changes doc-accuracy only.
