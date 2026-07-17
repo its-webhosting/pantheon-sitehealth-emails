@@ -488,8 +488,11 @@ Non-obvious things the harness relies on:
 - **The script is imported, not re-parsed.** `tests/conftest.py` imports the program as
   `psh._legacy` via a normal `importlib.import_module("psh._legacy")` (the repo root is on
   `sys.path` because the suite runs as `python -m pytest`, cwd = repo root); the `psh` fixture
-  exposes that module. `SourceFileLoader` is **no longer** used for the program — it remains only
-  in `tests/helpers/checkload.py`, for loading `check/` packages standalone. Argparse was
+  exposes that module. `SourceFileLoader` is **no longer** used for the program; it survives in
+  the suite only for loading individual `check/`/`plugin/` modules standalone — used directly in
+  the per-module test files (e.g. `tests/integration/test_check_sitelens.py`, `test_plugin_aws.py`),
+  while the `tests/helpers/checkload.py` helper (for packages with relative imports) uses
+  `importlib.util.spec_from_file_location` + `exec_module` instead. Argparse was
   refactored into `build_arg_parser()`/`parse_args()`; `sc.options` is set by the caller, so a
   test sets it (the `reset_sc` autouse fixture does) before calling functions. `MPLBACKEND=Agg`
   must be set before the load (conftest does this) because the module imports `matplotlib.pyplot`
