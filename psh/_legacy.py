@@ -22,7 +22,6 @@ import os
 import re
 import shlex
 import signal
-import stat
 import subprocess
 import sys
 import time
@@ -325,6 +324,7 @@ from psh.gateway import (
     wp_eval,
 )
 from psh.notice import Notice, Severity, registry
+from psh.modules import find_modules
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
 
@@ -521,22 +521,6 @@ def check_drupal_module(
         )
 
     return notices
-
-
-def find_modules(module_type: str) -> list[str]:
-    modules = []
-    # find all non-empty regular files in/under the directory f"{type}" that are named "__init__.py":
-    for dirpath, dirs, files in os.walk(module_type, followlinks=True):
-        for file in files:
-            if file == "__init__.py":
-                target = os.path.join(dirpath, file)
-                st = os.stat(target)
-                if stat.S_ISREG(st.st_mode) and st.st_size != 0:
-                    parts = target.split("/")[:-1]
-                    target_name = ".".join(parts)
-                    modules.append(target_name)
-    modules.sort()  # ensure a consistent order when importing to simplify troubleshooting
-    return modules
 
 
 def smtp_login() -> SMTP_SSL:

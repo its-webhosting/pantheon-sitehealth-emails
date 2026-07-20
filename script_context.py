@@ -7,6 +7,7 @@ from rich.console import Console
 
 import html2text
 from psh.notice import Notice, Severity   # noqa: F401 -- Severity re-exported as sc.Severity for check/plugin packages
+from psh.modules import PHASES, add_hook, invoke_hooks   # noqa: F401 -- add_hook/invoke_hooks re-exported as sc.* for check/plugin packages
 
 
 options: argparse.Namespace = argparse.Namespace()  # parsed CLI options; set by parse_args() caller
@@ -34,26 +35,6 @@ DEFER = object()
 
 substitutions = []
 
-# Ordered lifecycle phases.  'setup' runs once per run (NOTE: including --create-tables,
-# which exits later); the site_* phases run once per processed site, in this order, each
-# receiving the SiteContext -- but a per-site fatal error (e.g. a domain:list failure) skips
-# that site's remaining phases, so hooks must not assume a later phase always follows an
-# earlier one.  Phases through site_post_gather run on full-report and --only-warn paths;
-# site_pre_render only on the full-report path; --update and --import-older-metrics never
-# reach any site_* phase.  Dotted names (e.g. 'setup.umich.portal') are plugin-defined
-# events: allowed, not ordered here.  The per-phase site_context data contract lives in
-# CLAUDE.md ("Per-site report pipeline").
-PHASES = (
-    'setup',
-    'site_pre',            # first per-site seam (rename of the old 'check' seam; fires
-                           # after the traffic gather, just before site_post_traffic --
-                           # no per-phase keys guaranteed)
-    'site_post_traffic',
-    'site_post_dns',
-    'site_post_gather',
-    'site_pre_render',
-)
-
 hooks = {phase: [] for phase in PHASES}
 
 plugin_context = {}
@@ -68,28 +49,6 @@ icon = {
 def debug(*args, level: int = 1) -> None:
     if options.verbose >= level:
         console.log(*args, _stack_offset=2)
-
-
-def _valid_hook_name(hook_name: str) -> bool:
-    return hook_name in PHASES or '.' in hook_name
-
-
-def add_hook(hook_name: str, target: dict) -> None:
-    if not _valid_hook_name(hook_name):
-        console.print(f'[bold red]ERROR: add_hook: unknown phase "{hook_name}" '
-                      f'(known phases: {", ".join(PHASES)}; dotted names are plugin events)')
-        sys.exit(1)
-    hooks.setdefault(hook_name, []).append(target)
-
-
-def invoke_hooks(hook_name: str, *args, **kwargs) -> None:
-    if not _valid_hook_name(hook_name):
-        console.print(f'[bold red]ERROR: invoke_hooks: unknown phase "{hook_name}"')
-        sys.exit(1)
-    debug(f'[bold magenta]=== Calling hooks for {hook_name}:')
-    for hook in hooks.get(hook_name, []):
-        debug(f'Invoking {hook_name} hook target {hook["name"]}')
-        hook['func'](*args, **kwargs)
 
 
 def html_to_text(html: str) -> str:
