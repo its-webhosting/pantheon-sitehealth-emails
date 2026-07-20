@@ -28,8 +28,13 @@ def test_condition_2_two_hook_producers_is_fatal(psh, reset_sc):
 def test_condition_2_hook_producing_a_core_registry_key_is_fatal(psh, reset_sc):
     import psh.modules as m
     reset_sc.add_hook("site_pre", _hook("a", produces=["traffic_rows"]))
-    with pytest.raises(m.DuplicateProducerError, match="traffic_rows"):
+    with pytest.raises(m.DuplicateProducerError, match="traffic_rows") as exc_info:
         m.validate_hooks()
+    # SPEC section 4: the message must name BOTH producers' phases, not just the new
+    # claimant's -- an operator debugging a collision needs the existing owner's phase
+    # (site_post_traffic, where "traffic_rows" is a core CONTRACT key) without reading
+    # source.
+    assert "site_post_traffic" in str(exc_info.value)
 
 
 def test_condition_3_same_phase_cycle_is_fatal(psh, reset_sc):

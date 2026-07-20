@@ -208,14 +208,14 @@ def _registry_owners() -> dict:
 def _claim_hook_producers(owner_phase: dict, sc) -> None:
     """Extend owner_phase with every hook's produces (condition 2: DuplicateProducerError
     on a second producer of one key, hook+hook or hook-vs-registry)."""
-    for phase in PHASES:
-        index = PHASES.index(phase)
+    for index, phase in enumerate(PHASES):
         for hook in sc.hooks.get(phase, []):
             for key in hook["produces"]:
                 if key in owner_phase:
+                    owner_index, owner_label = owner_phase[key]
                     raise DuplicateProducerError(
-                        f'"{key}" has two producers: {owner_phase[key][1]} and hook '
-                        f'"{hook["name"]}" ({phase}) -- one owner per key')
+                        f'"{key}" has two producers: {owner_label} ({PHASES[owner_index]}) '
+                        f'and hook "{hook["name"]}" ({phase}) -- one owner per key')
                 owner_phase[key] = (index, f'hook "{hook["name"]}"')
 
 
@@ -223,8 +223,7 @@ def _check_hook_consumers(owner_phase: dict, sc) -> None:
     """Condition 1 (UnproducedKeyError), condition 4 (LaterPhaseKeyError), and -- via
     ordered_hooks(), which raises on the ready-queue deadlock -- condition 3
     (HookCycleError), per phase."""
-    for phase in PHASES:
-        index = PHASES.index(phase)
+    for index, phase in enumerate(PHASES):
         for hook in sc.hooks.get(phase, []):
             for key in hook["consumes"]:
                 if key not in owner_phase:
