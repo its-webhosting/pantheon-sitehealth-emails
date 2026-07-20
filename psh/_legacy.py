@@ -324,7 +324,7 @@ from psh.gateway import (
     wp_eval,
 )
 from psh.notice import Notice, Severity, registry
-from psh.modules import find_modules
+from psh.modules import find_modules, stuff_gather_contract, stuff_traffic_contract
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
 
@@ -2291,9 +2291,7 @@ and to find out what went wrong:
 
             # Per-phase data contract (see CLAUDE.md "Per-site report pipeline"): the traffic
             # window is guaranteed populated from site_post_traffic onward.
-            site_context["traffic_rows"] = results
-            site_context["start_date"] = start_date
-            site_context["end_date"] = end_date
+            stuff_traffic_contract(site_context, results, start_date, end_date)
             sc.invoke_hooks("site_post_traffic", site_context)
 
             # The set of Cloudflare-proxied FQDNs (fqdns.json) is fetched-or-loaded once, before this
@@ -3101,17 +3099,9 @@ not get blocked.
                 }
 
             # Per-phase data contract (see CLAUDE.md): WP/Drush gather results are guaranteed
-            # present from site_post_gather onward.  NOTE: the *_version values are the string
-            # "unknown" (not None) when the version fetch failed -- None only means "not that
-            # framework".  Only the plugins/modules keys use None for "gather failed".
-            site_context["framework"] = site["framework"]
-            site_context["site_url"] = site_url
-            site_context["wordpress_version"] = wordpress_version
-            site_context["wordpress_plugins"] = plugins if isinstance(plugins, list) else None
-            site_context["drupal_version"] = drupal_version
-            # NOTE: drush pm:list returns a DICT keyed by module name (unlike wp plugin list,
-            # which returns a list) -- check_drupal_module requires the dict shape.
-            site_context["drupal_modules"] = mods if isinstance(mods, dict) else None
+            # present from site_post_gather onward.
+            stuff_gather_contract(site_context, site["framework"], site_url,
+                                  wordpress_version, plugins, drupal_version, mods)
             sc.invoke_hooks("site_post_gather", site_context)
 
             # Check for un-applied site updates:
