@@ -5,10 +5,17 @@ import script_context as sc
 if 'UMich' in sc.config and 'enabled' in sc.config['UMich'] and sc.config['UMich']['enabled']:
     from .sitelens import setup_sitelens, check_sitelens_urls, check_sitelens_scores
     from .cloudflare_cms import check_cloudflare_cms_integrations
-    sc.add_hook('setup.umich.portal', {'name': 'check.umich.sitelens.setup_sitelens', 'func': setup_sitelens})
-    sc.add_hook('site_pre', {'name': 'check.umich.sitelens.check_sitelens_urls', 'func': check_sitelens_urls})
-    sc.add_hook('site_pre', {'name': 'check.umich.sitelens.check_sitelens_scores', 'func': check_sitelens_scores})
+    sc.add_hook('setup.umich.portal', {'name': 'check.umich.sitelens.setup_sitelens', 'func': setup_sitelens,
+                                       'consumes': [], 'produces': []})
+    sc.add_hook('site_pre', {'name': 'check.umich.sitelens.check_sitelens_urls', 'func': check_sitelens_urls,
+                             'consumes': [], 'produces': []})
+    sc.add_hook('site_pre', {'name': 'check.umich.sitelens.check_sitelens_scores', 'func': check_sitelens_scores,
+                             'consumes': [], 'produces': []})
     sc.add_hook('site_post_gather', {'name': 'check.umich.cloudflare_cms.check_cloudflare_cms_integrations',
-                                     'func': check_cloudflare_cms_integrations})
+                                     'func': check_cloudflare_cms_integrations,
+                                     'consumes': ['fqdns_behind_cloudflare', 'framework',
+                                                  'wordpress_plugins', 'drupal_version',
+                                                  'drupal_modules'],
+                                     'produces': []})
 else:
     sc.console.print('[bold yellow] Skipping check.umich.sitelens because UMich plugin is not enabled')

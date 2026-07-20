@@ -23,6 +23,8 @@ import os
 import stat
 import sys
 
+from rich.markup import escape
+
 # Ordered lifecycle phases.  'setup' runs once per run (NOTE: including --create-tables,
 # which exits later); the site_* phases run once per processed site, in this order, each
 # receiving the SiteContext -- but a per-site fatal error (e.g. a domain:list failure) skips
@@ -70,11 +72,31 @@ def _valid_hook_name(hook_name: str) -> bool:
 
 
 def add_hook(hook_name: str, target: dict) -> None:
+    """Register a hook.  `target` MUST carry `name`, `func`, and the data-contract
+    declarations `consumes` and `produces` (each a possibly-empty list of contract-key
+    names, CLAUDE.md per-phase table; CAMPAIGN.md section 4).  Dotted plugin events must
+    declare both empty.  Violations exit loudly here -- nothing enters sc.hooks
+    undeclared, which is what lets validate_hooks()/ordered_hooks() index the keys
+    unconditionally."""
     import script_context as sc  # noqa: PLC0415 -- call-time import; see the module docstring
 
     if not _valid_hook_name(hook_name):
         sc.console.print(f'[bold red]ERROR: add_hook: unknown phase "{hook_name}" '
                          f'(known phases: {", ".join(PHASES)}; dotted names are plugin events)')
+        sys.exit(1)
+    hook_label = escape(str(target.get("name", "<unnamed>")))
+    for entry in ("consumes", "produces"):
+        value = target.get(entry)
+        if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
+            sc.console.print(
+                f'[bold red]ERROR: add_hook: hook "{hook_label}" for "{escape(hook_name)}" must '
+                f'declare "{entry}" as a list of contract-key names ([] when none) -- '
+                f'see the per-phase data contract in CLAUDE.md')
+            sys.exit(1)
+    if '.' in hook_name and (target["consumes"] or target["produces"]):
+        sc.console.print(
+            f'[bold red]ERROR: add_hook: dotted event "{escape(hook_name)}" hook "{hook_label}" '
+            f'must declare empty consumes/produces (contract keys are phase-anchored)')
         sys.exit(1)
     sc.hooks.setdefault(hook_name, []).append(target)
 

@@ -42,7 +42,8 @@ def test_invoke_hooks_unknown_bare_name_is_fatal(reset_sc):
 def test_dotted_event_registers_and_invokes(reset_sc):
     sc = reset_sc
     fired = []
-    sc.add_hook("setup.custom.event", {"name": "probe", "func": lambda x: fired.append(x)})
+    sc.add_hook("setup.custom.event", {"name": "probe", "func": lambda x: fired.append(x),
+                                       "consumes": [], "produces": []})
     sc.invoke_hooks("setup.custom.event", 42)
     assert fired == [42]
 
@@ -62,7 +63,8 @@ def test_within_phase_registration_order_preserved(reset_sc):
     sc = reset_sc
     seen = []
     for tag in ("a", "b", "c"):
-        sc.add_hook("site_pre", {"name": tag, "func": lambda t=tag: seen.append(t)})
+        sc.add_hook("site_pre", {"name": tag, "func": lambda t=tag: seen.append(t),
+                                 "consumes": [], "produces": []})
     sc.invoke_hooks("site_pre")
     assert seen == ["a", "b", "c"]
 
@@ -71,3 +73,30 @@ def test_reset_sc_seeds_all_phases(reset_sc):
     sc = reset_sc
     assert set(sc.hooks.keys()) == set(EXPECTED_PHASES)
     assert all(v == [] for v in sc.hooks.values())
+
+
+def test_add_hook_missing_declarations_is_fatal(reset_sc):
+    """CAMPAIGN.md section 4 condition 5: no legacy mode -- a hook without consumes/produces
+    (or with a non-list / non-str member) must die loudly at registration."""
+    sc = reset_sc
+    with pytest.raises(SystemExit):
+        sc.add_hook("site_pre", {"name": "probe", "func": lambda: None})
+    with pytest.raises(SystemExit):
+        sc.add_hook("site_pre", {"name": "probe", "func": lambda: None, "consumes": []})
+    with pytest.raises(SystemExit):
+        sc.add_hook("site_pre", {"name": "probe", "func": lambda: None,
+                                 "consumes": "traffic_rows", "produces": []})
+    with pytest.raises(SystemExit):
+        sc.add_hook("site_pre", {"name": "probe", "func": lambda: None,
+                                 "consumes": [42], "produces": []})
+
+
+def test_add_hook_dotted_event_must_declare_empty(reset_sc):
+    """Contract keys are phase-anchored; a dotted event has no phase position, so a non-empty
+    declaration is unvalidatable (SPEC D-i4-3)."""
+    sc = reset_sc
+    with pytest.raises(SystemExit):
+        sc.add_hook("setup.custom.event", {"name": "probe", "func": lambda: None,
+                                           "consumes": ["traffic_rows"], "produces": []})
+    sc.add_hook("setup.custom.event", {"name": "probe", "func": lambda: None,
+                                       "consumes": [], "produces": []})  # empty is fine

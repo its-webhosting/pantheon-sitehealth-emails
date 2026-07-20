@@ -32,9 +32,12 @@ if _cf.get('enabled') and isinstance(_cachecheck, dict) and _cachecheck.get('ena
     from .cfg import validate_cachecheck_config
     validate_cachecheck_config()
     sc.add_hook('setup', {'name': 'check.cloudflare.egress.check_egress_ip',
-                          'func': check_egress_ip})
+                          'func': check_egress_ip,
+                          'consumes': [], 'produces': []})
     sc.add_hook('site_post_dns', {'name': 'check.cloudflare.cache.check_cloudflare_cache',
-                                  'func': check_cloudflare_cache})
+                                  'func': check_cloudflare_cache,
+                                  'consumes': ['fqdns_behind_cloudflare', 'primary_domain'],
+                                  'produces': []})
 else:
     sc.console.print(
         '[bold yellow] Skipping check.cloudflare because [Cloudflare] and/or '

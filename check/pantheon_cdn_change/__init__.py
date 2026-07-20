@@ -14,5 +14,6 @@ from .hook import check_pantheon_cdn_change
 
 sc.add_hook('site_post_dns',
             {'name': 'check.pantheon_cdn_change.hook.check_pantheon_cdn_change',
-             'func': check_pantheon_cdn_change})
+             'func': check_pantheon_cdn_change,
+             'consumes': ['custom_domains'], 'produces': []})
 

@@ -10,4 +10,8 @@ import script_context as sc
 from .hook import emit_dns_notices
 
 sc.add_hook('site_post_dns', {'name': 'check.dns.hook.emit_dns_notices',
-                              'func': emit_dns_notices})
+                              'func': emit_dns_notices,
+                              'consumes': ['dns_transient', 'fqdns_not_behind_cloudflare',
+                                           'behind_cloudflare_not_proxied',
+                                           'proxied_in_multiple_zones', 'not_in_dns'],
+                              'produces': []})
