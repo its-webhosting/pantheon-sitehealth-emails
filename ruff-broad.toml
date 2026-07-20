@@ -12,7 +12,6 @@
 extend-exclude = [
     # Grandfathered until their increment moves/cleans them:
     "psh/_legacy.py",       # the remnant; shrinks I2-I13, dies I14
-    "script_context.py",    # facade; cleaned when I4 moves the hook engine
     "dns_classify.py",      # cleaned if/when moved (I14 MAY, CAMPAIGN section 3.1)
     "check/",               # cleaned as I8-I10 restructure them
     "plugin/",              # cleaned as increments touch them

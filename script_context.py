@@ -3,12 +3,18 @@ import argparse
 import sys
 from typing import Any
 
+import html2text
 from rich.console import Console
 
-import html2text
-from psh.notice import Notice, Severity   # noqa: F401 -- Severity re-exported as sc.Severity for check/plugin packages
-from psh.modules import PHASES, add_hook, invoke_hooks   # noqa: F401 -- add_hook/invoke_hooks re-exported as sc.* for check/plugin packages
-
+from psh.modules import (  # noqa: F401 -- add_hook/invoke_hooks re-exported as sc.* for check/plugin packages
+    PHASES,
+    add_hook,
+    invoke_hooks,
+)
+from psh.notice import (  # noqa: F401 -- Severity re-exported as sc.Severity for check/plugin packages
+    Notice,
+    Severity,
+)
 
 options: argparse.Namespace = argparse.Namespace()  # parsed CLI options; set by parse_args() caller
 config: dict[str, Any] = {}                          # parsed pantheon-sitehealth-emails.toml
@@ -115,8 +121,8 @@ class SiteContext(dict):
             notice['icon'] = icon[notice['type']]
         if 'text' not in notice:
             notice['text'] = html_to_text(notice['message'])
-        order = notice['order'] if 'order' in notice else 'append'
-        if order == 'prepend' or order == 'first':
+        order = notice.get('order', 'append')
+        if order in ('prepend', 'first'):
             self['notices'].insert(0, notice)
         else:
             self['notices'].append(notice)
@@ -182,8 +188,8 @@ def add_news_item(news_item: dict, from_where: str = 'check') -> None:
         news_item['icon'] = icon[news_item['type']]
     if 'text' not in news_item:
         news_item['text'] = html_to_text(news_item['message'])
-    order = news_item['order'] if 'order' in news_item else 'append'
-    if order == 'prepend' or order == 'first':
+    order = news_item.get('order', 'append')
+    if order in ('prepend', 'first'):
         news.insert(0, news_item)
     else:
         news.append(news_item)
