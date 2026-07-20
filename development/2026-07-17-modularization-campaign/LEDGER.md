@@ -428,3 +428,120 @@ snapshots; four goldens byte-identical across the increment
     make the assumption explicit when `main()` reaches final form.
 - **Open questions for I5:** none new — proceed per CAMPAIGN.md §11 row I5 (`psh/db.py`;
   DB test suites relocated intact; note the resume helpers stay behind for I13).
+
+## I5 — DB-layer move (2026-07-20, commit `c291a26` (Task 1) + this closing docs commit)
+
+Spec/plan: `development/2026-07-20-mod-I5-db/` (`SPEC.md` carries the pasted acceptance
+results, corrected — see below). One code commit (Deliverables A–D landed atomically:
+partial application cannot be green), plus this closing docs commit (CLAUDE.md / memory /
+this ledger entry / SPEC §9 acceptance). Full suite at close **including the live tier**
+(Terminus credentials present in this environment) = **782 passed / 1 skipped**, all three
+gates, 27 snapshots; four goldens byte-identical across the increment
+(`git diff 1cf37d3 -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** exactly the §3.1 `psh/db.py` row — `Base`, `PantheonTraffic`,
+  `PantheonOverageProtection`, `TrafficRow`, `OverageProtectionRow`,
+  `DatabaseUnavailableError`, `record_db_reconnect`, `db_retryable`, `db_retry`,
+  `update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`,
+  `load_overage_protection_window`, `db_engine_args` — into the new `psh/db.py`, gated
+  from birth, re-imported into `psh/_legacy.py` (I2/I3 pattern) so call sites, the `psh.*`
+  test references, and the `sc.db_engine_args` exposure line all resolve unchanged.
+
+- **Deviations from CAMPAIGN.md:** none (all of the below are SPEC-level decisions or
+  ledger notes within §11 row I5's own scope, not amendments to CAMPAIGN.md):
+  1. **D-i5-1 — the two reconnect counters move to `script_context.py`, not `psh/db.py`.**
+     §3.1's `psh/db.py` row names `record_db_reconnect` (the function) but neither counter
+     dict; §3.4 bars new module-level mutable state in `psh/` (the same rule that kept
+     `sc.hooks` in `script_context.py`, LEDGER I4). The deciding defect class: the writer
+     (`db_retry`, now in `psh/db.py`) and the remnant readers (`finish_run`/`abort_run`,
+     staying in `psh/_legacy.py` until I13) would otherwise hold **separately rebindable
+     bindings of the same name** across two modules — the exact I2 `psh.gateway.run_terminus`
+     seam lesson (PD#14: a stale-namespace patch silently fails to intercept). One owning
+     namespace dissolves it: `script_context.py` defines `db_reconnects_by_site: dict[str,
+     int] = {}` / `db_reconnect_failures_by_site: dict[str, int] = {}` (829–838's contract
+     comments moved verbatim), `db_retry` writes `sc.db_reconnect[s|_failures]_by_site`, the
+     remnant readers read the same `sc.` names. **§6 already schedules "the reconnect
+     counters" into I13's `RunState`** — this is their scheduled interim home, not a new
+     permanent surface.
+  2. **D-i5-3 — "DB test suites relocated intact" (§11 row I5) reads as: targets relocate,
+     files don't.** The suites already lived in their tier-named homes
+     (`tests/unit/test_db_resilience.py`, `tests/integration/test_db_roundtrip.py`,
+     `tests/integration/test_db_credentials.py`, plus `test_traffic_table_rows.py`,
+     `test_abort_run.py`, `test_finish_run.py` for the counter seam specifically) and stayed
+     there; the *only* mandatory edit was the counter-seam repoint (every
+     `monkeypatch.setattr(psh, "db_reconnect[s|_failures]_by_site", …)` and every
+     `psh.db_reconnect[s|_failures]_by_site` assertion, 56 sites across 5 files,
+     retargeted to `script_context`/`sc`). No assertion weakened, no test dropped,
+     collected count unchanged (see the acceptance figures above).
+  3. **B10/B11 stay in `main()`** (`db.create_engine`/sessionmaker/`create_all`,
+     `_legacy.py:1997–2011`) — §3.1 assigns them no module and §11 row I5 lists defs only;
+     per CAMPAIGN.md §11 row I5's own text, they move with `main()`'s final form at I13.
+  4. **Remnant blank-line collapse, disclosed by the implementer, whitespace only,
+     reviewer-verified.** The brief's line-range deletions, applied to non-contiguous
+     regions of `psh/_legacy.py`, left runs of up to 8 blank lines where deleted blocks
+     abutted (around `ResumeSiteNotFoundError`/`sites_from_resume_point`/
+     `merge_prior_results`, which stayed for I13). Collapsed to the file's standard 2 blank
+     lines — no code line touched, confirmed by task review as formatting debris cleanup
+     (Definition of Done's "no debug cruft" line), not a scope violation of "verbatim except
+     the named edits" (that rule binds the *moved* bodies in `db.py`, not the remnant's
+     leftover whitespace runs).
+  5. **SPEC finding-table correction (PD#14).** SPEC §5's finding table enumerated
+     `db_retry(…, site: str = None)` → `site: str | None = None` but not
+     `record_db_reconnect`'s own `site: str` parameter, which `db_retry` passes `site`
+     straight into. Running the type gate on the real moved assembly caught this as
+     `reportArgumentType` at all four call sites (watched red, then fixed — PD#14: the
+     instrument was allowed to prove itself before being trusted). Disposed the same way as
+     the sibling edit: retyped `site: str | None` — the body already treats `None` as
+     `"(no site)"` (`key = site if site is not None else "(no site)"`), so this is an honest
+     annotation fix, not a behavior change. Task reviewer confirmed the disposition correct.
+  6. **SPEC §7/§9 baseline correction (PD#14, this closing task).** Both sections originally
+     stated the `--fast`-tier collected-count baseline as "782 passed / 1 skipped" — that
+     figure is LEDGER I4's **full**-tier count (`--fast` plus the live tier, credentials
+     present at I4 close). The actual `--fast`-tier baseline is **780 passed / 1 skipped / 2
+     deselected**. Both SPEC spots corrected; 782 is never pasted as a `--fast`-tier
+     expectation anywhere in this increment's documents.
+
+- **Contract/config/sc additions:** two new `script_context.py` module attributes,
+  `db_reconnects_by_site` / `db_reconnect_failures_by_site` (D-i5-1 above) — process-global
+  mutable state like `sc.hooks`, **not** check-facing API, so they do NOT join
+  `test_documented_sc_facade_names_exist` (§11 row I5 / SPEC §1 non-scope, explicit). No new
+  contract keys, no config keys.
+
+- **Ratchet (§13):** `psh/db.py` born gated (broad ruff + pyright standard, 0 findings from
+  birth); `script_context.py` (already un-grandfathered since I4) stayed clean after the two
+  counter additions. Nothing deleted from `ruff-broad.toml`'s `extend-exclude` this
+  increment (same as I2/I3 — the moved code lands in a fresh gated file, not an
+  un-grandfathered old one; `psh/_legacy.py` stays grandfathered). Dispositions: ERA001
+  dead-schema comment deleted (`PantheonTraffic`'s `# id: Mapped[int]…` line); RUF013/
+  pyright on `db_retry`'s `site` param → `str | None`; DTZ007 on `update_traffic_rows`'s
+  naive `strptime` → `# noqa: DTZ007` with an inline reason (Pantheon's `env:metrics`
+  timestamps are naive date markers; attaching a tzinfo risks an off-by-one-day shift, a
+  behavior change a move may not make); pyright on `db_engine_args` → `-> tuple[str, dict]`
+  (§6 house-style replacement); pyright `reportAttributeAccessIssue` on `sc.db_reconnect…`
+  resolved by Deliverable B's typed module-level definitions. Plus the one
+  ledger-recorded correction above: `record_db_reconnect`'s own `site` param, also
+  `str | None`.
+
+- **Discovered tasks (dispositions):**
+  - `record_db_reconnect`'s untyped-Optional `site` param, not named by SPEC §5's finding
+    table → **fixed here** (Task 1; see Deviation 5 above).
+  - Blank-line debris from the non-contiguous line-range deletions → **fixed here**
+    (Task 1; see Deviation 4 above).
+  - SPEC §7/§9's "782" `--fast`-tier baseline, actually the I4 full-tier figure →
+    **fixed here** (Task 2; see Deviation 6 above).
+  - No other discovered tasks — Task 1's report found no further gaps beyond the two
+    ruff/pyright corrections and the whitespace cleanup recorded above.
+
+- **Open questions for I6:** none new — proceed per CAMPAIGN.md §11 row I6
+  (`psh/traffic.py`: `get_old_metrics`, `estimate_month_visits`,
+  `build_traffic_table_rows`, the `traffic_table_columns` global, the metrics
+  gather + DB update/load flow B22–B26, and the visits-by-month aggregation B43;
+  source lines 598–671 and 977–1127 per §11's table). I6's spec author should note that
+  `build_traffic_table_rows` (staying in `_legacy.py` until I6, currently `:510`) is one of
+  `db_retry`'s five named idempotent units (CLAUDE.md § Database) — it is passed to
+  `db_retry(session, unit, …)` as a `lambda` from the call site in `_legacy.py` (`:3460`),
+  not imported by `psh/db.py` itself (`db_retry` is a generic retry wrapper around any
+  callable, with no compile-time dependency on the unit's home module). So no import needs
+  re-verifying at I6 — the coupling is call-site-only — but I6 should keep `db_retry`'s
+  docstring/CLAUDE.md's "five named idempotent units" list in sync once
+  `build_traffic_table_rows` moves to `psh/traffic.py`.

@@ -89,7 +89,7 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 ### Single-module core + `script_context` shared state
 
 Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-Five modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+Six modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
 subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
 transport seam — see the **Terminus/WP/Drush wrappers** bullet). **`psh/configuration.py`**
 (moved in I3) is the config engine — `process_config`/`config_substitution`/
@@ -110,7 +110,22 @@ inverse of the notice module's: `script_context.py` re-exports `PHASES`/`add_hoo
 import `script_context` at module level — its engine functions import `sc` at call time
 (the module docstring carries the diagram; the mutable `sc.hooks` dict deliberately stays
 in `script_context.py`, because `reset_sc` rebinds it around every test and CAMPAIGN.md
-§3.4 bars new module-level mutable state in `psh/`). The last is
+§3.4 bars new module-level mutable state in `psh/`). **`psh/db.py`** (moved in I5) holds
+every DB touch this program makes: the SQLAlchemy models (`Base`, `PantheonTraffic`,
+`PantheonOverageProtection`), the row types (`TrafficRow`, `OverageProtectionRow`), the
+resilience layer (`db_retry`, `db_retryable`, `record_db_reconnect`,
+`DatabaseUnavailableError`), the read/write units (`update_traffic_rows`,
+`insert_traffic_rows`, `load_traffic_rows`, `load_overage_protection_window`), and
+`db_engine_args` — re-imported by `psh/_legacy.py`, same import-back pattern as the
+gateway/configuration modules, so call sites and the `sc.db_engine_args` exposure
+assignment resolve unchanged. The two reconnect counters (`db_reconnects_by_site`,
+`db_reconnect_failures_by_site`) do NOT live in `psh/db.py`: they're `script_context.py`
+module-level attributes (`sc.db_reconnects_by_site`/`sc.db_reconnect_failures_by_site`),
+because `db_retry` (now in `psh/db.py`) and the remnant readers `finish_run`/`abort_run` (staying in
+`psh/_legacy.py` until I13) need one shared, `reset_sc`-isolated namespace rather than two
+separately rebindable module bindings of the same name (the I2 `run_terminus`-seam lesson
+— see § Database's test-seam note below). This is their scheduled interim home; I13's
+`RunState` is where they finally land. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -362,8 +377,9 @@ against it, so drift on either side goes red:
 
 ### Database
 
-SQLAlchemy declarative models `PantheonTraffic` and `PantheonOverageProtection` (see class
-defs near the top of the script). Backend is chosen by the `[Database]` TOML section:
+SQLAlchemy declarative models `PantheonTraffic` and `PantheonOverageProtection` live in
+**`psh/db.py`** (moved in I5, along with every other DB touch — see § Single-module core
+above), re-imported by `psh/_legacy.py`. Backend is chosen by the `[Database]` TOML section:
 `type` is `sqlite` or `mysql` (anything else exits). Both `type` and `name` are read
 **unconditionally** — a `[Database]` section without them is a `KeyError`, not a default; the
 `sqlite`/`database.db` "default" lives in the sample config, not the code.
@@ -427,7 +443,13 @@ artifacts. The two reconnect counters are **healed vs. failed** and both are pri
 (`Database reconnects: N healed, M failed`): `db_retry()` counts a heal only after the retry
 *returns*, and counts a failure when the retry or the pre-retry rollback dies — an attempt-counting
 version reported "1 reconnect" on the run that aborted *because* nothing reconnected, and zero on
-the rollback failure, the most definite connection loss there is.
+the rollback failure, the most definite connection loss there is. **Test seam:** the counters are
+`script_context.py` module attributes (`sc.db_reconnects_by_site`/
+`sc.db_reconnect_failures_by_site`), not `psh/db.py` or `psh/_legacy.py` state — a test patches or
+asserts against **`script_context`** (e.g. `monkeypatch.setattr(sc, "db_reconnects_by_site", {})`).
+The old `psh.db_reconnect[s|_failures]_by_site`-shaped binding no longer exists, so a stale
+`psh`-targeted patch fails loudly (`AttributeError`), not silently — there is nothing on `psh`
+left to shadow.
 
 **Two rich gotchas, both shipped as bugs once.** (1) `sc.console` has markup enabled, so **every
 `sc.console.print()` interpolating text the program did not author must
