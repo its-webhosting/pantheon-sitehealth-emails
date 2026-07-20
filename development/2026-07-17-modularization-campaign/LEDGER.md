@@ -474,7 +474,7 @@ gates, 27 snapshots; four goldens byte-identical across the increment
      retargeted to `script_context`/`sc`). No assertion weakened, no test dropped,
      collected count unchanged (see the acceptance figures above).
   3. **B10/B11 stay in `main()`** (`db.create_engine`/sessionmaker/`create_all`,
-     `_legacy.py:1997–2011`) — §3.1 assigns them no module and §11 row I5 lists defs only;
+     `_legacy.py:1651–1665`) — §3.1 assigns them no module and §11 row I5 lists defs only;
      per CAMPAIGN.md §11 row I5's own text, they move with `main()`'s final form at I13.
   4. **Remnant blank-line collapse, disclosed by the implementer, whitespace only,
      reviewer-verified.** The brief's line-range deletions, applied to non-contiguous
