@@ -9,6 +9,7 @@ import signal
 
 import pytest
 
+import script_context as sc
 from helpers.dnsfake import recording_console
 
 SITE_NAMES = ["its-wws-test1", "its-wws-test2", "its-wws-test3"]
@@ -35,8 +36,8 @@ def abort(
     console = recording_console(monkeypatch, reset_sc, width=width)
     reset_sc.options = psh.parse_args(argv[1:])
     monkeypatch.setattr(psh.sys, "argv", argv)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
 
     # abort_run() sets SIGINT to SIG_IGN, which is PROCESS-GLOBAL and restored by no fixture:
     # without this patch, the rest of the pytest session would silently ignore Ctrl-C

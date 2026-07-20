@@ -119,6 +119,8 @@ _SC_ATTRS = (
     "plugin",
     "check",
     "plugin_context",
+    "db_reconnects_by_site",
+    "db_reconnect_failures_by_site",
 )
 
 
@@ -142,6 +144,8 @@ def reset_sc(psh):
     sc.plugin = {}
     sc.check = {}
     sc.plugin_context = {}
+    sc.db_reconnects_by_site = {}
+    sc.db_reconnect_failures_by_site = {}
     try:
         yield sc
     finally:

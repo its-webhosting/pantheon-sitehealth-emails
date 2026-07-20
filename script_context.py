@@ -45,6 +45,19 @@ hooks = {phase: [] for phase in PHASES}
 
 plugin_context = {}
 
+# Reconnects HEALED by db_retry() -- the retry ran and succeeded -- attributed to the site that
+# caused them.  Counted only after the second attempt returns: counting the attempt instead would
+# let an aborted run report a reconnect it never actually made.
+db_reconnects_by_site: dict[str, int] = {}
+
+# Connection losses db_retry() could NOT heal, attributed the same way: the retry failed, or the
+# rollback before it did.  The counterpart of the dict above, and the reason it can be trusted --
+# every lost connection lands in exactly one of the two, so "0 healed" never means "nothing
+# happened".  Both are reported on the console and in {ymd}-run.json
+# (development/2026-07-13-db-connection-resilience/SPEC.md 3.6).  Written by psh.db.db_retry;
+# read by finish_run/abort_run; absorbed into RunState at campaign I13.
+db_reconnect_failures_by_site: dict[str, int] = {}
+
 icon = {
     'info': '&#x1F50E;',  # magnifying glass
     'warning': '&#x26A0;',  # warning sign

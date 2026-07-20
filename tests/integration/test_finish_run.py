@@ -9,6 +9,7 @@ import os
 
 import pytest
 
+import script_context as sc
 from helpers.dnsfake import recording_console
 
 
@@ -51,8 +52,8 @@ def test_run_finish_phase_fires_before_artifacts_are_written(psh, tmp_path, monk
     # fire before {ymd}-notices.csv / {ymd}-results.json / {ymd}-run.json exist, so a future
     # consumer sees the run intact and can still influence what gets written.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     seen = []
     ymd = datetime.datetime.today().strftime("%Y%m%d")
     reset_sc.add_hook("run_finish", {
@@ -68,8 +69,8 @@ def test_run_finish_phase_fires_before_artifacts_are_written(psh, tmp_path, monk
 @pytest.mark.integration
 def test_finish_run_all_writes_the_artifacts(psh, tmp_path, monkeypatch, reset_sc):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     run(psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"])
 
     assert "its-wws-test1,some-notice,detail" in list(tmp_path.glob("*-notices.csv"))[0].read_text()
@@ -100,8 +101,8 @@ def test_finish_run_without_all_prints_to_the_console(psh, tmp_path, monkeypatch
     # The non---all branch of the epilogue.  No golden covers it; without this test it could be
     # deleted wholesale and the suite would stay green.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     console = run(psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "its-wws-test1"])
 
     output = console.export_text()
@@ -113,8 +114,8 @@ def test_finish_run_without_all_prints_to_the_console(psh, tmp_path, monkeypatch
 @pytest.mark.integration
 def test_finish_run_aborted_does_not_claim_success(psh, tmp_path, monkeypatch, reset_sc):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {"its-wws-test2": 3})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {"its-wws-test2": 1})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {"its-wws-test2": 3})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {"its-wws-test2": 1})
     console = run(
         psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
         aborted_at="its-wws-test2", reason="database",
@@ -145,8 +146,8 @@ def test_finish_run_aborted_before_any_site_does_not_claim_success(
     # misreads this as a clean completion: it prints the green success line and writes a null
     # `reason` into run.json, even though the process is about to exit 130/1.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     console = run(
         psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
         aborted_at=None, reason="interrupted",
@@ -168,8 +169,8 @@ def test_finish_run_update_all_writes_no_artifacts(psh, tmp_path, monkeypatch, r
     # overwrite {ymd}-results.json with an empty object -- DESTROYING the artifacts of the
     # monthly report run made earlier the same day.  Write nothing; still print the totals.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {"its-wws-test1": 2})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {"its-wws-test1": 2})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     ymd = datetime.datetime.today().strftime("%Y%m%d")
     (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-test9,from-the-report-run\n")
     (tmp_path / f"{ymd}-results.json").write_text('{"its-wws-test9": {"plan": "Basic"}}')
@@ -194,8 +195,8 @@ def test_finish_run_import_older_metrics_all_writes_no_artifacts(
 ):
     # The other report-less mode: same rule, and it must not depend on --update alone.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     run(psh, monkeypatch, reset_sc, ["--all", "--import-older-metrics"])
 
     assert list(tmp_path.glob("*-notices.csv")) == []
@@ -207,8 +208,8 @@ def test_finish_run_writes_artifacts_even_if_the_close_fails(psh, tmp_path, monk
     # finish_run() is called FROM the abort path, on a session whose DB is by definition sick.  A
     # failing close() must cost neither the artifacts nor the engine dispose() (SPEC 3.3.3).
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     engine = FakeEngine()
     run(
         psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"],
@@ -229,8 +230,8 @@ def test_finish_run_abort_does_not_truncate_an_earlier_runs_artifacts(
     # Before the abort path flushed at all, an interrupt wrote nothing and was harmless; it must
     # stay harmless.  An abort ACCUMULATES; only a run that reaches the end truncates.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     ymd = datetime.datetime.today().strftime("%Y%m%d")
     (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-morning,some-notice,detail\n")
     # A results.json left by an OLDER version still carries the "_run" key.  It must not survive
@@ -272,8 +273,8 @@ def test_finish_run_migrates_legacy_run_key_into_previous_on_first_run_since_upg
     # silently lose the prior run's reconnect evidence -- the exact thing "previous" exists to
     # preserve.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     ymd = datetime.datetime.today().strftime("%Y%m%d")
     (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-morning,some-notice,detail\n")
     (tmp_path / f"{ymd}-results.json").write_text(
@@ -301,8 +302,8 @@ def test_finish_run_prefers_run_json_over_a_legacy_run_key_when_both_exist(
     # If {ymd}-run.json already exists, it is the authoritative prior-run record; a stale "_run"
     # key surviving inside an old results.json must not override it.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     ymd = datetime.datetime.today().strftime("%Y%m%d")
     (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-morning,some-notice,detail\n")
     (tmp_path / f"{ymd}-results.json").write_text(
@@ -324,8 +325,8 @@ def test_finish_run_completed_run_still_truncates(psh, tmp_path, monkeypatch, re
     # The other half of the rule: a run that reaches the end owns the day's artifacts outright.
     # Without this, a re-run of the whole month would silently double every row.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
-    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
     ymd = datetime.datetime.today().strftime("%Y%m%d")
     (tmp_path / f"{ymd}-notices.csv").write_text("its-wws-stale,old-notice,detail\n")
     (tmp_path / f"{ymd}-results.json").write_text('{"its-wws-stale": {"plan": "Basic"}}')

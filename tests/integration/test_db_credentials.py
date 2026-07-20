@@ -5,6 +5,8 @@ URL, which embeds the DB password.  See SPEC section 3.8.
 import pytest
 import sqlalchemy as db
 
+import script_context as sc
+
 # create_engine("mysql+mysqldb://...") imports the DBAPI EAGERLY, so on a sqlite-only install
 # (the [mysql] extra is optional and CLAUDE.md's setup line sanctions dropping it) that line
 # raises ModuleNotFoundError OUTSIDE the pytest.raises block below -- a hard ERROR in the
@@ -21,7 +23,7 @@ def test_db_retry_error_leaks_no_credentials(psh, monkeypatch):
     # and this assertion can fail.  (A hand-built OperationalError contains no URL at all, which
     # is what made an earlier draft of this test vacuous.)
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
     # connect_timeout=1: loopback port 1 normally REFUSES instantly, but a host that DROPs it
     # would otherwise hang the suite for MySQLdb's default timeout.
     engine = db.create_engine(
