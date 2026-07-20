@@ -338,3 +338,93 @@ across the increment (`git diff 45b8a88 -- tests/e2e/__snapshots__/` empty).
   I4's spec author should note that `psh.notice.registry` is import-time-once metadata (same
   contract as `sc.substitutions`/`sc.hooks`, per `psh/notice.py`'s own "Reload constraint"
   docstring) — relevant if the DAG work touches module reload/re-registration semantics.
+
+## I4 — hooks + DAG + contract registry (2026-07-20, commits `82d62ff..1f2a6af` + closing docs commit)
+
+Spec/plan: `development/2026-07-20-mod-I4-hooks-dag/` (SPEC.md carries the pasted acceptance
+results; task reports under `.superpowers/sdd/task-{1..6}-report.md` carry the red/green
+evidence). Six per-task code commits plus one review-fix commit, each green, plus this
+closing docs commit (CLAUDE.md / memory / this ledger entry / the dev folder). Full suite at
+close **including the live tier** (Terminus token present) = **782 passed / 1 skipped**
+(the skip is `test_db_credentials.py`'s `importorskip("MySQLdb")`), all three gates, 27
+snapshots; four goldens byte-identical across the increment
+(`git diff d46f56d -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** `find_modules` (from `psh/_legacy.py`) and the hook engine — `PHASES`,
+  `_valid_hook_name`, `add_hook`, `invoke_hooks` (from `script_context.py`) — into the new
+  `psh/modules.py` (gated from birth). `script_context.py` re-exports
+  `PHASES`/`add_hook`/`invoke_hooks` via a top-of-file `from psh.modules import …` (the I3
+  `Notice`/`Severity` mechanism), so every `sc.*` call site resolves unchanged; `_legacy.py`
+  re-imports `find_modules` + the new names. **New:** mandatory `consumes`/`produces`
+  declarations (§4 condition 5, enforced at `add_hook` — nothing enters `sc.hooks`
+  undeclared); `validate_hooks()` (§4 conditions 1–4 as named `HookDagError` subclasses:
+  `UnproducedKeyError`, `DuplicateProducerError`, `HookCycleError`, `LaterPhaseKeyError`),
+  called in `main()` after the check-import loop; `ordered_hooks()` (Kahn, registration-order
+  tie-break) used by `invoke_hooks`; the authoritative `CONTRACT` registry +
+  `stuff_traffic_contract`/`stuff_gather_contract` extracted from `main()`'s B28/B37 stuffing
+  lines (registry-pinned by `tests/unit/test_contract_registry.py`, alongside
+  `dns_classify.stuff_dns_contract`); the **`run_finish`** phase (first statement of
+  `finish_run()`, completed AND aborted runs). All 11 in-repo `add_hook` registrations
+  retrofitted with code-verified declarations; permanent
+  `tests/integration/test_hook_dag.py` loads every real check/plugin package and validates.
+
+- **Deviations from CAMPAIGN.md (all ledger notes, no amendments — each stays within §4's
+  observable contract; rationale in SPEC D-i4-1…7):**
+  1. The mutable `hooks` dict **stays in `script_context.py`** (§3.1 moves the engine
+     functions; §3.4 bars new module-level mutable state in `psh/`, and `reset_sc` rebinds
+     `sc.hooks` — a second home would silently desync, PD#14). Engine functions read it via
+     a call-time `import script_context as sc` (cycle-avoidance; module docstring diagram).
+  2. **Dotted events must declare `consumes`/`produces` BOTH empty** — §4's "dotted events
+     unchanged" read as invocation semantics, not registration schema; a non-empty
+     declaration on a phase-less event is unvalidatable and therefore fatal.
+  3. **Condition 5 enforces at `add_hook` time** (stricter placement than §4's
+     "module-load completion"; conditions 1–4 validate at load completion as written).
+  4. **Invoke order is computed per invocation** by pure `ordered_hooks()` rather than
+     stored at validation (§4 diagram says "stored") — same inputs, same order; removes the
+     stale-cache mode for tests that register without validating.
+  5. **`run_finish` fires with no arguments until I13's `RunState`** (§4 says "receiving
+     the RunState", a type that does not exist until I13; no consumer exists, so the
+     signature change then is safe).
+  6. **B2/B4 module-import loops stay in `main()`** (§3.1 assigns them to `psh/modules.py`
+     eventually; §11 row I4 does not list them — they move with `main()`'s final form, I13).
+
+- **Contract/config/sc additions:** `run_finish` phase (registry entry `()` — CLAUDE.md
+  table row added). **No new contract keys, no config keys, no new `sc` names** (the
+  re-exported engine names already existed on `sc`). SPEC §6 correction during Task 3:
+  `check.cloudflare.cache` consumes `['fqdns_behind_cloudflare', 'primary_domain']` — the
+  spec-time grep pattern (`site_context[`) missed the `.get("primary_domain")` read at
+  `cache.py:233`; the brief's mandated code re-verification caught it (PD#14 working as
+  designed).
+
+- **Ratchet (§13):** `psh/modules.py` born gated (broad ruff + pyright standard, 0
+  findings). **`script_context.py` un-grandfathered** — deleted from `ruff-broad.toml`
+  `extend-exclude`; findings fixed: `I001`, 2× `SIM401` (`.get` rewrites), 2× `PLR1714`
+  (tuple-membership rewrites, deliberately tuples not ruff's suggested set literals — no new
+  hashability assumption), all equivalence-argued in the Task 6 report. No ignore-list
+  changes; noqa inventory in `psh/modules.py`: `PLC0415` (call-time sc imports, cycle
+  reason), `PTH116`/`PTH118` (find_modules keeps str paths for its `.split("/")`),
+  `PLR0913` (stuff_gather_contract's spec-pinned 7-arg signature).
+
+- **Discovered tasks (dispositions):**
+  - **Pre-existing raw hook-dict write** in `tests/integration/test_plugin_umich_portal.py`
+    (`sc.hooks[...] = [...]` bypassing `add_hook`) broke under `ordered_hooks`' unconditional
+    key indexing → **fixed here** (Task 5), converted to a declared `add_hook` call;
+    repo-wide grep confirmed it was the only instance (fix-the-class rule).
+  - `tests/helpers/checkload.py` gained a backward-compatible `base=` param so the DAG test
+    can load `plugin/` packages standalone → **fixed here** (Task 5).
+  - The two pre-existing unknown-phase fatals interpolated `hook_name` unescaped
+    (Invariant 6 gap, latent since the engine's script_context days) → **fixed here**
+    (Task 5, §8 sanctions stdout improvement).
+  - `main()`'s `except HookDagError` → print + exit glue is untested (every condition is
+    proven red at the `validate_hooks` seam; the goldens prove the success path through
+    `main()`) → accepted, **noted here** (PD#14: the glue rests on inspection).
+  - `run_finish` abort-path firing is covered transitively (shared unconditional first line
+    + `test_abort_run.py` proves `finish_run` runs on abort) → accepted per SPEC §9;
+    a direct probe in the abort tests is a cheap add if `finish_run`'s call structure ever
+    changes → **noted here**.
+  - **Runtime-registered hooks bypass DAG conditions 1–4** (validation runs once,
+    post-import; only `add_hook`'s declaration check fires later). No in-repo hook registers
+    dynamically; import-time registration is the assumed model → **I13** (lifecycle) should
+    make the assumption explicit when `main()` reaches final form.
+- **Open questions for I5:** none new — proceed per CAMPAIGN.md §11 row I5 (`psh/db.py`;
+  DB test suites relocated intact; note the resume helpers stay behind for I13).

@@ -89,7 +89,7 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 ### Single-module core + `script_context` shared state
 
 Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-Four modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+Five modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
 subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
 transport seam — see the **Terminus/WP/Drush wrappers** bullet). **`psh/configuration.py`**
 (moved in I3) is the config engine — `process_config`/`config_substitution`/
@@ -100,7 +100,17 @@ unchanged (same import-back pattern I2 used for the gateway). **`psh/notice.py`*
 holds `Notice` (a frozen dataclass), `Severity` (a `StrEnum`), `NoticeRegistry`, and
 `DuplicateNoticeCodeError` — the typed replacement for the ad-hoc notice dict (see **Notices
 vs. news** below); it imports nothing from `script_context`, so both `sc` and every `psh/`
-module can import it without a cycle. The last is
+module can import it without a cycle. **`psh/modules.py`** (new in I4) is module discovery +
+the hook engine: `find_modules`, `PHASES`, `add_hook`/`invoke_hooks`, the consumes/produces
+DAG validation (`validate_hooks`/`ordered_hooks`, the `HookDagError` family), the
+authoritative `CONTRACT` registry, and the `stuff_traffic_contract`/`stuff_gather_contract`
+stuffers (see **Hooks** and the data-contract table below). Its import direction is the
+inverse of the notice module's: `script_context.py` re-exports `PHASES`/`add_hook`/
+`invoke_hooks` via a top-of-file `from psh.modules import …`, so `psh/modules.py` must NOT
+import `script_context` at module level — its engine functions import `sc` at call time
+(the module docstring carries the diagram; the mutable `sc.hooks` dict deliberately stays
+in `script_context.py`, because `reset_sc` rebinds it around every test and CAMPAIGN.md
+§3.4 bars new module-level mutable state in `psh/`). The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -114,8 +124,9 @@ in **`script_context.py`** (imported everywhere as
 module-level import makes both names module attributes automatically, so this is NOT one of
 the explicit `sc.<name> = <name>` assignments in `_legacy.py`'s sc-exposure block, unlike
 `sc.umich_enabled`/`sc.cloudflare_enabled` above), and
-helpers `debug()`, `add_hook()`/`invoke_hooks()`, `add_news_item()`, `html_to_text()` (notice-adding
-is now a `SiteContext` method, below). **`html_to_text()` builds a fresh `HTML2Text` per call** —
+helpers `debug()`, `add_news_item()`, `html_to_text()` (notice-adding
+is now a `SiteContext` method, below; `add_hook()`/`invoke_hooks()` moved to `psh/modules.py`
+in I4 and reach `sc` via the same top-of-file import mechanism as `Notice`/`Severity`). **`html_to_text()` builds a fresh `HTML2Text` per call** —
 never reintroduce a shared instance: it is stateful, and sharing one made the first notice of a run
 render in a different link style from every other (the module-level `sc.text_maker` it replaced is
 gone). The parser is built by `build_arg_parser()` and `sc.options`
@@ -124,7 +135,7 @@ available to every function at call time.
 
 ### Plugin / check module system (`plugin/`, `check/`)
 
-`find_modules()` walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
+`find_modules()` (in `psh/modules.py` since I4) walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
 containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
 `check.cloudflare`, `check.dns`, `check.pantheon_cdn_change`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
@@ -134,16 +145,31 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 `<{secret env NAME}` substitutions, with an optional trailing default) registers
 **unconditionally** — no `[Env]` section — because it has no dependency and core config
 (`[SMTP].username = "<{env USER}"`) needs it. Modules register by:
-- **Hooks** — `sc.add_hook('<phase>', {'name': …, 'func': …})`. Phases are the ordered
+- **Hooks** — `sc.add_hook('<phase>', {'name': …, 'func': …, 'consumes': […], 'produces': […]})`.
+  The `consumes`/`produces` declarations are **mandatory** (each a possibly-empty list of
+  data-contract key names, table below; missing/malformed → fatal at registration, no legacy
+  mode — CAMPAIGN.md §4 condition 5). Phases are the ordered
   `sc.PHASES` tuple: `setup` (once per run — **including `--create-tables`**, which exits
   later), then per site `site_pre` (rename of the old `check` seam), `site_post_traffic`,
-  `site_post_dns`, `site_post_gather`, `site_pre_render`. Each site phase receives the
-  `SiteContext`; the per-phase guaranteed keys are the data-contract table below. Bare
-  names not in `PHASES` are a **fatal error** in both `add_hook` and `invoke_hooks`;
+  `site_post_dns`, `site_post_gather`, `site_pre_render`, and per run `run_finish` (fired as
+  the first statement of `finish_run()` — before any teardown or artifact write, on completed
+  AND aborted runs; no arguments until I13's `RunState`; no consumer yet). Each site phase
+  receives the `SiteContext`; the per-phase guaranteed keys are the data-contract table below.
+  Bare names not in `PHASES` are a **fatal error** in both `add_hook` and `invoke_hooks`;
   dotted names (e.g. `setup.umich.portal`) are plugin-defined events, allowed and
-  invoked by whoever owns them. Gating: phases through `site_post_gather` run on
+  invoked by whoever owns them — but they MUST declare `consumes`/`produces` **empty**
+  (contract keys are phase-anchored; a dotted event has no phase position). After the module
+  import loops, `main()` runs `psh.modules.validate_hooks()`, which is **fatal** (named
+  `HookDagError` subclasses) on: a consumed key nothing produces; two producers of one key
+  (hooks or the core `CONTRACT` registry — one owner per key); a consumes/produces cycle among
+  same-phase hooks; consuming a key first produced in a *later* phase (earlier is fine).
+  Within a phase `invoke_hooks` runs producers before consumers (registration order breaks
+  ties, so today's edgeless DAG preserves registration order exactly); the permanent
+  `tests/integration/test_hook_dag.py` loads every real check/plugin package and proves the
+  DAG validates. Gating: phases through `site_post_gather` run on
   full-report and `--only-warn` paths; `site_pre_render` full-report only; `--update`/
-  `--import-older-metrics` never reach any site phase; a per-site fatal error (e.g.
+  `--import-older-metrics` never reach any site phase (they DO reach `run_finish`, whose
+  artifact writes are separately gated); a per-site fatal error (e.g.
   domain:list failure) skips that site's remaining phases.
 - **Config substitutions** — appending to `sc.substitutions`. TOML string values
   containing `<{ ... }>` are resolved by `process_config()`/`config_substitution()`
@@ -202,7 +228,11 @@ the config, then render.
 
 **Normative per-phase data contract** — main() stuffs these `site_context` keys just
 before invoking each phase; hooks code against this table (keys always exist, empty/None
-when the source was disabled, malformed, or failed):
+when the source was disabled, malformed, or failed). **The machine-readable copy —
+`psh.modules.CONTRACT` — is authoritative**; this table is its prose rendering, and
+`tests/unit/test_contract_registry.py` pins the stuffers (`stuff_traffic_contract`/
+`stuff_gather_contract` in `psh/modules.py`, `stuff_dns_contract` in `dns_classify.py`)
+against it, so drift on either side goes red:
 
 | Phase | Guaranteed new keys (beyond `site`/`notices`/`sections`/`attachments`) |
 |---|---|
@@ -211,6 +241,7 @@ when the source was disabled, malformed, or failed):
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version`/`drupal_version` (str; `"unknown"` — NOT None — when that framework's version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed |
 | `site_pre_render` | everything above (full-report path only; no consumer yet — the documented seam for future report-shaping hooks) |
+| `run_finish` | — (run-level, not per-site: receives no `SiteContext` and no arguments until I13's `RunState`; fired first thing in `finish_run()` on completed and aborted runs — the seam for future run-level artifact hooks) |
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
   `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
@@ -484,9 +515,9 @@ earlier gate's red (PD#1):
    a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy; runs over the
    **whole tree**, including the files the campaign grandfathers.
 2. **ruff, broad campaign ratchet** (`ruff-broad.toml`: `select = ALL` minus a grandfathered
-   exclude list — `psh/_legacy.py`, `script_context.py`, `dns_classify.py`, `check/`, `plugin/`,
+   exclude list — `psh/_legacy.py`, `dns_classify.py`, `check/`, `plugin/`,
    `tests/`, `development/`; CAMPAIGN.md §13). Each increment un-grandfathers its files by deleting
-   them from that list.
+   them from that list (`script_context.py` was un-grandfathered in I4).
 3. **pyright, standard mode** over `psh/` minus `_legacy.py` (`[tool.pyright]`); a missing pyright
    binary is a **hard failure**, never a silent skip (PD#1/PD#14).
 
