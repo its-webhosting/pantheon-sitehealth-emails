@@ -185,7 +185,11 @@ dash-named main script; the helpers they need are exposed as `sc` attributes nea
 `cloudflare_enabled()` def (`sc.escape_url`, `sc.check_wordpress_plugin`,
 `sc.check_drupal_module`, `sc.umich_enabled`, `sc.cloudflare_enabled`, `sc.terminus`,
 `sc.fqdn_re`) — extend that block for new ones (tests
-monkeypatch these when loading check modules standalone). `check/cloudflare/httpseam.py`
+monkeypatch these when loading check modules standalone). A few façade names are exposed
+**elsewhere**, not in that block: `sc.db_engine_args` (assigned in `_legacy.py`, see § Database)
+and `sc.Notice`/`sc.Severity` (which reach `sc` via a top-of-`script_context.py`
+`from psh.notice import Notice, Severity` import — see § Notices vs. news); all are pinned by
+the `test_documented_sc_facade_names_exist` house-rule. `check/cloudflare/httpseam.py`
 holds the ONE monkeypatchable HTTP seam (`fetch`/`sleep`) and `egress.py` its own `probe`
 seam — route any new outbound HTTP in that package through them to stay offline-testable.
 

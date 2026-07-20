@@ -623,25 +623,35 @@ if credentialed, else `--fast` with a ledger note); `/archive-session`; closing 
 
 ## Acceptance criteria (commands + pasted output — CAMPAIGN.md §16)
 
-Baseline (I3 start) = `45b8a88` (I2 closing commit). Run and pasted at close:
+Baseline (I3 start) = `45b8a88` (I2 closing commit). **Run and pasted at close** (commits
+`ed2698f` config move, `d21a1d2` notice+PoC, `672866e` docs; live tier NOT run — no live
+credentials in this environment, same caveat as prior increments):
 
 ```
-# 1. Full suite (live tier if present), all three gates, goldens byte-identical:
-$ ./run-tests --llm    (tail)      →  All checks passed! / All checks passed! /
-                                       0 errors, 0 warnings, 0 informations / LLM_SUMMARY passed=… failed=0 …
+# 1. Full suite, all three gates, goldens byte-identical:
+$ ./run-tests --fast    (tail)
+  27 snapshots passed.
+  761 passed, 1 skipped, 2 deselected in 28.05s
+  Linting (ruff, narrow PD set) ...
+  Linting (ruff-broad.toml, campaign ratchet) ...
+  Type-checking (pyright, campaign ratchet) ...          # all three gates green
+  # (the 1 skip is test_db_credentials.py's importorskip("MySQLdb") on a sqlite-only install)
 
 # 2. Goldens unchanged across the increment (the load-bearing check for the PoC):
-$ git diff 45b8a88 HEAD -- tests/e2e/__snapshots__/    →  empty (four goldens byte-identical)
+$ git diff 45b8a88 HEAD -- tests/e2e/__snapshots__/    →  0 lines (four goldens byte-identical)
 
 # 3. New files under the full gate, zero findings:
 $ uvx ruff check --config ruff-broad.toml psh/configuration.py psh/notice.py  →  All checks passed!
-  pyright (./run-tests scope psh minus _legacy)                                →  0 errors
+$ pyright  (./run-tests scope psh minus _legacy)                              →  0 errors, 0 warnings, 0 informations
 
-# 4. New instruments, shown RED then GREEN (task reports carry the pasted red states):
-#  - test_registry_rejects_duplicate_code: constructed dup -> DuplicateNoticeCodeError (GREEN);
-#    red demo = remove the `if code in self._codes` guard -> second register silent -> test fails.
+# 4. New instruments, shown RED then GREEN (task reports .superpowers/sdd/task-{1,2}-report.md carry
+#    the pasted red states; the Task-2 review independently reproduced all three):
+#  - test_registry_rejects_duplicate_code: GREEN; red demo = drop the `if code in self._codes` guard
+#    -> "DID NOT RAISE DuplicateNoticeCodeError" (reviewer-reproduced).
 #  - test_notice_projects_to_legacy_dict: RED before add_notice handles Notice
-#    (missing-"message"/TypeError) -> GREEN after _notice_to_dict.
-#  - SC_FACADE_NAMES Notice/Severity: RED (comment out sc.Notice) naming Notice -> reverted GREEN.
-#  - test_folder_items_sorted_by_filename: passes on the old glob AND the new Path.glob (regression pin).
+#    (TypeError: argument of type 'Notice' is not iterable) -> GREEN after _notice_to_dict; forcing an
+#    unconditional `order` key re-reds it (reviewer-reproduced).
+#  - SC_FACADE_NAMES: RED (remove Severity from the script_context import) "missing ['Severity']" -> GREEN.
+#  - test_folder_items_sorted_by_filename: passes on old glob AND new Path.glob; unsorted Path.glob
+#    yields non-lexical readdir order (reviewer-reproduced) -> a dropped sorted() would red it.
 ```
