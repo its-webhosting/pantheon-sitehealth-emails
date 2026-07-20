@@ -5,6 +5,7 @@ function prints or writes.  See SPEC section 5.
 
 import datetime
 import json
+import os
 
 import pytest
 
@@ -42,6 +43,26 @@ def run(psh, monkeypatch, reset_sc, argv, engine=None, session=None, **kwargs):
         **kwargs,
     )
     return console
+
+
+@pytest.mark.integration
+def test_run_finish_phase_fires_before_artifacts_are_written(psh, tmp_path, monkeypatch, reset_sc):
+    # run_finish is the seam for future run-level artifact hooks (CAMPAIGN.md section 4): it must
+    # fire before {ymd}-notices.csv / {ymd}-results.json / {ymd}-run.json exist, so a future
+    # consumer sees the run intact and can still influence what gets written.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(psh, "db_reconnects_by_site", {})
+    monkeypatch.setattr(psh, "db_reconnect_failures_by_site", {})
+    seen = []
+    ymd = datetime.datetime.today().strftime("%Y%m%d")
+    reset_sc.add_hook("run_finish", {
+        "name": "probe", "consumes": [], "produces": [],
+        "func": lambda: seen.append(os.path.exists(f"{ymd}-notices.csv")),
+    })
+
+    run(psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"])
+
+    assert seen == [False]   # fired exactly once, before any artifact existed
 
 
 @pytest.mark.integration

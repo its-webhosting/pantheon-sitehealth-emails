@@ -16,6 +16,7 @@ EXPECTED_PHASES = (
     "site_post_dns",
     "site_post_gather",
     "site_pre_render",
+    "run_finish",
 )
 
 

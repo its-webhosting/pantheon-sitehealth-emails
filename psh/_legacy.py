@@ -1176,6 +1176,9 @@ def finish_run(
     as a site -- a metadata key there silently becomes a bogus site row in the operator's monthly
     stats.  {ymd}-results.json is site-keyed and nothing else.
     """
+    # Run-level seam (CAMPAIGN.md section 4): fire before ANY teardown or artifact write so
+    # future hooks see the run intact.  No arguments until I13's RunState.
+    sc.invoke_hooks("run_finish")
     # Two separate try blocks, deliberately: a failing close() must not skip dispose().  The
     # catches are narrow -- (SQLAlchemyError, OSError), not Exception -- so a TypeError from a
     # future edit still crashes loudly.  Neither failure may cost the operator the artifacts:
