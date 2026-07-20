@@ -83,7 +83,7 @@ def add_hook(hook_name: str, target: dict) -> None:
     import script_context as sc  # noqa: PLC0415 -- call-time import; see the module docstring
 
     if not _valid_hook_name(hook_name):
-        sc.console.print(f'[bold red]ERROR: add_hook: unknown phase "{hook_name}" '
+        sc.console.print(f'[bold red]ERROR: add_hook: unknown phase "{escape(hook_name)}" '
                          f'(known phases: {", ".join(PHASES)}; dotted names are plugin events)')
         sys.exit(1)
     hook_label = escape(str(target.get("name", "<unnamed>")))
@@ -107,12 +107,69 @@ def invoke_hooks(hook_name: str, *args, **kwargs) -> None:
     import script_context as sc  # noqa: PLC0415 -- call-time import; see the module docstring
 
     if not _valid_hook_name(hook_name):
-        sc.console.print(f'[bold red]ERROR: invoke_hooks: unknown phase "{hook_name}"')
+        sc.console.print(f'[bold red]ERROR: invoke_hooks: unknown phase "{escape(hook_name)}"')
         sys.exit(1)
     sc.debug(f'[bold magenta]=== Calling hooks for {hook_name}:')
-    for hook in sc.hooks.get(hook_name, []):
+    for hook in ordered_hooks(sc.hooks.get(hook_name, [])):
         sc.debug(f'Invoking {hook_name} hook target {hook["name"]}')
         hook['func'](*args, **kwargs)
+
+
+class HookDagError(Exception):
+    """Base for the fatal hook-DAG validation conditions (CAMPAIGN.md section 4).
+    main() catches this, prints the message, and exits 1."""
+
+
+class UnproducedKeyError(HookDagError):
+    """Condition 1: a hook consumes a contract key that neither the core registry
+    (CONTRACT) nor any hook produces."""
+
+
+class DuplicateProducerError(HookDagError):
+    """Condition 2: two producers of one key (hook+hook, or a hook claiming a key the
+    core registry already owns) -- one owner per key, a silent overwrite is a silent
+    failure (PD#1)."""
+
+
+class HookCycleError(HookDagError):
+    """Condition 3: a consumes/produces cycle among same-phase hooks."""
+
+
+class LaterPhaseKeyError(HookDagError):
+    """Condition 4: a hook consumes a key first produced in a LATER phase."""
+
+
+def ordered_hooks(hooks_list: list) -> list:
+    """The hooks in invocation order: producers before consumers (Kahn's algorithm),
+    registration order breaking ties -- so an edgeless list (every in-repo hook today)
+    keeps exactly its registration order.  Pure; raises HookCycleError on a cycle.
+    Deliberately re-computed per invoke_hooks call rather than cached at validation
+    (SPEC D-i4-6): same inputs give the same order, and tests register hooks without
+    running validate_hooks()."""
+    producers = {}
+    for hook in hooks_list:
+        for key in hook["produces"]:
+            producers.setdefault(key, hook["name"])
+    consumed_from = {
+        hook["name"]: {producers[key] for key in hook["consumes"] if key in producers}
+        for hook in hooks_list
+    }
+    ordered = []
+    done = set()
+    remaining = list(hooks_list)
+    while remaining:
+        progressed = False
+        for hook in list(remaining):
+            if consumed_from[hook["name"]] <= done:
+                ordered.append(hook)
+                done.add(hook["name"])
+                remaining.remove(hook)
+                progressed = True
+        if not progressed:
+            names = ", ".join(sorted(h["name"] for h in remaining))
+            raise HookCycleError(
+                f"consumes/produces cycle among same-phase hooks: {names}")
+    return ordered
 
 
 # The machine-readable form of CLAUDE.md's per-phase data-contract table -- THIS is
@@ -137,6 +194,61 @@ CONTRACT: dict[str, tuple[str, ...]] = {
     "site_pre_render": (),
     "run_finish": (),
 }
+
+
+def _registry_owners() -> dict:
+    """owner_phase seed: every CONTRACT key, owned by "core" at its phase's index."""
+    owner_phase = {}   # key -> (phase index, producer label)
+    for index, phase in enumerate(PHASES):
+        for key in CONTRACT[phase]:
+            owner_phase[key] = (index, "core")
+    return owner_phase
+
+
+def _claim_hook_producers(owner_phase: dict, sc) -> None:
+    """Extend owner_phase with every hook's produces (condition 2: DuplicateProducerError
+    on a second producer of one key, hook+hook or hook-vs-registry)."""
+    for phase in PHASES:
+        index = PHASES.index(phase)
+        for hook in sc.hooks.get(phase, []):
+            for key in hook["produces"]:
+                if key in owner_phase:
+                    raise DuplicateProducerError(
+                        f'"{key}" has two producers: {owner_phase[key][1]} and hook '
+                        f'"{hook["name"]}" ({phase}) -- one owner per key')
+                owner_phase[key] = (index, f'hook "{hook["name"]}"')
+
+
+def _check_hook_consumers(owner_phase: dict, sc) -> None:
+    """Condition 1 (UnproducedKeyError), condition 4 (LaterPhaseKeyError), and -- via
+    ordered_hooks(), which raises on the ready-queue deadlock -- condition 3
+    (HookCycleError), per phase."""
+    for phase in PHASES:
+        index = PHASES.index(phase)
+        for hook in sc.hooks.get(phase, []):
+            for key in hook["consumes"]:
+                if key not in owner_phase:
+                    raise UnproducedKeyError(
+                        f'hook "{hook["name"]}" ({phase}) consumes "{key}", which nothing '
+                        f'produces (neither the core contract nor any hook)')
+                if owner_phase[key][0] > index:
+                    raise LaterPhaseKeyError(
+                        f'hook "{hook["name"]}" ({phase}) consumes "{key}", first produced '
+                        f'in the later phase "{PHASES[owner_phase[key][0]]}"')
+        ordered_hooks(sc.hooks.get(phase, []))  # condition 3, per phase
+
+
+def validate_hooks() -> None:
+    """Validate the whole hook DAG at module-load completion (CAMPAIGN.md section 4
+    conditions 1-4; condition 5 is enforced at add_hook time -- nothing enters sc.hooks
+    undeclared).  Raises a named HookDagError subclass; main() turns it into a fatal
+    exit.  Dotted plugin events carry (enforced-)empty declarations, so only bare
+    phases participate."""
+    import script_context as sc  # noqa: PLC0415 -- call-time import; see the module docstring
+
+    owner_phase = _registry_owners()
+    _claim_hook_producers(owner_phase, sc)
+    _check_hook_consumers(owner_phase, sc)
 
 
 def stuff_traffic_contract(site_context: MutableMapping[str, Any], traffic_rows, start_date,

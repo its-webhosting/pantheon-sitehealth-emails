@@ -76,8 +76,12 @@ def test_setup_portal_db_overrides_config_and_populates(portal_module, reset_sc,
         "Pantheon": {"plan_sku_to_name": {"stale": "Stale"}},
     }
     # setup_portal_db fires the nested 'setup.umich.portal' hook (SiteLens setup depends on it).
+    # Registered through sc.add_hook (not a raw sc.hooks[...] append) so it carries the
+    # consumes/produces declarations every hook needs (campaign I4; a dotted event must
+    # declare both empty -- see psh/modules.py's add_hook).
     fired = []
-    sc.hooks["setup.umich.portal"] = [{"name": "probe", "func": lambda conn: fired.append(conn)}]
+    sc.add_hook("setup.umich.portal", {"name": "probe", "func": lambda conn: fired.append(conn),
+                                       "consumes": [], "produces": []})
 
     portal_module.setup_portal_db()
 

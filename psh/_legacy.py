@@ -324,7 +324,13 @@ from psh.gateway import (
     wp_eval,
 )
 from psh.notice import Notice, Severity, registry
-from psh.modules import find_modules, stuff_gather_contract, stuff_traffic_contract
+from psh.modules import (
+    HookDagError,
+    find_modules,
+    stuff_gather_contract,
+    stuff_traffic_contract,
+    validate_hooks,
+)
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
 
@@ -1920,6 +1926,15 @@ def main() -> None:
         sc.debug(f"Loading check: {check_name}")
         module = importlib.import_module(check_name)
         sc.check[check_name] = module
+
+    # All modules are loaded; every hook is registered.  Validate the consumes/produces
+    # DAG before anything runs (CAMPAIGN.md section 4) -- a bad declaration is a startup
+    # fatal, not a mid-run surprise.
+    try:
+        validate_hooks()
+    except HookDagError as e:
+        sc.console.print(f"[bold red]ERROR: hook validation failed: {escape(str(e))}")
+        sys.exit(1)
 
     # Validate and process arguments.  The --resume-from guards come first: the create-tables and
     # sites-or-all checks below both exit before they would be reached, shadowing these more

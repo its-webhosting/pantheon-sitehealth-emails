@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 
-def _package_dir(psh, package):
-    return Path(psh.__file__).resolve().parents[1] / "check" / package
+def _package_dir(psh, package, base="check"):
+    return Path(psh.__file__).resolve().parents[1] / base / package
 
 
 def _purge(probe):
@@ -28,9 +28,12 @@ def _purge(probe):
         del sys.modules[name]
 
 
-def load_check_package(psh, package, probe, request):
-    """Execute check/<package>/__init__.py as `probe` -- i.e. RUN its hook registration."""
-    pkg_dir = _package_dir(psh, package)
+def load_check_package(psh, package, probe, request, base="check"):
+    """Execute <base>/<package>/__init__.py as `probe` -- i.e. RUN its hook registration.
+
+    `base` defaults to "check"; pass base="plugin" to load a plugin/ package instead --
+    same probe-package mechanics, the two trees are siblings (CLAUDE.md)."""
+    pkg_dir = _package_dir(psh, package, base)
     _purge(probe)
     request.addfinalizer(lambda: _purge(probe))
     spec = importlib.util.spec_from_file_location(
