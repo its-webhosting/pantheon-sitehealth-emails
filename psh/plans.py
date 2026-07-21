@@ -3,6 +3,7 @@
 Moved out of the main script at campaign I7 (CAMPAIGN.md section 3.1, development/
 2026-07-20-mod-I7-plans/SPEC.md).
 """
+import copy
 import dataclasses
 import datetime
 import sys
@@ -11,6 +12,8 @@ import numpy as np
 from rich.markup import escape
 
 import script_context as sc
+from psh.configuration import umich_enabled
+from psh.db import db_retry, load_overage_protection_window
 from psh.gateway import terminus
 
 cost_table_columns = [
@@ -273,3 +276,222 @@ def resolve_plan_name(site: dict) -> str | None:
         )
         sys.exit("Bailing out.")
     return sc.config["Pantheon"]["plan_sku_to_name"][plan_sku]
+
+
+@dataclasses.dataclass(frozen=True)
+class PlanRecommendation:
+    """Everything main() and the site_pre_render contract need from the cost model."""
+
+    months_until_recommendations: int
+    median_visitors: float
+    cost_same: dict
+    costs_median: dict
+    costs_best: dict
+    cost_table_rows: dict
+    current_plan: str
+    recommended_plan: str
+    current_plan_index: int
+    recommended_plan_index: int
+    savings: float
+    estimate_start_date: datetime.date
+    estimate_end_date: datetime.date
+    savings_entry: dict | None
+
+
+def recommend_plan(  # noqa: C901, PLR0912, PLR0913, PLR0915 -- moved verbatim (CAMPAIGN.md section 3.1: moves get no algorithmic redesign); one flow input per param (B47 seam, SPEC D-i7-7)
+    db_session, site, catalog, visits_by_month, site_plan_start, estimate,
+    start_date, end_date, portal_site_id, site_context,
+) -> PlanRecommendation:
+    """Compare the site's current plan cost to every other plan and recommend the cheapest.
+
+    Extracted verbatim from main()'s per-site loop (B47) at campaign I7 (SPEC D-i7-7).  Adds
+    the upgrade recommendation notice to site_context itself (it holds the context, the I6
+    flow-function pattern) and returns a PlanRecommendation the caller unpacks into the
+    template locals; main() keeps the run accumulators, appending savings_entry to
+    site_savings when it is not None.  Returns default (no-recommendation) values when the
+    site has 4 or fewer in-window months -- no overage-protection DB read happens then.
+    """
+    plan_info = catalog.plan_info
+    plan_names = catalog.plan_names
+    overage_block_size = catalog.overage_block_size
+    overage_block_cost = catalog.overage_block_cost
+    site_current_plan = site["plan_name"]
+    end_date_yyyy_mm = end_date.strftime("%Y-%m")
+    savings = 0.0
+    savings_entry = None
+    site_recommended_plan = site["plan_name"]
+    site_current_plan_index = 0
+    site_recommended_plan_index = 0
+    costs_best = {}  # set only on the >4-month path; kept for the PlanRecommendation return
+
+    # Load the overage protection data we need for this site and date range:
+
+    # Compare current plan cost to other plan costs
+
+    median_visitors = 0
+    cost_same = {}
+    costs_median = {}
+    cost_table_rows = {}
+    estimate_start_date = (
+        end_date  # default both estimate start/end dates to the report end date
+    )
+    estimate_end_date = end_date
+    k = [
+        d for d in visits_by_month if d >= site_plan_start.strftime("%Y-%m")
+    ]
+    v = [visits_by_month[d] for d in k]
+    months_until_recommendations = 0 if len(v) > 4 else 5 - len(v)  # noqa: PLR2004 -- verbatim move; a recommendation needs >4 in-window months (CAMPAIGN.md section 3.1: moves get no algorithmic redesign)
+    if len(v) > 4:  # noqa: PLR2004 -- verbatim move; a recommendation needs >4 in-window months (CAMPAIGN.md section 3.1: moves get no algorithmic redesign)
+
+        # One ranged query for the whole window, snapshotted as plain data; plan_costs()
+        # then does ~91 dict lookups instead of ~91 committed round trips to a remote
+        # RDS.  Safe because nothing writes to pantheon_overage_protection between these
+        # plan_costs() reads and build_traffic_table_rows()' commit, which now runs later
+        # in main() (after the --only-warn gate).
+        overage_protection = db_retry(
+            db_session,
+            lambda: load_overage_protection_window(
+                db_session, site, start_date, end_date
+            ),
+            what=f"loading overage protection for {site['name']}",
+            site=site["name"],
+        )
+
+        def op_lookup(month):
+            return overage_protection.get(
+                datetime.date.fromisoformat(month + "-01")
+            )
+
+        cost_same, costs_median, costs_best, median_visitors = plan_costs(
+            plan_info,
+            plan_names,
+            visits_by_month,
+            v,
+            estimate,
+            end_date_yyyy_mm,
+            site_plan_start,
+            overage_block_size,
+            overage_block_cost,
+            op_lookup,
+        )
+        # find the key in costs_best with the lowest value:
+        site_recommended_plan = min(costs_best, key=lambda plan: costs_best[plan])
+
+        if site["plan_name"] != site_recommended_plan:
+            site_current_plan_index = plan_names.index(site["plan_name"])
+            site_recommended_plan_index = plan_names.index(site_recommended_plan)
+            savings = abs(
+                cost_same[site["plan_name"]] - costs_best[site_recommended_plan]
+            )
+            if site_current_plan_index > site_recommended_plan_index:
+                if site_recommended_plan == "Basic":
+                    # Basic is a better deal, but only if the site owner isn't using Performance features
+                    # other than Overage Protection.
+                    # TODO: check to see if performance features are in use
+                    #    New Relic, Solr, Redis, WP/Drupal Multisite
+                    if site_current_plan == "Performance Small":
+                        site_recommended_plan = "Performance Small"
+                        savings = 0
+                    # check to see if there is a plan between the current plan and Basic that also saves money
+                    if site_current_plan_index > 1:  # not already Performance Small
+                        sc.console.print(
+                            f"Checking for a better plan between {site_current_plan} and Basic"
+                        )
+                        bc = copy.copy(costs_best)
+                        del bc["Basic"]
+                        alt = min(bc, key=lambda plan: bc[plan])
+                        sc.console.print(f"cheapest plan excluding Basic: {alt}")
+                        if alt != site_current_plan:
+                            sc.console.log(f"Found a better plan: {alt}")
+                            savings = abs(
+                                cost_same[site["plan_name"]] - costs_best[alt]
+                            )
+                            site_recommended_plan = alt
+                        else:
+                            site_recommended_plan = site_current_plan
+                            savings = 0
+                    # TODO: if Basic still looks best, give a special message recommending switching to Basic.
+                # D-i7-4 (campaign I7): every surviving downgrade recommendation
+                # reaches the operator's savings summary -- non-Basic downgrades
+                # used to vanish from it.  Still no owner notice (campaign non-goal;
+                # README TODO).
+                savings_entry = {
+                    "site": site["name"],
+                    "savings": savings,
+                    "current_plan": site["plan_name"],
+                    "recommended_plan": site_recommended_plan,
+                }
+            else:
+                site_context.add_notice(
+                    build_plan_recommendation_notice(
+                        site["name"], site["plan_name"], site_recommended_plan,
+                        savings, portal_site_id, umich_enabled(),
+                    )
+                )
+                savings_entry = {
+                    "site": site["name"],
+                    "savings": savings,
+                    "current_plan": site["plan_name"],
+                    "recommended_plan": site_recommended_plan,
+                }
+
+        sc.debug(
+            f"Best plan for {site['name']} is {site_recommended_plan} "
+            f"at ${costs_best[site_recommended_plan]:,.2f}"
+        )
+        for plan in plan_names:
+            cost_table_rows[plan] = {}
+            cost_table_rows[plan]["plan"] = plan
+            cost_table_rows[plan]["cost-same"] = f"${cost_same[plan]:,.2f}"
+            cost_table_rows[plan]["cost-median"] = f"${costs_median[plan]:,.2f}"
+            cost_table_rows[plan]["notes"] = ""
+            if plan == site_recommended_plan:
+                cost_table_rows[plan]["notes"] = (
+                    '<span class="pill pill-warning">Recommended Plan</span>'
+                )
+            if plan == site["plan_name"]:
+                if cost_table_rows[plan]["notes"] != "":
+                    cost_table_rows[plan]["notes"] += " &nbsp; "
+                cost_table_rows[plan]["notes"] += (
+                    '<span class="pill pill-primary">Current Plan</span>'
+                )
+            cost_table_rows[plan]["recommend"] = (
+                "Yes" if plan == site_recommended_plan else "No"
+            )
+
+        estimate_start_date = (
+            end_date.replace(day=1) + datetime.timedelta(days=32)
+        ).replace(day=1)
+        estimate_end_date = estimate_start_date.replace(
+            year=estimate_start_date.year + 1
+        ) - datetime.timedelta(days=1)
+
+    return PlanRecommendation(
+        months_until_recommendations=months_until_recommendations,
+        median_visitors=median_visitors,
+        cost_same=cost_same,
+        costs_median=costs_median,
+        costs_best=costs_best,
+        cost_table_rows=cost_table_rows,
+        current_plan=site_current_plan,
+        recommended_plan=site_recommended_plan,
+        current_plan_index=site_current_plan_index,
+        recommended_plan_index=site_recommended_plan_index,
+        savings=savings,
+        estimate_start_date=estimate_start_date,
+        estimate_end_date=estimate_end_date,
+        savings_entry=savings_entry,
+    )
+
+
+def stuff_plans_contract(site_context, current_plan: str, recommended_plan: str,
+                         costs: dict, savings: float) -> None:
+    """Publish the site_pre_render contract keys (psh.modules.CONTRACT is authoritative).
+
+    costs is {"same": {plan: cost}, "median": {...}, "best": {...}} -- {} when the site
+    has too few in-window months for a recommendation.  recommended_plan equals
+    current_plan when no change is recommended."""
+    site_context["current_plan"] = current_plan
+    site_context["recommended_plan"] = recommended_plan
+    site_context["plan_costs"] = costs
+    site_context["savings"] = savings

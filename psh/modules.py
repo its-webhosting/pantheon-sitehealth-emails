@@ -175,7 +175,8 @@ def ordered_hooks(hooks_list: list) -> list:
 # The machine-readable form of CLAUDE.md's per-phase data-contract table -- THIS is
 # authoritative (CAMPAIGN.md section 4); the CLAUDE.md table is its prose rendering.
 # Keys FIRST guaranteed at each phase; availability is cumulative (site_pre_render
-# guarantees everything above it and adds nothing).  The base SiteContext keys
+# guarantees everything above it plus the four plan/cost keys stuffed just before it,
+# full-report path only -- I7).  The base SiteContext keys
 # (site/notices/sections/attachments) are construction, not contract, and hooks do not
 # declare them.  validate_hooks() reads this to resolve consumed keys (SPEC section 4).
 CONTRACT: dict[str, tuple[str, ...]] = {
@@ -191,7 +192,7 @@ CONTRACT: dict[str, tuple[str, ...]] = {
         "framework", "site_url", "wordpress_version", "drupal_version",
         "wordpress_plugins", "drupal_modules",
     ),
-    "site_pre_render": (),
+    "site_pre_render": ("current_plan", "recommended_plan", "plan_costs", "savings"),
     "run_finish": (),
 }
 

@@ -12,7 +12,6 @@
 
 import argparse
 import calendar
-import copy
 import datetime
 import html
 import importlib
@@ -239,13 +238,16 @@ from psh.traffic import (
 from psh.plans import (
     PlanCatalog,
     PlanInfo,
+    PlanRecommendation,
     build_plan_over_time,
     build_plan_recommendation_notice,
     contract_year_end,
     cost_table_columns,
     overage_blocks,
     plan_costs,
+    recommend_plan,
     resolve_plan_name,
+    stuff_plans_contract,
 )
 from psh.notice import Notice, Severity, registry
 from psh.modules import (
@@ -2569,12 +2571,6 @@ A variety of support options are available.
 
             # TODO: Warn if no Autopilot
 
-            # TODO: instead of continuing here, proceed below to calculate plan recommendations, skipping the graph and email
-            if sc.options.only_warn:
-                for n in site_context["notices"]:
-                    all_warnings.append(n["csv"])
-                continue
-
             visits_by_month, plan_on_day = aggregate_visits_by_month(
                 results, start_date, end_date
             )
@@ -2608,6 +2604,42 @@ A variety of support options are available.
             # Convert the keys of the visits_by_month dictionary to datetime objects
             dates = [datetime.date.fromisoformat(d + "-15") for d in visits_by_month.keys()]
             visits = list(visits_by_month.values())
+
+            # Estimate the visits for the last month if it isn't over yet:
+            estimate = estimate_month_visits(visits_by_month, dates, last_day, end_date.day)
+
+            # Load the overage protection data and compare current-plan cost to the other
+            # plans (psh.plans.recommend_plan).  Runs before the --only-warn gate so
+            # warning-only runs include the plan recommendation (D7, campaign I7).
+            site_plan_start = plan_over_time[0]["start"].replace(day=1)
+            rec = recommend_plan(
+                db_session,
+                site,
+                catalog,
+                visits_by_month,
+                site_plan_start,
+                estimate,
+                start_date,
+                end_date,
+                portal_site_id,
+                site_context,
+            )
+            site_recommended_plan = rec.recommended_plan
+            site_current_plan_index = rec.current_plan_index
+            site_recommended_plan_index = rec.recommended_plan_index
+            median_visitors = rec.median_visitors
+            cost_table_rows = rec.cost_table_rows
+            months_until_recommendations = rec.months_until_recommendations
+            estimate_start_date = rec.estimate_start_date
+            estimate_end_date = rec.estimate_end_date
+            if rec.savings_entry is not None:
+                site_savings.append(rec.savings_entry)
+
+            if sc.options.only_warn:
+                for n in site_context["notices"]:
+                    all_warnings.append(n["csv"])
+                continue
+
             visits_covered_by_month = {}
             first_plan_day = days[0]
             last_plan_day = days[-1]
@@ -2640,8 +2672,6 @@ A variety of support options are available.
             #
             sc.debug(f"[bold magenta]=== Creating chart for {site['name']}:")
 
-            # Estimate the visits for the last month if it isn't over yet:
-            estimate = estimate_month_visits(visits_by_month, dates, last_day, end_date.day)
             if estimate != -1:
                 estimates_by_month = visits_covered_by_month.copy()
                 for month in estimates_by_month.keys():
@@ -2984,9 +3014,6 @@ A variety of support options are available.
 
             # TODO: If Performance small and below Basic upgrade + no New Relic + No Solr + No Redis + mem usage low --> Switch to Basic
 
-            # Load the overage protection data we need for this site and date range:
-
-            site_plan_start = plan_over_time[0]["start"].replace(day=1)
             traffic_table_rows = db_retry(
                 db_session,
                 lambda: build_traffic_table_rows(
@@ -3008,145 +3035,6 @@ A variety of support options are available.
             )
 
             sc.debug(traffic_table_rows)
-
-            # Compare current plan cost to other plan costs
-
-            median_visitors = 0
-            cost_same = {}
-            costs_median = {}
-            cost_table_rows = {}
-            estimate_start_date = (
-                end_date  # default both estimate start/end dates to the report end date
-            )
-            estimate_end_date = end_date
-            k = [
-                d for d in visits_by_month.keys() if d >= site_plan_start.strftime("%Y-%m")
-            ]
-            v = [visits_by_month[d] for d in k]
-            months_until_recommendations = 0 if len(v) > 4 else 5 - len(v)
-            if len(v) > 4:
-
-                # One ranged query for the whole window, snapshotted as plain data; plan_costs()
-                # then does ~91 dict lookups instead of ~91 committed round trips to a remote
-                # RDS.  Safe because nothing writes to pantheon_overage_protection between
-                # build_traffic_table_rows()' commit (above) and plan_costs()' reads (below).
-                overage_protection = db_retry(
-                    db_session,
-                    lambda: load_overage_protection_window(
-                        db_session, site, start_date, end_date
-                    ),
-                    what=f"loading overage protection for {site['name']}",
-                    site=site["name"],
-                )
-
-                def op_lookup(month):
-                    return overage_protection.get(
-                        datetime.date.fromisoformat(month + "-01")
-                    )
-
-                cost_same, costs_median, costs_best, median_visitors = plan_costs(
-                    plan_info,
-                    plan_names,
-                    visits_by_month,
-                    v,
-                    estimate,
-                    end_date_yyyy_mm,
-                    site_plan_start,
-                    overage_block_size,
-                    overage_block_cost,
-                    op_lookup,
-                )
-                # find the key in costs_best with the lowest value:
-                site_recommended_plan = min(costs_best, key=costs_best.get)
-
-                if site["plan_name"] != site_recommended_plan:
-                    site_current_plan_index = plan_names.index(site["plan_name"])
-                    site_recommended_plan_index = plan_names.index(site_recommended_plan)
-                    savings = abs(
-                        cost_same[site["plan_name"]] - costs_best[site_recommended_plan]
-                    )
-                    if site_current_plan_index > site_recommended_plan_index:
-                        if site_recommended_plan == "Basic":
-                            # Basic is a better deal, but only if the site owner isn't using Performance features
-                            # other than Overage Protection.
-                            # TODO: check to see if performance features are in use
-                            #    New Relic, Solr, Redis, WP/Drupal Multisite
-                            if site_current_plan == "Performance Small":
-                                site_recommended_plan = "Performance Small"
-                                savings = 0
-                            # check to see if there is a plan between the current plan and Basic that also saves money
-                            if site_current_plan_index > 1:  # not already Performance Small
-                                sc.console.print(
-                                    f"Checking for a better plan between {site_current_plan} and Basic"
-                                )
-                                bc = copy.copy(costs_best)
-                                del bc["Basic"]
-                                alt = min(bc, key=bc.get)
-                                sc.console.print(f"cheapest plan excluding Basic: {alt}")
-                                if alt != site_current_plan:
-                                    sc.console.log(f"Found a better plan: {alt}")
-                                    savings = abs(
-                                        cost_same[site["plan_name"]] - costs_best[alt]
-                                    )
-                                    site_recommended_plan = alt
-                                else:
-                                    site_recommended_plan = site_current_plan
-                                    savings = 0
-                            # TODO: if Basic still looks best, give a special message recommending switching to Basic.
-                            site_savings.append(
-                                {
-                                    "site": site["name"],
-                                    "savings": savings,
-                                    "current_plan": site["plan_name"],
-                                    "recommended_plan": site_recommended_plan,
-                                }
-                            )
-                    else:
-                        site_context.add_notice(
-                            build_plan_recommendation_notice(
-                                site["name"], site["plan_name"], site_recommended_plan,
-                                savings, portal_site_id, umich_enabled(),
-                            )
-                        )
-                        site_savings.append(
-                            {
-                                "site": site["name"],
-                                "savings": savings,
-                                "current_plan": site["plan_name"],
-                                "recommended_plan": site_recommended_plan,
-                            }
-                        )
-
-                sc.debug(
-                    f"Best plan for {site['name']} is {site_recommended_plan} "
-                    f"at ${costs_best[site_recommended_plan]:,.2f}"
-                )
-                for plan in plan_names:
-                    cost_table_rows[plan] = {}
-                    cost_table_rows[plan]["plan"] = plan
-                    cost_table_rows[plan]["cost-same"] = f"${cost_same[plan]:,.2f}"
-                    cost_table_rows[plan]["cost-median"] = f"${costs_median[plan]:,.2f}"
-                    cost_table_rows[plan]["notes"] = ""
-                    if plan == site_recommended_plan:
-                        cost_table_rows[plan]["notes"] = (
-                            '<span class="pill pill-warning">Recommended Plan</span>'
-                        )
-                    if plan == site["plan_name"]:
-                        if cost_table_rows[plan]["notes"] != "":
-                            cost_table_rows[plan]["notes"] += " &nbsp; "
-                        cost_table_rows[plan]["notes"] += (
-                            '<span class="pill pill-primary">Current Plan</span>'
-                        )
-                    cost_table_rows[plan]["recommend"] = (
-                        "Yes" if plan == site_recommended_plan else "No"
-                    )
-
-                estimate_start_date = (
-                    end_date.replace(day=1) + datetime.timedelta(days=32)
-                ).replace(day=1)
-                estimate_end_date = estimate_start_date.replace(
-                    year=estimate_start_date.year + 1
-                ) - datetime.timedelta(days=1)
 
             site_context.add_notices(
                 build_smell_notices(site["name"], wp_smell, drush_smell, composer_smell)
@@ -3216,6 +3104,17 @@ A variety of support options are available.
                         site["name"], site["plan_name"], annual_bill, shortcode
                     ),
                 )
+
+            stuff_plans_contract(
+                site_context,
+                site_current_plan,
+                site_recommended_plan,
+                {"same": rec.cost_same, "median": rec.costs_median,
+                 "best": rec.costs_best}
+                if rec.cost_same
+                else {},
+                rec.savings,
+            )
 
             # Last per-site seam before rendering (full-report path only; --only-warn continued
             # above).  No consumer yet -- the documented seam for future report-shaping hooks.

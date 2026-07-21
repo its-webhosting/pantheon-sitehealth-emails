@@ -23,8 +23,28 @@ def test_contract_phases_match_engine_phases(psh, reset_sc):
 
 def test_contract_empty_phases(psh):
     import psh.modules
-    for phase in ("setup", "site_pre", "site_pre_render", "run_finish"):
+    for phase in ("setup", "site_pre", "run_finish"):
         assert psh.modules.CONTRACT[phase] == ()
+
+
+def test_site_pre_render_contract_keys(psh):
+    import psh.modules
+    assert psh.modules.CONTRACT["site_pre_render"] == (
+        "current_plan", "recommended_plan", "plan_costs", "savings")
+
+
+def test_plans_stuffer_writes_exactly_the_registry_keys(psh, reset_sc):
+    import psh.modules
+    import psh.plans
+    ctx = _fresh_ctx(reset_sc)
+    psh.plans.stuff_plans_contract(ctx, "Basic", "Performance Small",
+                                   {"same": {"Basic": 1.0}, "median": {}, "best": {}},
+                                   12.5)
+    assert set(ctx) - BASE_KEYS == set(psh.modules.CONTRACT["site_pre_render"])
+    assert ctx["current_plan"] == "Basic"
+    assert ctx["recommended_plan"] == "Performance Small"
+    assert ctx["plan_costs"]["same"] == {"Basic": 1.0}
+    assert ctx["savings"] == 12.5
 
 
 def test_traffic_stuffer_writes_exactly_the_registry_keys(psh, reset_sc):

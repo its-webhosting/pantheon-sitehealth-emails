@@ -224,13 +224,16 @@ def normalize_report_html(text):
 
 
 def seed_traffic(db_path, *, site_id=E2E_SITE_ID, year=2026, month=3,
-                 plan="Performance Small"):
-    """Seed a deterministic month of PantheonTraffic rows into a sqlite DB."""
+                 plan="Performance Small", visits_scale=1):
+    """Seed a deterministic month of PantheonTraffic rows into a sqlite DB.
+
+    visits_scale multiplies the per-day volume (default 1 -- existing callers unchanged);
+    the D7 --only-warn e2e seeds 6x to reach an upgrade recommendation."""
     con = sqlite3.connect(str(db_path))
     try:
         day = datetime.date(year, month, 1)
         while day.month == month:
-            visits = 1000 + day.day * 10
+            visits = (1000 + day.day * 10) * visits_scale
             con.execute(
                 "INSERT OR REPLACE INTO pantheon_traffic "
                 "(site_id, traffic_date, site_plan, visits, pages_served, cache_hits) "
