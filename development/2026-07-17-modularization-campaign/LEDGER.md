@@ -922,7 +922,10 @@ each green: `5a6654d` (Task 1 — the four `site_post_gather` contract keys + B4
 `sc.wp_error`), `717e21f` (Task 3 — U-M WP checks → `check/umich/` + ratchet narrowing),
 `fb92e9d` (Task 4 — `psh/gather.py`), `d5c4bf8` (the carried I8 rich-pprint fix, below),
 plus this closing docs commit (CLAUDE.md / CAMPAIGN.md §8 amendment / memory / this
-entry / the dev folder). Full suite at close **including the live tier** (Terminus
+entry / the dev folder) and `ea55efc` (whole-branch-review fix, after the closing
+commit: two comment-level corrections — the stale `WordPressGather.wordpress_version`
+field comment in `psh/gather.py`, and `test_house_rules.py`'s façade quote repointed at
+the updated CLAUDE.md sentence; verdict then unqualified PASS/PASS). Full suite at close **including the live tier** (Terminus
 credentials present — `ls ~/.terminus/cache/tokens/` shows one token; the 2 live-marked
 tests ran) = **910 passed / 1 skipped** (the skip is `test_db_credentials.py`'s
 `importorskip("MySQLdb")` on a sqlite-only install), all three gates (`All checks
