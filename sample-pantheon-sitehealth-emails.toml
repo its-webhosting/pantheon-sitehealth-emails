@@ -101,6 +101,13 @@ plan-elite_1m-contract-annual-1            = "Elite 1M"
 plan-elite_2m-contract-annual-1            = "Elite 2M"
 
 
+[Check.pantheon]
+# Generic Pantheon site-health checks: frozen site, uninitialized live environment on
+# a paid plan, unapplied upstream updates, PHP end-of-life.  Enabled by default; set
+# to false to disable all four.
+enabled = true
+
+
 [Database]
 # currently supported database types: sqlite, mysql
 

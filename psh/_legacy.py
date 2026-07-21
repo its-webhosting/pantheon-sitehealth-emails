@@ -1401,35 +1401,6 @@ def main() -> None:
             # accumulate into it through the pipeline below.
             site_context = sc.SiteContext(site)
 
-            if site["frozen"] is not False:
-                sc.console.print(
-                    f":exclamation: [bold red] ATTENTION: {site['name']} is frozen!"
-                )
-                site_context.add_notice(
-                    {
-                        "type": "alert",
-                        "icon": "&#x1F6A8;",  # police car light
-                        "csv": f"{site['name']},frozen",
-                        "short": "unfreeze site",
-                        "message": f"""
-<p>Website <strong>{site["name"]}</strong> is frozen!</p>
-<p><a href="https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing">
-This should not happen</a> to a website on a paid Pantheon plan.</p>
-<p><a href="https://its.umich.edu/computing/web-mobile/pantheon/support#support">Contact Pantheon</a> to get
-<strong>{site["name"]}</strong> unfrozen and to find out what went wrong.</p>
-""",
-                        "text": f"""
-Website {site["name"]} is frozen!
-<https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing>
-
-This should not happen</a> to a website on a paid Pantheon plan.
-Contact Pantheon to get {site["name"]} unfrozen
-and to find out what went wrong:
-<https://its.umich.edu/computing/web-mobile/pantheon/support#support>
-""",
-                    }
-                )
-
             if site["plan_name"] not in plan_names:
                 sc.console.print(
                     f":exclamation: [bold red] ATTENTION: {site['name']} "
@@ -1459,31 +1430,6 @@ and to find out what went wrong:
                     "this should never happen"
                 )
                 sys.exit("Bailing out.")
-            if envs["live"]["initialized"] is False:
-                sc.console.print(
-                    f":exclamation: [bold red] ERROR: {site['name']} is on a paid plan but its live "
-                    "environment is not initialized"
-                )
-                site_context.add_notice(
-                    {
-                        "type": "alert",
-                        "icon": "&#x1F6A8;",  # police car light
-                        "csv": f"{site['name']},no-live-env-but-paid-plan",
-                        "short": f"no live environment",
-                        "message": f"""
-            <p>{site["name"]} is on a paid plan but its live environment is not initialized.  Either initialize
-            the live environment and connect a domain through which people will access the site or downgrade the
-            site's plan to Sandbox to save money.</p>
-            """,
-                        "text": f"""
-            {site["name"]} is on a paid plan but its
-            live environment is not initialized.  Either initialize the
-            live environment and connect a domain through which people
-            will access the site or downgrade the site's plan to
-            Sandbox to save money.
-            """,
-                    }
-                )
 
             # Metrics for an uninitialized live environment will be all zeroes; this is OK.
 

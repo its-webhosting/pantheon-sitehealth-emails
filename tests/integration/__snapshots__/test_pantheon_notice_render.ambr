@@ -1,0 +1,51 @@
+# serializer version: 1
+# name: test_frozen_notice_snapshot
+  '''
+  
+  <p>Website <strong>bus-occb</strong> is frozen!</p>
+  <p><a href="https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing">
+  This should not happen</a> to a website on a paid Pantheon plan.</p>
+  <p><a href="https://its.umich.edu/computing/web-mobile/pantheon/support#support">Contact Pantheon</a> to get
+  <strong>bus-occb</strong> unfrozen and to find out what went wrong.</p>
+  
+  '''
+# ---
+# name: test_frozen_notice_snapshot.1
+  '''
+  
+  Website bus-occb is frozen!
+  <https://docs.pantheon.io/guides/platform-considerations/platform-site-info#inactive-site-freezing>
+  
+  This should not happen</a> to a website on a paid Pantheon plan.
+  Contact Pantheon to get bus-occb unfrozen
+  and to find out what went wrong:
+  <https://its.umich.edu/computing/web-mobile/pantheon/support#support>
+  
+  '''
+# ---
+# name: test_frozen_notice_snapshot.2
+  'unfreeze site'
+# ---
+# name: test_no_live_env_notice_snapshot
+  '''
+  
+              <p>bus-occb is on a paid plan but its live environment is not initialized.  Either initialize
+              the live environment and connect a domain through which people will access the site or downgrade the
+              site's plan to Sandbox to save money.</p>
+              
+  '''
+# ---
+# name: test_no_live_env_notice_snapshot.1
+  '''
+  
+              bus-occb is on a paid plan but its
+              live environment is not initialized.  Either initialize the
+              live environment and connect a domain through which people
+              will access the site or downgrade the site's plan to
+              Sandbox to save money.
+              
+  '''
+# ---
+# name: test_no_live_env_notice_snapshot.2
+  'no live environment'
+# ---
