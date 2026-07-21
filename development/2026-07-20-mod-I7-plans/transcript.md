@@ -5602,3 +5602,394 @@ options:
 }
 ```
 
+### ↳ Tool result
+
+```
+source JSONL: /home/node/.claude/projects/-workspace/b5a734bd-fa00-48c8-8ef4-af429de13f5e.jsonl
+wrote development/2026-07-20-mod-I7-plans/transcript.md (scrubbed) and development/2026-07-20-mod-I7-plans/transcript.raw.md (raw, gitignored)
+wrote development/2026-07-20-mod-I7-plans/statistics.md
+```
+
+## Assistant
+
+Archive rendered and scrubbed. Closing commit:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git status --short | head -20; git add development/2026-07-20-mod-I7-plans development/2026-07-17-modularization-campaign/LEDGER.md development/2026-07-17-modularization-campaign/BLOCKMAP.md && git status --short | grep '^[AM]' | head -15",
+  "description": "Stage closing docs (dev folder + ledger + blockmap)"
+}
+```
+
+### ↳ Tool result
+
+```
+Exit code 128
+ M development/2026-07-17-modularization-campaign/BLOCKMAP.md
+ M development/2026-07-17-modularization-campaign/LEDGER.md
+?? development/2026-07-20-mod-I7-plans/
+fatal: Unable to create '/workspace/.git/index.lock': File exists.
+
+Another git process seems to be running in this repository, e.g.
+an editor opened by 'git commit'. Please make sure all processes
+are terminated then try again. If it still fails, a git process
+may have crashed in this repository earlier:
+remove the file manually to continue.
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "ps aux | grep -c '[g]it ' ; ls -la /workspace/.git/index.lock 2>/dev/null",
+  "description": "Check for a live git process before touching the lock"
+}
+```
+
+### ↳ Tool result
+
+```
+Exit code 2
+1
+```
+
+## Assistant
+
+The lock file is already gone (transient — a hook's git process). Retrying:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git add development/2026-07-20-mod-I7-plans development/2026-07-17-modularization-campaign/LEDGER.md development/2026-07-17-modularization-campaign/BLOCKMAP.md && git commit -m \"docs(campaign-I7): close the plans increment\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\" && git log --oneline -8 && git status --short",
+  "description": "Commit the I7 closing docs"
+}
+```
+
+### ↳ Tool result
+
+```
+Exit code 128
+fatal: Unable to create '/workspace/.git/index.lock': File exists.
+
+Another git process seems to be running in this repository, e.g.
+an editor opened by 'git commit'. Please make sure all processes
+are terminated then try again. If it still fails, a git process
+may have crashed in this repository earlier:
+remove the file manually to continue.
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "ps aux | grep '[g]it' | head -5; echo ---; ls -la /workspace/.git/index.lock 2>/dev/null && echo \"lock exists\"",
+  "description": "Identify the process holding the git lock"
+}
+```
+
+### ↳ Tool result
+
+```
+Exit code 2
+node     16830  0.0  0.3 1141348 56108 ?       Sl   Jul20   0:03 /usr/local/share/npm-global/lib/node_modules/@colbymchenry/codegraph/node_modules/@colbymchenry/codegraph-linux-arm64/node -e  const fs = require('fs'); const parentPid = Number(process.argv[1]); const timeoutMs = Number(process.argv[2]); const capMs = Number(process.argv[3]); const progressPaths = process.argv.slice(4); const secs = Math.round(timeoutMs / 1000); function kill(extra) {   try { fs.writeSync(2, Buffer.from('[CodeGraph] Main thread unresponsive for ~' + secs + 's' + (extra || '') + ' ??? killing the wedged process so a fresh one can start (#850). Disable with CODEGRAPH_NO_WATCHDOG=1.\n')); } catch (e) {}   try { process.kill(parentPid, 'SIGKILL'); } catch (e) {}   process.exit(0); } // Fingerprint of the watched files (size + mtime). A change between checks is // forward disk progress ??? a slow synchronous SQLite statement, not a wedge. function snap() {   let s = '';   for (const p of progressPaths) {     try { const st = fs.statSync(p); s += st.size + ':' + st.mtimeMs + ';'; } catch (e) { s += 'x;'; }   }   return s; } let lastSnap = progressPaths.length ? snap() : ''; let lastSnapAt = Date.now(); let silentSince = null; // start of the current continuous-silence episode function onTimeout() {   if (!progressPaths.length) return kill('');   const now = Date.now();   if (silentSince === null) silentSince = now - timeoutMs; // silence began ~one timeout ago   const cur = snap();   if (cur !== lastSnap && now - silentSince < capMs) {     // The event loop is blocked but the DB files are advancing: a legitimate     // long store on slow storage. Defer, re-baseline, keep watching.     lastSnap = cur;     timer = setTimeout(onTimeout, timeoutMs);     return;   }   kill(cur !== lastSnap ? ' despite ongoing disk activity (hard cap ' + Math.round(capMs / 1000) + 's reached)' : ''); } let timer = setTimeout(onTimeout, timeoutMs); process.stdin.on('data', () => {   silentSince = null;   // Keep the baseline fresh while healthy (throttled ??? a stat per second).   if (progressPaths.length) {     const t = Date.now();     if (t - lastSnapAt >= 1000) { lastSnap = snap(); lastSnapAt = t; }   }   clearTimeout(timer); timer = setTimeout(onTimeout, timeoutMs); }); process.stdin.on('end', () => process.exit(0));   // parent closed the pipe (exited) -> no orphan process.stdin.on('error', () => process.exit(0)); // pipe broke -> parent gone process.stdin.resume();  16764 60000 600000
+node     18122 25.0  0.0   9100  4680 ?        R    07:43   0:00 /usr/bin/git -c core.fsmonitor=false -c log.showSignature=false --no-optional-locks --no-pager status --porcelain=v1 --untracked-files=all --no-renames -z -- .
+node     18124  0.0  0.0  12284  5468 ?        R    07:43   0:00 /usr/bin/git -c core.fsmonitor=false -c log.showSignature=false --no-optional-locks --no-pager diff --numstat --no-renames HEAD
+node     18125  0.0  0.0   4040  2844 ?        Ss   07:43   0:00 /bin/bash -c source /home/node/.claude/shell-snapshots/snapshot-bash-1784595655577-p4tbhy.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && eval 'ps aux | grep '"'"'[g]it'"'"' | head -5; echo ---; ls -la /workspace/.git/index.lock 2>/dev/null && echo "lock exists"' < /dev/null && pwd -P >| /tmp/claude-49b5-cwd
+node     18128  0.0  0.0   4040  2044 ?        S    07:43   0:00 /bin/bash -c source /home/node/.claude/shell-snapshots/snapshot-bash-1784595655577-p4tbhy.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && eval 'ps aux | grep '"'"'[g]it'"'"' | head -5; echo ---; ls -la /workspace/.git/index.lock 2>/dev/null && echo "lock exists"' < /dev/null && pwd -P >| /tmp/claude-49b5-cwd
+---
+```
+
+## Assistant
+
+The lock is transient (harness git probes racing my add). Retrying with a brief retry loop:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "for i in 1 2 3 4 5; do if git add development/2026-07-20-mod-I7-plans development/2026-07-17-modularization-campaign/LEDGER.md development/2026-07-17-modularization-campaign/BLOCKMAP.md 2>/tmp/gitadd.err; then echo \"add OK\"; break; fi; sleep 2; done; git commit -m \"docs(campaign-I7): close the plans increment\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\" && git log --oneline -8",
+  "description": "Retry staging and commit closing docs"
+}
+```
+
+### ↳ Tool result
+
+```
+add OK
+[main 893ba35] docs(campaign-I7): close the plans increment
+ 6 files changed, 7104 insertions(+), 1 deletion(-)
+ create mode 100644 development/2026-07-20-mod-I7-plans/PLAN.md
+ create mode 100644 development/2026-07-20-mod-I7-plans/SPEC.md
+ create mode 100644 development/2026-07-20-mod-I7-plans/statistics.md
+ create mode 100644 development/2026-07-20-mod-I7-plans/transcript.md
+893ba35 docs(campaign-I7): close the plans increment
+15fb36d fix(campaign-I7): restore OP write-before-read ordering around the plan recommendation
+8053f8e docs(campaign-I7): correct the PlanRecommendation field list in CLAUDE.md
+1d32b9f docs(campaign-I7): document the plans layer, D7, and the section-8 amendment
+24c5892 refactor(campaign-I7): recommend_plan + D7 --only-warn recommendation + site_pre_render contract keys
+641db2f refactor(campaign-I7): PlanCatalog/PlanInfo and resolve_plan_name (B9/B12/B17)
+b74b5a6 refactor(campaign-I7): move the plans layer into psh/plans.py; fix its-recommends-plan csv
+3195c81 docs(campaign-I6): archive the traffic-layer session
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git status --short; echo \"I7 CLOSED: 7 commits 3195c81..893ba35, final review PASS both axes, full suite 810/1 incl. live tier\" >> /workspace/.superpowers/sdd/progress.md",
+  "description": "Confirm clean tree; final ledger note"
+}
+```
+
+### ↳ Tool result
+
+```
+(Bash completed with no output)
+```
+
+### ⚙ Tool call: `TaskUpdate`
+
+```json
+{
+  "taskId": "3",
+  "status": "completed"
+}
+```
+
+### ⚙ Tool call: `TaskUpdate`
+
+```json
+{
+  "taskId": "4",
+  "status": "completed"
+}
+```
+
+### ↳ Tool result
+
+```
+Updated task #4 status
+```
+
+### ↳ Tool result
+
+```
+Updated task #3 status
+```
+
+## Assistant
+
+**I7 is complete and closed** — 7 commits on `main` (`3195c81..893ba35`), working tree clean, full suite at close **810 passed / 1 skipped including the live tier**, all three gates green, and the four e2e goldens byte-identical across the whole increment.
+
+What shipped:
+
+- **`psh/plans.py`** (gated from birth): the six moved defs (`cost_table_columns`, `overage_blocks`, `contract_year_end`, `plan_costs`, `build_plan_over_time`, `build_plan_recommendation_notice`), the §6-mandated `PlanCatalog`/`PlanInfo` typed view, `resolve_plan_name` (B17), and `recommend_plan` + `PlanRecommendation` (the B47 core) — all re-imported by `_legacy.py` so every existing call site and `psh.<name>` test reference resolves unchanged.
+- **D7**: `--only-warn` now computes the plan recommendation before dumping warnings, so warning-only runs emit `its-recommends-plan` rows (the old B42 TODO is retired), proven by a new offline e2e.
+- **Contract keys** `current_plan`/`recommended_plan`/`plan_costs`/`savings` at `site_pre_render`, registry-pinned; the I6 `overage_blocks` bridge discharged; the `its-recommends-plan` csv comma defect fixed (fixed 5-column row, §8 amendment recorded); the non-Basic-downgrade `site_savings` omission fixed; owner-facing downgrade notice deliberately deferred to a README TODO (new report content is a campaign non-goal).
+
+The most important event: **the whole-branch review caught a real Critical I introduced**. My SPEC claimed nothing writes overage-protection rows in the per-site flow — false: `build_traffic_table_rows` persists them (BLOCKMAP's B46 row mislabeled it as a read; now corrected). The D7 reorder had put the recommendation's OP read before that write, making first-run-of-month reports render different costs than a re-run. Per your choice, the fix hoists the table build above the recommendation, restoring write-commit-then-read on both paths. Two knock-ons, both verified against baseline behavior: a new run-twice determinism e2e (shown genuinely red on the broken ordering), and the `--only-warn` e2e savings pin moved 2755.00→4995.00 — the reviewer re-derived the new value from a baseline full-report run, so the new pin is the *correct* pre-campaign semantics, not a weakened one.
+
+The ledger entry carries everything forward for I8, including its inherited item: the `php_version < "8.2"` string comparison fixes in B41 as it moves to `check/pantheon/`, and the note that `build_php_eol_notice` travels there too.
+
+## User
+
+<command-message>archive-session</command-message>
+<command-name>/archive-session</command-name>
+
+## User
+
+Base directory for this skill: /workspace/.claude/skills/archive-session
+
+# Archiving a development session
+
+Run this at the end of a feature-development session, after the work is done but
+**before committing**. It populates the feature's `development/<YYYY-MM-DD-slug>/`
+folder with the record artifacts, then hands back to the user to commit.
+
+Do the deterministic, secret-sensitive work (rendering, scrubbing, token math) via
+`development/finalize-session.py` — never eyeball-redact a transcript yourself. This
+skill's job is only to (a) figure out the target folder, (b) capture the two things
+the script can't reach from outside a live session, and (c) run the script.
+
+## Steps
+
+1. **Determine the target folder.** It is `development/<YYYY-MM-DD-slug>/` for the
+   feature just built. If the user passed a slug as the argument, use
+   `development/<that>/`. Otherwise infer it from the active `SPEC.md`, the git branch,
+   or the feature under discussion; if it's ambiguous, ask the user. Create the folder
+   if it doesn't exist. If prompts weren't saved yet, remind the user that
+   `NN-*.prompt.md` files and any `design-notes/` are part of the record.
+
+2. **Capture in-session-only data to a gitignored `*.raw.txt` file** in the folder:
+   - **/usage (dollar cost)** — you **cannot** invoke `/usage` yourself (it's a
+     built-in CLI command, not a tool). Ask the user to run `/usage` and paste its
+     output, then save that verbatim to `<dir>/usage.raw.txt`. This is the source of
+     the cost figure — the script has no price table. If the user skips it, proceed;
+     the cost section will just say it wasn't captured.
+
+   The `.raw.txt` file is gitignored; the script folds its contents into
+   `statistics.md`.
+
+3. **Run the script.** From the repo root:
+   ```
+   python development/finalize-session.py --dir development/<YYYY-MM-DD-slug> \
+       [--usage-capture development/<YYYY-MM-DD-slug>/usage.raw.txt] \
+       [--label NN]
+   ```
+   It defaults to the newest session JSONL under `~/.claude/projects/-workspace/`.
+   Pass `--label NN` only for a feature spanning multiple sessions (produces
+   `transcript-NN.md` / `statistics-NN.md`). Omit `--usage-capture` if you didn't create it.
+   This writes `transcript.md` (scrubbed, committed), `transcript.raw.md` (gitignored),
+   and `statistics.md` (committed).
+
+4. **Scaffold `analytics.md`** in the folder if it doesn't already exist — a short
+   template for the user's own narrative analysis (distinct from the auto-generated
+   `statistics.md`, which is machine-written; do not hand-edit `statistics.md`):
+   ```markdown
+   # Analytics — <feature>
+
+   _Your narrative: what went well, what to do differently, decisions worth remembering._
+   ```
+
+5. **Verify and report — do NOT commit.** Confirm `transcript.md` scrubbed cleanly
+   with a **value-shaped** grep (matches actual secret VALUES, not prose mentions of
+   the names — a session that merely discusses `SMTP_PASSWORD` etc. is fine):
+   ```
+   grep -nE '(SMTP_PASSWORD|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|CLOUDFLARE_API_KEY|CLOUDFLARE_EMAIL)[[:space:]]*[=:][[:space:]]*[^[:space:]«]|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer [A-Za-z0-9._-]{12,}' development/<dir>/transcript.md
+   ```
+   This should return nothing; any hit is a real secret value that slipped the regex —
+   surface it, don't commit. (A bare quoted word that happens to look like a token is
+   left alone by design.) List what was written. Then tell the user the folder is ready
+   and that they can ask you to commit everything (code + `development/<dir>/`) in one
+   commit, with you writing the commit message.
+
+## Assistant
+
+The archive was partially done during the close (transcript + statistics rendered and committed in `893ba35`), but two skill steps remain: the `/usage` cost capture and the `analytics.md` scaffold — and re-running the script will also pick up the session tail since that render. Scaffolding analytics now:
+
+### ⚙ Tool call: `Write`
+
+```json
+{
+  "file_path": "/workspace/development/2026-07-20-mod-I7-plans/analytics.md",
+  "content": "# Analytics — I7: plans layer (`psh/plans.py`) + D7\n\n_Your narrative: what went well, what to do differently, decisions worth remembering._\n"
+}
+```
+
+### ↳ Tool result
+
+```
+File created successfully at: /workspace/development/2026-07-20-mod-I7-plans/analytics.md (file state is current in your context — no need to Read it back)
+```
+
+## Assistant
+
+`analytics.md` scaffolded. One capture only you can do: please run `/usage` and paste its output here — I'll save it verbatim to `development/2026-07-20-mod-I7-plans/usage.raw.txt` (gitignored) and re-run the finalize script with `--usage-capture` so `statistics.md` gets the dollar cost. If you'd rather skip it, say so and I'll finalize without the cost figure.
+
+## User
+
+Here is the output of `/usage`:
+```
+   Session
+
+   Total cost:            $80.21
+   Total duration (API):  1h 44m 27s
+   Total duration (wall): 11h 2m 26s
+   Total code changes:    4072 lines added, 367 lines removed
+   Usage by model:
+       claude-haiku-4-5:  531 input, 14 output, 0 cache read, 0 cache write ($0.0006)
+         claude-fable-5:  1.3k input, 189.9k output, 24.3m cache read, 993.9k cache write ($50.54)
+        claude-sonnet-5:  7.9k input, 156.3k output, 28.8m cache read, 1.2m cache write ($15.36)
+        claude-opus-4-8:  232 input, 133.7k output, 15.9m cache read, 485.5k cache write ($14.32)
+
+   Current session
+   ███                                                6% used
+   Resets 12:19pm (America/Detroit)
+
+   Current week (all models)
+   █████████                                          18% used
+   Resets Jul 21, 6:59pm (America/Detroit)
+   +50% weekly limits promo through Aug 19 · clau.de/cc-50-promo
+
+   Current week (Fable)
+   ██████████                                         20% used
+   Resets Jul 21, 6:59pm (America/Detroit)
+
+   What's contributing to your limits usage?
+   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+   Last 24h · these are independent characteristics of your usage, not a breakdown
+
+   98% of your usage came from subagent-heavy sessions
+    Each subagent runs its own requests. Be deliberate about spawning them — and
+    consider configuring a cheaper model for simpler subagents.
+
+   62% of your usage was at >150k context
+    Longer sessions are more expensive even when cached. /compact mid-task, /clear
+    when switching to new tasks.
+
+   36% of your usage came from subagents under
+   "superpowers:subagent-driven-development"
+    If this runs frequently, consider configuring its subagents with a cheaper
+    model or tightening their prompts.
+
+   30% of your usage came from /superpowers:subagent-driven-development
+    Heavy skills can be scoped down or run with a cheaper model via skill
+    frontmatter.
+
+   73% of your usage came from plugin "superpowers"
+    Review what this plugin contributes — its agents, skills, and MCP tools all
+    count toward your limit.
+
+   Skills                  % of usage
+   /superpowers:subagent-drive…   30%
+   /superpowers:writing-plans      8%
+   /andrej-karpathy-skills:kar…    8%
+   /archive-session                4%
+
+   Subagents               % of usage
+   superpowers:subagent-driven…   36%
+   psh-reviewer                    3%
+   psh-implementer                 2%
+
+   Plugins                 % of usage
+   superpowers                    73%
+   andrej-karpathy-skills          8%
+
+   MCP servers             % of usage
+   codegraph                       7%
+
+
+```
+
+## Assistant
+
+Saving the capture and re-running the finalize script:
+
+### ⚙ Tool call: `Write`
+
+```json
+{
+  "file_path": "/workspace/development/2026-07-20-mod-I7-plans/usage.raw.txt",
+  "content": "   Session\n\n   Total cost:            $80.21\n   Total duration (API):  1h 44m 27s\n   Total duration (wall): 11h 2m 26s\n   Total code changes:    4072 lines added, 367 lines removed\n   Usage by model:\n       claude-haiku-4-5:  531 input, 14 output, 0 cache read, 0 cache write ($0.0006)\n         claude-fable-5:  1.3k input, 189.9k output, 24.3m cache read, 993.9k cache write ($50.54)\n        claude-sonnet-5:  7.9k input, 156.3k output, 28.8m cache read, 1.2m cache write ($15.36)\n        claude-opus-4-8:  232 input, 133.7k output, 15.9m cache read, 485.5k cache write ($14.32)\n\n   Current session\n   ███                                                6% used\n   Resets 12:19pm (America/Detroit)\n\n   Current week (all models)\n   █████████                                          18% used\n   Resets Jul 21, 6:59pm (America/Detroit)\n   +50% weekly limits promo through Aug 19 · clau.de/cc-50-promo\n\n   Current week (Fable)\n   ██████████                                         20% used\n   Resets Jul 21, 6:59pm (America/Detroit)\n\n   What's contributing to your limits usage?\n   Approximate, based on local sessions on this machine — does not include other devices or claude.ai\n\n   Last 24h · these are independent characteristics of your usage, not a breakdown\n\n   98% of your usage came from subagent-heavy sessions\n    Each subagent runs its own requests. Be deliberate about spawning them — and\n    consider configuring a cheaper model for simpler subagents.\n\n   62% of your usage was at >150k context\n    Longer sessions are more expensive even when cached. /compact mid-task, /clear\n    when switching to new tasks.\n\n   36% of your usage came from subagents under\n   \"superpowers:subagent-driven-development\"\n    If this runs frequently, consider configuring its subagents with a cheaper\n    model or tightening their prompts.\n\n   30% of your usage came from /superpowers:subagent-driven-development\n    Heavy skills can be scoped down or run with a cheaper model via skill\n    frontmatter.\n\n   73% of your usage came from plugin \"superpowers\"\n    Review what this plugin contributes — its agents, skills, and MCP tools all\n    count toward your limit.\n\n   Skills                  % of usage\n   /superpowers:subagent-drive…   30%\n   /superpowers:writing-plans      8%\n   /andrej-karpathy-skills:kar…    8%\n   /archive-session                4%\n\n   Subagents               % of usage\n   superpowers:subagent-driven…   36%\n   psh-reviewer                    3%\n   psh-implementer                 2%\n\n   Plugins                 % of usage\n   superpowers                    73%\n   andrej-karpathy-skills          8%\n\n   MCP servers             % of usage\n   codegraph                       7%\n"
+}
+```
+
+### ↳ Tool result
+
+```
+File created successfully at: /workspace/development/2026-07-20-mod-I7-plans/usage.raw.txt (file state is current in your context — no need to Read it back)
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python development/finalize-session.py --dir development/2026-07-20-mod-I7-plans --usage-capture development/2026-07-20-mod-I7-plans/usage.raw.txt 2>&1 | tail -4; echo \"=== scrub check:\"; grep -nE '(SMTP_PASSWORD|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|CLOUDFLARE_API_KEY|CLOUDFLARE_EMAIL)[[:space:]]*[=:][[:space:]]*[^[:space:]«]|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer [A-Za-z0-9._-]{12,}' development/2026-07-20-mod-I7-plans/transcript.md; echo \"grep exit: $? (1 = clean)\"; git status --short development/",
+  "description": "Finalize with usage capture; verify scrub; show folder status"
+}
+```
+
