@@ -2204,7 +2204,8 @@ not get blocked.
             # Per-phase data contract (see CLAUDE.md): WP/Drush gather results are guaranteed
             # present from site_post_gather onward.
             stuff_gather_contract(site_context, site["framework"], site_url,
-                                  wordpress_version, plugins, drupal_version, mods)
+                                  wordpress_version, plugins, drupal_version, mods,
+                                  add_on_updates, wp_smell, drush_smell, composer_smell)
             sc.invoke_hooks("site_post_gather", site_context)
 
             if sc.options.verbose:
@@ -2757,7 +2758,9 @@ A variety of support options are available.
             # TODO: Create SVG chart
 
             site_context.add_notices(
-                build_smell_notices(site["name"], wp_smell, drush_smell, composer_smell)
+                build_smell_notices(site["name"], site_context["wp_smell"],
+                                    site_context["drush_smell"],
+                                    site_context["composer_smell"])
             )
 
             sc.debug("===== Notices:\n", site_context["notices"])

@@ -191,6 +191,7 @@ CONTRACT: dict[str, tuple[str, ...]] = {
     "site_post_gather": (
         "framework", "site_url", "wordpress_version", "drupal_version",
         "wordpress_plugins", "drupal_modules",
+        "add_on_updates", "wp_smell", "drush_smell", "composer_smell",
     ),
     "site_pre_render": ("current_plan", "recommended_plan", "plan_costs", "savings"),
     "run_finish": (),
@@ -261,12 +262,21 @@ def stuff_traffic_contract(site_context: MutableMapping[str, Any], traffic_rows,
     site_context["end_date"] = end_date
 
 
-def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, site_url,  # noqa: PLR0913 -- one param per site_post_gather contract key (6), matching CLAUDE.md's table; a config object would just re-wrap the same six names for one call site
-                          wordpress_version, plugins, drupal_version, mods) -> None:
+def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, site_url,  # noqa: PLR0913 -- one param per site_post_gather contract key (10), matching CLAUDE.md's table; a config object would just re-wrap the same ten names for one call site
+                          wordpress_version, plugins, drupal_version, mods,
+                          add_on_updates, wp_smell, drush_smell, composer_smell) -> None:
     """Publish the site_post_gather contract keys (CONTRACT above).  NOTE: the *_version
     values are the string "unknown" (not None) when the version fetch failed -- None only
     means "not that framework".  Only the plugins/modules keys use None for "gather
-    failed"."""
+    failed".  add_on_updates is a list of pending add-on updates (plugins then themes,
+    list order); [] when none, not that framework, or the gather failed -- stuffed as
+    the SAME list object main() still reads for B39, not a copy.  wp_smell/drush_smell/
+    composer_smell are str, "" when none: the stderr of the last non-fatal wp/drush/
+    composer wrapper call that produced any.  wp_smell MAY be rebound in place during
+    the site_post_gather phase by check.wordpress.ocp/check.wordpress.favicon (their
+    probe stderr participates in last-wins, SPEC D-i9-3) -- the one sanctioned
+    mutate-during-phase key; consumers must read site_context["wp_smell"], never a
+    stale main() local."""
     site_context["framework"] = framework
     site_context["site_url"] = site_url
     site_context["wordpress_version"] = wordpress_version
@@ -275,6 +285,14 @@ def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, sit
     # NOTE: drush pm:list returns a DICT keyed by module name (unlike wp plugin list,
     # which returns a list) -- check_drupal_module requires the dict shape.
     site_context["drupal_modules"] = mods if isinstance(mods, dict) else None
+    site_context["add_on_updates"] = add_on_updates
+    # str values; "" when none.  wp_smell MAY be rebound in place during the phase by
+    # check.wordpress.ocp/check.wordpress.favicon (their probe stderr participates in
+    # last-wins, SPEC D-i9-3) -- the one sanctioned mutate-during-phase key.  Consumers
+    # read site_context, never a stale local.
+    site_context["wp_smell"] = wp_smell
+    site_context["drush_smell"] = drush_smell
+    site_context["composer_smell"] = composer_smell
 
 
 def stuff_envs_contract(site_context: MutableMapping[str, Any], envs) -> None:

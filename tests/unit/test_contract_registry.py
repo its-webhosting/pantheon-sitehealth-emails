@@ -75,7 +75,8 @@ def test_gather_stuffer_writes_exactly_the_registry_keys(psh, reset_sc):
     import psh.modules
     ctx = _fresh_ctx(reset_sc)
     psh.modules.stuff_gather_contract(ctx, "wordpress", "https://x/", "6.5",
-                                      ["a-plugin"], None, None)
+                                      ["a-plugin"], None, None,
+                                      [], "", "", "")
     assert set(ctx) - BASE_KEYS == set(psh.modules.CONTRACT["site_post_gather"])
     assert ctx["wordpress_plugins"] == ["a-plugin"]
     assert ctx["drupal_modules"] is None
@@ -87,9 +88,24 @@ def test_gather_stuffer_normalizes_non_list_plugins_and_non_dict_mods(psh, reset
     import psh.modules
     ctx = _fresh_ctx(reset_sc)
     psh.modules.stuff_gather_contract(ctx, "drupal8", "", "unknown",
-                                      None, "10.2", {"mod": {}})
+                                      None, "10.2", {"mod": {}},
+                                      [], "", "", "")
     assert ctx["wordpress_plugins"] is None
     assert ctx["drupal_modules"] == {"mod": {}}
+
+
+def test_gather_stuffer_new_keys(psh, reset_sc):
+    import psh.modules
+    ctx = _fresh_ctx(reset_sc)
+    addons = [{"slug": "x", "name": "X", "type": "plugin",
+               "current_version": "1", "new_version": "2"}]
+    psh.modules.stuff_gather_contract(ctx, "wordpress", "https://x/", "6.9", [],
+                                      None, None, addons, "warn-w", "warn-d", "warn-c")
+    assert ctx["add_on_updates"] is addons          # same object, not a copy
+    assert ctx["wp_smell"] == "warn-w"
+    assert ctx["drush_smell"] == "warn-d"
+    assert ctx["composer_smell"] == "warn-c"
+    assert set(ctx) - BASE_KEYS == set(psh.modules.CONTRACT["site_post_gather"])
 
 
 def test_dns_stuffer_writes_exactly_the_registry_keys(psh, reset_sc):
