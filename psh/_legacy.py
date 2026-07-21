@@ -50,22 +50,6 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 import dns_classify
 import script_context as sc
 
-traffic_table_columns = [
-    {"name": "month", "label": "Month"},
-    {"name": "visitors", "label": "Pantheon Visitors"},
-    {"name": "month", "label": "Month"},
-    {"name": "visitors", "label": "Pantheon Visitors"},
-    {"name": "plan", "label": "Plan"},
-    {"name": "plan-limit", "label": "Plan Limit"},
-    {"name": "overage", "label": "Overage"},
-    {"name": "overage-blocks", "label": "Overage Blocks"},
-    {"name": "overage-cost", "label": "Overage Cost"},
-    {"name": "overage-protection", "label": "Overage Protection"},
-    {"name": "upgrade-at", "label": "Upgrade At"},
-    {"name": "next-plan", "label": "Upgrade To"},
-    {"name": "downgrade-at", "label": "Downgrade At"},
-    {"name": "previous-plan", "label": "Downgrade To"},
-]
 
 cost_table_columns = [
     {"name": "plan", "label": "Plan"},
@@ -250,6 +234,16 @@ from psh.gateway import (
     wp_error,
     wp_eval,
 )
+from psh.traffic import (
+    aggregate_visits_by_month,
+    build_traffic_table_rows,
+    estimate_month_visits,
+    get_old_metrics,
+    import_older_site_metrics,
+    load_site_traffic,
+    traffic_table_columns,
+    update_site_traffic,
+)
 from psh.notice import Notice, Severity, registry
 from psh.modules import (
     HookDagError,
@@ -260,80 +254,6 @@ from psh.modules import (
 )
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
-
-
-def get_old_metrics(
-    site_env: str, site: dict, period: str, end_date: datetime.date
-) -> list:
-    sc.console.print(f"[bold magenta]=== Processing old data by {period}:")
-    try:
-        metrics = terminus_data("env:metrics", site_env, f"--period={period}")
-    except TerminusError as e:
-        # Older-metrics import is best-effort supplementary data: a transient/undecodable
-        # failure for one site returns no rows (import nothing) rather than raising and
-        # aborting the whole run.
-        sc.console.print(
-            f":exclamation: [bold red] ERROR: could not fetch {period} metrics for "
-            f"{site['name']}: {escape(str(e))}"
-        )
-        return []
-    new_rows = []
-
-    for e in metrics["timeseries"]:
-        entry = metrics["timeseries"][e]
-        if entry["visits"] == 0 and entry["pages_served"] == 0:
-            sc.debug(f"No traffic for {period} {entry['datetime']}")
-            continue
-
-        traffic_date = datetime.datetime.strptime(
-            entry["datetime"], "%Y-%m-%dT%H:%M:%S"
-        ).date()
-        if period == "week":
-            days_in_period = 7
-        else:
-            _, days_in_period = calendar.monthrange(
-                traffic_date.year, traffic_date.month
-            )
-
-        visits_per_day = entry["visits"] // days_in_period
-        visits_last_day = visits_per_day + entry["visits"] % days_in_period
-        pages_served_per_day = entry["pages_served"] // days_in_period
-        pages_served_last_day = (
-            pages_served_per_day + entry["pages_served"] % days_in_period
-        )
-        cache_hits_per_day = entry["cache_hits"] // days_in_period
-        cache_hits_last_day = cache_hits_per_day + entry["cache_hits"] % days_in_period
-
-        sc.debug(
-            f"traffic/day for {period} starting {traffic_date}: visits={visits_per_day} "
-            f"pages={pages_served_per_day} cache_hits={cache_hits_per_day}",
-            level=2,
-        )
-
-        for i in range(days_in_period):
-            if traffic_date < end_date:
-                if i < days_in_period - 1:
-                    daily_traffic = {
-                        "site_id": site["id"],
-                        "traffic_date": traffic_date,
-                        "site_plan": site["plan_name"],
-                        "visits": visits_per_day,
-                        "pages_served": pages_served_per_day,
-                        "cache_hits": cache_hits_per_day,
-                    }
-                else:
-                    daily_traffic = {
-                        "site_id": site["id"],
-                        "traffic_date": traffic_date,
-                        "site_plan": site["plan_name"],
-                        "visits": visits_last_day,
-                        "pages_served": pages_served_last_day,
-                        "cache_hits": cache_hits_last_day,
-                    }
-                new_rows.append(daily_traffic)
-            traffic_date += datetime.timedelta(days=1)
-
-    return new_rows
 
 
 def check_wordpress_plugin(
@@ -480,157 +400,6 @@ def overage_blocks(overage, overage_block_size) -> int:
 def contract_year_end(report_date: datetime.date) -> bool:
     """True if `report_date` is in the U-M contract-year-end window (June 16-29)."""
     return report_date.month == 6 and 16 <= report_date.day < 30
-
-
-def estimate_month_visits(visits_by_month, dates, last_day, end_day) -> int:
-    """Extrapolate the final (partial) month's visits.
-
-    Returns -1 when the reporting month is complete or too early to extrapolate (i.e. not
-    ``1 < end_day < last_day``), matching the inline behavior it replaces.  ``dates`` is the
-    ordered list of month midpoints (datetime.date) whose keys index ``visits_by_month``.
-    """
-    estimate = -1
-    if last_day > end_day > 1:
-        extrapolate = (
-            visits_by_month[dates[-1].strftime("%Y-%m")] * last_day / (end_day - 1)
-        )
-        if len(visits_by_month) > 1:
-            previous_month = visits_by_month[dates[-2].strftime("%Y-%m")]
-            if last_day >= 25:
-                estimate = round(extrapolate)
-            elif last_day >= 15:
-                estimate = round((2 * extrapolate + previous_month) / 3)
-            else:
-                estimate = round((extrapolate + previous_month) / 2)
-        else:
-            estimate = round(extrapolate)
-    return estimate
-
-
-def build_traffic_table_rows(
-    session,
-    site: dict,
-    visits_by_month: dict,
-    plan_on_day: dict,
-    plan_info: dict,
-    site_plan_start: datetime.date,
-    first_plan_day: datetime.date,
-    last_plan_day: datetime.date,
-    start_date: datetime.date,
-    end_date: datetime.date,
-    overage_block_size: int,
-    overage_block_cost: float,
-) -> dict:
-    """Build the report's per-month traffic table and persist overage-protection state.
-
-    Idempotent, so db_retry() may re-run it after a rollback: every local (traffic_table_rows,
-    op_remaining, old_plan) is reset on entry, and the PantheonOverageProtection rows are
-    get-or-create by primary key.  Extracting this block out of main() is what makes that true --
-    see SPEC 3.3.1 for what a statement-level retry would corrupt instead.
-    """
-    traffic_table_rows = {}
-    d = (start_date.replace(day=1) - datetime.timedelta(days=15)).replace(day=1)
-    op = session.get(
-        PantheonOverageProtection, {"site_id": site["id"], "month": d}
-    )
-    op_remaining = 0 if op is None else op.months_remaining
-    old_plan = None
-    for month in visits_by_month.keys():
-        ymd = datetime.date.fromisoformat(month + "-15")
-        ymd1 = ymd.replace(day=1)
-        if ymd < first_plan_day:
-            ymd = first_plan_day
-        if ymd > last_plan_day:
-            ymd = last_plan_day
-        if ymd1 < start_date:
-            ymd1 = start_date
-        if ymd1 > end_date:
-            ymd1 = end_date.replace(day=1)
-        if ymd1 < site_plan_start:
-            continue
-        d = ymd if ymd >= first_plan_day else first_plan_day
-        plan = plan_on_day[d]
-        if ymd1 == site_plan_start and plan != "Basic":
-            op_remaining = 4
-        if old_plan in ("Sandbox", "Basic") and plan not in ("Sandbox", "Basic"):
-            op_remaining = 4
-        old_plan = plan
-        traffic_table_rows[month] = {}
-        traffic_table_rows[month]["month"] = datetime.datetime.strptime(
-            month, "%Y-%m"
-        ).strftime("%B %Y")
-        traffic_table_rows[month]["visitors"] = f"{visits_by_month[month]:,.0f}"
-        traffic_table_rows[month]["plan"] = plan
-        traffic_limit = int(plan_info[plan]["traffic_limit"])
-        traffic_table_rows[month]["plan-limit"] = f"{traffic_limit:,.0f}"
-        traffic_table_rows[month]["upgrade-at"] = (
-            f"{plan_info[plan]['upgrade_at']:,.0f}"
-        )
-        traffic_table_rows[month]["next-plan"] = plan_info[plan]["upgrade_to"]
-        downgrade_to = plan_info[plan]["downgrade_to"]
-        if downgrade_to is not None:
-            downgrade_at = plan_info[downgrade_to]["upgrade_at"]
-            traffic_table_rows[month]["downgrade-at"] = f"{downgrade_at:,.0f}"
-            traffic_table_rows[month]["previous-plan"] = downgrade_to
-        else:
-            traffic_table_rows[month]["downgrade-at"] = "-"
-            traffic_table_rows[month]["previous-plan"] = "-"
-        overage = max(visits_by_month[month] - traffic_limit, 0)
-        n_blocks = overage_blocks(overage, overage_block_size)
-        overage_cost = n_blocks * overage_block_cost
-        overage_text = f"{overage:,.0f}"
-        overage_blocks_text = f"{n_blocks:,.0f}"
-        overage_cost_text = f"${overage_cost:,.0f}"
-        overage_protection_status = "-"
-        # Overage protection started retroactively on 2024-01-01
-        if month >= "2024-01" and plan != "Basic":
-            overage_protection_status = ""
-            if ymd.month == 1:
-                op_remaining = 4
-                overage_protection_status = "Set to 4 months, "
-            op_used = False
-            if overage > 0 and op_remaining > 0:
-                op_remaining -= 1
-                op_used = True
-            op = session.get(
-                PantheonOverageProtection, {"site_id": site["id"], "month": ymd1}
-            )
-            if op is None:
-                op = PantheonOverageProtection(
-                    site_id=site["id"],
-                    month=ymd1,
-                    months_remaining=op_remaining,
-                    used_this_month=op_used,
-                )
-                session.add(op)
-            else:
-                op.months_remaining = op_remaining
-                op.used_this_month = op_used
-            if op_used:
-                overage_protection_status += f"used 1 month, "
-                overage_cost_text = (
-                    '$0 (<span style="font-size:smaller;">waived '
-                    + overage_cost_text
-                    + ")</span>"
-                )
-            overage_protection_status += (
-                f"1 month remaining"
-                if op_remaining == 1
-                else f"{op_remaining} months remaining"
-            )
-        else:
-            op_remaining = 0
-            if plan != "Basic":
-                overage_text = "-"
-                overage_blocks_text = "-"
-                overage_cost_text = "-"
-        traffic_table_rows[month]["overage"] = overage_text
-        traffic_table_rows[month]["overage-blocks"] = overage_blocks_text
-        traffic_table_rows[month]["overage-cost"] = overage_cost_text
-        traffic_table_rows[month]["overage-protection"] = overage_protection_status
-
-    session.commit()  # save the changes we made to the pantheon_overage_protection table
-    return traffic_table_rows
 
 
 def plan_costs(
@@ -1904,57 +1673,18 @@ and to find out what went wrong:
             # Metrics for an uninitialized live environment will be all zeroes; this is OK.
 
             live_site = site["id"] + ".live"
-            metrics, errors, fatal = terminus("env:metrics", live_site, "--period=day")
-            if fatal or metrics is None:
-                sc.console.print(
-                    f":exclamation: [bold red] ERROR: could not fetch metrics for {site_name}: {escape(errors)}"
-                )
+            if not update_site_traffic(db_session, site, live_site, start_date, end_date):
                 continue
 
-            sc.debug(f"[bold magenta]=== Updating metrics for {site['name']}:")
-            db_retry(
-                db_session,
-                lambda: update_traffic_rows(db_session, site, metrics, start_date, end_date),
-                what=f"updating traffic rows for {site['name']}",
-                site=site["name"],
-            )
-
             if sc.options.import_older_metrics:
-                sc.console.print(
-                    f"[bold magenta]=== Importing older metrics for {site['name']}:"
-                )
-                # The terminus call stays OUTSIDE the retried unit: a retry must not re-run it.
-                # Order (fetch week -> insert week -> fetch month -> insert month) is unchanged.
-                for period in ("week", "month"):
-                    new_rows = get_old_metrics(live_site, site, period, end_date)
-                    db_retry(
-                        db_session,
-                        lambda rows=new_rows: insert_traffic_rows(db_session, rows),
-                        what=f"importing older {period} metrics for {site['name']}",
-                        site=site["name"],
-                    )
+                import_older_site_metrics(db_session, site, live_site, end_date)
                 continue  # skip the rest of the processing for the sites
 
             if sc.options.update:
                 sc.console.print("site visitors updated, skipping report")
                 continue
 
-            # Get all the data we will use.  This ALSO releases the DB connection before the gather
-            # below -- see load_traffic_rows().
-            results = db_retry(
-                db_session,
-                lambda: load_traffic_rows(db_session, site, start_date, end_date),
-                what=f"loading traffic rows for {site['name']}",
-                site=site["name"],
-            )
-
-            sc.debug(
-                f"{len(results)} records found in the database for {site['name']} "
-                f"between {start_date} and {end_date}:",
-                level=2,
-            )
-            # for row in results:
-            #    sc.debug(row, level=2)
+            results = load_site_traffic(db_session, site, start_date, end_date)
 
             sc.invoke_hooks("site_pre", site_context)
 
@@ -3033,19 +2763,9 @@ A variety of support options are available.
                     all_warnings.append(n["csv"])
                 continue
 
-            # Create an array containing the sum of visits by month:
-            visits_by_month = {}
-            plan_on_day = {}
-            d = start_date
-            while d <= end_date:
-                month = d.strftime("%Y-%m")
-                visits_by_month[month] = 0
-                d = d.replace(day=1) + datetime.timedelta(days=32)
-                d = d.replace(day=1)
-            for row in results:
-                month = row.traffic_date.strftime("%Y-%m")
-                visits_by_month[month] += row.visits
-                plan_on_day[row.traffic_date] = row.site_plan
+            visits_by_month, plan_on_day = aggregate_visits_by_month(
+                results, start_date, end_date
+            )
             if sc.options.verbose:
                 pprint(visits_by_month)
                 if sc.options.verbose > 1:
