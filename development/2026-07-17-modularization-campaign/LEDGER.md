@@ -545,3 +545,121 @@ gates, 27 snapshots; four goldens byte-identical across the increment
   re-verifying at I6 — the coupling is call-site-only — but I6 should keep `db_retry`'s
   docstring/CLAUDE.md's "five named idempotent units" list in sync once
   `build_traffic_table_rows` moves to `psh/traffic.py`.
+
+## I6 — traffic-layer move (2026-07-20, commit cb01934 + closing docs commit)
+
+Spec/plan: `development/2026-07-20-mod-I6-traffic/` (`SPEC.md` cites CAMPAIGN.md by section;
+`.superpowers/sdd/task-1-report.md` carries the combined RED/GREEN evidence for both plan
+tasks). One code commit (`cb01934`), plus this closing docs commit (CLAUDE.md / memory /
+this ledger entry / SPEC §9 acceptance). Full suite at close **including the live tier**
+(Terminus credentials present in this environment) = **790 passed / 1 skipped**, all three
+gates, 27 snapshots; four goldens byte-identical across the increment
+(`git diff 5de11a4 -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** exactly the §3.1 `psh/traffic.py` row — `traffic_table_columns`,
+  `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows` — plus four **new**
+  flow functions extracted from `main()`'s per-site loop body: `update_site_traffic`
+  (B22+B23), `import_older_site_metrics` (B24), `load_site_traffic` (B26), and
+  `aggregate_visits_by_month` (the B43 aggregation loop only). All re-imported into
+  `psh/_legacy.py` (I2/I3/I5 pattern), so `main()`'s call sites and the tests' `psh.<name>`
+  references resolve unchanged.
+
+- **Deviations from CAMPAIGN.md:** none (all of the below are SPEC-level decisions or ledger
+  notes within §11 row I6's own scope, not amendments to CAMPAIGN.md):
+  1. **D-i6-1 — loop control, option gating, and B25 stay in `main()`; the flow functions
+     signal via return values, never `continue`.** A `continue` cannot cross a function
+     boundary, and §3.3 names the site-loop skeleton (B25 included) as staying in `main()`,
+     while §11 row I6 assigns the B22–B26/B43 flow to `psh/traffic.py` — read as: the flow
+     *bodies* move, loop control does not (resolves the §11-row-I6-vs-§3.3 tension).
+     `update_site_traffic` returns `bool` (`main()`: `if not update_site_traffic(...):
+     continue`); `import_older_site_metrics` returns `None` under `main()`'s existing
+     `sc.options.import_older_metrics` gate + `continue`; B25 (the `--update` continue)
+     stays verbatim between the two call sites, exactly where it is today.
+  2. **D-i6-2 — `overage_blocks` bridges via a call-time import.**
+     `build_traffic_table_rows` calls `overage_blocks`, which §3.1 assigns to `psh/plans.py`
+     (I7) but which must stay in `_legacy.py` this increment (`plan_costs` and the
+     `psh.overage_blocks` test references still live there); a module-level import would be a
+     cycle (`_legacy` imports `psh.traffic` for the re-exports). Resolved with a call-time
+     `from psh._legacy import overage_blocks` at the top of the function body
+     (`# noqa: PLC0415`, the I4 `psh/modules.py` precedent). **Temporary until I7**, which
+     moves `overage_blocks` into `psh/plans.py` and MUST replace this with a module-level
+     `from psh.plans import overage_blocks` (**I7 obligation** — repeated under Open
+     questions below).
+  3. **D-i6-3 — the `psh.db` re-imports in `_legacy.py` stay**, even though `main()` no
+     longer calls `update_traffic_rows`/`insert_traffic_rows`/`load_traffic_rows` directly
+     (those calls now live in `psh/traffic.py`): 22 test references across
+     `tests/conftest.py`, `test_traffic_table_rows.py`, and `test_db_resilience.py` resolve
+     `psh.update_traffic_rows`/`psh.insert_traffic_rows`/`psh.load_traffic_rows`/
+     `psh.PantheonOverageProtection` through the `psh` fixture — not orphaned, so the "remove
+     only what this change orphans" rule's negative case applies, same as I5's D-i5-3.
+  4. **D-i6-4 — B43 moves as a pure function; its consumers stay.**
+     `aggregate_visits_by_month(rows, start_date, end_date) -> tuple[dict, dict]` is the
+     seed-every-month-to-0 + sum-visits + last-row-wins `plan_on_day` loop, pure (no `sc`, no
+     I/O, per §3.4). The verbose `pprint` diagnostics block (wired to `sc.options.verbose`,
+     not aggregation), the empty-`plan_on_day` synthetic-day guard, and the
+     `build_plan_over_time` call + its date/chart prep all stay in `main()` for I7/I11 — §3.1's
+     "visits-by-month aggregation (B43)" is read as the aggregation loop only.
+
+- **Process note:** the PLAN's Task 1 (RED) and Task 2 (the move + GREEN) ran as **one
+  dispatch and one atomic commit** — a partially applied move cannot be green (Deliverables
+  A–C land together or not at all), so red tests could not themselves be committed. The
+  plan's task split was SPEC §7's; the commit-discipline rule ("per-task commits, each
+  green") held — the single commit is that task's green checkpoint, same shape as I5's one
+  atomic Deliverables-A–D commit.
+
+- **Contract/config/sc additions:** none. No new contract keys, no config keys, no new `sc`
+  names (nothing in the move set is on `sc`; grep-verified per SPEC §1 non-scope).
+
+- **Ratchet (§13):** `psh/traffic.py` born gated (broad ruff + pyright standard), 0 findings
+  after dispositions. Measured: 2× `DTZ007` noqa (naive-date `strptime` calls —
+  `get_old_metrics`'s fetch-timestamp parse and `build_traffic_table_rows`'s month-label
+  re-parse; attaching tzinfo risks an off-by-one-day shift, a behavior change a move may not
+  make — the I5 precedent); 2× `PLR2004` noqa (`estimate_month_visits`'s 25-/15-day
+  extrapolation-weighting thresholds); a quadruple `C901`/`PLR0912`/`PLR0915`/`PLR0913` noqa
+  on `build_traffic_table_rows`'s def (moved verbatim, no algorithmic redesign per §3.1's
+  whole-file-coverage rule; the 12-arg signature is pinned by `test_traffic_table_rows.py`
+  and the `main()` call site); one call-time-import `PLC0415` (the D-i6-2 bridge); `SIM118` +
+  `PLC0206` resolved by rewriting `for month in visits_by_month.keys():` to
+  `for month, month_visits in visits_by_month.items():`; 3× `PLR1730` + `FURB136` resolved by
+  rewriting `if`-guard clamps to `max()`/`min()` (equivalent on totally-ordered dates); 2×
+  `F541` resolved by dropping unnecessary `f`-prefixes; one `ERA001` (commented-out debug
+  pair in the B26 region) resolved by **deletion**, not carry-forward (ratchet disposition
+  "cleaned exactly once, as it moves" — I5's `# id:` precedent). Nothing removed from
+  `ruff-broad.toml`'s `extend-exclude` this increment (fresh gated file — I2/I3/I5 precedent;
+  `psh/_legacy.py` stays grandfathered).
+
+- **Discovered tasks (dispositions):**
+  - **Fixture-shadowing defect in the plan's own integration-test code.** All four
+    `psh.traffic.*`-calling tests in `tests/integration/test_traffic_flow.py` (written
+    verbatim per the brief) initially went **red for the wrong reason**
+    (`AttributeError: module 'psh._legacy' has no attribute 'traffic'`), not the specced
+    seam. Root cause: each test function declares `psh` as a fixture parameter (the `psh`
+    fixture returns `psh._legacy`), which shadows the file's module-level `import psh.traffic`
+    inside the function body — `psh.traffic.update_site_traffic(...)` then resolved as
+    attribute access on `_legacy` (which has no `traffic` attribute), not on the top-level
+    `psh` package. **Fixed here**, per PD#14 (never weaken a test to make it green): three of
+    the four affected functions were converted to `from psh.traffic import
+    import_older_site_metrics, load_site_traffic, update_site_traffic` at module level,
+    called unqualified — the existing `test_contract_registry.py`/`test_hook_dag.py`
+    local-reimport pattern didn't transplant cleanly because one test also needs
+    `psh.TrafficRow`, which only resolves through the fixture's `psh` binding. No assertion,
+    input, or expected value changed in any test.
+  - The commented-out `# for row in results:` / `#    sc.debug(row, level=2)` debug pair in
+    the B26 region — **deleted, not moved** (ERA001; see Ratchet above).
+  - **Observation, no action:** `traffic_table_columns` opens with `month`/`visitors` listed
+    twice (entries 1–2 = 3–4); both templates render the full list
+    (`email_template.html:359`) and `[1:]` (`:374`, `email_template.txt:105`), so the
+    duplication is rendered and golden-frozen. Whether it's a deliberate responsive-layout
+    device or a latent bug is unresolved; disposition: **leave**, a post-campaign question —
+    any change now would violate Invariant 1.
+  - **Review minor:** increment SPECs for pure-move increments (I5, I6) carry no PD#8 flow
+    diagram even though the moved flow is non-local (crosses function/phase boundaries) —
+    noted here for future increment spec authors; no action this increment.
+
+- **Open questions for I7:** proceed per CAMPAIGN.md §11 row I7 (`psh/plans.py`; `PlanInfo`;
+  D7 `--only-warn` plan recommendation; plan/cost contract keys) **plus** the D-i6-2
+  obligation above (replace `build_traffic_table_rows`'s call-time
+  `from psh._legacy import overage_blocks` with a module-level
+  `from psh.plans import overage_blocks` once `overage_blocks` lands in `psh/plans.py`)
+  **plus** LEDGER I1's carried items for I7 (B47 downgrade-path behavior decision; the
+  `its-recommends-plan` comma-in-csv issue).

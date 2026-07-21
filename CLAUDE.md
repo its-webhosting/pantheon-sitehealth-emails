@@ -89,7 +89,7 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 ### Single-module core + `script_context` shared state
 
 Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-Six modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+Seven modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
 subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
 transport seam — see the **Terminus/WP/Drush wrappers** bullet). **`psh/configuration.py`**
 (moved in I3) is the config engine — `process_config`/`config_substitution`/
@@ -125,7 +125,17 @@ because `db_retry` (now in `psh/db.py`) and the remnant readers `finish_run`/`ab
 `psh/_legacy.py` until I13) need one shared, `reset_sc`-isolated namespace rather than two
 separately rebindable module bindings of the same name (the I2 `run_terminus`-seam lesson
 — see § Database's test-seam note below). This is their scheduled interim home; I13's
-`RunState` is where they finally land. The last is
+`RunState` is where they finally land. **`psh/traffic.py`** (moved in I6) holds the
+traffic-metrics layer: the move set (`traffic_table_columns`, `get_old_metrics`,
+`estimate_month_visits`, `build_traffic_table_rows`) plus four flow functions extracted from
+`main()`'s per-site loop (`update_site_traffic`, `import_older_site_metrics`,
+`load_site_traffic`, `aggregate_visits_by_month`) — re-imported by `psh/_legacy.py`, same
+import-back pattern as the gateway/configuration/db modules, so `main()`'s call sites and the
+`psh.<name>` test references resolve unchanged. `build_traffic_table_rows` calls
+`overage_blocks` (still in `psh/_legacy.py`; §3.1 assigns it to `psh/plans.py` at I7) via a
+call-time import (`# noqa: PLC0415`, cycle-avoidance — the I4 `psh/modules.py` precedent) —
+**temporary until I7**, which MUST replace it with a module-level
+`from psh.plans import overage_blocks`. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -406,8 +416,9 @@ DB-free, where it used to do ~91 uncached per-month `Session.get()`s (each its o
 round trip over the WAN, and a Basic-plan site — no rows at all — missed on every one).
 DB work runs through `db_retry(session, unit, what=…, site=…)`, which retries **whole
 idempotent units of work** (`update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`,
-`build_traffic_table_rows`, `load_overage_protection_window`) and NEVER a statement with pending
-writes — a rollback discards them,
+`build_traffic_table_rows` — moved to `psh/traffic.py` at I6, still passed to `db_retry` as a
+`lambda` from its `psh/_legacy.py` call site — and `load_overage_protection_window`) and NEVER
+a statement with pending writes — a rollback discards them,
 so a statement-level retry would commit a partial write set. What it retries is decided by
 **`db_retryable(e)`** = `isinstance(e, OperationalError) or e.connection_invalidated`, **not** by an
 exception class list: SQLAlchemy's mysqldb dialect classifies a lost connection by error *code*, so
@@ -610,12 +621,20 @@ Non-obvious things the harness relies on:
   read-only.
 - **Pure-helper seam.** Pure functions extracted from `main()` as module-level defs so they're
   importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
-  `estimate_month_visits`, `plan_costs` (the cost model — DB-free via an injected
+  `plan_costs` (the cost model — DB-free via an injected
   `op_lookup(month)`), plus `load_news_items`, `build_plan_over_time` (returns `[]` for
   zero traffic; `main()` guards the empty case and skips the plan sections), and
   `sites_from_resume_point`/`merge_prior_results` (the `--resume-from` logic, which cannot be
   reached through the `--all`-banned subprocess interlock and so is only testable in-process). The
-  extractions are behavior-preserving (goldens byte-identical). **`classify_hostname_dns` is NOT
+  extractions are behavior-preserving (goldens byte-identical). `estimate_month_visits` and
+  `build_traffic_table_rows` now live in `psh/traffic.py` (moved at I6, born gated under the
+  broad ruff set + pyright standard) — still importable as `psh.estimate_month_visits`/
+  `psh.build_traffic_table_rows` via `_legacy.py`'s re-import, same seam as before the move. The
+  B43 visits-by-month aggregation is its own pure function there too,
+  `psh.traffic.aggregate_visits_by_month(rows, start_date, end_date) -> tuple[dict, dict]`
+  (`tests/unit/test_traffic_aggregation.py`), covering seeding traffic-free months to 0 and the
+  last-row-wins `plan_on_day` map; the `pprint` diagnostics, the empty-`plan_on_day` guard, and
+  `build_plan_over_time`'s call stay in `main()` (I7/I11). **`classify_hostname_dns` is NOT
   one of these** — it moved out of the script into `dns_classify.py`; import it from there.
 - **DNS tests.** The `dns_classify.py` engine and `check/dns/` package have their own suite:
   `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS, and
