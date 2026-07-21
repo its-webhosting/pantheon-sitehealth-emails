@@ -49,3 +49,216 @@
 # name: test_no_live_env_notice_snapshot.2
   'no live environment'
 # ---
+# name: test_php_eol_notice_snapshots[8.0-alert]
+  '''
+  
+  <p><b>bus-occb is using PHP 8.0.  On September 30, 2026,
+  <a href="https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule">Pantheon will move your site
+  to PHP 8.1</a>, which may break your site.</b></p>
+  <p>Please <a href="https://docs.pantheon.io/guides/php/php-versions">manually upgrade your site to PHP 8.2 or later</a>
+  so you can fix any problems without affecting your site's visitors.  Although you can update
+  your site to use PHP 8.1 instead of 8.2, please note that Pantheon has already announced that they will also remove
+  PHP 8.1 sometime after September 30, 2026.</p>
+  
+  '''
+# ---
+# name: test_php_eol_notice_snapshots[8.0-alert].1
+  '''
+  
+  bus-occb is using PHP 8.0.  On
+  September 30, 2026, Pantheon will move your site to PHP 8.1,
+  which may break your site.
+  <https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule>
+  
+  Please manually upgrade your site to PHP 8.2 or later so you can fix
+  any problems without affecting your site's visitors.
+  <https://docs.pantheon.io/guides/php/php-versions>
+  
+  Although you can update your site to use PHP 8.1 instead of 8.2,
+  please note that Pantheon has already announced that they will also
+  remove PHP 8.1 sometime after September 30, 2026.
+  
+  '''
+# ---
+# name: test_php_eol_notice_snapshots[8.0-alert].2
+  'Upgrade PHP'
+# ---
+# name: test_php_eol_notice_snapshots[8.1-warning]
+  '''
+  
+  <p><b>bus-occb is using PHP 8.1.</b>
+  You may want to <a href="https://docs.pantheon.io/guides/php/php-versions">manually upgrade your site to PHP 8.2 or later</a>
+  since <a href="https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule">Pantheon has announced they will no
+  longer offer PHP 8.1 soon</a>, likely sometime in 2027.</p>
+  
+  '''
+# ---
+# name: test_php_eol_notice_snapshots[8.1-warning].1
+  '''
+  
+  bus-occb is using PHP 8.1.
+  
+  You may want to manually upgrade your site to PHP 8.2 or later
+  <https://docs.pantheon.io/guides/php/php-versions>
+  since Pantheon has announced they will no longer offer PHP 8.1
+  soon</a>, likely sometime in 2027.
+  <https://docs.pantheon.io/release-notes/2026/03/php-removal-schedule>
+  
+  '''
+# ---
+# name: test_php_eol_notice_snapshots[8.1-warning].2
+  'Upgrade PHP'
+# ---
+# name: test_updates_notice_snapshots[2026-05-01T00:00:00+00:00-alert]
+  '''
+  
+  <p><strong>bus-occb</strong> has
+  <a href="https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code">1 pending updates from Pantheon</a>, the oldest
+  from 61 days ago.</p>
+  <p><i>Please <a href="https://docs.pantheon.io/core-updates">apply these updates</a> immediately</i> and then
+  <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>. Websites that are
+  unmaintained or insecure may be shut down to protect the university.</p>
+  <p>U-M Procurement has a <a href="https://procurement.umich.edu/u-m-employees/purchasing/ordering/quote-to-order/">list
+  of web agencies</a> that will maintain a website for you and bill a university shortcode. If you would like help
+  applying the updates yourself, you can <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">obtain
+  support through either Pantheon or ITS</a>.</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
+  <tbody>
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">Date</div><div class="rt-data rt-plan">May  1, 2026</div></td>
+  <td><div class="rt-data-header rt-plan">Description</div><div class="rt-data rt-plan">Update WordPress to 6.6</div></td>
+  <td><div class="rt-data-header rt-plan">Author</div><div class="rt-data rt-plan">Pantheon</div></td>
+  </tr>
+  </tbody>
+  </table>
+  </div>
+  
+  '''
+# ---
+# name: test_updates_notice_snapshots[2026-05-01T00:00:00+00:00-alert].1
+  '''
+  
+  bus-occb has 1 pending updates from Pantheon
+  <https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code>, the
+  oldest from 61 days ago.
+  
+  PLEASE APPLY THESE UPDATES IMMEDIATELY
+  <https://docs.pantheon.io/core-updates> and then deploy them to the
+  Live environment. <https://docs.pantheon.io/pantheon-workflow>
+  
+  Websites that are unmaintained or insecure may be shut down to protect
+  the university.
+  
+  U-M Procurement has a list of web agencies
+  <https://procurement.umich.edu/u-m-employees/purchasing/ordering/quote-to-order/>
+  that will maintain a website for you and bill a university shortcode.
+  If you would like help applying the updates yourself, you can obtain
+  support through either Pantheon or ITS.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+  
+  
+  * May  1, 2026
+    - Update WordPress to 6.6
+    - Author: Pantheon
+  
+  
+  
+  '''
+# ---
+# name: test_updates_notice_snapshots[2026-05-01T00:00:00+00:00-alert].2
+  'needs maintenance: 1 Pantheon update, 61 days old'
+# ---
+# name: test_updates_notice_snapshots[2026-06-15T00:00:00+00:00-warning]
+  '''
+  
+  <p><strong>bus-occb</strong> has
+  <a href="https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code">1 pending updates from Pantheon</a>, the oldest
+  from 16 days ago.</p>
+  <p>Please <a href="https://docs.pantheon.io/core-updates">apply these updates</a> and
+  <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
+  <tbody>
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">Date</div><div class="rt-data rt-plan">June 15, 2026</div></td>
+  <td><div class="rt-data-header rt-plan">Description</div><div class="rt-data rt-plan">Update WordPress to 6.6</div></td>
+  <td><div class="rt-data-header rt-plan">Author</div><div class="rt-data rt-plan">Pantheon</div></td>
+  </tr>
+  </tbody>
+  </table>
+  </div>
+  
+  '''
+# ---
+# name: test_updates_notice_snapshots[2026-06-15T00:00:00+00:00-warning].1
+  '''
+  
+  bus-occb has 1 pending updates from Pantheon
+  <https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code>, the
+  oldest from 16 days ago. Please apply these updates
+  <https://docs.pantheon.io/core-updates> and deploy them to the
+  Live environment. <https://docs.pantheon.io/pantheon-workflow>
+  A variety of support options are available.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+  
+  
+  * June 15, 2026
+    - Update WordPress to 6.6
+    - Author: Pantheon
+  
+  
+  
+  '''
+# ---
+# name: test_updates_notice_snapshots[2026-06-15T00:00:00+00:00-warning].2
+  '1 pending Pantheon update'
+# ---
+# name: test_updates_notice_snapshots[2026-06-28T00:00:00+00:00-info]
+  '''
+  
+  <p><strong>bus-occb</strong> has
+  <a href="https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code">1 pending recent updates from Pantheon</a>.</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">Date</th><th class="rt-plan">Description</th><th class="rt-plan">Author</th></thead>
+  <tbody>
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">Date</div><div class="rt-data rt-plan">June 28, 2026</div></td>
+  <td><div class="rt-data-header rt-plan">Description</div><div class="rt-data rt-plan">Update WordPress to 6.6</div></td>
+  <td><div class="rt-data-header rt-plan">Author</div><div class="rt-data rt-plan">Pantheon</div></td>
+  </tr>
+  </tbody>
+  </table>
+  </div>
+  <p>How to: <a href="https://docs.pantheon.io/core-updates">apply updates</a>,
+  <a href="https://docs.pantheon.io/pantheon-workflow">deploy updates</a>,
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">get support</a>.</p>
+  
+  '''
+# ---
+# name: test_updates_notice_snapshots[2026-06-28T00:00:00+00:00-info].1
+  '''
+  
+  bus-occb has 1 pending recent updates from Pantheon
+  <https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code>.
+  
+  
+  * June 28, 2026
+    - Update WordPress to 6.6
+    - Author: Pantheon
+  
+  
+  How to:
+    * apply updates <https://docs.pantheon.io/core-updates>
+    * deploy updates <https://docs.pantheon.io/pantheon-workflow>,
+    * get support <https://its.umich.edu/computing/web-mobile/pantheon/support>
+  
+  '''
+# ---
+# name: test_updates_notice_snapshots[2026-06-28T00:00:00+00:00-info].2
+  '1 pending Pantheon update'
+# ---

@@ -17,14 +17,22 @@ def test_registers_hooks_when_config_is_silent(psh, reset_sc, request):
         "check.pantheon.frozen.check_frozen_site",
         "check.pantheon.live_env.check_live_env",
     ]
+    assert [h["name"] for h in reset_sc.hooks["site_post_gather"]] == [
+        "check.pantheon.updates.check_upstream_updates",
+        "check.pantheon.php_eol.check_php_eol",
+    ]
 
 
 def test_declarations_match_the_spec_table(psh, reset_sc, request):
     reset_sc.config = {"Check": {"pantheon": {"enabled": True}}}
     load_check_package(psh, "pantheon", "pantheon_decl_probe", request)
-    hooks = {h["name"]: h for h in reset_sc.hooks["site_pre"]}
+    hooks = {h["name"]: h
+             for phase in ("site_pre", "site_post_gather")
+             for h in reset_sc.hooks[phase]}
     assert hooks["check.pantheon.frozen.check_frozen_site"]["consumes"] == []
     assert hooks["check.pantheon.live_env.check_live_env"]["consumes"] == ["envs"]
+    assert hooks["check.pantheon.updates.check_upstream_updates"]["consumes"] == []
+    assert hooks["check.pantheon.php_eol.check_php_eol"]["consumes"] == ["envs"]
     assert all(h["produces"] == [] for h in hooks.values())
 
 
