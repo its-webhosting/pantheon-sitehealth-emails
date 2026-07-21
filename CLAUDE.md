@@ -182,7 +182,7 @@ available to every function at call time.
 `find_modules()` (in `psh/modules.py` since I4) walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
 containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
-`check.cloudflare`, `check.dns`, `check.pantheon_cdn_change`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
+`check.cloudflare`, `check.dns`, `check.pantheon`, `check.pantheon_cdn_change`, `check.umich`). Each `__init__.py` self-registers at import time — usually pulling in a
 sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`, `env/get_env.py`,
 `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
 only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{env NAME}` /
@@ -244,7 +244,16 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 `setup` + per-FQDN HTTP checks at `site_post_dns`, see `docs/cloudflare-cachecheck.md`).
 DNS-resolution notices live in `check/dns/` (`notices.py` builders + the `site_post_dns`
 `hook.py`), fed by the `dns_classify.py` engine; `no-domains`/`no-primary-domain` remain in
-core. `check/pantheon_cdn_change/` (`site_post_dns`, unconditional registration) flags
+core. `check/pantheon/` (I8; the first Tier-2 check package, gated on `[Check.pantheon].enabled`
+— **default true**: an absent `[Check]`/`[Check.pantheon]`/`enabled` still registers, so
+relocating a check that ran unconditionally does not silently disable it) holds four
+Pantheon-platform checks, one module each: `frozen.py` (frozen-site notice) and `live_env.py`
+(paid plan with no initialized live env; consumes `envs`) at `site_pre`, `updates.py`
+(`terminus upstream:updates:list` staleness — the §3.2 check-fetches-its-own-data case, via
+`sc.terminus`) and `php_eol.py` (PHP end-of-life warning/alert; consumes `envs`) at
+`site_post_gather`, registered in that order (D-i8-3). The four notice bodies still embed
+un-gated U-M links (moved verbatim — see the still-hardcoded-U-M list under Testing).
+`check/pantheon_cdn_change/` (`site_post_dns`, unconditional registration) flags
 custom domains still CNAME'd to the legacy Pantheon GCDN (Fastly) — in public DNS or in
 Cloudflare — and gets the replacement records Pantheon requires from `terminus domain:dns`;
 **temporary**, delete once Pantheon's CDN migration is done — see
@@ -282,7 +291,7 @@ against it, so drift on either side goes red:
 
 | Phase | Guaranteed new keys (beyond `site`/`notices`/`sections`/`attachments`) |
 |---|---|
-| `site_pre` | — (fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
+| `site_pre` | `envs` (I8, at `site_pre`; dict — the `terminus env:list` JSON keyed by environment id, each value carrying `id, created, domain, connection_mode, locked, initialized, php_version, php_runtime_generation`. `main()`'s guards ensure `envs["live"]` exists with an `initialized` key before any site phase fires; **`php_version` is NOT guaranteed present** — read it with `.get`. Never `None`/empty when a phase fires: a failed `env:list` fetch skips the site. Core-produced — fetched by `main()` where it gates on it, stuffed by `stuff_envs_contract` in `psh/modules.py`. The phase fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version`/`drupal_version` (str; `"unknown"` — NOT None — when that framework's version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed |
@@ -569,9 +578,12 @@ earlier gate's red (PD#1):
    a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy; runs over the
    **whole tree**, including the files the campaign grandfathers.
 2. **ruff, broad campaign ratchet** (`ruff-broad.toml`: `select = ALL` minus a grandfathered
-   exclude list — `psh/_legacy.py`, `dns_classify.py`, `check/`, `plugin/`,
-   `tests/`, `development/`; CAMPAIGN.md §13). Each increment un-grandfathers its files by deleting
-   them from that list (`script_context.py` was un-grandfathered in I4).
+   exclude list — `psh/_legacy.py`, `dns_classify.py`, the four still-grandfathered check
+   packages enumerated individually (`check/cloudflare/`, `check/dns/`,
+   `check/pantheon_cdn_change/`, `check/umich/` — the wholesale `check/` was replaced by this
+   enumeration at I8 so `check/pantheon/` is born gated), `plugin/`, `tests/`, `development/`;
+   CAMPAIGN.md §13). Each increment un-grandfathers its files by deleting them from that list
+   (`script_context.py` was un-grandfathered in I4).
 3. **pyright, standard mode** over `psh/` minus `_legacy.py` (`[tool.pyright]`); a missing pyright
    binary is a **hard failure**, never a silent skip (PD#1/PD#14).
 
@@ -679,6 +691,17 @@ Non-obvious things the harness relies on:
   U-M-before-cutoff copy is pinned), and the 4th e2e golden (below).
   **`dns_classify.resolve` is the one monkeypatchable DNS seam** — patch it (as those tests do) so
   nothing hits real DNS; route any new resolution through it.
+- **check/pantheon tests (I8).** The `check/pantheon/` package (frozen/live-env/updates/php-eol)
+  has its own suite: `tests/unit/test_php_eol_notice.py` (the `build_php_eol_notice` builder,
+  repointed to its `check/pantheon/php_eol.py` home at I8 — the D-i8-4 lexicographic-compare and
+  missing-`php_version` fixes are pinned here), `tests/integration/test_check_pantheon_init.py`
+  (config gating + the four hooks' phase/`consumes`/`produces` declarations; default-true proof),
+  `tests/integration/test_check_pantheon.py` (the four hook seams via `sc.SiteContext` and the
+  `gateway` fixture, incl. the D-i8-5 singular-`short` interpolation pin), and
+  `tests/integration/test_pantheon_notice_render.py` (syrupy snapshots of all seven notice
+  variants). The `envs` contract key and `stuff_envs_contract` are pinned by
+  `tests/unit/test_contract_registry.py`, and `tests/integration/test_hook_dag.py` proves the
+  `check.pantheon` declarations validate.
 - **Shared DNS-test infrastructure (`tests/helpers/`).** `dnsfake.py` has the fake
   `dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`) and
   `recording_console` (a wide `record=True` Console, read back with `export_text()` — not `capsys`,
@@ -747,7 +770,12 @@ Non-obvious things the harness relies on:
   always runs with the UMich plugin enabled, so the non-U-M golden is the only guard. **Still
   hardcoded U-M** in core (not yet relocated to the `umich` packages): the date-driven
   annual-billing notices, the `umich-oidc-login`/Hummingbird/Drupal user-agent checks, and the
-  branding in `email_template.html` (its.umich.edu URLs, `webmaster@umich.edu`, `node/4705`). The
+  branding in `email_template.html` (its.umich.edu URLs, `webmaster@umich.edu`, `node/4705`).
+  Also **hardcoded U-M but living in the generic `check/pantheon/` package** (relocated out of
+  core at I8, un-gated U-M links moved verbatim — not `check/umich/` because §3.2 assigns these
+  platform checks to `check/pantheon/`; de-U-M-ifying them is post-campaign/I14 work): the
+  `frozen`, `no-live-env-but-paid-plan`, and `updates-*` notice bodies (its.umich.edu /
+  procurement links). The
   non-U-M golden does **not** assert "no umich.edu anywhere", so it will not catch new leakage —
   keep institution-specific logic behind config flags / the `umich` plugin+check packages.
 - **Cache-check tests.** The `check/cloudflare/` modules are loaded standalone (SourceFileLoader;

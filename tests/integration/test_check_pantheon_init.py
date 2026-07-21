@@ -41,4 +41,5 @@ def test_disabled_registers_nothing_and_says_so(psh, reset_sc, request, monkeypa
     reset_sc.config = {"Check": {"pantheon": {"enabled": False}}}
     load_check_package(psh, "pantheon", "pantheon_off_probe", request)
     assert not reset_sc.hooks.get("site_pre")
+    assert not reset_sc.hooks.get("site_post_gather")
     assert "Skipping check.pantheon" in console.export_text()

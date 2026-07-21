@@ -770,3 +770,145 @@ across the increment (`git diff 3195c81 -- tests/e2e/__snapshots__/` empty).
   absent (Obs. 2) — B41 moves into `check/pantheon/` this increment, so fix it there
   test-first. Note the php-eol builder (`build_php_eol_notice`) still lives in
   `psh/_legacy.py` (I1 extraction) and travels to `check/pantheon/` at I8.
+
+## I8 — check/pantheon (2026-07-21, commits dd9aac2/3ea3491/ab3c97b + closing docs commit)
+
+Spec/plan: `development/2026-07-21-mod-I8-check-pantheon/` (`SPEC.md` §9 carries the
+pasted acceptance; task reports + reviews under `.superpowers/sdd/`, incl. the RED
+evidence for the three named fixes in `task-3-report.md`). Three per-task code commits
+(`dd9aac2` Task 1 — `envs` contract key; `3ea3491` Task 2 — package + frozen/live-env;
+`ab3c97b` Task 3 — updates/php-eol + the named fixes), each green, plus this closing
+docs commit (CLAUDE.md / memory / this ledger entry / the dev folder). Full suite at
+close **including the live tier** (Terminus credentials present — the 2 live-marked
+tests ran and passed) = **846 passed / 1 skipped** (the skip is `test_db_credentials.py`'s
+`importorskip("MySQLdb")` on a sqlite-only install), all three gates, 48 snapshots; four
+goldens byte-identical across the increment (`git diff 6ce3416 --
+tests/e2e/__snapshots__/` empty). This is the campaign's **first Tier-2 check package**
+and the **first `[Check.*]` config section**.
+
+- **Moved:** exactly the §11-row-I8 move set (B19, B21's notice half, B38, B41) out of
+  `main()` into the new `check/pantheon/` package (one module per check, D-i8-1), plus
+  the I1-extracted `build_php_eol_notice`:
+  - **B19** (frozen console print + `frozen` notice) → `check/pantheon/frozen.py`, hook
+    `check.pantheon.frozen.check_frozen_site` at `site_pre` (consumes `[]`).
+  - **B21's initialized-False branch** (console ERROR + `no-live-env-but-paid-plan`
+    notice) → `check/pantheon/live_env.py`, hook `check.pantheon.live_env.check_live_env`
+    at `site_pre` (consumes `['envs']`). The `env:list` fetch, the fatal/undecodable
+    `continue`, and the missing-live `sys.exit` guards stay in `main()` (SPEC §3.3 /
+    D-i8-2 — core fetches `envs` because core gates on it, then stuffs it).
+  - **B38** (banner print + `upstream:updates:list` fetch + `updates-info`/`-warning`/
+    `-alert` notices + non-list error print) → `check/pantheon/updates.py`, hook
+    `check.pantheon.updates.check_upstream_updates` at `site_post_gather` (consumes `[]`;
+    fetches its own data via `sc.terminus` — the CAMPAIGN §3.2 check-specific-fetch case;
+    one call edit `terminus(...)` → `sc.terminus(...)`).
+  - **B41 + `build_php_eol_notice`** → `check/pantheon/php_eol.py` (pure module, imports
+    only `sc`), hook `check.pantheon.php_eol.check_php_eol` at `site_post_gather`
+    (consumes `['envs']`). The builder left `psh/_legacy.py` with **no re-import** (unlike
+    I2–I7's moves — nothing in `_legacy.py` calls it after the move; the hook does), and
+    `tests/unit/test_php_eol_notice.py` repointed to the new standalone-loaded home.
+  Column-0 `f"""` notice-literal interiors (incl. the no-live-env literal's 12-space
+  interior indentation) moved byte-for-byte (Invariant 8; extracted-block diff pasted
+  empty in the task reports, I2 precedent). Registration order (D-i8-3): frozen, live_env
+  at `site_pre`; updates, php_eol at `site_post_gather` — preserves the within-package
+  notice order.
+
+- **Named fixes shipped (all red-first; RED evidence in `.superpowers/sdd/task-3-report.md`):**
+  1. **D-i8-4.1** (LEDGER I1 Obs. 2 discharge, half 1): `php_version < "8.2"`
+     lexicographic string compare → int-tuple compare (`(major, minor…) < (8, 2)`), so
+     `"8.10"` no longer draws a false September-30 alert (`"8.10" < "8.2"` was `True`).
+     Bonus inside scope: `""` no longer false-alerts (parse failure → `None`). RED:
+     `build_php_eol_notice("s", "8.10")` returned an alert dict on the old code, `None`
+     on the new.
+  2. **D-i8-4.2** (Obs. 2 discharge, half 2): the hook reads
+     `envs["live"].get("php_version")` (was an unguarded `["php_version"]` that would
+     KeyError and abort the **whole run** — the guards check `live`/`initialized` but
+     never `php_version`); the builder returns `None` for `None`/unparseable input (one
+     mechanism covers both). RED: `build_php_eol_notice("s", None)` raised `TypeError`
+     (`None < "8.2"`) on the old code; the hook-seam test shows a `php_version`-less
+     `envs` adds no notice and raises nothing. **LEDGER I1 Obs. 2 is now fully
+     discharged.**
+  3. **D-i8-5** (discovered this increment, §12 fix-now disposition): the updates-alert
+     branch's singular `short` lacked its `f`-prefix and rendered the literal
+     `"{oldest_update_days} days old"`; the `f` was added, pinned by
+     `test_single_old_update_short_is_interpolated` (one 45-day-old update →
+     `"needs maintenance: 1 Pantheon update, 45 days old"`). Not a csv value (§8 csv row
+     untouched); no golden renders any `updates-*` notice.
+
+- **Contract/config/sc additions:** `CONTRACT["site_pre"] = ("envs",)` +
+  `psh.modules.stuff_envs_contract` (a core-produced key beside
+  `stuff_traffic_contract`/`stuff_gather_contract` per D-i8-2), called by `main()`
+  directly above the `site_pre` invoke; `PHASES`' `site_pre` comment updated; CLAUDE.md
+  contract-table row added; pinned by `tests/unit/test_contract_registry.py`. `envs` =
+  the `terminus env:list` JSON dict keyed by environment id (fields `id, created, domain,
+  connection_mode, locked, initialized, php_version, php_runtime_generation`); `main()`'s
+  guards guarantee `envs["live"]` with an `initialized` key before any site phase fires,
+  **`php_version` NOT guaranteed present** (the D-i8-4 defect class). `[Check.pantheon]`
+  — the **first `[Check.*]` config section** (§5 shape), `enabled` **default TRUE**
+  (absent section/key → registered, so relocating a check that ran unconditionally does
+  not silently disable it); documented in `sample-pantheon-sitehealth-emails.toml` after
+  the last `[Pantheon.*]` table. **No new `sc` façade names** (hooks use the existing
+  `sc.console`/`sc.terminus`).
+
+- **Deviations / prediction corrections (all ledger notes, none amend CAMPAIGN.md):**
+  1. **D-i8-3 ordering consequence (spec-documented).** At `site_post_gather` three pairs
+     flip: today's add order is umich.cloudflare_cms → B38 updates → B39 addons → B41
+     php-eol; after the move it is pantheon.updates → pantheon.php_eol →
+     umich.cloudflare_cms → B39 addons. So updates/php-eol now precede cloudflare_cms
+     notices and php-eol precedes the still-inline B39 add-on notice (php-eol was
+     previously added after both; updates previously after cloudflare_cms). For a
+     production site where such notices co-occur at equal severity, the rendered
+     within-tier order and that site's `-notices.csv` row order shift; row content, keys,
+     and shape unchanged (§8's structure bar holds). **Zero golden impact, proven**: no
+     moved notice code renders in any golden (fixture `upstream:updates:list` returns
+     `[]`, fixture PHP is 8.2, sites are unfrozen with initialized live envs). `site_pre`
+     order is preserved exactly (frozen before live_env, both before umich.sitelens). The
+     asymmetry vs B39 dissolves at I10 when addons becomes a hook.
+  2. **`__init__.py` blank-line collapse.** The Task 2 brief's `__init__.py` skeleton
+     showed two blank lines between the import and the guard; ruff-broad `I001` required
+     one — collapsed (behavior-identical, the born-gated requirement governs).
+  3. **PLAN Step-5 prediction correction (PD#14).** The plan predicted both
+     `["8.10", "9.0"]` params would red pre-fix — only `"8.10"` reds; `"9.0" < "8.2"` is
+     already `False` lexicographically, so `"9.0"` is a green boundary pin, not a
+     regression case.
+
+- **Ratchet (§13):** `check/pantheon/` **born gated** (broad ruff + the D-i8-6 config
+  gate; `uvx ruff check --config ruff-broad.toml check/pantheon/` clean, `psh/modules.py`
+  clean, pyright gate 0 errors). `ruff-broad.toml`'s wholesale `"check/"` exclude was
+  replaced by the **four enumerated grandfathered packages** (`check/cloudflare/`,
+  `check/dns/`, `check/pantheon_cdn_change/`, `check/umich/`) so the new package is not
+  swept in — the first time the campaign narrowed the check exclusion. Dispositions
+  (confirmed against real ruff output, PD#14): **F541 ×3** f-prefix drops (live_env
+  `"no live environment"`, php_eol 2× `"Upgrade PHP"` — all behavior-identical, I6
+  precedent); **PLR2004 noqa ×2** (the `<=7`/`<=30` age thresholds, verbatim B38 move);
+  **T203 noqa ×1** (the `pprint(updates)` operator diagnostic on the non-list error
+  path). SPEC §5's predicted-possible `C901`/`PLR0915` on `check_upstream_updates` did
+  **NOT** fire (under thresholds; recorded, no noqa added). **Pyright scope UNCHANGED**
+  (`psh/` minus `_legacy.py`) — deliberate (D-i8-7): the checks call runtime-assigned
+  `sc` attributes (`sc.terminus`/`sc.console`) that pyright cannot see on
+  `script_context`, and declaring typed façade stubs was not I8 scope. **I9/I10 inherit
+  this decision consciously.** Nothing else deleted from `extend-exclude` (`psh/_legacy.py`
+  stays grandfathered).
+
+- **Discovered tasks (dispositions):**
+  - **D-i8-5** (updates-alert singular `short` missing `f`-prefix) — discovered during
+    scope verification; §12 "fits scope and <~30 min → fix now, note in ledger" →
+    **fixed here** (Task 3; see Named fixes above).
+  - **Test hardening** (Task 3 review minor): `test_disabled_registers_nothing_and_says_so`
+    now also asserts `not reset_sc.hooks.get("site_post_gather")` (was asserting only
+    `site_pre`) → **fixed here** (this closing task).
+  - Mid-file imports in the two `check/pantheon/` integration test files
+    (`test_check_pantheon_init.py`, `test_check_pantheon.py`) — grandfathered test style
+    (the `tests/` tree stays excluded from the broad ruff set) → **left** (Task 3 review
+    adjudicated).
+  - No other discovered tasks — the task reports found no further gaps beyond the ruff
+    dispositions and the prediction corrections recorded above.
+
+- **Open questions for I9:** proceed per CAMPAIGN.md §11 row I9 (`psh/gather.py` WP half;
+  `check/wordpress/`; U-M WP checks → `check/umich/`; `add_on_updates` + smell contract
+  keys). **Note for I9's spec author:** `check.pantheon`'s two `site_post_gather` hooks
+  now run before `check.umich`'s and before any new `check/wordpress/` hooks whose
+  package name sorts after `"pantheon"` — new packages' notice-order consequences must be
+  analyzed the D-i8-3 way. The **pyright-scope decision (D-i8-7) is inherited**. LEDGER
+  I3's `Notice`-adoption candidates for extra-csv notices remain I10/I12 (the `updates-*`
+  csv rows carry extra fields, which `Notice` cannot hold without the reserved §6
+  amendment).
