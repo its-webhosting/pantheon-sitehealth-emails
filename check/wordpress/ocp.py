@@ -43,7 +43,7 @@ def check_ocp_config(site_context):
                         "icon": "&#x1F6A8;",  # police car light
                         "csv": f"{site['name']},ocp-config-fix-needed",
                         "short": "Fix Object Cache Pro configuration",
-                        "message": f'<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>',  # noqa: F541 -- verbatim-moved notice literal, f-prefix kept for byte-identity (Invariant 8)
-                        "text": f"Please fix this site's Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config",  # noqa: F541 -- verbatim-moved notice literal, f-prefix kept for byte-identity (Invariant 8)
+                        "message": '<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>',
+                        "text": "Please fix this site's Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config",
                     }
                 )
