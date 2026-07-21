@@ -1,7 +1,7 @@
 # serializer version: 1
 # name: test_plan_recommendation_render[generic]
   dict({
-    'csv': 's,its-recommends-plan,Performance Medium,Performance Small,1,234.50',
+    'csv': 's,its-recommends-plan,Performance Medium,Performance Small,1234.50',
     'icon': '&#x1F50E;',
     'message': '''
       
@@ -29,7 +29,7 @@
 # ---
 # name: test_plan_recommendation_render[umich]
   dict({
-    'csv': 's,its-recommends-plan,Performance Medium,Performance Small,1,234.50',
+    'csv': 's,its-recommends-plan,Performance Medium,Performance Small,1234.50',
     'icon': '&#x1F50E;',
     'message': '''
       

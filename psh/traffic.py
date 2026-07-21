@@ -7,10 +7,7 @@ control stays in main(), these functions signal via return values, SPEC D-i6-1),
 B43 visits-by-month aggregation.  build_traffic_table_rows remains one of db_retry()'s
 five named idempotent units (CLAUDE.md section Database).
 
-Bridge note (SPEC D-i6-2): build_traffic_table_rows calls overage_blocks, which still
-lives in psh._legacy (it moves to psh.plans at I7) -- imported at call time because
-_legacy imports this module for the re-exports (cycle).  I7 replaces that import with
-`from psh.plans import overage_blocks`.
+overage_blocks is imported from psh.plans (bridge discharged at I7 per LEDGER I6).
 """
 import calendar
 import datetime
@@ -27,6 +24,7 @@ from psh.db import (
     update_traffic_rows,
 )
 from psh.gateway import TerminusError, terminus, terminus_data
+from psh.plans import overage_blocks
 
 traffic_table_columns = [
     {"name": "month", "label": "Month"},
@@ -166,9 +164,6 @@ def build_traffic_table_rows(  # noqa: C901, PLR0912, PLR0915, PLR0913 -- moved 
     get-or-create by primary key.  Extracting this block out of main() is what makes that true --
     see SPEC 3.3.1 for what a statement-level retry would corrupt instead.
     """
-    # Cycle: _legacy imports this module.  overage_blocks moves to psh.plans at I7.
-    from psh._legacy import overage_blocks  # noqa: PLC0415
-
     traffic_table_rows = {}
     d = (start_date.replace(day=1) - datetime.timedelta(days=15)).replace(day=1)
     op = session.get(

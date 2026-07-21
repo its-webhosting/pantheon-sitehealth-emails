@@ -27,6 +27,8 @@ def test_generic_variant_has_no_umich_urls(psh):
 
 
 def test_csv_is_variant_independent(psh):
+    # D-i7-5 (campaign I7): the savings field is comma-free -- a thousands separator
+    # inside a comma-separated row split the field and made the column count variable.
     assert _notice(psh, True)["csv"] == _notice(psh, False)["csv"] == (
-        "s,its-recommends-plan,Performance Medium,Performance Small,1,234.50"
+        "s,its-recommends-plan,Performance Medium,Performance Small,1234.50"
     )
