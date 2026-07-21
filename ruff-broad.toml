@@ -16,7 +16,8 @@ extend-exclude = [
     "check/cloudflare/",           # untouched tenant; cleaned at I14
     "check/dns/",                  # untouched tenant; cleaned at I14
     "check/pantheon_cdn_change/",  # temporary check; deleted or cleaned at I14
-    "check/umich/",                # grows at I9/I10/I12; cleaned then
+    "check/umich/sitelens.py",       # untouched tenant; cleaned at I14
+    "check/umich/cloudflare_cms.py", # untouched tenant; cleaned at I14
     "plugin/",              # cleaned as increments touch them
     "tests/",               # cleaned per-increment alongside their code
     "development/",         # historical archive, never linted

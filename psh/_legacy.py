@@ -36,7 +36,6 @@ import matplotlib.dates as mdates
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
-import semver
 import sqlalchemy as db
 from jinja2 import Template
 from matplotlib.gridspec import GridSpec
@@ -1627,141 +1626,12 @@ def main() -> None:
                                 f"[bold yellow]{site['name']} has must-use plugin:"
                             )
                             pprint(p)
-                        # Special check for umich-oidc-login upgrade, December 2025
-                        if p["name"] == "umich-oidc-login" and p["status"] != "inactive":
-                            if semver.compare(p["version"], "1.2.99") <= 0:
-                                site_context.add_notice(
-                                    {
-                                        "type": "warning",
-                                        "icon": "&#x26A0;",  # warning sign
-                                        "csv": f"{site['name']},umich-oidc-login-reinstall",
-                                        "short": "Reinstall the UMich OIDC Login plugin to get the latest version",
-                                        "message": f"""
-<p><strong>Please reinstall the UMich OIDC Login plugin to get the latest version.</strong></p>
-<p>Versions 1.3.0 and later of the UMich OIDC Login plugin are hosted
-<a href="https://github.com/its-webhosting/umich-oidc-login">on GitHub</a> rather than on wordpress.org.
-{site["name"]} is using version {p["version"]}, so you will need to install version 1.3.0 or later by hand to get
-future updates of this plugin through WordPress.  Please use one of the following three methods:
-</p>
-<ul>
-    <li>
-        (Simplest method, if you already have <a href="https://docs.pantheon.io/terminus">Terminus</a> set up <a href="https://docs.pantheon.io/terminus/install#ssh-authentication-optional-but-recommended">to work with WP CLI</a>): Run the command
-        <pre>
-terminus wp {site["name"]}.dev -- plugin install --force --activate https://github.com/its-webhosting/umich-oidc-login/releases/latest/download/umich-oidc-login.zip</pre>And then deploy from Dev to Test, and from Test to Live.<br /><br />
-    </li>
-    <li>
-        Or, <a href="https://github.com/its-webhosting/umich-oidc-login/releases/latest/download/umich-oidc-login.zip">download the latest version</a>,
-        upload the zip file through your WordPress admin dashboard using <code>Plugins -> Add New -> Upload Plugin</code>, then activate the plugin.<br /><br />
-    </li>
-    <li>
-        Or, <a href="https://github.com/its-webhosting/umich-oidc-login/releases/latest/download/umich-oidc-login.zip">download the latest version</a>,
-        unzip it on your local computer, upload the resulting <code>umich-oidc-login</code> folder to the <code>wp-content/plugins/</code> folder in your site
-        (replacing any umich-oidc-login folder that is already there), then activate the plugin.
-    </li>
-</ul>
-<p style="font-size: smaller;"><strong>NOTE:</strong> If your site uses any <code>[umich_oidc_button]</code> or <code>[umich_oidc_link]</code> shortcodes and uses an HTML
-attribute (such as <code>class</code> or <code>style</code>) in those shortcodes, after you upgrade, the site will not look right and may
-not function correctly unless you turn on the option <code>Settings -> UMich OIDC Login -> Shortcodes ->
-Custom buttons and links -> Allow HTML attributes</code>.  This is safe to turn on as long as you trust any users with the
-WordPress roles Contributor, Author, and Editor not to use Cross-Site Scripting to compromise an Administrator account
-and gain Administrator access for themselves.  If you don't want to turn this option on, an alternative is to use a
-child theme or a custom plugin to style the OIDC buttons/links.</p>
-""",
-                                        "text": f"""
-Please reinstall the UMich OIDC Login plugin
-to get the latest version.
-
-Versions 1.3.0 and later of the UMich OIDC Login plugin are hosted
-on GitHub <https://github.com/its-webhosting/umich-oidc-login>
-rather than on wordpress.org. {site["name"]} is using
-version {p["version"]}, so you will need to install version 1.3.0
-or later by hand to get future updates of this plugin through
-WordPress.  Please use one of the following three methods:
-
-* Simplest method, if you already have Terminus
-<https://docs.pantheon.io/terminus> set up to work with WP CLI
-<https://docs.pantheon.io/terminus/install#ssh-authentication-optional-but-recommended">
-Run the command
-
-terminus wp {site["name"]}.dev -- plugin install --force --activate https://github.com/its-webhosting/umich-oidc-login/releases/latest/download/umich-oidc-login.zip
-
-And then deploy from Dev to Test, and from Test to Live.
-
-* Or, download the latest version
-<https://github.com/its-webhosting/umich-oidc-login/releases/latest/download/umich-oidc-login.zip>
-upload the zip file through your WordPress admin dashboard using
-Plugins -> Add New -> Upload Plugin, then activate the plugin.
-
-* Or, download the latest version
-<https://github.com/its-webhosting/umich-oidc-login/releases/latest/download/umich-oidc-login.zip>
-unzip it on your local computer, upload the resulting
-umich-oidc-login folder to the wp-content/plugins/ folder in your
-site (replacing any umich-oidc-login folder that is already there),
-then activate the plugin.
-
-NOTE: If your site uses any [umich_oidc_button] or
-[umich_oidc_link] shortcodes and uses an HTML attribute (such as
-"class" or "style") in those shortcodes, after you upgrade, the
-site will not look right and may not function correctly unless you
-turn on the option Settings -> UMich OIDC Login -> Shortcodes ->
-Custom buttons and links -> Allow HTML attributes.  This is safe
-to turn on as long as you trust any users with the WordPress roles
-Contributor, Author, and Editor not to use Cross-Site Scripting to
-compromise an Administrator account and gain Administrator access
-for themselves.  If you don't want to turn this option on, an
-alternative is to use a child theme or a custom plugin to style
-the OIDC buttons/links.
-""",
-                                    }
-                                )
+                        # The umich-oidc-login reinstall check moved to
+                        # check/umich/oidc_login.py (site_post_gather hook).
                         # The Object Cache Pro configuration check moved to
                         # check/wordpress/ocp.py (site_post_gather hook).
-                    # Special check for our fork of Hummingbird (version number contains 'umich')
-                    name = "hummingbird-performance"
-                    display_name = "UMich Hummingbird"
-                    url = "https://documentation.its.umich.edu/node/4243"
-                    url2 = "https://documentation.its.umich.edu/node/5114"
-                    reason = "UMich Hummingbird is unsupported and has been replaced by University of Michigan: Cloudflare Cache"
-                    installed = [
-                        p for p in plugins if p["name"] == name and "umich" in p["version"]
-                    ]
-                    if len(installed) != 0:
-                        plugin = installed[0]
-                        sc.console.print(
-                            f":exclamation: [bold red] ATTENTION: {site} has {display_name} installed."
-                        )
-                        if "status" in plugin and plugin["status"] == "inactive":
-                            site_context.add_notice(
-                                {
-                                    "type": "info",
-                                    "icon": "&#x1F50E;",  # magnifying glass
-                                    "csv": f"{site['name']},unsupported-turned-off,{name}",
-                                    "short": f"delete inactive plugin {name}",
-                                    "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin is inactive but should be deleted:</p><p>{html.escape(reason)}</p>',
-                                    "text": f"The {display_name} WordPress plugin\n<{url}>\nis inactive but should be deleted: {reason}",
-                                }
-                            )
-                        else:
-                            site_context.add_notice(
-                                {
-                                    "type": "alert",
-                                    "icon": "&#x1F6A8;",  # police car light
-                                    "csv": f"{site['name']},unsupported,{name}",
-                                    "short": f"replace plugin {name} with umich-cloudflare",
-                                    "message": f'''
-<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be replaced! It is unsupported and out of date.</p>
-<p>Please install the <a href="{escape_url(url2)}">University of Michigan: Cloudflare Cache</a> plugin and remove {html.escape(display_name)}.</p>
-''',
-                                    "text": f"""
-The {display_name} WordPress plugin\n<{url}>\nneeds to be replaced!
-It is unsupported and out of date.
-
-Please install the University of Michigan: Cloudflare Cache
-<{url2}>
-plugin and remove {display_name}.
-""",
-                                }
-                            )
+                    # The UMich Hummingbird fork check moved to
+                    # check/umich/hummingbird.py (site_post_gather hook).
                 sc.console.print(
                     f"[bold magenta]=== Checking WordPress themes for {site['name']}:"
                 )
