@@ -44,7 +44,8 @@ Key flags (the parser sets `allow_abbrev=False`, so no `--for` → `--for-real` 
 unless `--create-tables`); `--config`/`-c` picks the TOML file (default
 `pantheon-sitehealth-emails.toml`). Without `--for-real`, mail is addressed to the logged-in user,
 not to owners — this is the primary safety mechanism, always dry-run first. `--update`
-only refreshes traffic data; `--only-warn` checks sites for warnings without generating
+only refreshes traffic data; `--only-warn` checks sites for warnings — including the plan
+recommendation, computed before the gate since D7 (campaign I7) — without generating
 reports or sending mail; `--import-older-metrics` backfills Pantheon's weekly/monthly
 aggregates (and is mutually exclusive with `--create-tables`); `-v`/`-vv`/`-vvv` increase
 verbosity (`--create-tables` forces `-vvv`). `--update-cloudflare-fqdns` /
@@ -132,10 +133,25 @@ traffic-metrics layer: the move set (`traffic_table_columns`, `get_old_metrics`,
 `load_site_traffic`, `aggregate_visits_by_month`) — re-imported by `psh/_legacy.py`, same
 import-back pattern as the gateway/configuration/db modules, so `main()`'s call sites and the
 `psh.<name>` test references resolve unchanged. `build_traffic_table_rows` calls
-`overage_blocks` (still in `psh/_legacy.py`; §3.1 assigns it to `psh/plans.py` at I7) via a
-call-time import (`# noqa: PLC0415`, cycle-avoidance — the I4 `psh/modules.py` precedent) —
-**temporary until I7**, which MUST replace it with a module-level
-`from psh.plans import overage_blocks`. The last is
+`overage_blocks` via a module-level `from psh.plans import overage_blocks` (the I6 bridge —
+a call-time import guarded by `# noqa: PLC0415` — discharged at I7 per its own obligation).
+**`psh/plans.py`** (moved in I7) holds the plans layer: the move set
+(`cost_table_columns`, `overage_blocks`, `contract_year_end`, `plan_costs`,
+`build_plan_over_time`, `build_plan_recommendation_notice`) plus the new typed
+`PlanCatalog`/`PlanInfo` view over `[Pantheon].plan_info` (`PlanCatalog.from_config`
+performs the legacy `"-"` → `None` normalization **mutating the config sub-dict in
+place**, so `main()`'s `plan_info`/`plan_names` aliases and the chart/annual-billing
+regions keep reading the same object — a copy would fork two views of one config),
+`resolve_plan_name(site)` (the B17 Elite-SKU lookup, `None` on a transient Terminus
+failure so `main()` can `continue`, `sys.exit` preserved on a missing/unknown SKU), and
+`recommend_plan(...)` (the B47 recommendation core, returning a frozen
+`PlanRecommendation` — `current_plan`/`recommended_plan`/`plan_costs` fields/`savings`/
+`savings_entry`, the last appended to `main()`'s `site_savings` accumulator when not
+`None` — and adding the upgrade notice to `site_context` itself, the I6 flow-function
+pattern) plus `stuff_plans_contract()` (the `dns_classify.stuff_dns_contract` producer-
+module precedent, publishing the four `site_pre_render` contract keys below) — all
+re-imported by `psh/_legacy.py`, same import-back pattern as the other moved modules, so
+`main()`'s call sites and the `psh.<name>` test references resolve unchanged. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -249,7 +265,9 @@ seam — route any new outbound HTTP in that package through them to stay offlin
 For each site: build a `site_context` dict (holds `notices`, `sections`, `attachments`,
 traffic data, plan info), invoke the site phases (below) at their seams, gather
 Pantheon/WP/Drupal data, compute the plan recommendation from `[Pantheon.plan_info]` in
-the config, then render.
+the config, then render. Since D7 (campaign I7), the recommendation (`psh.plans.
+recommend_plan`) runs before the `--only-warn` gate, not after it, so a warning-only run
+also gets an `its-recommends-plan` row when one applies.
 
 **Normative per-phase data contract** — main() stuffs these `site_context` keys just
 before invoking each phase; hooks code against this table (keys always exist, empty/None
@@ -265,7 +283,7 @@ against it, so drift on either side goes red:
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version`/`drupal_version` (str; `"unknown"` — NOT None — when that framework's version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed |
-| `site_pre_render` | everything above (full-report path only; no consumer yet — the documented seam for future report-shaping hooks) |
+| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks) |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext` and no arguments until I13's `RunState`; fired first thing in `finish_run()` on completed and aborted runs — the seam for future run-level artifact hooks) |
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
@@ -621,21 +639,26 @@ Non-obvious things the harness relies on:
   read-only.
 - **Pure-helper seam.** Pure functions extracted from `main()` as module-level defs so they're
   importable as `psh.<fn>` and unit/property tested: `overage_blocks`, `contract_year_end`,
-  `plan_costs` (the cost model — DB-free via an injected
-  `op_lookup(month)`), plus `load_news_items`, `build_plan_over_time` (returns `[]` for
-  zero traffic; `main()` guards the empty case and skips the plan sections), and
+  `plan_costs` (the cost model — DB-free via an injected `op_lookup(month)`), and
+  `build_plan_over_time` (returns `[]` for zero traffic; `main()` guards the empty case
+  and skips the plan sections) now live in `psh/plans.py` (moved at I7, born gated under
+  the broad ruff set + pyright standard) — still importable as `psh.overage_blocks`/
+  `psh.contract_year_end`/`psh.plan_costs`/`psh.build_plan_over_time` via `_legacy.py`'s
+  re-import, same seam as before the move. Also extracted: `load_news_items`, and
   `sites_from_resume_point`/`merge_prior_results` (the `--resume-from` logic, which cannot be
   reached through the `--all`-banned subprocess interlock and so is only testable in-process). The
   extractions are behavior-preserving (goldens byte-identical). `estimate_month_visits` and
-  `build_traffic_table_rows` now live in `psh/traffic.py` (moved at I6, born gated under the
+  `build_traffic_table_rows` live in `psh/traffic.py` (moved at I6, born gated under the
   broad ruff set + pyright standard) — still importable as `psh.estimate_month_visits`/
   `psh.build_traffic_table_rows` via `_legacy.py`'s re-import, same seam as before the move. The
   B43 visits-by-month aggregation is its own pure function there too,
   `psh.traffic.aggregate_visits_by_month(rows, start_date, end_date) -> tuple[dict, dict]`
   (`tests/unit/test_traffic_aggregation.py`), covering seeding traffic-free months to 0 and the
   last-row-wins `plan_on_day` map; the `pprint` diagnostics, the empty-`plan_on_day` guard, and
-  `build_plan_over_time`'s call stay in `main()` (I7/I11). **`classify_hostname_dns` is NOT
-  one of these** — it moved out of the script into `dns_classify.py`; import it from there.
+  `build_plan_over_time`'s call stay in `main()` (loop control/ordering — I7's `psh/plans.py`
+  move took the bodies, not the call sites; I11 is the chart-region increment still to come).
+  **`classify_hostname_dns` is NOT one of these** — it moved out of the script into
+  `dns_classify.py`; import it from there.
 - **DNS tests.** The `dns_classify.py` engine and `check/dns/` package have their own suite:
   `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS, and
   `dns_classify.MalformedNameError` — `resolve()` converts dnspython's syntax errors

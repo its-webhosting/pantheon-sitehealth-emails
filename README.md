@@ -298,6 +298,13 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 * Measure PHP memory usage and factor that into plan recommendations
 
+* Notify site owners directly of downgrade plan recommendations **(post-campaign)** — today
+  a downgrade recommendation reaches only the operator's stdout savings summary, never an
+  owner-facing notice (campaign I7, `development/2026-07-20-mod-I7-plans/SPEC.md` D-i7-4: a
+  new notice is new report content, out of scope for a behavior-preserving increment). The
+  dead `extra_message`/`extra_text` locals I1 deleted from `build_plan_recommendation_notice`
+  (assigned, never read) were presumably meant for this.
+
 * Add security score to SiteLens.  Include Cloudflare Radar, SSL Labs, securityheaders.com / Mozilla Observatory API, pending updates, best practices, check internals of site (filesystem config, ...)
 
 * Add a Cloudflare score to SiteLens: DNS, cache headers for pages/assets/api, check internals (SSL Full/Strict, WAF not disabled, ...)
