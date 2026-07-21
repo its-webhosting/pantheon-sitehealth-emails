@@ -912,3 +912,179 @@ and the **first `[Check.*]` config section**.
   I3's `Notice`-adoption candidates for extra-csv notices remain I10/I12 (the `updates-*`
   csv rows carry extra fields, which `Notice` cannot hold without the reserved §6
   amendment).
+
+## I9 — wordpress (2026-07-21, commits 5a6654d/309ebcf+0873c3a/717e21f/fb92e9d/d5c4bf8 + closing docs commit)
+
+Spec/plan: `development/2026-07-21-mod-I9-wordpress/` (`SPEC.md` §9 carries the pasted
+acceptance; task reports + reviews under `.superpowers/sdd/`). Per-task code commits,
+each green: `5a6654d` (Task 1 — the four `site_post_gather` contract keys + B48 repoint),
+`309ebcf` + review fix `0873c3a` (Task 2 — `check/wordpress/` package + `sc.wp_eval`/
+`sc.wp_error`), `717e21f` (Task 3 — U-M WP checks → `check/umich/` + ratchet narrowing),
+`fb92e9d` (Task 4 — `psh/gather.py`), `d5c4bf8` (the carried I8 rich-pprint fix, below),
+plus this closing docs commit (CLAUDE.md / CAMPAIGN.md §8 amendment / memory / this
+entry / the dev folder). Full suite at close **including the live tier** (Terminus
+credentials present — `ls ~/.terminus/cache/tokens/` shows one token; the 2 live-marked
+tests ran) = **910 passed / 1 skipped** (the skip is `test_db_credentials.py`'s
+`importorskip("MySQLdb")` on a sqlite-only install), all three gates (`All checks
+passed!` ×2, pyright `0 errors`), 72 snapshots; four goldens
+byte-identical across the increment (`git diff ecb4420 -- tests/e2e/__snapshots__/`
+empty — the new syrupy files live under `tests/integration/__snapshots__/`).
+
+- **Moved:** exactly the §11-row-I9 move set (B32–B34; baseline `check_wordpress_plugin`
+  lines 672–739), split three ways per D-i9-1:
+  - **Gather core → `psh/gather.py`** (Tier 1, born gated): `check_wordpress_plugin`
+    (signature unchanged; papc/sessions/cloudflare_cms call it via
+    `sc.check_wordpress_plugin`), `wordpress_network_url` (B32), `gather_wordpress`
+    (B34 gather core: version/plugin-list/theme-list fetches, add-on collection
+    plugins-then-themes, must-use print) returning the new `WordPressGather` NamedTuple
+    (`wordpress_version`/`plugins`/`add_on_updates`/`wp_smell`/`results_entry`) —
+    **a §6-unlisted supporting return type, the I7 `PlanRecommendation` precedent
+    (ledger note, no amendment)**. Re-imported by `_legacy.py` (I2–I7 pattern);
+    `main()` threads the fields per D-i9-2, preserving the last-wins smell overwrite
+    (an empty returned smell never clears an earlier one). The failed-gather `wp_error`
+    notices moved with the fetches (they describe the gather, not a check).
+    `escape_url` is reached via a call-time bridge import from `psh._legacy`
+    (`# noqa: PLC0415`, D-i6-2 precedent) — **I12 obligation: replace with a
+    module-level `from psh.render import escape_url` when I12 moves it there.**
+  - **Generic checks → `check/wordpress/`** (Tier 2, born gated): `papc.py`,
+    `sessions.py`, `ocp.py`, `favicon.py`, four `site_post_gather` hooks registered
+    PAPC → sessions → OCP → favicon (D-i9-5) under `[Check.wordpress].enabled`
+    (**default true**, D-i8-6 shape; documented in the sample toml). `ocp`/`favicon`
+    probe via `sc.wp_eval`, build failure notices via `sc.wp_error`, and rebind
+    `site_context["wp_smell"]` on non-fatal stderr (D-i9-3). The favicon notice body's
+    un-gated its.umich.edu links moved verbatim (Invariant 8; recorded in CLAUDE.md's
+    still-hardcoded-U-M list, the I8 check/pantheon precedent).
+  - **U-M checks → `check/umich/`**: `oidc_login.py` + `hummingbird.py`, two
+    `site_post_gather` hooks registered after `cloudflare_cms` under the existing
+    `[UMich].enabled` gate.
+  Notice-dict literals moved byte-verbatim (extracted-block diff evidence in the task
+  reports; every difference is a named, sanctioned substitution). All moved notices
+  keep the legacy dict form — several carry extra csv fields (`not-installed,{name}`,
+  `turned-off,{name}`), so `Notice`-class adoption stays deferred (LEDGER I3 → I10/I12).
+
+- **CAMPAIGN.md §8 AMENDMENT (D-i9-4), applied in this closing commit:** the notice-csv
+  *values* row gains "I9 (wp-smell precedence when theme-list and OCP-probe stderr
+  co-occur without favicon stderr — see LEDGER I9)". The smell overwrite order changed
+  from version → plugins → OCP → themes → favicon (inline) to version → plugins →
+  themes (gather) → OCP → favicon (hooks); the final `wp_smell` — embedded in the
+  `wp-smell` notice csv — differs ONLY when theme-list and OCP-probe stderr are both
+  non-empty and favicon stderr is empty (today themes won; after I9 OCP wins). In
+  practice wp-cli stderr is identical across a run's calls, making the divergent case
+  value-identical too; exact preservation would need per-source smell slots §4's fixed
+  key set does not admit. The new precedence is pinned deliberately by
+  `test_ocp_stderr_beats_earlier_theme_smell_when_favicon_clean` (Task 2).
+
+- **D-i9-6 gating change (deliberate, this is the record):** the umich-oidc-login and
+  Hummingbird-fork checks previously ran **un-gated** — a non-U-M run with
+  `umich-oidc-login` installed got U-M-specific advice. After I9 they run only when
+  `[UMich].enabled` (proof: `test_umich_disabled_registers_neither_wp_check`). For a
+  non-U-M run the `umich-oidc-login-reinstall`/`unsupported-turned-off`/`unsupported`
+  notices and csv rows no longer occur — NOT a §8 csv-value change (rows appear/
+  disappear with config, the cachecheck precedent); zero golden impact (goldens run
+  umich-disabled and their fixtures fire neither check). Invariant 3 moves in its
+  intended direction.
+
+- **D-i9-7 ordering as shipped:** post-I9 `site_post_gather` registration order is
+  `pantheon.updates`, `pantheon.php_eol`, `umich.cloudflare_cms`, `umich.oidc_login`,
+  `umich.hummingbird` (module name is `hummingbird`, not the SPEC sketch's
+  `hummingbird_fork`; hook name `check.umich.hummingbird.check_hummingbird_fork`),
+  then `wordpress.papc`, `wordpress.sessions`, `wordpress.ocp`, `wordpress.favicon` —
+  no DAG edges among them, so registration order holds. The six moved checks' notices
+  are now added during the phase (after `pantheon.*`/`cloudflare_cms` output) and the
+  U-M pair precedes the wordpress four (inline order was PAPC, sessions, oidc, OCP,
+  hummingbird, favicon). Equal-severity co-occurring notices shift within-tier render
+  and `-notices.csv` row order; content/keys/shape unchanged (§8 structure bar holds).
+  Zero golden impact, proven (SPEC §6 + empty snapshot diff). Between Tasks 2 and 3 an
+  interim state existed (wordpress hooks in-phase, U-M pair still inline); it resolved
+  at Task 3 and never shipped outside the increment.
+
+- **Contract/config/sc additions:** `CONTRACT["site_post_gather"]` += `add_on_updates`
+  (list of pending add-on-update dicts, plugins then themes in list order; `[]` when
+  none/not that framework/gather failed; stuffed as the SAME list object `main()`'s B39
+  table still reads) and `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when
+  none; **`wp_smell` MAY be rebound in place during the phase** by
+  `check.wordpress.ocp`/`check.wordpress.favicon` — the one sanctioned
+  mutate-during-phase key; hooks do NOT declare `produces: ['wp_smell']`, which would
+  be a duplicate-producer fatal). `stuff_gather_contract` grew the four params; B48's
+  `build_smell_notices` call repoints to the `site_context` reads (B39 keeps reading
+  the local — same object, asymmetry dissolves at I10). `[Check.wordpress]` (`enabled`,
+  default true) added to the sample toml. `sc.wp_eval`/`sc.wp_error` façade lines
+  added (D-i9-9; `sc.wp` deliberately NOT added — no relocated check calls `wp()`),
+  pinned by `test_documented_sc_facade_names_exist`.
+
+- **Deviations / prediction corrections (PD#14 — real tool output vs. SPEC §5/§7):**
+  1. **T203 did NOT fire in `psh/gather.py`** — the diagnostics use `rich.pretty.pprint`
+     (what the inline code used; SPEC §3's "stdlib `pprint`" was wrong on that name),
+     which T203 (stdlib-only) does not cover; pre-added noqas were RUF100-flagged and
+     removed. This exposed an **I8 silent divergence**: `check/pantheon/updates.py` had
+     imported stdlib `pprint` where inline B38 used `rich.pretty.pprint`, changing the
+     non-list error path's diagnostic rendering — **fixed here** (`d5c4bf8`: rich
+     import restored, unused `noqa: T203` dropped, `ruff-broad` clean,
+     `test_check_pantheon.py` 14 passed).
+  2. `C901` + `PLR0912` fired on `gather_wordpress` (noqa'd, moved verbatim);
+     `PLR0915` did NOT (under threshold). Unpredicted: `PLR0913` on
+     `check_wordpress_plugin` (noqa — signature unchanged is a requirement), `E713`
+     (`not "status" in plugin` — fixed in place, the D-i8 disposition), `PERF401` on
+     the theme add-on loop (noqa, verbatim move). `PLC0415` fired as predicted but the
+     brief's single-line noqa tripped `I001`; the I6 two-line precedent form was used.
+  3. **F541 fired in Task 2** on four placeholder-free single-line notice literals
+     (SPEC §5 predicted none) — initially noqa'd citing Invariant 8; review found the
+     citation wrong (Invariant 8 governs column-0 triple-quoted literals) and the fix
+     (`0873c3a`) dropped the extraneous f-prefixes instead (behavior-identical, I6/I8
+     precedent). Task 3's newly-gated files: `I001` fixed, an unused
+     `import script_context as sc` in `oidc_login.py` removed (F401 — the moved body
+     uses no `sc.*`), `SIM102` noqa'd (collapsing would re-indent a byte-locked dict).
+  4. **SPEC §7 expected-value corrections:** through the gateway seam `wp_eval` always
+     returns a str, so a fatal version fetch yields `""` (its stripped stdout), NOT
+     `"unknown"` — the `"unknown"` fallback moved verbatim but is unreachable for
+     WordPress (Drupal's `"unknown"` on failure is real); and a fatal
+     `wordpress_network_url` yields `("", "")`, not `(None, "")` — `main()` then sets
+     `site_url = ""`, exactly the old inline behavior. Tests pin reality; CLAUDE.md's
+     contract-table row now words this accurately.
+  5. **D-i9-10 fixed as specced:** the Hummingbird ATTENTION print now interpolates
+     `site['name']`, not the whole site dict (stdout MAY improve freely, §8); pinned
+     via `recording_console`.
+  6. `semver` orphaned from `_legacy.py` and removed (Task 3, grep-verified);
+     `html`/`pprint` retained (other users). `wp` also stays imported in `_legacy.py` —
+     NOT orphaned (`tests/integration/test_wrappers.py` calls `psh.wp(...)`); it is now
+     a pure re-export there.
+
+- **Ratchet (§13):** `psh/gather.py` + `check/wordpress/` **born gated** (broad ruff +,
+  for `psh/gather.py`, the pyright gate — all clean). `ruff-broad.toml`'s
+  `"check/umich/"` exclude narrowed one level deeper to `"check/umich/sitelens.py"` +
+  `"check/umich/cloudflare_cms.py"` (the I8 enumeration precedent), so the package
+  `__init__.py` and the two new modules are gated; the two legacy siblings stay
+  grandfathered until I14. **Pyright scope UNCHANGED** (`psh/` minus `_legacy.py`) —
+  D-i8-7 inherited (D-i9-8): the checks call runtime-assigned `sc` attributes (now
+  including `sc.wp_eval`/`sc.wp_error`) pyright cannot see on `script_context`.
+  **I10 inherits both decisions.**
+
+- **Discovered tasks (dispositions):**
+  - The I8 stdlib-vs-rich `pprint` divergence in `check/pantheon/updates.py`
+    (Task 4 review finding) → **fixed here** (`d5c4bf8`, §12 fix-now disposition; see
+    Deviations 1).
+  - `stuff_gather_contract`'s docstring still says the `*_version` values are
+    `"unknown"` on a failed fetch — accurate for Drupal, not for WordPress (the `""`
+    reality above); a docs-only closing task cannot edit `psh/modules.py` → **ledgered
+    to I10**, which extends that stuffer's Drupal half anyway. CLAUDE.md's table (the
+    authoritative prose rendering) is already corrected.
+  - `semver.compare` emits a `PendingDeprecationWarning` (semver 3 deprecates the free
+    function for `Version.compare`) — surfaced by the moved oidc check, pre-existing
+    behavior moved verbatim → **post-campaign cleanup** (noted, not a campaign item).
+  - No others — the task reports found no further gaps beyond the ruff dispositions
+    and prediction corrections above.
+
+- **Open questions for I10:** the Drupal gather half mirrors this shape
+  (`gather_drupal` → `WordPressGather`-style NamedTuple; `check_drupal_module` moves to
+  `psh/gather.py` beside its sibling). **B39 (add-on table) and B48 (smell notice
+  bodies) move at I10** with their `site_context` reads already in place — B48 was
+  repointed at I9; B39 still reads the `add_on_updates` local, which is the same object
+  the stuffer publishes, so the repoint is free when it becomes a hook. The
+  `escape_url` bridge in `psh/gather.py` is an **I12 obligation** (module-level
+  `psh.render` import when it moves). The **pyright-scope decision (D-i8-7/D-i9-8) is
+  inherited**. `Notice`-adoption for extra-csv notices remains I10/I12. The
+  `stuff_gather_contract` docstring correction above is I10's. drush/composer smells:
+  `drush_smell`/`composer_smell` are published but still fed only by `main()`'s inline
+  Drupal/composer code — I10 decides whether its relocated checks get the same
+  sanctioned-rebind treatment as `wp_smell` (analyze the D-i9-4 way if the overwrite
+  order changes).

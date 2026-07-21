@@ -267,7 +267,7 @@ scope; (2) follow `prompts/implementation-standards.md` (subagent-driven, test-f
 |---|---|---|
 | Rendered emails (4 goldens) | NEVER change (byte-identical) | end of campaign |
 | `-results.json` / `-notices.csv` / `-run.json` structure (keys, row shape) | NEVER change | end of campaign |
-| Notice csv *values* | MAY change only in I1 (named bug fixes), I12 (scheduled B51 deletion), and I7 (`its-recommends-plan` savings-field format, D-i7-5 — amendment) | — |
+| Notice csv *values* | MAY change only in I1 (named bug fixes), I12 (scheduled B51 deletion), I7 (`its-recommends-plan` savings-field format, D-i7-5 — amendment), and I9 (wp-smell precedence when theme-list and OCP-probe stderr co-occur without favicon stderr — see LEDGER I9) | — |
 | stdout / console / error messages | MAY improve freely | — |
 | Config: existing keys | NEVER break | I14 (renames with migration table) |
 | Config: new keys | MUST land in final schema shape | — |
