@@ -462,6 +462,8 @@ sc.check_drupal_module = check_drupal_module
 sc.umich_enabled = umich_enabled
 sc.cloudflare_enabled = cloudflare_enabled
 sc.terminus = terminus      # check packages: Pantheon calls (e.g. domain:dns) go through this
+sc.wp_eval = wp_eval        # check packages: WP-CLI eval probes (check/wordpress ocp, favicon)
+sc.wp_error = wp_error      # check packages: WP command-failure notices
 sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
 sc.db_engine_args = db_engine_args  # plugin/umich/portal.py: ONE URL builder, ONE set of pool
                                     # settings for every database this program connects to
@@ -1429,7 +1431,6 @@ def main() -> None:
             main_fqdn = facts.main_fqdn
             custom_domains = facts.custom_domains
             primary_domain = facts.primary_domain
-            fqdns_not_behind_cloudflare = facts.fqdns_not_behind_cloudflare  # used by favicon check
             if isinstance(domains, dict):
                 if len(custom_domains) == 0:
                     site_context.add_notice(
@@ -1605,26 +1606,8 @@ def main() -> None:
                     wp_smell = errors
                 if sc.options.verbose:
                     pprint(plugins)
-                site_context.add_notices(
-                    check_wordpress_plugin(
-                        site["name"],
-                        plugins,
-                        "pantheon-advanced-page-cache",
-                        "Pantheon Advanced Page Cache",
-                        "https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin",
-                        "Needed for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
-                    )
-                )
-                site_context.add_notices(
-                    check_wordpress_plugin(
-                        site["name"],
-                        plugins,
-                        "wp-native-php-sessions",
-                        "Native PHP Sessions",
-                        "https://docs.pantheon.io/guides/php/wordpress-sessions#install-wordpress-native-php-sessions-plugin",
-                        "Strongly recommended to ensure PHP sessions work correctly on Pantheon.",
-                    )
-                )
+                # The PAPC and native-PHP-sessions plugin checks moved to
+                # check/wordpress/papc.py and check/wordpress/sessions.py (site_post_gather hooks).
                 # The umich-cloudflare plugin check moved to check/umich/cloudflare_cms.py
                 # (site_post_gather hook).
                 if isinstance(plugins, list):
@@ -1731,37 +1714,8 @@ the OIDC buttons/links.
 """,
                                     }
                                 )
-                        # Special check for Object Cache Pro upgrade, see https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config
-                        if p["name"] == "object-cache-pro" and p["status"] != "inactive":
-                            # This isn't a plugin, but here is a good place to check for it.
-                            ocp_config, errors, fatal = wp_eval(
-                                live_site,
-                                'echo (defined("WP_REDIS_CONFIG") && isset(WP_REDIS_CONFIG["analytics"]["persist"]) && WP_REDIS_CONFIG["analytics"]["persist"])? "true": "false";',
-                            )
-                            if fatal or ocp_config is None:
-                                site_context.add_notices(
-                                    wp_error(
-                                        site["name"],
-                                        "ocp-config-check",
-                                        f"Unable to check OCP configuration for {site['name']}.",
-                                        errors,
-                                    )
-                                )
-                            elif errors != "":
-                                wp_smell = errors
-                            if isinstance(ocp_config, str) and ocp_config.startswith(
-                                "true"
-                            ):
-                                site_context.add_notice(
-                                    {
-                                        "type": "alert",
-                                        "icon": "&#x1F6A8;",  # police car light
-                                        "csv": f"{site['name']},ocp-config-fix-needed",
-                                        "short": "Fix Object Cache Pro configuration",
-                                        "message": f'<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>',
-                                        "text": f"Please fix this site's Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config",
-                                    }
-                                )
+                        # The Object Cache Pro configuration check moved to
+                        # check/wordpress/ocp.py (site_post_gather hook).
                     # Special check for our fork of Hummingbird (version number contains 'umich')
                     name = "hummingbird-performance"
                     display_name = "UMich Hummingbird"
@@ -1842,37 +1796,8 @@ plugin and remove {display_name}.
                                     "new_version": t["update_version"],
                                 }
                             )
-                # This isn't a plugin, but here is a good place to check for it.
-                favicon, errors, fatal = wp_eval(
-                    live_site, 'echo is_file("favicon.ico") ? "true": "false";'
-                )
-                if fatal or favicon is None:
-                    site_context.add_notices(
-                        wp_error(
-                            site["name"],
-                            "favicon-check",
-                            f"Unable to check for <code>/favicon.ico</code> file for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    wp_smell = errors
-                sc.debug(f"{site['name']} has a favicon.ico file: {favicon}")
-                if (
-                    isinstance(favicon, str)
-                    and favicon.startswith("false")
-                    and len(fqdns_not_behind_cloudflare) > 0
-                ):
-                    site_context.add_notice(
-                        {
-                            "type": "warning",
-                            "icon": "&#x26A0;",  # warning sign
-                            "csv": f"{site['name']},no-favicon",
-                            "short": "add favicon.ico file",
-                            "message": f'<p><a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Put this site behind Cloudflare</a> or add a <a href="https://en.wikipedia.org/wiki/Favicon"><code>/code/favicon.ico</code> file</a> to lower Pantheon visitor numbers and increase the site\'s traffic capacity.</p>',
-                            "text": f"Put this site behind Cloudflare\n<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>\nor add a /code/favicon.ico file\n<https://en.wikipedia.org/wiki/Favicon>\nto lower Pantheon visitor numbers and increase the amount of traffic the site can handle at any time.",
-                        }
-                    )
+                # The favicon.ico presence check moved to check/wordpress/favicon.py
+                # (site_post_gather hook).
 
             elif site["framework"].startswith("drupal"):
                 sc.console.print(

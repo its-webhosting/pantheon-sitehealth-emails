@@ -1,0 +1,25 @@
+# serializer version: 1
+# name: test_no_favicon_warning_snapshot
+  '<p><a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Put this site behind Cloudflare</a> or add a <a href="https://en.wikipedia.org/wiki/Favicon"><code>/code/favicon.ico</code> file</a> to lower Pantheon visitor numbers and increase the site\'s traffic capacity.</p>'
+# ---
+# name: test_no_favicon_warning_snapshot.1
+  '''
+  Put this site behind Cloudflare
+  <https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>
+  or add a /code/favicon.ico file
+  <https://en.wikipedia.org/wiki/Favicon>
+  to lower Pantheon visitor numbers and increase the amount of traffic the site can handle at any time.
+  '''
+# ---
+# name: test_no_favicon_warning_snapshot.2
+  'add favicon.ico file'
+# ---
+# name: test_ocp_alert_snapshot
+  '<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>'
+# ---
+# name: test_ocp_alert_snapshot.1
+  "Please fix this site's Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config"
+# ---
+# name: test_ocp_alert_snapshot.2
+  'Fix Object Cache Pro configuration'
+# ---

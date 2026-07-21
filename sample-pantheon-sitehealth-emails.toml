@@ -108,6 +108,10 @@ plan-elite_2m-contract-annual-1            = "Elite 2M"
 enabled = true
 
 
+[Check.wordpress]
+enabled = true          # PAPC, native-PHP-sessions, OCP-config, favicon checks
+
+
 [Database]
 # currently supported database types: sqlite, mysql
 

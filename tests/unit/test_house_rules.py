@@ -160,7 +160,7 @@ def test_only_the_gateway_spawns_a_subprocess():
 # standalone)."  sc.db_engine_args is exposed in the same block (CLAUDE.md § Database).
 SC_FACADE_NAMES = ("escape_url", "check_wordpress_plugin", "check_drupal_module",
                    "umich_enabled", "cloudflare_enabled", "terminus", "fqdn_re",
-                   "db_engine_args", "Notice", "Severity")
+                   "db_engine_args", "Notice", "Severity", "wp_eval", "wp_error")
 
 
 def test_documented_sc_facade_names_exist(reset_sc):
