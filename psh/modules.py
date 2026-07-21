@@ -40,7 +40,7 @@ PHASES = (
     'setup',
     'site_pre',            # first per-site seam (rename of the old 'check' seam; fires
                            # after the traffic gather, just before site_post_traffic --
-                           # no per-phase keys guaranteed)
+                           # guarantees "envs" (campaign I8))
     'site_post_traffic',
     'site_post_dns',
     'site_post_gather',
@@ -181,7 +181,7 @@ def ordered_hooks(hooks_list: list) -> list:
 # declare them.  validate_hooks() reads this to resolve consumed keys (SPEC section 4).
 CONTRACT: dict[str, tuple[str, ...]] = {
     "setup": (),
-    "site_pre": (),
+    "site_pre": ("envs",),
     "site_post_traffic": ("traffic_rows", "start_date", "end_date"),
     "site_post_dns": (
         "domains", "custom_domains", "primary_domain", "main_fqdn",
@@ -275,3 +275,11 @@ def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, sit
     # NOTE: drush pm:list returns a DICT keyed by module name (unlike wp plugin list,
     # which returns a list) -- check_drupal_module requires the dict shape.
     site_context["drupal_modules"] = mods if isinstance(mods, dict) else None
+
+
+def stuff_envs_contract(site_context: MutableMapping[str, Any], envs) -> None:
+    """Publish the site_pre contract key (CONTRACT above).  `envs` is the terminus
+    env:list JSON dict keyed by environment id; main()'s guards ensure envs["live"]
+    exists with an "initialized" key before any site phase fires.  "php_version" is
+    NOT guaranteed present (check/pantheon/php_eol.py tolerates its absence)."""
+    site_context["envs"] = envs

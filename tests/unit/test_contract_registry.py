@@ -23,8 +23,22 @@ def test_contract_phases_match_engine_phases(psh, reset_sc):
 
 def test_contract_empty_phases(psh):
     import psh.modules
-    for phase in ("setup", "site_pre", "run_finish"):
+    for phase in ("setup", "run_finish"):
         assert psh.modules.CONTRACT[phase] == ()
+
+
+def test_site_pre_contract_key(psh):
+    import psh.modules
+    assert psh.modules.CONTRACT["site_pre"] == ("envs",)
+
+
+def test_envs_stuffer_writes_exactly_the_registry_keys(psh, reset_sc):
+    import psh.modules
+    ctx = _fresh_ctx(reset_sc)
+    envs = {"live": {"initialized": True, "php_version": "8.2"}}
+    psh.modules.stuff_envs_contract(ctx, envs)
+    assert set(ctx) - BASE_KEYS == set(psh.modules.CONTRACT["site_pre"])
+    assert ctx["envs"] is envs
 
 
 def test_site_pre_render_contract_keys(psh):

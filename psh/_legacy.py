@@ -253,6 +253,7 @@ from psh.notice import Notice, Severity, registry
 from psh.modules import (
     HookDagError,
     find_modules,
+    stuff_envs_contract,
     stuff_gather_contract,
     stuff_traffic_contract,
     validate_hooks,
@@ -1500,6 +1501,7 @@ and to find out what went wrong:
 
             results = load_site_traffic(db_session, site, start_date, end_date)
 
+            stuff_envs_contract(site_context, envs)
             sc.invoke_hooks("site_pre", site_context)
 
             # Per-phase data contract (see CLAUDE.md "Per-site report pipeline"): the traffic
