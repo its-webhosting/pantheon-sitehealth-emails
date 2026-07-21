@@ -663,3 +663,110 @@ gates, 27 snapshots; four goldens byte-identical across the increment
   `from psh.plans import overage_blocks` once `overage_blocks` lands in `psh/plans.py`)
   **plus** LEDGER I1's carried items for I7 (B47 downgrade-path behavior decision; the
   `its-recommends-plan` comma-in-csv issue).
+
+## I7 — plans-layer move + D7 (2026-07-21, commits `b74b5a6`, `641db2f`, `24c5892`, `1d32b9f`, `8053f8e`, `15fb36d` + closing docs commit)
+
+Spec/plan: `development/2026-07-20-mod-I7-plans/` (`SPEC.md` §9 carries the pasted
+acceptance; task reports + reviews under `.superpowers/sdd/`, incl. the whole-branch
+review at `i7-final-review.md` and its fix report). Four per-task code commits + one
+docs-fix commit + one final-review fix commit, each green, plus this closing docs commit.
+Full suite at close **including the live tier** (Terminus credentials present) =
+**810 passed / 1 skipped**, all three gates, 27 snapshots; four goldens byte-identical
+across the increment (`git diff 3195c81 -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** exactly the §3.1 `psh/plans.py` row — `cost_table_columns`,
+  `overage_blocks`, `contract_year_end`, `plan_costs`, `build_plan_over_time`, plus the
+  I1-extracted `build_plan_recommendation_notice` — into the new `psh/plans.py` (gated
+  from birth), re-imported into `psh/_legacy.py` (I2/I3/I5/I6 pattern). **New:**
+  `PlanInfo`/`PlanCatalog` (§6's I7 type; `from_config` performs B12's `"-"`→`None`
+  normalization mutating the config sub-dict in place, carries B9's overage constants as
+  fields — the two B9 reads stay verbatim in `main()` per §3.3 and feed `from_config`),
+  `resolve_plan_name` (B17 body incl. the Elite check as its early return; `main()`
+  keeps `continue` + tail inits), `recommend_plan` + frozen `PlanRecommendation` (the
+  B47 core; fields `months_until_recommendations`/`median_visitors`/`cost_same`/
+  `costs_median`/`costs_best`/`cost_table_rows`/`current_plan`/`recommended_plan`/both
+  indexes/`savings`/`estimate_start_date`/`estimate_end_date`/`savings_entry` — `main()`
+  unpacks and appends `savings_entry` to `site_savings`), and `stuff_plans_contract`.
+  **D7 shipped:** the recommendation flow runs before the `--only-warn` gate, so
+  warning-only runs emit `its-recommends-plan` csv rows (the B42 TODO retired).
+  **D-i6-2 discharged:** `psh/traffic.py` now has a module-level
+  `from psh.plans import overage_blocks`; the call-time bridge and its docstring note
+  are gone.
+
+- **CRITICAL found by the whole-branch review, fixed in `15fb36d` (design
+  human-approved).** SPEC D-i7-6 originally argued the reorder safe on the claim that
+  nothing writes `pantheon_overage_protection` in the per-site flow — **false**:
+  `build_traffic_table_rows` (B46) persists+commits that window's OP rows (BLOCKMAP's
+  B46 row said "DB read + commit"; corrected this commit to say read/WRITE). The initial
+  D7 reorder therefore put recommend_plan's op-window read before the write: a
+  first-of-month full report rendered different costs than a re-run (empirically:
+  `$2,005.00` then `$1,925.00`; baseline `$1,925.00` both). Fix: `main()` hoists
+  `first_plan_day`/`last_plan_day`/`site_plan_start` and the whole B46 block above
+  `recommend_plan` on both paths, restoring write-commit-then-read; full-report output
+  back to baseline-identical and deterministic. Consequences, both deliberate:
+  `--only-warn` now also runs the table build and persists OP rows (it already wrote
+  traffic rows), making its recommendation values equal the full report's — which moved
+  the only-warn e2e savings pin `2755.00`→`4995.00` (re-derived from a **baseline**
+  full-report run at the same seed: `$4,995.00`/`Performance Large`; the 2755.00 value
+  was an artifact of the OP-less simulation branch, so the new pin is stronger, not
+  weakened). New instrument (PD#14):
+  `test_recommendation_is_deterministic_across_reruns` renders twice and pins the
+  OP-affected `$1,925.00` cell — shown red on the broken ordering before the fix.
+
+- **Deviations from CAMPAIGN.md:** none of architecture; SPEC-level notes: D-i7-1
+  (bodies move, B9 reads/loop control/tail inits stay — the I6 D-i6-1 reading of the
+  §11-vs-§3.3 tension), `site_name`→`site["name"]` in two moved error prints
+  (identical value, I6 precedent), and the SPEC's own two corrected spots (D-i7-1
+  prose vs the shipped D-i7-3 seam; D-i7-6's false no-writes claim + stale diagram,
+  both rewritten to the shipped design).
+
+- **Sanctioned csv change (§8 amendment, applied in `1d32b9f`):** `its-recommends-plan`'s
+  savings field is now `{savings:.2f}` (comma-free, fixed 5-column row; HTML/text bodies
+  keep `{savings:,.2f}`). §8's row now names I7 alongside I1/I12. LEDGER I1 Obs. 5
+  discharged; the `Notice`-class adoption route for this notice (LEDGER I3 candidates)
+  is NOT taken — extra csv fields remain, dict form stays until the §6 csv-field
+  amendment (candidates now I10/I12).
+
+- **D-i7-4 (LEDGER I1 Obs. 3 discharged):** no owner-facing downgrade notice (new
+  report content is a §1 non-goal → README TODO added); the non-Basic-downgrade
+  `site_savings` omission IS fixed (stdout-only surface): every surviving downgrade
+  recommendation now produces a savings entry, shown red-first at the seam.
+
+- **Contract/config/sc additions:** `CONTRACT["site_pre_render"]` gains
+  `current_plan`, `recommended_plan`, `plan_costs` (`{"same"/"median"/"best": {plan:
+  float}}`, `{}` when ≤4 in-window months), `savings` — stuffed by `main()` from the
+  `PlanRecommendation` just before the phase fires; still no consumer (the seam is now
+  key-bearing). CLAUDE.md table row updated + pinned by `test_contract_registry.py`.
+  No config keys; no new `sc` façade names.
+
+- **Ratchet (§13):** `psh/plans.py` born gated (broad ruff + pyright standard, 0
+  findings after dispositions). Measured dispositions: `SIM118` (`.keys()` iteration →
+  `.items()`-free `in`-form rewrite), `PLR1730` (`if`-clamp → `max()`), 2× `PLR2004`
+  noqa (magic thresholds, moved verbatim), `PLR0913`+`C901`/`PLR0912` noqa on
+  `plan_costs`/`recommend_plan` (pinned signature / verbatim move), 2×
+  `min(d, key=d.get)` → `key=lambda plan: d[plan]` (pyright overload; provably
+  identical selection + tie-break), `costs_best = {}` prologue init (NameError guard on
+  the ≤4-month return — mirrors the sibling inits), and the three SPEC-mandated
+  annotations. SPEC §5's predicted `PLR0915`/`FBT001` did NOT fire (recorded, no noqa
+  added). Nothing removed from `ruff-broad.toml` `extend-exclude` (fresh gated file,
+  I2–I6 precedent; `psh/_legacy.py` stays grandfathered).
+
+- **Discovered tasks (dispositions):**
+  - **BLOCKMAP B46 mislabel** ("DB read + commit" for a unit that WRITES OP rows) —
+    the root of the Critical above; **fixed this commit** in BLOCKMAP.md (correction
+    note on the B46 row), so no later increment re-derives the false premise.
+  - **Dead tail inits in `psh/_legacy.py`** (post-rec-unpack): `site_recommended_plan`
+    and both index inits are now always overwritten before use on every path that
+    reaches the template — dead stores. **`site_current_plan` is NOT dead** (the
+    empty-`plan_on_day` guard and the annual-billing blocks read it). Left in place
+    (plan-mandated verbatim preservation); → **I13** deletes the three dead lines with
+    `main()`'s final form — and only those three.
+  - `import copy` orphaned in `_legacy.py` by the B47 move → removed (the I3
+    only-what-this-change-orphans rule; `copy` now imported by `psh/plans.py`).
+- **Open questions for I8:** proceed per CAMPAIGN.md §11 row I8 (`check/pantheon/` +
+  `[Check.pantheon]` config section — the first `[Check.*]` section, §5 shape; `envs`
+  contract key at `site_pre`; B19/B21/B38/B41) **plus** LEDGER I1's carried item for
+  I8: the `php_version < "8.2"` string comparison and the KeyError when the key is
+  absent (Obs. 2) — B41 moves into `check/pantheon/` this increment, so fix it there
+  test-first. Note the php-eol builder (`build_php_eol_notice`) still lives in
+  `psh/_legacy.py` (I1 extraction) and travels to `check/pantheon/` at I8.
