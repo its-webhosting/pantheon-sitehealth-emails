@@ -145,10 +145,13 @@ regions keep reading the same object — a copy would fork two views of one conf
 `resolve_plan_name(site)` (the B17 Elite-SKU lookup, `None` on a transient Terminus
 failure so `main()` can `continue`, `sys.exit` preserved on a missing/unknown SKU), and
 `recommend_plan(...)` (the B47 recommendation core, returning a frozen
-`PlanRecommendation` — `current_plan`/`recommended_plan`/`plan_costs` fields/`savings`/
-`savings_entry`, the last appended to `main()`'s `site_savings` accumulator when not
-`None` — and adding the upgrade notice to `site_context` itself, the I6 flow-function
-pattern) plus `stuff_plans_contract()` (the `dns_classify.stuff_dns_contract` producer-
+`PlanRecommendation` — `current_plan`/`recommended_plan`/`cost_same`/`costs_median`/
+`costs_best`/`cost_table_rows`/`savings`/`savings_entry` fields, the last appended to
+`main()`'s `site_savings` accumulator when not `None` — and adding the upgrade notice to
+`site_context` itself, the I6 flow-function pattern) plus `stuff_plans_contract()` (which
+`main()` calls with the `cost_same`/`costs_median`/`costs_best` fields nested into the
+single `plan_costs` **contract key** — `{"same": ..., "median": ..., "best": ...}` — not a
+`PlanRecommendation` field of that name) (the `dns_classify.stuff_dns_contract` producer-
 module precedent, publishing the four `site_pre_render` contract keys below) — all
 re-imported by `psh/_legacy.py`, same import-back pattern as the other moved modules, so
 `main()`'s call sites and the `psh.<name>` test references resolve unchanged. The last is
