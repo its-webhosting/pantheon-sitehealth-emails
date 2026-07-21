@@ -3,7 +3,8 @@ upstream:updates:list for the live environment itself (the check-specific-fetch 
 CAMPAIGN.md section 3.2) and emits an age-tiered notice with the update table."""
 
 import datetime
-from pprint import pprint
+
+from rich.pretty import pprint
 
 import script_context as sc
 
@@ -178,4 +179,4 @@ support through either Pantheon or ITS.
         sc.console.print(
             f":exclamation: [bold red] ERROR: unable to check updates for {site['name']}"
         )
-        pprint(updates)  # noqa: T203 -- existing operator diagnostic on the non-list error path (verbatim B38)
+        pprint(updates)
