@@ -28,7 +28,7 @@ from psh.gateway import wp, wp_error, wp_eval
 
 
 class WordPressGather(NamedTuple):
-    wordpress_version: str  # "unknown" when the fetch failed (never None here)
+    wordpress_version: str  # "" when the fetch failed (fatal wp_eval stdout; the "unknown" fallback below is unreachable through the gateway)
     plugins: object         # raw wp plugin list result (list | None | junk)
     add_on_updates: list    # plugin updates then theme updates, list order
     wp_smell: str           # last-wins stderr across version/plugins/themes; "" if none

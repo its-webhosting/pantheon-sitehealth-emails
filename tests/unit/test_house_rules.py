@@ -155,7 +155,8 @@ def test_only_the_gateway_spawns_a_subprocess():
 
 # CLAUDE.md § Plugin / check module system: "the helpers they need are exposed as sc
 # attributes near the cloudflare_enabled() def (sc.escape_url, sc.check_wordpress_plugin,
-# sc.check_drupal_module, sc.umich_enabled, sc.cloudflare_enabled, sc.terminus, sc.fqdn_re) --
+# sc.check_drupal_module, sc.umich_enabled, sc.cloudflare_enabled, sc.terminus, sc.fqdn_re,
+# and since I9 sc.wp_eval/sc.wp_error -- needed by the relocated OCP/favicon checks) --
 # extend that block for new ones (tests monkeypatch these when loading check modules
 # standalone)."  sc.db_engine_args is exposed in the same block (CLAUDE.md § Database).
 SC_FACADE_NAMES = ("escape_url", "check_wordpress_plugin", "check_drupal_module",
