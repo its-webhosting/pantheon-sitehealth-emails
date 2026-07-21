@@ -3,10 +3,15 @@ dumping warnings, so warning-only runs surface its-recommends-plan rows.
 
 At the default seed volume (median 35,960) the cost model lands in the Basic-downgrade
 guardrail (no notice -- see test_recommendation_e2e.py), so this seeds 6x: median 215,760,
-where Performance Large's cost (best 6,920) beats current Performance Small (cost_same
-4,165 is beaten as best 8,005) -> upgrade notice, savings |4165 - 6920| = 2755.00.
-Derivation in the I7 PLAN.md (Task 3); verify by hand against minimal.toml before
-adjusting any pinned value here.
+where Performance Large is the recommended upgrade over Performance Small.
+
+The savings pin is 4995.00.  Since the campaign I7 final-review fix the traffic-table build
+runs before the recommendation on EVERY path (it persists+commits this window's overage-
+protection rows, which recommend_plan then reads back), so --only-warn computes the same
+OP-aware recommendation the full report does -- verified consistent ($4,995.00 in the
+rendered report) and deterministic (identical across re-runs in the same workdir).  A
+missing OP-write-before-read once made --only-warn use the simulation branch (savings
+2755.00), diverging from the full report; do not revert the pin to that value.
 """
 import pytest
 
@@ -44,9 +49,9 @@ def test_only_warn_includes_plan_recommendation(tmp_path):
     assert proc.returncode == 0, proc.stderr
     row = next(l for l in proc.stdout.splitlines()
                if f"{E2E_SITE},its-recommends-plan," in l)
-    # D-i7-5: fixed 5-column row, comma-free savings (2,755.00 would split the field).
+    # D-i7-5: fixed 5-column row, comma-free savings (4,995.00 would split the field).
     assert row.strip() == (
-        f"{E2E_SITE},its-recommends-plan,Performance Small,Performance Large,2755.00"
+        f"{E2E_SITE},its-recommends-plan,Performance Small,Performance Large,4995.00"
     )
     # --only-warn still renders and sends nothing.
     assert not (work / "build" / f"{E2E_SITE}.html").exists()

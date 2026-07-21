@@ -324,8 +324,6 @@ def recommend_plan(  # noqa: C901, PLR0912, PLR0913, PLR0915 -- moved verbatim (
     site_recommended_plan_index = 0
     costs_best = {}  # set only on the >4-month path; kept for the PlanRecommendation return
 
-    # Load the overage protection data we need for this site and date range:
-
     # Compare current plan cost to other plan costs
 
     median_visitors = 0
@@ -345,9 +343,9 @@ def recommend_plan(  # noqa: C901, PLR0912, PLR0913, PLR0915 -- moved verbatim (
 
         # One ranged query for the whole window, snapshotted as plain data; plan_costs()
         # then does ~91 dict lookups instead of ~91 committed round trips to a remote
-        # RDS.  Safe because nothing writes to pantheon_overage_protection between these
-        # plan_costs() reads and build_traffic_table_rows()' commit, which now runs later
-        # in main() (after the --only-warn gate).
+        # RDS.  Safe because nothing writes to pantheon_overage_protection between
+        # build_traffic_table_rows()' commit (which main() now runs before this function,
+        # above the recommendation) and these plan_costs() reads.
         overage_protection = db_retry(
             db_session,
             lambda: load_overage_protection_window(

@@ -9,6 +9,8 @@ bug).  This module adds:
   * a >4-month run (seed six in-window months) that actually exercises the extracted plan_costs
     cost model end to end — a path no other e2e reaches.
 """
+import re
+
 import pytest
 
 from conftest import (
@@ -33,6 +35,10 @@ def _render(work):
          "--config", str(MINIMAL_CONFIG)],
         cwd=work,
     )
+
+
+def _cost_figures(html):
+    return re.findall(r"\$[\d,]+\.\d{2}", html)
 
 
 def test_new_site_shows_not_enough_data(rendered_report):
@@ -68,3 +74,34 @@ def test_recommendation_path_exercises_plan_costs(tmp_path):
     assert "35,960 per month" in html  # median_visitors returned by plan_costs
     rec_line = next(l for l in txt.splitlines() if l.strip().startswith("Recommended plan:"))
     assert "Performance Small" in rec_line
+
+
+def test_recommendation_is_deterministic_across_reruns(tmp_path):
+    """Regression guard (campaign I7 final review): build_traffic_table_rows persists+commits
+    the pantheon_overage_protection rows, and recommend_plan reads them back, so the write
+    MUST run before the read on every path.  When it didn't, the first render of a report --
+    with no prior OP rows in the DB -- computed a different Performance Small "Same Traffic
+    Cost" cell ($2,005.00: two overage blocks charged instead of waived) than every later
+    render of the identical command ($1,925.00, once run 1's write had landed), so the same
+    monthly run produced different owner emails run-to-run.  PD#14: this instrument fails RED
+    on exactly that nondeterminism (first-run $2,005.00 != second-run $1,925.00)."""
+    work = make_workdir(tmp_path)
+    run_program(["--create-tables", "--config", str(MINIMAL_CONFIG)], cwd=work)
+    for year, month in _SIX_MONTHS:
+        seed_traffic(work / "test.db", year=year, month=month)
+
+    proc1 = _render(work)
+    html1 = (work / "build" / f"{E2E_SITE}.html").read_text()
+    proc2 = _render(work)
+    html2 = (work / "build" / f"{E2E_SITE}.html").read_text()
+
+    assert proc1.returncode == 0, proc1.stderr
+    assert proc2.returncode == 0, proc2.stderr
+    # The OP-affected Performance Small "Same Traffic Cost" cell: present and identical on both
+    # runs.  $2,005.00 was the broken first-run value (blocks charged, not waived).
+    assert "$1,925.00" in html1
+    assert "$1,925.00" in html2
+    assert "$2,005.00" not in html1
+    assert "$2,005.00" not in html2
+    # The whole cost table is run-independent.
+    assert _cost_figures(html1) == _cost_figures(html2)

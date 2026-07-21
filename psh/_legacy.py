@@ -2608,10 +2608,46 @@ A variety of support options are available.
             # Estimate the visits for the last month if it isn't over yet:
             estimate = estimate_month_visits(visits_by_month, dates, last_day, end_date.day)
 
-            # Load the overage protection data and compare current-plan cost to the other
-            # plans (psh.plans.recommend_plan).  Runs before the --only-warn gate so
-            # warning-only runs include the plan recommendation (D7, campaign I7).
+            first_plan_day = days[0]
+            last_plan_day = days[-1]
             site_plan_start = plan_over_time[0]["start"].replace(day=1)
+
+            sc.debug(f"[bold magenta]=== Creating the traffic table:")
+
+            # TODO: for upgrade/downgrade and new plan columns, add an icon and a colored background so people can
+            #   see at a glance if it's more or less than 50% of the time.
+
+            # TODO: If Performance small and below Basic upgrade + no New Relic + No Solr + No Redis + mem usage low --> Switch to Basic
+
+            traffic_table_rows = db_retry(
+                db_session,
+                lambda: build_traffic_table_rows(
+                    db_session,
+                    site,
+                    visits_by_month,
+                    plan_on_day,
+                    plan_info,
+                    site_plan_start,
+                    first_plan_day,
+                    last_plan_day,
+                    start_date,
+                    end_date,
+                    overage_block_size,
+                    overage_block_cost,
+                ),
+                what=f"building the traffic table for {site['name']}",
+                site=site["name"],
+            )
+
+            sc.debug(traffic_table_rows)
+
+            # Build the traffic table (which persists+commits this run's overage-protection
+            # rows) BEFORE the recommendation, so recommend_plan's op-window read sees them --
+            # otherwise the first render of a report, with no prior OP rows, recommends against
+            # a different cost table than every later render (campaign I7 final review).
+            # Then compare current-plan cost to the other plans (psh.plans.recommend_plan),
+            # still before the --only-warn gate so warning-only runs include the recommendation
+            # (D7, campaign I7).
             rec = recommend_plan(
                 db_session,
                 site,
@@ -2641,8 +2677,6 @@ A variety of support options are available.
                 continue
 
             visits_covered_by_month = {}
-            first_plan_day = days[0]
-            last_plan_day = days[-1]
             for month in visits_by_month.keys():
                 ymd = datetime.date.fromisoformat(month + "-15")
                 if ymd < first_plan_day:
@@ -3006,35 +3040,6 @@ A variety of support options are available.
             plt.close(fig)
 
             # TODO: Create SVG chart
-
-            sc.debug(f"[bold magenta]=== Creating the traffic table:")
-
-            # TODO: for upgrade/downgrade and new plan columns, add an icon and a colored background so people can
-            #   see at a glance if it's more or less than 50% of the time.
-
-            # TODO: If Performance small and below Basic upgrade + no New Relic + No Solr + No Redis + mem usage low --> Switch to Basic
-
-            traffic_table_rows = db_retry(
-                db_session,
-                lambda: build_traffic_table_rows(
-                    db_session,
-                    site,
-                    visits_by_month,
-                    plan_on_day,
-                    plan_info,
-                    site_plan_start,
-                    first_plan_day,
-                    last_plan_day,
-                    start_date,
-                    end_date,
-                    overage_block_size,
-                    overage_block_cost,
-                ),
-                what=f"building the traffic table for {site['name']}",
-                site=site["name"],
-            )
-
-            sc.debug(traffic_table_rows)
 
             site_context.add_notices(
                 build_smell_notices(site["name"], wp_smell, drush_smell, composer_smell)
