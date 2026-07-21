@@ -237,12 +237,15 @@ from psh.traffic import (
     update_site_traffic,
 )
 from psh.plans import (
+    PlanCatalog,
+    PlanInfo,
     build_plan_over_time,
     build_plan_recommendation_notice,
     contract_year_end,
     cost_table_columns,
     overage_blocks,
     plan_costs,
+    resolve_plan_name,
 )
 from psh.notice import Notice, Severity, registry
 from psh.modules import (
@@ -1274,19 +1277,15 @@ def main() -> None:
         sc.debug("[bold magenta]=== News:")
         pprint(sc.news)
 
-    for plan in sc.config["Pantheon"]["plan_info"]:
-        upgrade_to = sc.config["Pantheon"]["plan_info"][plan]["upgrade_to"]
-        downgrade_to = sc.config["Pantheon"]["plan_info"][plan]["downgrade_to"]
-        sc.config["Pantheon"]["plan_info"][plan]["upgrade_to"] = (
-            upgrade_to if upgrade_to != "-" else None
-        )
-        sc.config["Pantheon"]["plan_info"][plan]["downgrade_to"] = (
-            downgrade_to if downgrade_to != "-" else None
-        )
-    plan_info = sc.config["Pantheon"][
-        "plan_info"
-    ]  # create an alias for convenience and readability
-    plan_names = list(plan_info.keys())
+    catalog = PlanCatalog.from_config(
+        sc.config["Pantheon"],
+        overage_block_size=overage_block_size,
+        overage_block_cost=overage_block_cost,
+    )
+    # Aliases for readability; the chart (I11) and annual-billing (I12) regions read the
+    # raw normalized dict.
+    plan_info = catalog.plan_info
+    plan_names = catalog.plan_names
 
     end_date = sc.options.date
     end_date_yyyy_mm = end_date.strftime("%Y-%m")
@@ -1381,29 +1380,10 @@ def main() -> None:
             )
             current_site_number += 1
 
-            if site["plan_name"] == "Elite":
-                # Pantheon uses the same display name (but a different SKU) for each Elite plan.
-                site_plan_info, errors, fatal = terminus("plan:info", site["name"])
-                if fatal or site_plan_info is None:
-                    # A transient/undecodable Terminus failure for one site skips that site
-                    # rather than aborting the whole run (consistent with the other per-site
-                    # terminus calls below).
-                    sc.console.print(
-                        f":exclamation: [bold red] ERROR: could not fetch plan info for {site_name}: {escape(errors)}"
-                    )
-                    continue
-                if "sku" not in site_plan_info:
-                    sc.console.print(
-                        f":exclamation: [bold red] ERROR: {site['name']} doesn't have a plan SKU"
-                    )
-                    sys.exit("Bailing out.")
-                plan_sku = site_plan_info["sku"]
-                if plan_sku not in sc.config["Pantheon"]["plan_sku_to_name"]:
-                    sc.console.print(
-                        f":exclamation: [bold red] ERROR: {site['name']} has an unknown plan SKU: {plan_sku}"
-                    )
-                    sys.exit("Bailing out.")
-                site["plan_name"] = sc.config["Pantheon"]["plan_sku_to_name"][plan_sku]
+            plan_name = resolve_plan_name(site)
+            if plan_name is None:
+                continue
+            site["plan_name"] = plan_name
             site_current_plan = site["plan_name"]
             site_recommended_plan = site["plan_name"]
             site_current_plan_index = 0

@@ -3,11 +3,15 @@
 Moved out of the main script at campaign I7 (CAMPAIGN.md section 3.1, development/
 2026-07-20-mod-I7-plans/SPEC.md).
 """
+import dataclasses
 import datetime
+import sys
 
 import numpy as np
+from rich.markup import escape
 
 import script_context as sc
+from psh.gateway import terminus
 
 cost_table_columns = [
     {"name": "plan", "label": "Plan"},
@@ -183,3 +187,89 @@ decreasing soon.
         "message": message,
         "text": text,
     }
+
+
+@dataclasses.dataclass(frozen=True)
+class PlanInfo:
+    """One [Pantheon].plan_info entry, typed (CAMPAIGN.md section 6, campaign I7)."""
+
+    cost: float
+    traffic_limit: int
+    upgrade_at: int
+    upgrade_to: str | None
+    downgrade_to: str | None
+
+
+@dataclasses.dataclass(frozen=True)
+class PlanCatalog:
+    """The typed view over [Pantheon].plan_info plus the two overage constants.
+
+    from_config() performs the B12 "-" -> None normalization MUTATING the plan_info
+    sub-dict in place: main()'s plan_info alias and the chart/annual-billing regions
+    (I11/I12) read the same object, and a copy would fork two views of one config.
+    plan_info/plan_names are the raw views main() aliases; plans is the typed view --
+    its heavy consumers arrive as I11/I12 move their regions (SPEC D-i7-2).
+    """
+
+    plan_info: dict
+    plan_names: list[str]
+    plans: dict[str, PlanInfo]
+    overage_block_size: int
+    overage_block_cost: float
+
+    @classmethod
+    def from_config(cls, pantheon_config: dict, *, overage_block_size: int,
+                    overage_block_cost: float) -> "PlanCatalog":
+        plan_info = pantheon_config["plan_info"]
+        for plan in plan_info:
+            upgrade_to = plan_info[plan]["upgrade_to"]
+            downgrade_to = plan_info[plan]["downgrade_to"]
+            plan_info[plan]["upgrade_to"] = upgrade_to if upgrade_to != "-" else None
+            plan_info[plan]["downgrade_to"] = (
+                downgrade_to if downgrade_to != "-" else None
+            )
+        plans = {
+            name: PlanInfo(
+                cost=float(info["cost"]),
+                traffic_limit=int(info["traffic_limit"]),
+                upgrade_at=int(info["upgrade_at"]),
+                upgrade_to=info["upgrade_to"],
+                downgrade_to=info["downgrade_to"],
+            )
+            for name, info in plan_info.items()
+        }
+        return cls(plan_info=plan_info, plan_names=list(plan_info.keys()), plans=plans,
+                   overage_block_size=overage_block_size,
+                   overage_block_cost=overage_block_cost)
+
+
+def resolve_plan_name(site: dict) -> str | None:
+    """Resolve the billing plan name for a site (B17).
+
+    Pantheon uses the same display name (but a different SKU) for each Elite plan, so an
+    Elite site's real plan comes from `terminus plan:info` via [Pantheon].plan_sku_to_name.
+    Returns None on a transient/undecodable Terminus failure (caller skips the site --
+    loop control stays in main(), SPEC D-i7-1); unknown/missing SKU stays fatal.
+    """
+    if site["plan_name"] != "Elite":
+        return site["plan_name"]
+    site_plan_info, errors, fatal = terminus("plan:info", site["name"])
+    if fatal or site_plan_info is None:
+        # A transient/undecodable Terminus failure for one site skips that site rather
+        # than aborting the whole run (consistent with the other per-site terminus calls).
+        sc.console.print(
+            f":exclamation: [bold red] ERROR: could not fetch plan info for {site['name']}: {escape(errors)}"
+        )
+        return None
+    if "sku" not in site_plan_info:
+        sc.console.print(
+            f":exclamation: [bold red] ERROR: {site['name']} doesn't have a plan SKU"
+        )
+        sys.exit("Bailing out.")
+    plan_sku = site_plan_info["sku"]
+    if plan_sku not in sc.config["Pantheon"]["plan_sku_to_name"]:
+        sc.console.print(
+            f":exclamation: [bold red] ERROR: {site['name']} has an unknown plan SKU: {plan_sku}"
+        )
+        sys.exit("Bailing out.")
+    return sc.config["Pantheon"]["plan_sku_to_name"][plan_sku]
