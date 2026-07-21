@@ -23,3 +23,42 @@
 # name: test_ocp_alert_snapshot.2
   'Fix Object Cache Pro configuration'
 # ---
+# name: test_papc_builder_multiple_installed_snapshot
+  '<p>The <a href="https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin">Pantheon Advanced Page Cache</a> WordPress plugin is installed multiple times.</p>'
+# ---
+# name: test_papc_builder_multiple_installed_snapshot.1
+  '''
+  The Pantheon Advanced Page Cache WordPress plugin
+  <https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin>
+  is installed multiple times.
+  '''
+# ---
+# name: test_papc_builder_multiple_installed_snapshot.2
+  'plugin pantheon-advanced-page-cache installed multiple times'
+# ---
+# name: test_papc_builder_not_installed_snapshot
+  '<p>The <a href="https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin">Pantheon Advanced Page Cache</a> WordPress plugin needs to be installed:</p><p>Needed for automatically clearing Pantheon&#x27;s caches (not Cloudflare&#x27;s) when content is updated.</p>'
+# ---
+# name: test_papc_builder_not_installed_snapshot.1
+  '''
+  The Pantheon Advanced Page Cache WordPress plugin
+  <https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin>
+  needs to be installed: Needed for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.
+  '''
+# ---
+# name: test_papc_builder_not_installed_snapshot.2
+  'install the pantheon-advanced-page-cache plugin'
+# ---
+# name: test_papc_builder_turned_off_snapshot
+  '<p>The <a href="https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin">Pantheon Advanced Page Cache</a> WordPress plugin needs to be activated:</p><p>Needed for automatically clearing Pantheon&#x27;s caches (not Cloudflare&#x27;s) when content is updated.</p>'
+# ---
+# name: test_papc_builder_turned_off_snapshot.1
+  '''
+  The Pantheon Advanced Page Cache WordPress plugin
+  <https://docs.pantheon.io/guides/wordpress-configurations/wordpress-cache-plugin>
+  needs to be activated: Needed for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.
+  '''
+# ---
+# name: test_papc_builder_turned_off_snapshot.2
+  'activate plugin pantheon-advanced-page-cache'
+# ---

@@ -224,6 +224,12 @@ from psh.gateway import (
     wp_error,
     wp_eval,
 )
+from psh.gather import (
+    WordPressGather,
+    check_wordpress_plugin,
+    gather_wordpress,
+    wordpress_network_url,
+)
 from psh.traffic import (
     aggregate_visits_by_month,
     build_traffic_table_rows,
@@ -259,74 +265,6 @@ from psh.modules import (
 )
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
-
-
-def check_wordpress_plugin(
-    site: str,
-    installed_plugins: list,
-    name: str,
-    display_name: str,
-    url: str,
-    reason: str,
-) -> list:
-    notices = []
-    if not isinstance(installed_plugins, list):
-        return notices  # this error should already have been handled by our caller, so skip additional work
-
-    installed = [p for p in installed_plugins if p["name"] == name]
-
-    if len(installed) == 0:
-        sc.console.print(
-            f":exclamation: [bold red] ATTENTION: {site} does not have the {display_name} plugin installed."
-        )
-        notices.append(
-            {
-                "type": "warning",
-                "icon": "&#x26A0;",  # warning sign
-                "csv": f"{site},not-installed,{name}",
-                "short": f"install the {name} plugin",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be installed:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} WordPress plugin\n<{url}>\nneeds to be installed: {reason}",
-            }
-        )
-        return notices
-
-    if len(installed) > 1:
-        sc.console.print(
-            f":exclamation: [bold red] ATTENTION: {site} has more than one {display_name} plugin installed."
-        )
-        notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site},multiple-installed,{name}",
-                "short": f"plugin {name} installed multiple times",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin is installed multiple times.</p>',
-                "text": f"The {display_name} WordPress plugin\n<{url}>\nis installed multiple times.",
-            }
-        )
-
-    plugin = installed[0]
-    if not "status" in plugin or plugin["status"] not in (
-        "active",
-        "active-network",
-        "must-use",
-    ):
-        sc.console.print(
-            f":exclamation: [bold red] ATTENTION: {site} has the {display_name} plugin installed but it is not active."
-        )
-        notices.append(
-            {
-                "type": "warning",
-                "icon": "&#x26A0;",  # warning sign
-                "csv": f"{site},turned-off,{name}",
-                "short": f"activate plugin {name}",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be activated:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} WordPress plugin\n<{url}>\nneeds to be activated: {reason}",
-            }
-        )
-
-    return notices
 
 
 def check_drupal_module(
@@ -1521,26 +1459,11 @@ def main() -> None:
                 site_url = f"https://{main_fqdn}/"
 
             if site["framework"] == "wordpress_network":
-                sc.console.print(
-                    f"[bold magenta]=== Getting WordPress network URL for {site['name']}:"
-                )
-                network_home_url, errors, fatal = wp_eval(
-                    live_site, "echo network_home_url();"
-                )
-                if fatal or network_home_url is None:
-                    site_context.add_notices(
-                        wp_error(
-                            site["name"],
-                            "version-check",
-                            f"Unable to get WordPress network URL for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    wp_smell = errors
-                sc.debug(f"{site['name']} WordPress network URL: {network_home_url}")
-                if isinstance(network_home_url, str):
-                    site_url = network_home_url.strip()
+                network_url, network_smell = wordpress_network_url(site, live_site, site_context)
+                if network_smell != "":
+                    wp_smell = network_smell
+                if network_url is not None:
+                    site_url = network_url
 
             sc.debug(f"Main domain for {site['name']}: {main_fqdn}")
             sc.debug(f"Site URL for {site['name']}:    {site_url}")
@@ -1557,117 +1480,13 @@ def main() -> None:
 
             add_on_updates = []
             if site["framework"].startswith("wordpress"):
-                sc.console.print(
-                    f"[bold magenta]=== Getting WordPress version for {site['name']}:"
-                )
-                wordpress_version, errors, fatal = wp_eval(
-                    live_site, 'require ABSPATH . WPINC . "/version.php"; echo $wp_version;'
-                )
-                if fatal or wordpress_version is None:
-                    site_context.add_notices(
-                        wp_error(
-                            site["name"],
-                            "version-check",
-                            f"Unable to check WordPress version for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    wp_smell = errors
-                sc.debug(f"{site['name']} WordPress version: {wordpress_version}")
-                if not isinstance(wordpress_version, str):
-                    wordpress_version = "unknown"
-                wordpress_version = wordpress_version.strip()
-                site_results[site["name"]] = {
-                    "framework": site["framework"],
-                    "version": wordpress_version,
-                    "plan_name": site["plan_name"],
-                }
-                sc.console.print(
-                    f"[bold magenta]=== Checking WordPress plugins for {site['name']}:"
-                )
-                plugins, errors, fatal = wp(
-                    live_site,
-                    "plugin",
-                    "list",
-                    "--fields=name,status,update,version,update_version,title",
-                )
-                if fatal or plugins is None:
-                    site_context.add_notices(
-                        wp_error(
-                            site["name"],
-                            "plugin-list",
-                            f"Unable to run <code>wp plugin list</code> for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    wp_smell = errors
-                if sc.options.verbose:
-                    pprint(plugins)
-                # The PAPC and native-PHP-sessions plugin checks moved to
-                # check/wordpress/papc.py and check/wordpress/sessions.py (site_post_gather hooks).
-                # The umich-cloudflare plugin check moved to check/umich/cloudflare_cms.py
-                # (site_post_gather hook).
-                if isinstance(plugins, list):
-                    for p in plugins:
-                        if p["update"] == "available":
-                            add_on_updates.append(
-                                {
-                                    "slug": p["name"],
-                                    "name": p["title"],
-                                    "type": "plugin",
-                                    "current_version": p["version"],
-                                    "new_version": p["update_version"],
-                                }
-                            )
-                        if p["status"] == "must-use" and p["name"] != "loader":
-                            sc.console.print(
-                                f"[bold yellow]{site['name']} has must-use plugin:"
-                            )
-                            pprint(p)
-                        # The umich-oidc-login reinstall check moved to
-                        # check/umich/oidc_login.py (site_post_gather hook).
-                        # The Object Cache Pro configuration check moved to
-                        # check/wordpress/ocp.py (site_post_gather hook).
-                    # The UMich Hummingbird fork check moved to
-                    # check/umich/hummingbird.py (site_post_gather hook).
-                sc.console.print(
-                    f"[bold magenta]=== Checking WordPress themes for {site['name']}:"
-                )
-                themes, errors, fatal = wp(
-                    live_site,
-                    "theme",
-                    "list",
-                    "--fields=name,status,update,version,update_version,title",
-                )
-                if fatal or themes is None:
-                    site_context.add_notices(
-                        wp_error(
-                            site["name"],
-                            "plugin-list",
-                            f"Unable to run <code>wp theme list</code> for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    wp_smell = errors
-                if sc.options.verbose:
-                    pprint(themes)
-                if isinstance(themes, list):
-                    for t in themes:
-                        if t["update"] == "available":
-                            add_on_updates.append(
-                                {
-                                    "slug": t["name"],
-                                    "name": t["title"],
-                                    "type": "theme",
-                                    "current_version": t["version"],
-                                    "new_version": t["update_version"],
-                                }
-                            )
-                # The favicon.ico presence check moved to check/wordpress/favicon.py
-                # (site_post_gather hook).
+                gather = gather_wordpress(site, live_site, site_context)
+                wordpress_version = gather.wordpress_version
+                plugins = gather.plugins
+                add_on_updates = gather.add_on_updates
+                if gather.wp_smell != "":
+                    wp_smell = gather.wp_smell
+                site_results[site["name"]] = gather.results_entry
 
             elif site["framework"].startswith("drupal"):
                 sc.console.print(
