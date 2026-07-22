@@ -112,6 +112,10 @@ enabled = true
 enabled = true          # PAPC, native-PHP-sessions, OCP-config, favicon checks
 
 
+[Check.drupal]
+enabled = true          # PAPC-module, Drupal-7-EOL/tag1_d7es, multisite-probe checks
+
+
 [Database]
 # currently supported database types: sqlite, mysql
 

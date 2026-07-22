@@ -950,6 +950,44 @@ at the moment, it should be fixed to avoid possible future problems:
     return notices
 
 
+def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite):
+    """Return the no-primary-domain info notice dict, or None when it does not apply
+    (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3)."""
+    if (
+        len(custom_domains) > 1
+        and len(primary_domain) == 0
+        and site["framework"] != "wordpress_network"
+        and not is_multisite
+    ):
+        return {
+            "type": "info",
+            "icon": "&#x1F50E;",  # magnifying glass
+            "csv": f"{site['name']},no-primary-domain,",
+            "short": f"set a primary domain",
+            "message": f"""
+                    <p><strong>{site["name"]}</strong>
+                    <a href="https://dashboard.pantheon.io/sites/{site["id"]}#live/DomainsHTTPS/list">
+                    does not have a primary domain set</a> in the Pantheon dashboard. Setting a
+                    <a href="https://docs.pantheon.io/guides/redirect/primary-domain">primary domain</a> will improve SEO.
+                    It will also increase the Cloudflare cache hit ratio, lowering Pantheon visitor numbers.</p>
+                    <p><i>Do not set a primary domain if </i><strong>{site["name"]}</strong><i> is a multisite.</i></p>
+                    """,
+            "text": f"""
+                    {site["name"]} does not have a primary domain set
+                    in the Pantheon dashboard.
+                    <https://dashboard.pantheon.io/sites/{site["id"]}#live/DomainsHTTPS/list>
+                    Setting a primary domain
+                    <https://docs.pantheon.io/guides/redirect/primary-domain>
+                    will improve SEO. It will also increase the Cloudflare
+                    cache hit ratio, lowering Pantheon visitor numbers.
+
+                    DO NOT set a primary domain if {site["name"]} is a
+                    multisite.
+                    """,
+        }
+    return None
+
+
 def build_annual_bill_upcoming_notice(site_name, plan_name, annual_bill, shortcode, portal_site_id):
     """The contract-year-end "will be billed July 1" alert (BLOCKMAP B50)."""
     return {
@@ -1390,72 +1428,25 @@ def main() -> None:
                 """,
                         )
                     )
-                if (
-                    len(custom_domains) > 1
-                    and len(primary_domain) == 0
-                    and site["framework"] != "wordpress_network"
-                ):
-                    is_multisite = False
-                    if site["framework"].startswith("drupal"):
-                        sites_file, errors, fatal = drush_php_script(
-                            live_site,
-                            'echo json_encode( ["result" => (is_file("/code/web/sites/sites.php") || is_file("/code/sites/sites.php") ? true : false) ] );',
-                        )
-                        if fatal or sites_file is None:
-                            site_context.add_notices(
-                                drush_error(
-                                    site["name"],
-                                    "multisite-check",
-                                    f"The check for whether {site['name']} is a Drupal multisite failed.",
-                                    errors,
-                                )
-                            )
-                        elif errors != "":
-                            drush_smell = errors
-                        if (
-                            isinstance(sites_file, dict)
-                            and "result" in sites_file
-                            and sites_file["result"] == True
-                        ):
-                            is_multisite = True
-                        sc.console.print(
-                            f"{site['name']} is a Drupal multisite: {sites_file}"
-                        )
-                    if not is_multisite:
-                        site_context.add_notice(
-                            {
-                                "type": "info",
-                                "icon": "&#x1F50E;",  # magnifying glass
-                                "csv": f"{site['name']},no-primary-domain,",
-                                "short": f"set a primary domain",
-                                "message": f"""
-                    <p><strong>{site["name"]}</strong>
-                    <a href="https://dashboard.pantheon.io/sites/{site["id"]}#live/DomainsHTTPS/list">
-                    does not have a primary domain set</a> in the Pantheon dashboard. Setting a
-                    <a href="https://docs.pantheon.io/guides/redirect/primary-domain">primary domain</a> will improve SEO.
-                    It will also increase the Cloudflare cache hit ratio, lowering Pantheon visitor numbers.</p>
-                    <p><i>Do not set a primary domain if </i><strong>{site["name"]}</strong><i> is a multisite.</i></p>
-                    """,
-                                "text": f"""
-                    {site["name"]} does not have a primary domain set
-                    in the Pantheon dashboard.
-                    <https://dashboard.pantheon.io/sites/{site["id"]}#live/DomainsHTTPS/list>
-                    Setting a primary domain
-                    <https://docs.pantheon.io/guides/redirect/primary-domain>
-                    will improve SEO. It will also increase the Cloudflare
-                    cache hit ratio, lowering Pantheon visitor numbers.
-
-                    DO NOT set a primary domain if {site["name"]} is a
-                    multisite.
-                    """,
-                            }
-                        )
 
             # Per-phase data contract (see CLAUDE.md): publish the DnsFacts via the pure helper
             # (unit-tested against value-swaps in test_dns_classify.py), then fire the phase. The
             # check.dns hook consumes these keys to emit the DNS-resolution notices.
             dns_classify.stuff_dns_contract(site_context, domains, facts)
             sc.invoke_hooks("site_post_dns", site_context)
+
+            # The Drupal multisite probe (was B30, inline here) moved to
+            # check/drupal/multisite.py, a site_post_dns hook -- its produced keys are
+            # DAG-declared, not contract-guaranteed (CLAUDE.md, CAMPAIGN.md section 4
+            # amendment 2), so read with .get() (campaign I10, SPEC D-i10-3).
+            probe_smell = site_context.get("drupal_multisite_smell", "")
+            if probe_smell != "":
+                drush_smell = probe_smell
+            notice = no_primary_domain_notice(
+                site, custom_domains, primary_domain, site_context.get("drupal_multisite", False)
+            )
+            if notice is not None:
+                site_context.add_notice(notice)
 
             if main_fqdn != "":
                 site_url = f"https://{main_fqdn}/"
@@ -1532,50 +1523,9 @@ def main() -> None:
                     drush_smell = errors
                 if sc.options.verbose:
                     pprint(mods)
-                site_context.add_notices(
-                    check_drupal_module(
-                        site["name"],
-                        mods,
-                        "pantheon_advanced_page_cache",
-                        "Pantheon Advanced Page Cache",
-                        "https://www.drupal.org/project/pantheon_advanced_page_cache",
-                        "Necessary for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.",
-                    )
-                )
-                if drupal_version.startswith("7."):
-                    site_context.add_notice(
-                        {
-                            "type": "alert",
-                            "icon": "&#x1F6A8;",  # police car light
-                            "csv": f"{site['name']},drupal7-eol",
-                            "short": f"Migrate off Drupal 7 ASAP",
-                            "message": f"""
-<p><b>Drupal 7 Extended Support for {site["name"]} will end in December 2026.</b>
-Please migrate this site's content to a new site as soon as possible and
-then switch {site["name"]} to the Sandbox plan. Plan on a large amount of
-time being needed to design the new website, set it up, migrate content, and
-then launch the new website before December.</p>
-                """,
-                            "text": f"""
-Drupal 7 Extended Support for {site["name"]} will end in
-December 2026.  Please migrate this site's content to a new site
-as soon as possible and then switch {site["name"]} to
-the Sandbox plan. Plan on a large amount of time being needed to
-design the new website, set it up, migrate content, and then
-launch the new website before December.
-                """,
-                        }
-                    )
-                    site_context.add_notices(
-                        check_drupal_module(
-                            site["name"],
-                            mods,
-                            "tag1_d7es",
-                            "Tag1 D7ES",
-                            "https://docs.pantheon.io/supported-drupal#drupal-7-long-term-support",
-                            "Necessary for receiving extended support for Drupal 7.",
-                        )
-                    )
+                # The PAPC module check, the Drupal 7 EOL alert, and the tag1_d7es
+                # module check moved to check/drupal/papc.py and check/drupal/d7_eol.py
+                # (site_post_gather hooks, campaign I10).
                 # else: the four U-M Cloudflare module checks (cloudflare, cloudflarepurger,
                 # purge_processor_lateruntime, purge_processor_cron) moved to
                 # check/umich/cloudflare_cms.py (site_post_gather hook).

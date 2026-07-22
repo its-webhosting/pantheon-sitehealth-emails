@@ -38,8 +38,11 @@ EVERYTHING_ENABLED = {
 ALL_PACKAGES = (
     ("check", "cloudflare", "hookdag_check_cloudflare"),
     ("check", "dns", "hookdag_check_dns"),
+    ("check", "drupal", "hookdag_check_drupal"),
+    ("check", "pantheon", "hookdag_check_pantheon"),
     ("check", "pantheon_cdn_change", "hookdag_check_pantheon_cdn_change"),
     ("check", "umich", "hookdag_check_umich"),
+    ("check", "wordpress", "hookdag_check_wordpress"),
     ("plugin", "aws", "hookdag_plugin_aws"),
     ("plugin", "cloudflare", "hookdag_plugin_cloudflare"),
     ("plugin", "env", "hookdag_plugin_env"),
@@ -58,8 +61,10 @@ def test_all_real_hooks_validate(psh, reset_sc, request):
     psh.modules.validate_hooks()  # must not raise
 
     bare = {phase: [h["name"] for h in sc.hooks.get(phase, [])] for phase in sc.PHASES}
-    # Edgeless today (SPEC section 6: every in-repo hook declares produces=[]): validated
-    # order == registration order for every phase.
+    # Edgeless today: check.drupal.multisite is the campaign's first hook to declare a
+    # non-empty produces (SPEC D-i10-3, CAMPAIGN.md section 4 amendment 2), but nothing
+    # in-repo consumes its keys, so no hook has a real predecessor -- validated order ==
+    # registration order for every phase.
     for phase, names in bare.items():
         got = [h["name"] for h in psh.modules.ordered_hooks(sc.hooks.get(phase, []))]
         assert got == names

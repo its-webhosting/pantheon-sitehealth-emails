@@ -1,0 +1,113 @@
+# serializer version: 1
+# name: test_check_drupal_module_not_installed_snapshot
+  '<p>The <a href="https://www.drupal.org/project/pantheon_advanced_page_cache">Pantheon Advanced Page Cache</a> Drupal module needs to be installed:</p><p>Necessary for automatically clearing Pantheon&#x27;s caches (not Cloudflare&#x27;s) when content is updated.</p>'
+# ---
+# name: test_check_drupal_module_not_installed_snapshot.1
+  '''
+  The Pantheon Advanced Page Cache Drupal module
+  <https://www.drupal.org/project/pantheon_advanced_page_cache>
+  needs to be installed: Necessary for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.
+  '''
+# ---
+# name: test_check_drupal_module_not_installed_snapshot.2
+  'install module pantheon_advanced_page_cache'
+# ---
+# name: test_check_drupal_module_turned_off_snapshot
+  '<p>The <a href="https://www.drupal.org/project/pantheon_advanced_page_cache">Pantheon Advanced Page Cache</a> Drupal module needs to be enabled:</p><p>Necessary for automatically clearing Pantheon&#x27;s caches (not Cloudflare&#x27;s) when content is updated.</p>'
+# ---
+# name: test_check_drupal_module_turned_off_snapshot.1
+  '''
+  The Pantheon Advanced Page Cache Drupal module
+  <https://www.drupal.org/project/pantheon_advanced_page_cache>
+  needs to be enabled: Necessary for automatically clearing Pantheon's caches (not Cloudflare's) when content is updated.
+  '''
+# ---
+# name: test_check_drupal_module_turned_off_snapshot.2
+  'enable module pantheon_advanced_page_cache'
+# ---
+# name: test_drupal7_eol_snapshot
+  '''
+  
+  <p><b>Drupal 7 Extended Support for its-wws-test1 will end in December 2026.</b>
+  Please migrate this site's content to a new site as soon as possible and
+  then switch its-wws-test1 to the Sandbox plan. Plan on a large amount of
+  time being needed to design the new website, set it up, migrate content, and
+  then launch the new website before December.</p>
+                  
+  '''
+# ---
+# name: test_drupal7_eol_snapshot.1
+  '''
+  
+  Drupal 7 Extended Support for its-wws-test1 will end in
+  December 2026.  Please migrate this site's content to a new site
+  as soon as possible and then switch its-wws-test1 to
+  the Sandbox plan. Plan on a large amount of time being needed to
+  design the new website, set it up, migrate content, and then
+  launch the new website before December.
+                  
+  '''
+# ---
+# name: test_drupal7_eol_snapshot.2
+  'Migrate off Drupal 7 ASAP'
+# ---
+# name: test_multisite_check_fatal_snapshot
+  '''
+  
+  <p>The check for whether <strong>its-wws-test1</strong> is a Drupal multisite failed.
+  <code>drush</code> returned the following error:</p>
+  <pre>boom
+  
+  Expecting value: line 1 column 1 (char 0)</pre>
+  
+  '''
+# ---
+# name: test_multisite_check_fatal_snapshot.1
+  '''
+  
+  The check for whether its-wws-test1 is a Drupal multisite failed.
+  drush returned the following error:
+  
+  ----- START DRUSH ERROR -----
+  boom
+  
+  Expecting value: line 1 column 1 (char 0)
+  ----- END ERROR -----
+  
+  
+  '''
+# ---
+# name: test_multisite_check_fatal_snapshot.2
+  'fix drush error'
+# ---
+# name: test_no_primary_domain_notice_snapshot
+  '''
+  
+                      <p><strong>its-wws-test1</strong>
+                      <a href="https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#live/DomainsHTTPS/list">
+                      does not have a primary domain set</a> in the Pantheon dashboard. Setting a
+                      <a href="https://docs.pantheon.io/guides/redirect/primary-domain">primary domain</a> will improve SEO.
+                      It will also increase the Cloudflare cache hit ratio, lowering Pantheon visitor numbers.</p>
+                      <p><i>Do not set a primary domain if </i><strong>its-wws-test1</strong><i> is a multisite.</i></p>
+                      
+  '''
+# ---
+# name: test_no_primary_domain_notice_snapshot.1
+  '''
+  
+                      its-wws-test1 does not have a primary domain set
+                      in the Pantheon dashboard.
+                      <https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#live/DomainsHTTPS/list>
+                      Setting a primary domain
+                      <https://docs.pantheon.io/guides/redirect/primary-domain>
+                      will improve SEO. It will also increase the Cloudflare
+                      cache hit ratio, lowering Pantheon visitor numbers.
+  
+                      DO NOT set a primary domain if its-wws-test1 is a
+                      multisite.
+                      
+  '''
+# ---
+# name: test_no_primary_domain_notice_snapshot.2
+  'set a primary domain'
+# ---
