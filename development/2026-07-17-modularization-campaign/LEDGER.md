@@ -1100,8 +1100,13 @@ each green: `8034780` (Task 1 — Drupal UA check → `check/umich/` + drush fa�
 `eedd60c` (Task 2 — `check/drupal/` package + `main()` post-dns rewiring + hook-DAG test
 repair), `03c81c0` (Task 3 — `check/addon_updates/` package), `edafe0d` (Task 4 —
 `psh/gather.py` Drupal half + smell builder + the two named fixes), plus this closing docs
-commit (CLAUDE.md / CAMPAIGN.md amendments / README TODO / memory / this entry / the dev
-folder). Full suite at close **including the live tier** (Terminus credentials present —
+commit (CLAUDE.md / CAMPAIGN.md amendments / README TODO / this entry / the dev
+folder; **auto-memory was NOT updated in this commit** — the whole-branch review caught the
+original wording claiming it was (its one Important finding, PD#13/PD#14): the controller
+had reserved memory for itself and skipped it. Memory was then updated post-final-review
+(`modularization-campaign` + `gateway-extraction` notes, incl. the two-binding
+`psh.gather.run_terminus` seam trap) and this sentence corrected in the same follow-up
+commit). Full suite at close **including the live tier** (Terminus credentials present —
 `ls ~/.terminus/cache/tokens/` shows one token, network to Pantheon reachable, the 2
 live-marked tests ran and passed) = **991 passed / 1 skipped** (the skip is
 `test_db_credentials.py`'s `importorskip("MySQLdb")` on a sqlite-only install), all three

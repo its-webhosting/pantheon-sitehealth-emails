@@ -805,7 +805,12 @@ applied to the document this closing commit; README `mutates` TODO added; LEDGER
 appended (§12 template, I9 density); CLAUDE.md updated (module map, package lists, contract
 table, sc-façade list, Testing block, still-hardcoded-U-M list, § Two mock seams); both
 `sample-pantheon-sitehealth-emails.toml` blocks (`[Check.drupal]`, `[Check.addon_updates]`)
-present since Tasks 2/3.
+present since Tasks 2/3. **Memory: NOT updated at this commit** — §8 item 4's "memory" clause
+was silently dropped from the original paste here (the whole-branch review's one Important
+finding — the PD#14 checklist shape). Discharged post-final-review: `modularization-campaign`
+(I10 status, hook-produced keys, the ALL_PACKAGES drift lesson) and `gateway-extraction`
+(the two-binding `psh.gather.run_terminus` seam trap) both updated, LEDGER wording corrected
+in the same follow-up commit.
 
 ### §8 item 5 — named pins green (all part of the 991 above)
 
