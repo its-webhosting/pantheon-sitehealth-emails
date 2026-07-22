@@ -36,6 +36,7 @@ EVERYTHING_ENABLED = {
 # present", not "every hook-bearing package".  Probe names are distinct even where the
 # check/ and plugin/ trees share a package name (both have a "cloudflare").
 ALL_PACKAGES = (
+    ("check", "addon_updates", "hookdag_check_addon_updates"),
     ("check", "cloudflare", "hookdag_check_cloudflare"),
     ("check", "dns", "hookdag_check_dns"),
     ("check", "drupal", "hookdag_check_drupal"),

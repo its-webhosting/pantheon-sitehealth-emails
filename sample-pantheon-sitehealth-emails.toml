@@ -116,6 +116,10 @@ enabled = true          # PAPC, native-PHP-sessions, OCP-config, favicon checks
 enabled = true          # PAPC-module, Drupal-7-EOL/tag1_d7es, multisite-probe checks
 
 
+[Check.addon_updates]
+enabled = true          # pending add-on (plugin/theme/package) updates table notice
+
+
 [Database]
 # currently supported database types: sqlite, mysql
 

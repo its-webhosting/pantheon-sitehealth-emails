@@ -1,0 +1,131 @@
+# serializer version: 1
+# name: test_audit_shaped_row_snapshot
+  '''
+  
+  <p><strong>its-wws-test1</strong> has 1 pending add-on updates.</p>
+  <p>Please update these add-ons in the site's Dev environment and
+  <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+  Uninstall any add-ons you are not using to improve your site's security, size, and speed.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">ID</th><th class="rt-plan">Name</th><th class="rt-plan">Type</th><th class="rt-plan">Current version</th><th class="rt-plan">New version</th></thead>
+  <tbody>
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">package-c</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan">Package C vulnerability, (HIGH)<br /><br />
+  Package C second finding, (MODERATE)<br /><br /></div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">library</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">1.0</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan"><a href="https://example.com/advisory">1.1</a></div></td>
+  </tr>
+  </tbody>
+  </table>
+  </div>
+  
+  '''
+# ---
+# name: test_audit_shaped_row_snapshot.1
+  '''
+  
+  its-wws-test1 has 1 pending add-on updates
+  <https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code>.
+  Please update these add-ons in the site's Dev environment and deploy
+  them to the Live environment.
+  <https://docs.pantheon.io/pantheon-workflow>
+  
+  Uninstall any add-ons you are not using to improve your site's
+  security, size, and speed.
+  
+  A variety of support options are available.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+  
+  
+  * package-c
+    - Name: [{'title': 'Package C vulnerability', 'severity': 'high'}, {'title': 'Package C second finding', 'severity': 'moderate'}]
+    - Type: library
+    - Current version: 1.0
+    - New version:     1.1
+  
+  
+  
+  '''
+# ---
+# name: test_audit_shaped_row_snapshot.2
+  '1 pending add-on update'
+# ---
+# name: test_audit_shaped_row_snapshot.3
+  'its-wws-test1,updates-addons,1'
+# ---
+# name: test_plugin_theme_pair_snapshot
+  '''
+  
+  <p><strong>its-wws-test1</strong> has 2 pending add-on updates.</p>
+  <p>Please update these add-ons in the site's Dev environment and
+  <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
+  Uninstall any add-ons you are not using to improve your site's security, size, and speed.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">A variety of support options are available</a>.</p>
+  <div class="container">
+  <table class="responsive-table site-updates">
+  <thead><th class="rt-plan">ID</th><th class="rt-plan">Name</th><th class="rt-plan">Type</th><th class="rt-plan">Current version</th><th class="rt-plan">New version</th></thead>
+  <tbody>
+  <tr style="background-color: #fff;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">plugin-a</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan">Plugin A</div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">plugin</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">1.0</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">1.1</div></td>
+  </tr>
+  
+  <tr style="background-color: #CCCFCA;">
+  <td><div class="rt-data-header rt-plan">ID</div><div class="rt-data rt-plan">theme-b</div></td>
+  <td><div class="rt-data-header rt-plan"">Name</div><div class="rt-data rt-plan">Theme B</div></td>
+  <td><div class="rt-data-header rt-plan">Type</div><div class="rt-data rt-plan">theme</div></td>
+  <td><div class="rt-data-header rt-plan">Current version</div><div class="rt-data rt-plan">2.0</div></td>
+  <td><div class="rt-data-header rt-plan">New version</div><div class="rt-data rt-plan">2.1</div></td>
+  </tr>
+  </tbody>
+  </table>
+  </div>
+  
+  '''
+# ---
+# name: test_plugin_theme_pair_snapshot.1
+  '''
+  
+  its-wws-test1 has 2 pending add-on updates
+  <https://dashboard.pantheon.io/sites/9cf2c790-c7b8-4f2f-a6f1-27385b8f958e#dev/code>.
+  Please update these add-ons in the site's Dev environment and deploy
+  them to the Live environment.
+  <https://docs.pantheon.io/pantheon-workflow>
+  
+  Uninstall any add-ons you are not using to improve your site's
+  security, size, and speed.
+  
+  A variety of support options are available.
+  <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">
+  
+  
+  * plugin-a
+    - Name: Plugin A
+    - Type: plugin
+    - Current version: 1.0
+    - New version:     1.1
+  
+  
+  * theme-b
+    - Name: Theme B
+    - Type: theme
+    - Current version: 2.0
+    - New version:     2.1
+  
+  
+  
+  '''
+# ---
+# name: test_plugin_theme_pair_snapshot.2
+  '2 pending add-on updates'
+# ---
+# name: test_plugin_theme_pair_snapshot.3
+  'its-wws-test1,updates-addons,2'
+# ---
