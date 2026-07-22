@@ -110,7 +110,7 @@ fixes in I1).
 | `psh/db.py` | ORM models, `TrafficRow`/`OverageProtectionRow`, `db_engine_args`, `db_retry`/`db_retryable`/`record_db_reconnect`, `update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`, `load_overage_protection_window`, `DatabaseUnavailableError` |
 | `psh/traffic.py` | `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows`, the `traffic_table_columns` global, metrics gather + DB update/load flow (B22–B26), visits-by-month aggregation (B43) |
 | `psh/plans.py` | plan_info normalization (B12 part), SKU resolution (B17), `overage_blocks`, `contract_year_end`, `plan_costs`, `build_plan_over_time`, the `cost_table_columns` global, recommendation flow (B47) |
-| `psh/gather.py` | Slimmed framework gathers feeding the `site_post_gather` contract (from B32–B35), `check_wordpress_plugin`/`check_drupal_module` helpers |
+| `psh/gather.py` | Slimmed framework gathers feeding the `site_post_gather` contract (from B32–B35), `check_wordpress_plugin`/`check_drupal_module` helpers, `build_smell_notices` (the B48 smell-notice *builder*; its emission stays in `main()` — LEDGER I10 amendment 1) |
 | `psh/charts.py` | Cap geometry (B13 part), chart data prep + matplotlib build (B44–B45) — returns PNG bytes |
 | `psh/render.py` | Jinja render (B53), PHP inline + `!important` pass (B54), `escape_url` |
 | `psh/mail.py` | Recipient resolution (B49), MIME assembly (B55), `smtp_login`, send (B57) |
@@ -135,7 +135,7 @@ get algorithmic redesign — moves are behavior-preserving except where §8 says
 | `check/pantheon/` (new) | frozen site (B19), no-live-env (B21), upstream updates (B38), PHP EOL (B41) | `site_pre` (frozen, no-live-env), `site_post_gather` (updates, PHP EOL) |
 | `check/wordpress/` (new) | PAPC + native-sessions checks, OCP config probe, favicon (from B34) | `site_post_gather` |
 | `check/drupal/` (new) | PAPC module check, D7 EOL + tag1_d7es, multisite probe (from B30/B35) | `site_post_dns` (multisite), `site_post_gather` |
-| `check/addon_updates/` (new) | add-on updates table notice (B39), smell notices (B48) | `site_post_gather` |
+| `check/addon_updates/` (new) | add-on updates table notice (B39) | `site_post_gather` |
 | `check/umich/` (existing, grows) | umich-oidc-login, Hummingbird fork (B34), Drupal UA check (B35), annual-billing notices (B50/B51), portal-URL text for the recommendation notice (B47's U-M half) | `site_post_gather`, `site_pre_render` (billing) |
 
 `check/dns/`, `check/cloudflare/`, `check/pantheon_cdn_change/` are untouched tenants.
@@ -143,13 +143,25 @@ A check MAY fetch its own data through `sc` gateway wrappers when the data is
 check-specific (e.g. `upstream:updates:list`); data used by core *and* checks is
 published through the contract instead (e.g. `envs`).
 
+The B48 smell notices are **not** a `check/addon_updates/` hook (LEDGER I10 amendment 1):
+their *builder* (`build_smell_notices`) moves to `psh/gather.py`, but the *emission* stays
+in `main()`. A `site_post_gather` smells hook cannot be ordered after the
+`wp_smell`/`drush_smell` in-place mutators — a `produces: ['wp_smell']` declaration is a
+condition-2 fatal against the core registry (D-i9-3), and alphabetical registration puts
+`check/addon_updates` first in the phase — and relocation would also add smell rows to
+`--only-warn` csv output (B48 sits after that gate today), a §8 surface change. The
+`mutates` hook declaration that would dissolve this class is post-campaign work (README TODO).
+
 ### 3.3 What stays in `main()` (exhaustive, with why)
 
 Config/arg bootstrap ordering (B1–B8 — the two-pass substitution *order* is the
 program); overage constants + date window (B9, B13 part); the site-loop skeleton (skips,
 banner, sorted order, resume filter — B14–B18, B20, B25, B42); phase firing and contract
-stuffing (B27, B28, B31, B37, B52); notice sort + subject (B50 minus billing); the
-`try`/`except BaseException` lifecycle dispatch (B59–B60 call sites). Everything else
+stuffing (B27, B28, B31, B37, B52); the B48 smell-notice *emission* call (the builder
+moved to `psh/gather.py` at I10, but the emission summarizes end-of-phase smell state no
+hook position can guarantee under the D-i9-3 rebind design, and it must stay behind the
+`--only-warn` gate — LEDGER I10 amendment 1); notice sort + subject (B50 minus billing);
+the `try`/`except BaseException` lifecycle dispatch (B59–B60 call sites). Everything else
 leaves. Target: 250–400 lines.
 
 ### 3.4 Parallel-ready constraint (D8)
@@ -209,6 +221,16 @@ New contract keys added by increments (exhaustive for this campaign): `envs` (I8
 `site_post_gather`), plan/cost keys `current_plan`, `recommended_plan`, `plan_costs`,
 `savings` (I7, at `site_pre_render`). Each addition updates registry + CLAUDE.md table +
 ledger in the same increment.
+
+**Hook-produced keys (I10).** A hook MAY produce keys of its own — declared in its
+`produces`, validated for duplicate producers, cycles, and phase position by the same
+conditions 1–4 above. Such keys are **DAG-declared, not registry-owned**: they are present
+only when the producing hook actually ran (absent when its gate failed or its package is
+disabled), so consumers read them with `.get()`, and they are **NOT** part of the
+guaranteed per-phase contract (the "new contract keys" list above stays exhaustive for
+registry-owned keys only). The campaign's first are `drupal_multisite` /
+`drupal_multisite_smell`, produced by `check.drupal.multisite` at `site_post_dns` and read
+by `main()` after the phase (I10; see LEDGER I10 amendment 2).
 
 ## 5. Configuration
 
@@ -340,7 +362,7 @@ Wave 4: I14 closing sweep
 | **I7** | B9, B12 (plans), B17, B47; 967–976, 1128–1208, 1254–1280 | `psh/plans.py`; `PlanInfo`; D7 (`--only-warn` runs recommendation); plan/cost contract keys |
 | **I8** | B19, B21, B38, B41 | `check/pantheon/` + `[Check.pantheon]`; `envs` contract key |
 | **I9** | B32–B34; 672–739 | `psh/gather.py` (WP half); `check/wordpress/`; U-M WP checks → `check/umich/`; `add_on_updates` + smell contract keys |
-| **I10** | B30, B35, B39, B48; 740–791 | gather (Drupal half); `check/drupal/`; `check/addon_updates/`; UA check → `check/umich/` |
+| **I10** | B30, B35, B39; B48 *builder* only (emission stays in `main()` — LEDGER I10 amendment 1); 740–791 | gather (Drupal half) + `build_smell_notices`; `check/drupal/`; `check/addon_updates/`; UA check → `check/umich/` |
 | **I11** | B13 (caps), B44–B45 | `psh/charts.py` |
 | **I12** | B49–B57 minus sort/subject core | `psh/render.py`, `psh/mail.py`; annual billing → `check/umich/` at `site_pre_render`; B51 deletion if past its date |
 | **I13** | B14 (accumulators), B56, B59–B60; 1649–2107 plus the resume helpers I5 left behind (1281–1284, 1528–1542, 1576–1607) | `psh/lifecycle.py`; `RunState`; `main()` reaches final form |

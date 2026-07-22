@@ -155,23 +155,37 @@ single `plan_costs` **contract key** — `{"same": ..., "median": ..., "best": .
 module precedent, publishing the four `site_pre_render` contract keys below) — all
 re-imported by `psh/_legacy.py`, same import-back pattern as the other moved modules, so
 `main()`'s call sites and the `psh.<name>` test references resolve unchanged.
-**`psh/gather.py`** (new in I9) holds the WordPress gather core: `check_wordpress_plugin`
+**`psh/gather.py`** (new in I9, Drupal half added in I10) holds the framework gather cores.
+The WordPress side (I9): `check_wordpress_plugin`
 (the recommended-plugin notice builder the papc/sessions/cloudflare_cms hooks call via
-`sc.check_wordpress_plugin`; `check_drupal_module`, its Drupal sibling, stays in
-`_legacy.py` until I10), `wordpress_network_url` (the B32 network-URL fetch), and
+`sc.check_wordpress_plugin`), `wordpress_network_url` (the B32 network-URL fetch), and
 `gather_wordpress` (the B34 gather core: version / plugin-list / theme-list fetches,
 add-on-update collection plugins-then-themes in list order, the must-use diagnostic
 print) returning a **`WordPressGather`** NamedTuple (`wordpress_version` / `plugins` /
 `add_on_updates` / `wp_smell` / `results_entry`) that `main()` threads into its locals —
 the returned smells participate in `main()`'s last-wins overwrite semantics (a later
 empty smell never clears an earlier one, so `main()` rebinds `wp_smell` only when the
-returned smell is non-empty). The `wp_error` notices for *failed gathers* stay with the
-fetches (they describe the gather, not a check); the notice-emitting checks that used to
-be interleaved here live in `check/wordpress/` and `check/umich/` (below). `escape_url`
+returned smell is non-empty). The Drupal side (I10): `check_drupal_module` (the
+recommended-module notice builder its Drupal siblings call via `sc.check_drupal_module`),
+`gather_drupal` (the B35 gather core: banner + core-status fetch + version derivation +
+`site_results` entry, pm:list, and the D7 pm:updatestatus **or** D8+ composer dry-run +
+composer audit add-on collection — the D7-vs-D8+ branch stays inside because it selects
+between two *gather* strategies, not between checks) returning a **`DrupalGather`**
+NamedTuple (`drupal_version` / `modules` / `add_on_updates` / `drush_smell` /
+`composer_smell` / `results_entry`; `main()` threads it last-wins exactly like the WP
+branch), and `build_smell_notices` (the B48 smell-notice *builder*; **its emission stays
+in `main()`** — LEDGER I10 amendment 1 — because it summarizes end-of-phase smell state no
+hook position can guarantee and must stay behind the `--only-warn` gate; the I10 move also
+de-indented its composer literal to column 0, matching the wp/drush siblings — the LEDGER
+I1 Obs. 4 fix, D-i10-8). The `wp_error`/`drush_error` notices for *failed gathers* stay
+with the fetches (they describe the gather, not a check); the notice-emitting checks that
+used to be interleaved here live in `check/wordpress/`, `check/drupal/`, and `check/umich/`
+(below). `escape_url`
 is reached via a call-time bridge import from `psh._legacy` (`# noqa: PLC0415`, the
 D-i6-2 precedent — replaced by a module-level `from psh.render import escape_url` when
 I12 moves it there). Re-imported by `psh/_legacy.py`, same import-back pattern, so
-`main()`'s call sites and the `sc.check_wordpress_plugin` exposure line resolve
+`main()`'s call sites and the `sc.check_wordpress_plugin`/`sc.check_drupal_module`
+exposure lines resolve
 unchanged. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
@@ -200,7 +214,8 @@ available to every function at call time.
 `find_modules()` (in `psh/modules.py` since I4) walks `plugin/` and `check/` for **non-empty `__init__.py`** files (the
 empty top-level `plugin/__init__.py` and `check/__init__.py` are skipped) and imports each
 containing package (currently `plugin.aws`, `plugin.cloudflare`, `plugin.env`, `plugin.umich`,
-`check.cloudflare`, `check.dns`, `check.pantheon`, `check.pantheon_cdn_change`, `check.umich`,
+`check.addon_updates`, `check.cloudflare`, `check.dns`, `check.drupal`, `check.pantheon`,
+`check.pantheon_cdn_change`, `check.umich`,
 `check.wordpress`). Each `__init__.py` self-registers at import time — usually pulling in a
 sibling file with the actual logic (`aws/get_secret.py`, `cloudflare/ips.py`, `env/get_env.py`,
 `umich/portal.py`, `check/umich/sitelens.py`) — guarded by a check of `sc.config` (e.g.
@@ -227,9 +242,14 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
   (hooks or the core `CONTRACT` registry — one owner per key); a consumes/produces cycle among
   same-phase hooks; consuming a key first produced in a *later* phase (earlier is fine).
   Within a phase `invoke_hooks` runs producers before consumers (registration order breaks
-  ties, so today's edgeless DAG preserves registration order exactly); the permanent
-  `tests/integration/test_hook_dag.py` loads every real check/plugin package and proves the
-  DAG validates. Gating: phases through `site_post_gather` run on
+  ties, so today's edgeless DAG — the `check.drupal.multisite` produced keys have no hook
+  consumer — preserves registration order exactly); the permanent
+  `tests/integration/test_hook_dag.py` loads every real check/plugin package (via its
+  `ALL_PACKAGES` list) and proves the
+  DAG validates. **This claim was FALSE I8→I10:** `ALL_PACKAGES` was last touched at I4 and
+  silently missed `check/pantheon` (I8) and `check/wordpress` (I9); I10 restored it (adding
+  `pantheon`, `wordpress`, `drupal`, `addon_updates`), so it again loads every package —
+  keep it in sync when adding a package. Gating: phases through `site_post_gather` run on
   full-report and `--only-warn` paths; `site_pre_render` full-report only; `--update`/
   `--import-older-metrics` never reach any site phase (they DO reach `run_finish`, whose
   artifact writes are separately gated); a per-site fatal error (e.g.
@@ -261,10 +281,13 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 `cloudflare_cms.py`, the relocated U-M CMS-integration checks at `site_post_gather`, plus
 `oidc_login.py` and `hummingbird.py` (I9) — the U-M WordPress plugin checks
 (umich-oidc-login reinstall; the U-M Hummingbird fork), both `site_post_gather`,
-registered after `cloudflare_cms` under the existing `[UMich].enabled` gate. That gate is
-a **deliberate I9 behavior change** (D-i9-6): these two checks previously ran un-gated,
-so a non-U-M run with `umich-oidc-login` installed got U-M-specific advice — after I9
-they run only for U-M; and `check/cloudflare/` — the opt-in `[Cloudflare.cachecheck]`
+registered after `cloudflare_cms`, plus `drupal_ua.py` (I10) — the Drupal user-agent check
+(consumes `framework`/`drupal_version`), a `site_post_gather` hook registered after
+`hummingbird` — all under the existing `[UMich].enabled` gate. That gate is
+a **deliberate behavior change** (D-i9-6 for the two WP checks, D-i10-6 for the Drupal UA
+check): these checks previously ran un-gated,
+so a non-U-M run got U-M-specific advice (e.g. a non-U-M Drupal 8+ site was told to
+configure a `…; UMich; …` user agent) — now they run only for U-M; and `check/cloudflare/` — the opt-in `[Cloudflare.cachecheck]`
 cache checks, egress-IP test at
 `setup` + per-FQDN HTTP checks at `site_post_dns`, see `docs/cloudflare-cachecheck.md`).
 DNS-resolution notices live in `check/dns/` (`notices.py` builders + the `site_post_dns`
@@ -287,10 +310,28 @@ Object Cache Pro config probe, via `sc.wp_eval`; consumes `wordpress_plugins`) a
 `favicon.py` (favicon presence probe via `sc.wp_eval`; consumes
 `fqdns_not_behind_cloudflare`). Every hook early-returns unless
 `site_context["framework"].startswith("wordpress")`. The `ocp`/`favicon` probes rebind
-`site_context["wp_smell"]` on non-fatal stderr — the one sanctioned mutate-during-phase
-contract key (see the table below) — and build failure notices with `sc.wp_error`. The
+`site_context["wp_smell"]` on non-fatal stderr — one of the two sanctioned mutate-during-phase
+contract keys (`wp_smell`, `drush_smell`; see the table below) — and build failure notices
+with `sc.wp_error`. The
 favicon notice body embeds un-gated its.umich.edu links (moved verbatim — see the
 still-hardcoded-U-M list under Testing).
+`check/drupal/` (I10; gated on `[Check.drupal].enabled` — **default true**, the same
+absent-section-still-registers shape as `check/pantheon/`) holds three generic Drupal
+checks: `multisite.py` (the B30 multisite probe via `sc.drush_php_script`, a
+`site_post_dns` hook that consumes `custom_domains`/`primary_domain` and **produces** the
+hook-declared keys `drupal_multisite`/`drupal_multisite_smell` — the campaign's first
+hook-produced keys, read by `main()` with `.get()` after the phase to seed `drush_smell`
+and gate the core `no-primary-domain` notice), `papc.py` (Pantheon Advanced Page Cache
+module check, delegating to `sc.check_drupal_module`) and `d7_eol.py` (the `drupal7-eol`
+notice + the tag1_d7es module check, one hook), the latter two at `site_post_gather`,
+registered multisite → papc → d7_eol; each early-returns unless the framework starts with
+`drupal`. `check/addon_updates/` (I10; gated on `[Check.addon_updates].enabled` —
+**default true**) holds one `site_post_gather` hook, `table.py` (the B39 pending-add-on
+updates table notice, consumes `add_on_updates`), reading the SAME list object the stuffer
+publishes; its `updates-addons` notice body embeds an un-gated its.umich.edu support link
+(moved verbatim — see the still-hardcoded-U-M list under Testing). The B48 smell notices
+are **not** in this package: their builder (`build_smell_notices`) lives in `psh/gather.py`
+and their emission stays in `main()` (LEDGER I10 amendment 1).
 `check/pantheon_cdn_change/` (`site_post_dns`, unconditional registration) flags
 custom domains still CNAME'd to the legacy Pantheon GCDN (Fastly) — in public DNS or in
 Cloudflare — and gets the replacement records Pantheon requires from `terminus domain:dns`;
@@ -301,8 +342,9 @@ that self-registers — no central registry to edit. Check modules cannot import
 dash-named main script; the helpers they need are exposed as `sc` attributes near the
 `cloudflare_enabled()` def (`sc.escape_url`, `sc.check_wordpress_plugin`,
 `sc.check_drupal_module`, `sc.umich_enabled`, `sc.cloudflare_enabled`, `sc.terminus`,
-`sc.fqdn_re`, and since I9 `sc.wp_eval`/`sc.wp_error` — needed by the relocated
-OCP/favicon checks) — extend that block for new ones (tests
+`sc.fqdn_re`, since I9 `sc.wp_eval`/`sc.wp_error` — needed by the relocated
+OCP/favicon checks — and since I10 `sc.drush_php_script`/`sc.drush_error` — needed by the
+relocated multisite/UA checks) — extend that block for new ones (tests
 monkeypatch these when loading check modules standalone). A few façade names are exposed
 **elsewhere**, not in that block: `sc.db_engine_args` (assigned in `_legacy.py`, see § Database)
 and `sc.Notice`/`sc.Severity` (which reach `sc` via a top-of-`script_context.py`
@@ -332,8 +374,8 @@ against it, so drift on either side goes red:
 |---|---|
 | `site_pre` | `envs` (I8, at `site_pre`; dict — the `terminus env:list` JSON keyed by environment id, each value carrying `id, created, domain, connection_mode, locked, initialized, php_version, php_runtime_generation`. `main()`'s guards ensure `envs["live"]` exists with an `initialized` key before any site phase fires; **`php_version` is NOT guaranteed present** — read it with `.get`. Never `None`/empty when a phase fires: a failed `env:list` fetch skips the site. Core-produced — fetched by `main()` where it gates on it, stuffed by `stuff_envs_contract` in `psh/modules.py`. The phase fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
-| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`) |
-| `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the legacy `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. **I9 keys:** `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object `main()`'s B39 add-on table still reads, not a copy), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` MAY be rebound in place during the phase** by `check.wordpress.ocp`/`check.wordpress.favicon` — their probes' stderr participates in last-wins, the one sanctioned mutate-during-phase key, so consumers reading after the phase (B48's smell notices today) MUST read `site_context["wp_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry) |
+| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (I10, NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str) — the campaign's first hook-declared produced keys. They are DAG-declared (in the hook's `produces`), present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
+| `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the legacy `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. **I9 keys:** `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy — the B39 table became a `site_post_gather` hook at I10, `main()` no longer reads it), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` (I10) — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (B48's smell emission today) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry. Smell precedence is provably unchanged by I10 — no pair of writers swapped relative order, so no notice-csv value diverges, D-i10-4) |
 | `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks) |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext` and no arguments until I13's `RunState`; fired first thing in `finish_run()` on completed and aborted runs — the seam for future run-level artifact hooks) |
 
@@ -680,7 +722,15 @@ Non-obvious things the harness relies on:
   the gateway module's namespace, so patching the remnant's imported binding would not intercept
   them (a silent test defect, PD#14). Module-singleton patches are unaffected — `psh.time.sleep`
   and `psh.subprocess.Popen` mutate shared module objects both gateway and `_legacy` import, so
-  they apply without repointing. Or use the PATH-shim fake `terminus` (`tests/shims/terminus`,
+  they apply without repointing. **`psh/gather.py` binds `run_terminus` in its OWN namespace**
+  (`from psh.gateway import run_terminus`) for `gather_drupal`'s composer dry-run, which calls
+  `run_terminus(...)` directly (composer's dry-run output is human-readable text, not JSON, so it
+  can't go through the JSON-decoding `terminus()` wrapper) — the same two-binding gotcha as the
+  wrappers. So a test exercising `gather_drupal` must patch **BOTH** `psh.gateway.run_terminus`
+  AND `psh.gather.run_terminus` (the `gateway` fixture repoints only the former; a gather test
+  that patches just it makes **real** Terminus subprocess calls — a mock that looks installed but
+  isn't, I10 Task 4). See `tests/integration/test_gather_drupal.py`'s module docstring.
+  Or use the PATH-shim fake `terminus` (`tests/shims/terminus`,
   record/replay) for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
 - **The suite must stay green on a sqlite-only install.** `[mysql]` is an optional extra and the
   setup line above sanctions dropping it, so a test needing a real MySQL engine
@@ -763,6 +813,26 @@ Non-obvious things the harness relies on:
   contract keys and the extended `stuff_gather_contract` (same-`add_on_updates`-object
   included) are pinned by `tests/unit/test_contract_registry.py`;
   `test_documented_sc_facade_names_exist` pins `sc.wp_eval`/`sc.wp_error`.
+- **psh/gather Drupal half + check/drupal + check/addon_updates + Drupal-UA tests (I10).**
+  Integration tier: `tests/integration/test_gather_drupal.py` (`psh.gather.gather_drupal`
+  via the `gateway` fixture + `sc.SiteContext` — D8+ composer-audit + D7 pm:updatestatus
+  happy paths, the fatal core-status/pm:list/pm:updatestatus/composer-update notices, the
+  last-wins smells, and the **D-i10-7 pin** that a D7 `"type": "module"` row renders
+  `module`; its module docstring records the two-binding `run_terminus` seam trap — patch
+  BOTH `psh.gateway.run_terminus` and `psh.gather.run_terminus`, see § Two mock seams),
+  `test_check_drupal_init.py`/`test_check_drupal.py` (config gating + declarations in order;
+  the multisite gate/probe/key-absence + `multisite-check` notice, papc/d7_eol delegation),
+  `test_check_addon_updates_init.py`/`test_check_addon_updates.py` (gating + the
+  `updates-addons` table incl. the same-object read), `test_check_umich_drupal_ua.py` (the
+  UA seams, the **D-i10-4** `drush_smell`-rebind pin, and the **D-i10-6** gating-change proof:
+  umich-disabled registers no `drupal_ua`), and the syrupy render files
+  `test_drupal_notice_render.py` / `test_addon_updates_notice_render.py` /
+  `test_umich_drupal_ua_notice_render.py` / `test_smell_notice_render.py` (Invariant-8 byte
+  pins; the last pins the **D-i10-8** composer de-indent). Unit tier:
+  `tests/unit/test_no_primary_domain_notice.py` (the D-i10-3 pure helper), and
+  `tests/unit/test_smell_notices.py` gained the D-i10-8 column-0 assertions.
+  `test_hook_dag.py`'s `ALL_PACKAGES` gained all four then-missing packages (I8/I9 drift
+  repair); `test_documented_sc_facade_names_exist` pins `sc.drush_php_script`/`sc.drush_error`.
 - **Shared DNS-test infrastructure (`tests/helpers/`).** `dnsfake.py` has the fake
   `dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`) and
   `recording_console` (a wide `record=True` Console, read back with `export_text()` — not `capsys`,
@@ -830,16 +900,18 @@ Non-obvious things the harness relies on:
 - **The reusable (non-UMich) path is only partly de-U-M-ified.** Bugs hide here because production
   always runs with the UMich plugin enabled, so the non-U-M golden is the only guard. **Still
   hardcoded U-M** in core (not yet relocated to the `umich` packages): the date-driven
-  annual-billing notices, the Drupal user-agent check (inline until I10 relocates it to
-  `check/umich/`; the umich-oidc-login/Hummingbird checks moved to `check/umich/` at I9 and are
-  now `[UMich].enabled`-gated), and the
+  annual-billing notices (until I12), and the
   branding in `email_template.html` (its.umich.edu URLs, `webmaster@umich.edu`, `node/4705`).
+  (The Drupal user-agent check LEFT this list at I10: it relocated to
+  `check/umich/drupal_ua.py` and is now `[UMich].enabled`-gated — U-M content living in the
+  U-M package where it belongs, the umich-oidc-login/Hummingbird I9 precedent.)
   Also **hardcoded U-M but living in the generic check packages** (un-gated U-M links moved
   verbatim when the checks relocated — the packages are generic because §3.2 assigns these
   platform checks there; de-U-M-ifying them is post-campaign/I14 work): in `check/pantheon/`
   (I8) the `frozen`, `no-live-env-but-paid-plan`, and `updates-*` notice bodies (its.umich.edu /
-  procurement links), and in `check/wordpress/` (I9) the `no-favicon` notice body
-  (its.umich.edu documentation links). The
+  procurement links), in `check/wordpress/` (I9) the `no-favicon` notice body
+  (its.umich.edu documentation links), and in `check/addon_updates/` (I10) the `updates-addons`
+  notice body (its.umich.edu support link). The
   non-U-M golden does **not** assert "no umich.edu anywhere", so it will not catch new leakage —
   keep institution-specific logic behind config flags / the `umich` plugin+check packages.
 - **Cache-check tests.** The `check/cloudflare/` modules are loaded standalone (SourceFileLoader;

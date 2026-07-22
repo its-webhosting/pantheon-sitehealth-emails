@@ -263,6 +263,14 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   below are being absorbed by it as it runs; items tagged **(post-campaign)** wait until it
   finishes, because each one moves the rendered-email goldens the campaign holds byte-identical.
 
+* Add a `mutates` hook declaration to the DAG **(post-campaign)** — a third per-hook edge kind
+  (beside `consumes`/`produces`) that orders a `site_post_gather` smell-notice consumer *after* the
+  in-place `wp_smell`/`drush_smell` mutators (`check.wordpress.ocp`/`.favicon`,
+  `check.umich.drupal_ua`), which today are deliberately DAG-invisible (D-i9-3); declined in-campaign
+  at I10 (user decision) because it is engine surface no move needs, but it is what would let B48's
+  smell notices become a `check/addon_updates/` hook instead of staying an inline emission in `main()`
+  (LEDGER I10 amendment 1).
+
 * ~~Add ruff for linting~~ — **done, narrowly** (2026-07-16). `[tool.ruff.lint]` in `pyproject.toml` selects only `E722`, `BLE001`, `S105`, `S106` — each one mechanizes a directive that already existed in prose (`prompts/directives.md` PD#2, PD#6), so nothing there is new policy. It runs in `./run-tests` (a gate) and in `.claude/hooks/ruff-check.sh` (advisory, at edit time). Both read `pyproject.toml`; neither passes `--select`. Two follow-ups, deliberately deferred:
   * **Broaden the rule set** **(campaign)** — now being executed by the modularization campaign's lint/type ratchet rather than deferred. `ruff check .` on the default set reports **45 findings** (measured 2026-07-17: 26 F541, 8 E741, 4 E713, 3 F841, 2 F401, 1 E402, 1 E712); the campaign goes further, gating every un-grandfathered file under `ruff-broad.toml` (`select = ALL` minus a shrinking exclude list) plus `[tool.pyright]`, per CAMPAIGN.md §13. Each increment deletes its files from the grandfather list and cleans them as they move, so the finding surface shrinks with the remnant.
   * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.

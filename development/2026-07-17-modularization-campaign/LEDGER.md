@@ -1091,3 +1091,213 @@ empty — the new syrupy files live under `tests/integration/__snapshots__/`).
   Drupal/composer code — I10 decides whether its relocated checks get the same
   sanctioned-rebind treatment as `wp_smell` (analyze the D-i9-4 way if the overwrite
   order changes).
+
+## I10 — drupal + addon_updates (2026-07-22, commits 8034780/eedd60c/03c81c0/edafe0d + closing docs commit)
+
+Spec/plan: `development/2026-07-22-mod-I10-drupal/` (`SPEC.md` §9 carries the pasted
+acceptance; task reports + reviews under `.superpowers/sdd/`). Four per-task code commits,
+each green: `8034780` (Task 1 — Drupal UA check → `check/umich/` + drush façade names),
+`eedd60c` (Task 2 — `check/drupal/` package + `main()` post-dns rewiring + hook-DAG test
+repair), `03c81c0` (Task 3 — `check/addon_updates/` package), `edafe0d` (Task 4 —
+`psh/gather.py` Drupal half + smell builder + the two named fixes), plus this closing docs
+commit (CLAUDE.md / CAMPAIGN.md amendments / README TODO / memory / this entry / the dev
+folder). Full suite at close **including the live tier** (Terminus credentials present —
+`ls ~/.terminus/cache/tokens/` shows one token, network to Pantheon reachable, the 2
+live-marked tests ran and passed) = **991 passed / 1 skipped** (the skip is
+`test_db_credentials.py`'s `importorskip("MySQLdb")` on a sqlite-only install), all three
+gates (`All checks passed!` ×2, pyright `0 errors`), 107 snapshots; four goldens
+byte-identical across the increment (`git diff eff1b40 -- tests/e2e/__snapshots__/` empty).
+
+- **Moved:** exactly the §11-row-I10 move set (B30, B35, B39, B48 *builder*; baseline
+  740–791 = `check_drupal_module`), split by block:
+  - **B30 multisite probe → `check/drupal/multisite.py`**, hook
+    `check.drupal.multisite.check_multisite` at `site_post_dns`, consumes
+    `['custom_domains', 'primary_domain']`, **produces `['drupal_multisite',
+    'drupal_multisite_smell']`** — the **campaign's first hook-produced (DAG-declared,
+    not registry-owned) contract keys** (D-i10-3; amendment 2). `main()` reads them with
+    `.get()` right after `invoke_hooks("site_post_dns")` to seed `drush_smell` (if the
+    probe smell is non-empty) and to gate the still-core `no-primary-domain` notice.
+  - **B35 checks → `check/drupal/` + `check/umich/`**: `papc.py` (PAPC module) and
+    `d7_eol.py` (`drupal7-eol` notice + tag1_d7es check, one hook) at `site_post_gather`,
+    registered multisite → papc → d7_eol (D-i10-5); the Drupal UA check →
+    `check/umich/drupal_ua.py` at `site_post_gather`, after `hummingbird` (D-i10-6).
+  - **B35 gather core → `psh/gather.gather_drupal`** returning the new **`DrupalGather`**
+    NamedTuple (`drupal_version`/`modules`/`add_on_updates`/`drush_smell`/`composer_smell`/
+    `results_entry`; a §6-unlisted supporting return type — the I7 `PlanRecommendation` /
+    I9 `WordPressGather` precedent, ledger note not amendment), plus `check_drupal_module`
+    beside its WP sibling. `main()`'s Drupal branch collapses to the D-i10-2 threading
+    (last-wins smell overwrite preserved; the D7-vs-D8+ branch stays *inside*
+    `gather_drupal` — it selects gather strategies, not checks).
+  - **B39 add-on table → `check/addon_updates/table.py`**, hook
+    `check.addon_updates.table.check_add_on_updates` at `site_post_gather`, consumes
+    `['add_on_updates']`, reading the SAME list object the stuffer publishes; the stray
+    `rt-plan""` doubled quote moved byte-verbatim (golden-rendered, do NOT fix).
+  - **B48 smell-notice *builder* → `psh/gather.build_smell_notices`; its emission stays
+    in `main()`** (amendment 1). The `no_primary_domain_notice(site, custom_domains,
+    primary_domain, is_multisite) -> dict | None` pure helper was extracted into
+    `psh/_legacy.py` (the Spine's named-extraction rule — no seam above the golden; its
+    final home is I13's call, ledger-noted like the I1 builders).
+  Column-0 `f"""` notice-literal interiors moved byte-for-byte (Invariant 8;
+  extracted-block diffs pasted in the four task reports — every difference a named,
+  sanctioned substitution class).
+
+- **Two CAMPAIGN.md amendments (user-approved 2026-07-22, applied to the document this
+  closing commit — the preamble's edit-the-document-AND-ledger rule):**
+  1. **B48's emission stays in `main()`; only its builder moves** (D-i10-1). Edited §3.1's
+     `psh/gather.py` row (+`build_smell_notices`), §3.2's `check/addon_updates/` row (B39
+     only + a B48-not-a-hook paragraph), §3.3's stays-in-`main()` list (+the B48 emission
+     call), and §11 row I10. Reason: a `site_post_gather` smells hook cannot be ordered
+     after the `wp_smell`/`drush_smell` in-place mutators — a `produces: ['wp_smell']`
+     declaration is a §4-condition-2 fatal against the core registry (D-i9-3), and
+     alphabetical registration puts `check/addon_updates` FIRST in the phase — and
+     relocation would also add smell rows to `--only-warn` csv output (B48 sits after that
+     gate today), a §8 surface change. The `mutates` hook declaration that would dissolve
+     this class is **post-campaign work → README TODO** (user decision).
+  2. **§4 gains the hook-produced-key definition** (one paragraph). Hooks MAY produce keys
+     of their own — validated by conditions 1–4 — but such keys are DAG-declared, present
+     only when the producing hook ran, `.get()`-read, and NOT part of the guaranteed
+     per-phase contract (whose new-keys list stays exhaustive for registry-owned keys).
+     Reason (D-i10-3): the multisite probe ships the campaign's first such keys; without
+     the edit CAMPAIGN.md's glossary ("guaranteed keys") and §4's exhaustive list would
+     silently contradict shipped code.
+
+- **D-i10-6 gating change (deliberate, the D-i9-6 precedent — this is the record):** the
+  Drupal UA check previously ran **un-gated** — a non-U-M Drupal 8+ site was told to
+  configure a `…; UMich; …` user agent, factually wrong off-campus. After I10 it runs only
+  when `[UMich].enabled` (proof: `test_check_umich_drupal_ua.py`'s umich-disabled
+  registers-nothing case). For a non-U-M run the `drupal-ua`/`drupal-ua-check` notices and
+  csv rows no longer occur — NOT a §8 csv-*value* change (rows appear/disappear with
+  config, the cachecheck precedent); Invariant 3 moves in its intended direction. **Golden
+  consequence:** the Drupal golden (`its-wws-test2`, umich-disabled) runs the un-gated UA
+  check *today* with a compliant fixture UA → zero notice; post-I10 `drupal_ua` is not
+  registered, so that `drush php:script` call + its `=== Checking for Drupal user agent`
+  banner disappear from the run — stdout-only (§8-free), the `.eml` unaffected, the goldens
+  byte-identical (verified empty diff). The now-unused fixture
+  `tests/fixtures/terminus-drupal/c17e10215ba09beb.json` is **kept, not deleted**
+  (Invariant 10 posture; the replay shim is argv-keyed so an unused fixture is harmless).
+
+- **D-i10-4 (smell precedence — the D-i9-4 analysis; NO §8 amendment):** `drush_smell`
+  joins `wp_smell` as a **sanctioned mutate-during-phase key** (mutator:
+  `check.umich.drupal_ua`, which does NOT declare `produces: ['drush_smell']` — the D-i9-3
+  rule); B48's emission already reads `site_context["drush_smell"]` (I9 repoint), so the
+  rebind reaches it. Post-I10 write order (probe → core-status → pm:list → UA) is
+  **identical in every co-occurrence** to today's — no pair of writers swapped relative
+  order, unlike I9's theme/OCP flip — so no notice-csv value can diverge and §8 needs no
+  amendment. Both `psh/modules.py` "one sanctioned mutate-during-phase key" occurrences and
+  CLAUDE.md's contract row now say two (`wp_smell`, `drush_smell`).
+
+- **Named fixes shipped (both red-first; RED evidence in the task reports):**
+  1. **D-i10-7** (updatestatus `type in u` builtin bug): `"type": u["type"] if type in u
+     else "package"` tested whether the **`type` builtin** is a dict key — always False, so
+     every D7 pm:updatestatus row rendered `package`. Fixed in the moved `gather_drupal` to
+     `u.get("type", "package")` (the `"type" in u` fix + ruff's immediate SIM401
+     simplification; behavior-identical). Notice-body value only (csv carries
+     `updates-addons,{num}`); zero golden impact (the Drupal golden's rows come from the
+     D8+ composer-audit path). RED: `task-4-report.md` §3.3 (`'package' == 'module'`
+     asserted on the moved-but-unfixed function, both runs quoted in Task 4's single
+     commit).
+  2. **D-i10-8** (composer-smell baked-in indentation — **LEDGER I1 Obs. 4 discharged**):
+     `build_smell_notices`' composer `message`/`text` literals carried 8 spaces of
+     accidental leading indentation on every interior line; de-indented to column 0 as the
+     builder moved, matching the wp/drush siblings. NOT an Invariant-8 violation (that locks
+     *deliberate* column-0 literals; this is the ledgered bug), NOT a csv change, zero
+     golden impact (no golden renders any smell). RED: `task-4-report.md` §3.1
+     (`assert not composer["message"].startswith("\n        ")` failing on the pre-move
+     builder).
+
+- **Contract/config/sc additions:** **no new core-stuffed CONTRACT keys** (I10 adds only
+  hook-produced keys, above — the multisite probe's, which live in the hook's `produces`,
+  not the registry). `[Check.drupal]` and `[Check.addon_updates]` config sections, `enabled`
+  **default TRUE** (D-i8-6 shape — absent section/key still registers; documented in
+  `sample-pantheon-sitehealth-emails.toml` after `[Check.wordpress]`). **Documented disable
+  consequences:** `[Check.drupal].enabled = false` → the multisite probe never runs, so a
+  Drupal *multisite* with >1 custom domains and no primary domain now gets the
+  info-severity `no-primary-domain` notice (the operator opted out of the probe that
+  suppressed it — D-i10-3, ledgered not guarded); `[Check.addon_updates].enabled = false`
+  → the `updates-addons` notice leaves reports AND `--only-warn` output. `sc.drush_php_script`
+  / `sc.drush_error` façade lines added (D-i10-10; `sc.drush` deliberately NOT — no relocated
+  check calls `drush()`, the I9 `sc.wp` reasoning), pinned by
+  `test_documented_sc_facade_names_exist`. `stuff_gather_contract`'s docstring corrected
+  (D-i10-11, the LEDGER I9 obligation — WP `*_version` is `""` on failure, Drupal
+  `"unknown"`; doc-only, no `CONTRACT` change).
+
+- **Deviations / discovered tasks (dispositions):**
+  - **`test_hook_dag.py` `ALL_PACKAGES` drift** (spec-review finding, PD#14): the list was
+    last touched at I4 and silently missed `check/pantheon` (I8) and `check/wordpress`
+    (I9), so CLAUDE.md's "loads every real check/plugin package" had been **false for two
+    increments** — I8/I9 shipped the drift silently. → **fixed at Task 2** (`eedd60c`):
+    added `pantheon`, `wordpress`, `drupal`, `addon_updates`; the per-phase `got == names`
+    assertion still holds (DAG stays edgeless — nothing consumes the probe keys). CLAUDE.md's
+    sentence restored + annotated with the false-window note.
+  - **The two-binding `run_terminus` seam trap** (Task 4 discovery, PD#14): `psh/gather.py`
+    binds `run_terminus` in its OWN namespace (`from psh.gateway import run_terminus`) for
+    `gather_drupal`'s composer dry-run direct call; the `gateway` fixture repoints only
+    `psh.gateway.run_terminus`, so a gather test patching just it makes **real** Terminus
+    subprocess calls (a mock that looks installed but isn't — the first RED run of
+    `test_gather_drupal.py` did exactly this). → **fixed in-test** (patch BOTH
+    `psh.gateway.run_terminus` and `psh.gather.run_terminus`, documented in the test's module
+    docstring) **+ a durable CLAUDE.md § Two mock seams note** (this closing commit).
+  - **Task 4's §8.3 sanctioned-class additions** (opus review, real tool output over the
+    prediction): **E713 ×2** in `check_drupal_module` (`not X in Y` → `X not in Y`, surfaced
+    only once the code left the grandfathered `_legacy.py`), the D-i10-7 fix expressed as
+    `u.get("type", "package")` (**SIM401**, behavior-identical to the conditional form), and
+    an `advisory = None` init + scoped `# pyright: ignore[reportOptionalSubscript]` in the
+    composer-audit loop (an empty `advisory_list` is unreachable in practice, but
+    `psh/gather.py` is pyright-gated where `_legacy.py` was not; `None["link"]` would still
+    raise loudly — PD#1-preserving). All behavior-preserving; the controller **amended SPEC
+    §8.3 in place** to list them. Also `import html` was genuinely orphaned in `_legacy.py`
+    by the move and removed (Karpathy #3); `drush`/`run_terminus`/`drush_php_script`/
+    `drush_error` are NOT orphaned (kept for the `psh.*` re-export contract the wrapper tests
+    rely on — the fix-the-class lesson: zero internal call sites ≠ orphan when other files
+    import through the namespace).
+  - **The two probe-smell seeding lines in `main()` rest on inspection** (D-i10-3): they
+    have no seam above the golden and are not golden-exercised (every golden site has ≤1
+    custom domain, so the probe never runs); accepted and ledger-noted (the I4
+    `HookDagError`-glue precedent). The halves they join are pinned separately
+    (`test_check_drupal.py`'s produced-key pins; D-i10-4's smell pins).
+  - **D-i10-12 subject-line consequence** (informational, ledgered to make it deliberate —
+    I9 shipped the same class without comment): the subject takes the FIRST sorted notice's
+    `short`, so for a production site with **no alert** whose first *warning* changes under
+    the within-tier notice-insertion shifts (e.g. `updates-addons` now sorts first in
+    `site_post_gather` where it used to run last), the email subject can change. Content of
+    every notice unchanged; **zero golden impact** (each golden's leading notice is unmoved —
+    `updates-addons` is the only warning-tier notice in all four goldens, so its within-tier
+    position is render-identical wherever inserted; the `Action Required` subjects come from
+    the `no-domains` alert / the cdn golden's from `updates-addons` itself).
+  - **D-i10-13 `Notice`-class adoption stays deferred to I12/I14** (PD#9, re-ledgered at
+    close): every notice I10 touched carries extra csv fields (`not-installed,{name}`,
+    `turned-off,{name}`, `updates-addons,{num}`, `drupal-ua,{ua}`, the three smell csvs),
+    which `Notice` cannot hold without the reserved §6 field-set amendment; taking it here
+    would widen the campaign's second-largest increment for zero behavioral gain. I12's spec
+    author inherits it with the annual-bill candidates.
+  - No others — the four task reports found no further gaps beyond the ruff/pyright
+    dispositions and the items above.
+
+- **Ratchet (§13):** `check/drupal/`, `check/addon_updates/`, `check/umich/drupal_ua.py`
+  **born gated** — new files never in `ruff-broad.toml`'s `extend-exclude` (the
+  `check/umich/` entry was narrowed to the two legacy siblings at I9); `psh/gather.py`
+  already gated. **I10 deletes NOTHING from and adds nothing to the exclude list** (I2–I9
+  precedent — the moved/new code lands in fresh gated files; `psh/_legacy.py` stays
+  grandfathered). Dispositions confirmed against real tool output (PD#14): on
+  `gather_drupal` — `C901`/`PLR0912`/`PLR0915` noqa (verbatim ~200-line body); on
+  `check_drupal_module` — `PLR0913` noqa (signature unchanged, the I9
+  `check_wordpress_plugin` precedent) + E713 ×2 rewrite; in the composer-audit region —
+  `PLW2901`/`PLR2004` noqa, `F541` f-drop on `"fix composer error"`, ERA001 commented
+  `drush_smell` line → prose; `F541` f-drop on `"Migrate off Drupal 7 ASAP"` and `E712`
+  (`== True` → `is True`) in `multisite.py`; `PLC0415` two-line noqa on the two new
+  `escape_url` bridges. **PLC0206 did NOT fire** (predicted-possible; recorded, no rewrite).
+  `check/addon_updates/table.py` needed **zero** suppressions. **Pyright scope UNCHANGED**
+  (`psh/` minus `_legacy.py`) — D-i8-7/D-i9-8 inherited (D-i10-9): the hooks call
+  runtime-assigned `sc` attributes (now including `sc.drush_php_script`/`sc.drush_error`)
+  pyright cannot see on `script_context`. **I11 inherits both decisions.**
+
+- **Open questions for I11:** proceed per CAMPAIGN.md §11 row I11 (`psh/charts.py`; B13 cap
+  geometry + B44–B45 chart data-prep + matplotlib build → PNG bytes). **Note for I11's spec
+  author:** B43's `pprint` diagnostics, the empty-`plan_on_day` synthetic-day guard, and the
+  `build_plan_over_time` call + its date/chart prep all stay in `main()` (LEDGER I6 D-i6-4
+  and I7 — I6 moved only the aggregation loop, I7 moved the plan-cost bodies but not the
+  chart call sites); the chart region consumes `main()` locals that the traffic (I6) and
+  plans (I7) moves already shaped, so I11 threads shaped data rather than re-deriving it.
+  `Notice`-adoption for extra-csv notices remains I12/I14; the `escape_url` bridges in
+  `psh/gather.py` (now two Drupal ones beside the WP one) are all the I12 obligation
+  (module-level `from psh.render import escape_url` when it moves).
