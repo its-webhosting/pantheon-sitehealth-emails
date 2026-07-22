@@ -13,7 +13,6 @@
 import argparse
 import calendar
 import datetime
-import html
 import importlib
 import io
 import json
@@ -225,8 +224,12 @@ from psh.gateway import (
     wp_eval,
 )
 from psh.gather import (
+    DrupalGather,
     WordPressGather,
+    build_smell_notices,
+    check_drupal_module,
     check_wordpress_plugin,
+    gather_drupal,
     gather_wordpress,
     wordpress_network_url,
 )
@@ -265,58 +268,6 @@ from psh.modules import (
 )
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
-
-
-def check_drupal_module(
-    site: str,
-    installed_mods: dict,
-    name: str,
-    display_name: str,
-    url: str,
-    reason: str,
-    level: str = "warning",
-) -> list:
-    notices = []
-    if not isinstance(installed_mods, dict):
-        return notices  # this error should already have been handled by our caller, so skip additional work
-
-    icon = "&#x26A0;"  # warning sign
-    if level == "info":
-        icon = "&#x1F50E;"  # magnifying glass
-
-    if not name in installed_mods:
-        sc.console.print(
-            f":exclamation: [bold red] ATTENTION: {site} does not have the {display_name} module installed."
-        )
-        notices.append(
-            {
-                "type": level,
-                "icon": icon,
-                "csv": f"{site},not-installed,{name}",
-                "short": f"install module {name}",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be installed:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} Drupal module\n<{url}>\nneeds to be installed: {reason}",
-            }
-        )
-        return notices
-
-    mod = installed_mods[name]
-    if not "status" in mod or mod["status"] != "Enabled":
-        sc.console.print(
-            f":exclamation: [bold red] ATTENTION: {site} has the {display_name} module installed but it is not enabled."
-        )
-        notices.append(
-            {
-                "type": level,
-                "icon": icon,
-                "csv": f"{site},turned-off,{name}",
-                "short": f"enable module {name}",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be enabled:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} Drupal module\n<{url}>\nneeds to be enabled: {reason}",
-            }
-        )
-
-    return notices
 
 
 def smtp_login() -> SMTP_SSL:
@@ -870,86 +821,6 @@ def abort_run(
     sys.exit(1 if reason == "database" else 130)
 
 
-def build_smell_notices(site_name, wp_smell, drush_smell, composer_smell):
-    """Return the list of smell notice dicts (possibly empty) for one site."""
-    notices = []
-    if wp_smell != "":
-        notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site_name},wp-smell,{json.dumps(wp_smell).replace(',', '\\,')}",
-                "short": "PHP code problems",
-                "message": f"""
-<p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site_name}</strong>.
-Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(wp_smell)}</pre>
-""",
-                "text": f"""
-The "wp" (WP CLI) command is reporting PHP code problems with
-{site_name}. Even if this is not breaking anything at
-the moment, it should be fixed to avoid possible future problems:
-
------ START WP CLI REPORTED PROBLEMS -----
-{wp_smell}
------ END OF WP CLI REPORTED PROBLEMS -----
-
-    """,
-            }
-        )
-
-    if drush_smell != "":
-        notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site_name},drush-smell,{json.dumps(drush_smell).replace(',', '\\,')}",
-                "short": "PHP code problems",
-                "message": f"""
-<p>The <code>drush</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
-if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(drush_smell)}</pre>
-""",
-                "text": f"""
-The "drush" command is reporting PHP code problems with
-{site_name}. Even if this is not breaking anything
-at the moment, it should be fixed to avoid possible future problems:
-
------ START DRUSH REPORTED PROBLEMS -----
-{drush_smell}
------ END OF DRUSH REPORTED PROBLEMS -----
-
-""",
-            }
-        )
-
-    if composer_smell != "":
-        notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site_name},composer-smell,{json.dumps(composer_smell).replace(',', '\\,')}",
-                "short": "PHP code problems",
-                "message": f"""
-        <p>The <code>composer</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
-        if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-        <pre>{html.escape(composer_smell)}</pre>
-        """,
-                "text": f"""
-        The "composer" command is reporting PHP code problems with
-        {site_name}. Even if this is not breaking anything
-        at the moment, it should be fixed to avoid possible future problems:
-
-        ----- START COMPOSER REPORTED PROBLEMS -----
-        {composer_smell}
-        ----- END OF COMPOSER REPORTED PROBLEMS -----
-
-        """,
-            }
-        )
-    return notices
-
-
 def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite):
     """Return the no-primary-domain info notice dict, or None when it does not apply
     (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3)."""
@@ -1482,212 +1353,16 @@ def main() -> None:
                 site_results[site["name"]] = gather.results_entry
 
             elif site["framework"].startswith("drupal"):
-                sc.console.print(
-                    f"[bold magenta]=== Checking Drupal modules for {site['name']}:"
-                )
-                drupal_status, errors, fatal = drush(live_site, "core-status")
-                if fatal or drupal_status is None:
-                    site_context.add_notices(
-                        drush_error(
-                            site["name"],
-                            "core-status",
-                            f"Unable to run <code>drush core-status</code> for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    drush_smell = errors
-                if sc.options.verbose:
-                    pprint(drupal_status)
-                drupal_version = (
-                    drupal_status["drupal-version"]
-                    if isinstance(drupal_status, dict) and "drupal-version" in drupal_status
-                    else "unknown"
-                )
-                site_results[site["name"]] = {
-                    "framework": site["framework"],
-                    "version": drupal_version,
-                    "plan_name": site["plan_name"],
-                }
-                mods, errors, fatal = drush(live_site, "pm:list")
-                if fatal or mods is None:
-                    site_context.add_notices(
-                        drush_error(
-                            site["name"],
-                            "pm-list",
-                            f"Unable to run <code>drush pm:list</code> for {site['name']}.",
-                            errors,
-                        )
-                    )
-                elif errors != "":
-                    drush_smell = errors
-                if sc.options.verbose:
-                    pprint(mods)
-                # The PAPC module check, the Drupal 7 EOL alert, and the tag1_d7es
-                # module check moved to check/drupal/papc.py and check/drupal/d7_eol.py
-                # (site_post_gather hooks, campaign I10).
-                # else: the four U-M Cloudflare module checks (cloudflare, cloudflarepurger,
-                # purge_processor_lateruntime, purge_processor_cron) moved to
-                # check/umich/cloudflare_cms.py (site_post_gather hook).
-                if drupal_version.startswith("7."):
-                    updates, errors, fatal = drush(live_site, "pm:updatestatus", "--full")
-                    if fatal:
-                        site_context.add_notices(
-                            drush_error(
-                                site["name"],
-                                "pm-updatestatus",
-                                f"Unable to run <code>drush pm:updatestatus</code> for {site['name']}.",
-                                errors,
-                            )
-                        )
-                    # elif errors != '':
-                    #     drush_smell = errors  # there will always be verbose progress output for pm:upstatestatus
-                    if sc.options.verbose:
-                        pprint(updates)
-                    if isinstance(updates, dict):
-                        for package in updates:
-                            u = updates[package]
-                            current_version = u["existing_version"]
-                            new_version = current_version
-                            if "candidate_version" in u:
-                                new_version = u["candidate_version"]
-                            elif "recommended" in u:
-                                new_version = u["recommended"]
-                            elif "latest_version" in u:
-                                new_version = u["latest_version"]
-                            if new_version == current_version:
-                                new_version = f"none: {u['project_status']}"
-                            add_on_updates.append(
-                                {
-                                    "slug": package,
-                                    "name": f'<a href="{escape_url(u["link"])}">{html.escape(u["title"])}</a>'
-                                    if "link" in u
-                                    else html.escape(u["title"]),
-                                    "type": u["type"] if type in u else "package",
-                                    "current_version": current_version,
-                                    "new_version": new_version,
-                                }
-                            )
-                else:
-                    sc.console.print(
-                        f"[bold magenta]=== Dry-run update for packages on {site['name']}:"
-                    )
-                    command = ["composer", live_site, "--", "update", "--dry-run"]
-                    updates, errors, fatal = run_terminus(command)
-                    if fatal or updates is None:
-                        site_context.add_notice(
-                            {
-                                "type": "alert",
-                                "icon": "&#x1F6A8;",  # police car light
-                                "csv": f"{site['name']},composer-update",
-                                "short": f"fix composer error",
-                                "message": f"""
-                    <p>Unable to run <code>composer update --dry-run</code> for {site["name"]}.
-                    <code>composer</code> returned the following error:</p>
-                    <pre>{html.escape(errors)}</pre>
-                    """,
-                                "text": f"""
-                    Unable to run 'composer update --dry-run' for {site["name"]}.
-                    composer returned the following error:
+                gather = gather_drupal(site, live_site, site_context)
+                drupal_version = gather.drupal_version
+                mods = gather.modules
+                add_on_updates = gather.add_on_updates
+                if gather.drush_smell != "":
+                    drush_smell = gather.drush_smell
+                if gather.composer_smell != "":
+                    composer_smell = gather.composer_smell
+                site_results[site["name"]] = gather.results_entry
 
-                    ----- START DRUSH ERROR -----
-                    {errors}
-                    ----- END ERROR -----
-
-                    """,
-                            }
-                        )
-                    elif errors != "":
-                        composer_smell = errors
-                    if sc.options.verbose:
-                        pprint(updates)
-                    package_updates = {}
-                    if isinstance(updates, str):
-                        for line in updates.split("\n"):
-                            # Example line:
-                            # - Upgrading drupal/admin_toolbar (3.4.2 => 3.5.3)
-                            m = re.search(
-                                r"^\s*-\s+Upgrading\s+(\S+)\s+\((.+) => (.+)\)\s*$", line
-                            )
-                            if m:
-                                package_updates[m.group(1)] = {
-                                    "current": m.group(2),
-                                    "new": m.group(3),
-                                }
-                    sc.console.print(
-                        f"[bold magenta]=== Running audit for packages on {site['name']}:"
-                    )
-                    audit, _errors, _fatal = terminus("composer", live_site, "--", "audit")
-                    if isinstance(audit, dict):
-                        if "advisories" in audit:
-                            package_list = audit["advisories"]
-                            for package in package_list:
-                                vuln = []
-                                advisory_list = package_list[package]
-                                for advisory in advisory_list:
-                                    if isinstance(advisory, str):
-                                        advisory = package_list[package][advisory]
-                                    if sc.options.verbose:
-                                        sc.console.print(
-                                            f"[bold yellow]Advisory for {package}:"
-                                        )
-                                        pprint(advisory)
-                                    title = advisory["title"]
-                                    t = title.split(" - ")
-                                    if advisory["severity"]:
-                                        severity = advisory["severity"]
-                                    elif len(t) == 4:
-                                        severity = t[1]
-                                        title = " - ".join([t[0], t[2], t[3]])
-                                    else:
-                                        severity = "unknown"
-                                    vuln.append(
-                                        {
-                                            "title": f'<a href="{escape_url(advisory["link"])}">{html.escape(title)}</a>',
-                                            "severity": severity,
-                                        }
-                                    )
-                                current_version = "unknown"
-                                new_version = "unknown"
-                                new_version_url = None
-                                if package in package_updates:
-                                    if "current" in package_updates[package]:
-                                        current_version = package_updates[package][
-                                            "current"
-                                        ]
-                                    if "new" in package_updates[package]:
-                                        new_version = package_updates[package]["new"]
-                                    elif "cve" in package_updates[package]:
-                                        cve = package_updates[package]["cve"]
-                                        new_version = f"See {cve}"
-                                        new_version_url = (
-                                            f"https://nvd.nist.gov/vuln/detail/{cve}"
-                                        )
-                                if new_version == "unknown":
-                                    new_version = "See advisory"
-                                    new_version_url = advisory["link"]
-                                a = {
-                                    "slug": package,
-                                    "name": vuln,
-                                    "type": "package",
-                                    "current_version": current_version,
-                                    "new_version": new_version,
-                                }
-                                if new_version_url:
-                                    a["new_version_url"] = new_version_url
-                                add_on_updates.append(a)
-                        if "abandoned" in audit and len(audit["abandoned"]) > 0:
-                            sc.console.print("[bold yellow]Abandoned packages:")
-                            pprint(audit["abandoned"])
-                    else:
-                        sc.console.print(
-                            f"[bold red]Unable to run <code>composer audit</code> for {site['name']}"
-                        )
-                    if sc.options.verbose:
-                        pprint(audit)
-                    # The Drupal user-agent check moved to check/umich/drupal_ua.py
-                    # (campaign I10, D-i10-6) -- a site_post_gather hook, now
-                    # [UMich].enabled-gated (a deliberate behavior change).
             else:
                 sc.console.print(
                     f":exclamation: [bold red] ATTENTION: unknown framework for {site['name']}: {site['framework']}"

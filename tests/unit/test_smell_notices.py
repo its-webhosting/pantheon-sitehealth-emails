@@ -39,3 +39,14 @@ def test_all_three_in_emission_order(psh):
     notices = psh.build_smell_notices("s", "w", "d", "c")
     codes = [n["csv"].split(",")[1] for n in notices]
     assert codes == ["wp-smell", "drush-smell", "composer-smell"]
+
+
+def test_composer_literals_are_column_zero_like_siblings(psh):
+    # D-i10-8 (LEDGER I1 Obs. 4): the composer message/text literals carried 8 spaces of
+    # accidental leading indentation on every interior line -- the wp/drush siblings are
+    # column-0.  RED on the pre-move builder (psh/_legacy.py) before the D-i10-8 de-indent.
+    notices = psh.build_smell_notices("s", "", "d", "c")
+    drush, composer = notices
+    assert not composer["message"].startswith("\n        ")
+    assert composer["message"].splitlines()[1].startswith("<p>The <code>composer</code>")
+    assert composer["text"].splitlines()[1].startswith('The "composer" command')

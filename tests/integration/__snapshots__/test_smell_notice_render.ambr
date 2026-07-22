@@ -1,0 +1,79 @@
+# serializer version: 1
+# name: test_composer_smell_notice_snapshot
+  '''
+  
+  <p>The <code>composer</code> command is reporting PHP code problems with <strong>its-wws-test1</strong>. Even
+  if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+  <pre>composer broke</pre>
+  
+  '''
+# ---
+# name: test_composer_smell_notice_snapshot.1
+  '''
+  
+  The "composer" command is reporting PHP code problems with
+  its-wws-test1. Even if this is not breaking anything
+  at the moment, it should be fixed to avoid possible future problems:
+  
+  ----- START COMPOSER REPORTED PROBLEMS -----
+  composer broke
+  ----- END OF COMPOSER REPORTED PROBLEMS -----
+  
+  
+  '''
+# ---
+# name: test_composer_smell_notice_snapshot.2
+  'PHP code problems'
+# ---
+# name: test_drush_smell_notice_snapshot
+  '''
+  
+  <p>The <code>drush</code> command is reporting PHP code problems with <strong>its-wws-test1</strong>. Even
+  if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+  <pre>drush broke</pre>
+  
+  '''
+# ---
+# name: test_drush_smell_notice_snapshot.1
+  '''
+  
+  The "drush" command is reporting PHP code problems with
+  its-wws-test1. Even if this is not breaking anything
+  at the moment, it should be fixed to avoid possible future problems:
+  
+  ----- START DRUSH REPORTED PROBLEMS -----
+  drush broke
+  ----- END OF DRUSH REPORTED PROBLEMS -----
+  
+  
+  '''
+# ---
+# name: test_drush_smell_notice_snapshot.2
+  'PHP code problems'
+# ---
+# name: test_wp_smell_notice_snapshot
+  '''
+  
+  <p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>its-wws-test1</strong>.
+  Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
+  <pre>wp broke</pre>
+  
+  '''
+# ---
+# name: test_wp_smell_notice_snapshot.1
+  '''
+  
+  The "wp" (WP CLI) command is reporting PHP code problems with
+  its-wws-test1. Even if this is not breaking anything at
+  the moment, it should be fixed to avoid possible future problems:
+  
+  ----- START WP CLI REPORTED PROBLEMS -----
+  wp broke
+  ----- END OF WP CLI REPORTED PROBLEMS -----
+  
+      
+  '''
+# ---
+# name: test_wp_smell_notice_snapshot.2
+  'PHP code problems'
+# ---

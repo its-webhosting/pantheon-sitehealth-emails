@@ -265,10 +265,13 @@ def stuff_traffic_contract(site_context: MutableMapping[str, Any], traffic_rows,
 def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, site_url,  # noqa: PLR0913 -- one param per site_post_gather contract key (10), matching CLAUDE.md's table; a config object would just re-wrap the same ten names for one call site
                           wordpress_version, plugins, drupal_version, mods,
                           add_on_updates, wp_smell, drush_smell, composer_smell) -> None:
-    """Publish the site_post_gather contract keys (CONTRACT above).  NOTE: the *_version
-    values are the string "unknown" (not None) when the version fetch failed -- None only
-    means "not that framework".  Only the plugins/modules keys use None for "gather
-    failed".  add_on_updates is a list of pending add-on updates (plugins then themes,
+    """Publish the site_post_gather contract keys (CONTRACT above).  NOTE: drupal_version
+    is the string "unknown" (not None) when the version fetch failed; wordpress_version is
+    "" on the same failure (through the gateway seam wp_eval always returns a str, so the
+    legacy "unknown" fallback in psh/gather.py is unreachable there -- SPEC D-i10-11,
+    correcting LEDGER I9 Deviations 4).  None only means "not that framework", for either.
+    Only the plugins/modules keys use None for "gather failed".  add_on_updates is a list
+    of pending add-on updates (plugins then themes,
     list order); [] when none, not that framework, or the gather failed -- stuffed as
     the SAME list object main() still reads for B39, not a copy.  wp_smell/drush_smell/
     composer_smell are str, "" when none: the stderr of the last non-fatal wp/drush/
