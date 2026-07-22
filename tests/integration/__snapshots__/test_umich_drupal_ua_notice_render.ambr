@@ -1,0 +1,26 @@
+# serializer version: 1
+# name: test_drupal_ua_notice_snapshot
+  '''
+  
+  <p>Please <a href="https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent">
+  configure the user agent string</a> that <strong>its-wws-test1</strong> uses for outgoing HTTP requests.
+  This will ensure that requests for data that this site makes of other University of Michigan websites do
+  not get blocked.</p>
+  
+  '''
+# ---
+# name: test_drupal_ua_notice_snapshot.1
+  '''
+  
+  Please configure the user agent string that its-wws-test1
+  uses for outgoing HTTP requests.  This will ensure that requests for
+  data that this site makes of other University of Michigan websites do
+  not get blocked.
+  
+  <https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent>
+  
+  '''
+# ---
+# name: test_drupal_ua_notice_snapshot.2
+  'Drupal user agent needs to be configured'
+# ---

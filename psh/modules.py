@@ -274,9 +274,10 @@ def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, sit
     composer_smell are str, "" when none: the stderr of the last non-fatal wp/drush/
     composer wrapper call that produced any.  wp_smell MAY be rebound in place during
     the site_post_gather phase by check.wordpress.ocp/check.wordpress.favicon (their
-    probe stderr participates in last-wins, SPEC D-i9-3) -- the one sanctioned
-    mutate-during-phase key; consumers must read site_context["wp_smell"], never a
-    stale main() local."""
+    probe stderr participates in last-wins, SPEC D-i9-3), and drush_smell MAY likewise
+    be rebound in place by check.umich.drupal_ua (SPEC D-i10-4) -- two sanctioned
+    mutate-during-phase keys (wp_smell, drush_smell); consumers must read
+    site_context["wp_smell"]/site_context["drush_smell"], never a stale main() local."""
     site_context["framework"] = framework
     site_context["site_url"] = site_url
     site_context["wordpress_version"] = wordpress_version
@@ -288,8 +289,9 @@ def stuff_gather_contract(site_context: MutableMapping[str, Any], framework, sit
     site_context["add_on_updates"] = add_on_updates
     # str values; "" when none.  wp_smell MAY be rebound in place during the phase by
     # check.wordpress.ocp/check.wordpress.favicon (their probe stderr participates in
-    # last-wins, SPEC D-i9-3) -- the one sanctioned mutate-during-phase key.  Consumers
-    # read site_context, never a stale local.
+    # last-wins, SPEC D-i9-3), and drush_smell MAY likewise be rebound in place by
+    # check.umich.drupal_ua (SPEC D-i10-4) -- two sanctioned mutate-during-phase keys
+    # (wp_smell, drush_smell).  Consumers read site_context, never a stale local.
     site_context["wp_smell"] = wp_smell
     site_context["drush_smell"] = drush_smell
     site_context["composer_smell"] = composer_smell

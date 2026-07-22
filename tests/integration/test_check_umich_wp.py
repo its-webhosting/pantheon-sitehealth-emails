@@ -29,10 +29,13 @@ def test_umich_enabled_registers_both_wp_checks_after_cloudflare_cms(psh, reset_
     reset_sc.config = {"UMich": {"enabled": True}}
     load_check_package(psh, "umich", "umich_wp_reg_on_probe", request)
     names = [h["name"] for h in reset_sc.hooks["site_post_gather"]]
+    # campaign I10 registers check.umich.drupal_ua after hummingbird (D-i10-6) --
+    # see tests/integration/test_check_umich_drupal_ua.py for its own registration pin.
     assert names == [
         "check.umich.cloudflare_cms.check_cloudflare_cms_integrations",
         "check.umich.oidc_login.check_oidc_login",
         "check.umich.hummingbird.check_hummingbird_fork",
+        "check.umich.drupal_ua.check_drupal_ua",
     ]
 
 

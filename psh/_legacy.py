@@ -401,6 +401,8 @@ sc.cloudflare_enabled = cloudflare_enabled
 sc.terminus = terminus      # check packages: Pantheon calls (e.g. domain:dns) go through this
 sc.wp_eval = wp_eval        # check packages: WP-CLI eval probes (check/wordpress ocp, favicon)
 sc.wp_error = wp_error      # check packages: WP command-failure notices
+sc.drush_php_script = drush_php_script  # check packages: drush php probes (check/drupal multisite, check/umich drupal_ua)
+sc.drush_error = drush_error            # check packages: drush command-failure notices
 sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
 sc.db_engine_args = db_engine_args  # plugin/umich/portal.py: ONE URL builder, ONE set of pool
                                     # settings for every database this program connects to
@@ -1733,78 +1735,9 @@ launch the new website before December.
                         )
                     if sc.options.verbose:
                         pprint(audit)
-                    sc.console.print(
-                        f"[bold magenta]=== Checking for Drupal user agent on {site['name']}:"
-                    )
-                    ua_check_script = """
-$result = 'unknown';
-try {
-    $client = \\Drupal::httpClient();
-    $response = $client->get( 'https://ifconfig.me/ua' );
-    $result = $response->getBody();
-}
-catch ( RequestException $e ) {
-    watchdog_exception( 'pantheon_sitehealth_emails', $e->getMessage() );
-}
-echo( json_encode( array( 'result' => "{$result}" ) ) );
-"""
-                    ua, errors, fatal = drush_php_script(
-                        live_site,
-                        ua_check_script,
-                    )
-                    if fatal or ua is None:
-                        site_context.add_notices(
-                            drush_error(
-                                site["name"],
-                                "drupal-ua-check",
-                                f"Failed to get the user agent string used by {site['name']}.",
-                                errors,
-                            )
-                        )
-                    elif errors != "":
-                        drush_smell = errors
-                    if (
-                        not isinstance(ua, dict)
-                        or "result" not in ua
-                        or not isinstance(ua["result"], str)
-                    ):
-                        site_context.add_notices(
-                            drush_error(
-                                site["name"],
-                                "drupal-ua-check",
-                                f"Failed to get the user agent string used by {site['name']}.",
-                                "Unexpected result from drush php-script.",
-                            )
-                        )
-                    elif (
-                        not ua["result"].startswith(
-                            "Drupal (+https://drupal.org/); UMich; https://"
-                        )
-                        or "your-site" in ua["result"].lower()
-                        or "your_site" in ua["result"].lower()
-                    ):
-                        site_context.add_notice(
-                            {
-                                "type": "info",
-                                "icon": "&#x1F50E;",  # magnifying glass
-                                "csv": f"{site['name']},drupal-ua,{ua['result']}",
-                                "short": "Drupal user agent needs to be configured",
-                                "message": f"""
-<p>Please <a href="https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent">
-configure the user agent string</a> that <strong>{site["name"]}</strong> uses for outgoing HTTP requests.
-This will ensure that requests for data that this site makes of other University of Michigan websites do
-not get blocked.</p>
-""",
-                                "text": f"""
-Please configure the user agent string that {site["name"]}
-uses for outgoing HTTP requests.  This will ensure that requests for
-data that this site makes of other University of Michigan websites do
-not get blocked.
-
-<https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent>
-""",
-                            }
-                        )
+                    # The Drupal user-agent check moved to check/umich/drupal_ua.py
+                    # (campaign I10, D-i10-6) -- a site_post_gather hook, now
+                    # [UMich].enabled-gated (a deliberate behavior change).
             else:
                 sc.console.print(
                     f":exclamation: [bold red] ATTENTION: unknown framework for {site['name']}: {site['framework']}"
