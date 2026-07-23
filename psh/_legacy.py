@@ -329,13 +329,12 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
 def sort_notices_and_subject(site_context, report):
     """B50 sort/subject core + billing-key wiring (pure; rides to psh/cli.py with main() at I14 -- D-i13-1).
 
-    Returns ``(sorted_notices, subject)``.  Reads the two hook-produced billing keys
-    (`annual_bill_upcoming` / `annual_bill_in_progress`, from check/umich/annual_billing)
-    with ``.get()`` and inserts them into the render-only `sorted_notices` list -- they
-    never enter ``site_context["notices"]``, so no -notices.csv rows (SPEC I12 §2.2).
-    Preserved quirks: `annual_bill_upcoming` overrides the subject and is inserted at
-    subject-computation time; `annual_bill_in_progress` is inserted LAST (so it renders
-    first) but AFTER the subject is fixed, so it never influences the subject.
+    Returns ``(sorted_notices, subject)``.  Reads the hook-produced billing key
+    (`annual_bill_upcoming`, from check/umich/annual_billing) with ``.get()`` and inserts
+    it into the render-only `sorted_notices` list -- it never enters
+    ``site_context["notices"]``, so no -notices.csv rows (SPEC I12 §2.2).
+    Preserved quirk: `annual_bill_upcoming` overrides the subject and is inserted at
+    subject-computation time.
     """
     site_name = site_context["site"]["name"]
     sorted_notices = (
@@ -356,13 +355,6 @@ def sort_notices_and_subject(site_context, report):
         elif sorted_notices[0]["type"] == "warning":
             subject = f"Action Recommended: {site_name}: {sorted_notices[0]['short']} | {report}"
         # no subject prefix for info notices
-
-    # TODO: remove this section at the beginning of August 2026:
-    # the `annual_bill_in_progress` key, produced by check/umich/annual_billing's in-progress
-    # hook.  Inserted last so it renders first, but AFTER the subject computation so it never
-    # influences the subject (preserved quirk).
-    if (in_progress := site_context.get("annual_bill_in_progress")) is not None:
-        sorted_notices.insert(0, in_progress)
 
     return sorted_notices, subject
 
@@ -903,12 +895,12 @@ def main() -> None:
             )
 
             # Last per-site seam before rendering (full-report path only; --only-warn continued
-            # above).  check.umich.annual_billing's two hooks run here, producing the billing
-            # keys the sort/subject helper wires in below; other future hooks may add notices.
+            # above).  check.umich.annual_billing's hook runs here, producing the billing
+            # key the sort/subject helper wires in below; other future hooks may add notices.
             sc.invoke_hooks("site_pre_render", site_context)
 
             # Sort + subject AFTER the phase (campaign I12): hooks that add notices now
-            # render, and the billing hooks' produced keys are wired in by the helper.
+            # render, and the billing hook's produced key is wired in by the helper.
             report = f"Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}"
             sorted_notices, subject = sort_notices_and_subject(site_context, report)
 

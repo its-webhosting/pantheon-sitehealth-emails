@@ -1,9 +1,10 @@
-"""psh.sort_notices_and_subject: B50's sort/subject core + billing-key wiring (campaign I12).
+"""psh.sort_notices_and_subject: B50's sort/subject core + billing-key wiring (campaign I12;
+B51 deleted I14a).
 
 This pure helper is the runtime seam for the previously-untested umich-only billing call
-sites (LEDGER I1 obligation).  Pins the preserved quirks: the in-progress notice renders
-first but NEVER influences the subject (it is inserted after the subject computation),
-and billing dicts never enter site_context["notices"].
+site (LEDGER I1 obligation).  Pins the preserved quirk: the `annual_bill_upcoming` notice
+overrides the subject and leads the rendered list, and the billing dict never enters
+site_context["notices"].
 """
 import pytest
 
@@ -58,25 +59,8 @@ def test_upcoming_key_overrides_subject_and_leads(psh, reset_sc):
     assert sorted_notices[0] is up
 
 
-def test_in_progress_key_leads_but_never_touches_subject(psh, reset_sc):
-    ip = {"type": "alert", "short": "billing", "csv": "x,annual-bill-in-progress"}
-    ctx = _ctx(reset_sc, notices=[_notice("warning", "meh")], annual_bill_in_progress=ip)
-    sorted_notices, subject = psh.sort_notices_and_subject(ctx, REPORT)
-    assert sorted_notices[0] is ip
-    assert subject == f"Action Recommended: mysite: meh | {REPORT}"   # the preserved quirk
-
-
-def test_both_keys_render_in_progress_first_then_upcoming(psh, reset_sc):
-    up = {"type": "alert", "short": "u", "csv": "x,annual-bill"}
-    ip = {"type": "alert", "short": "i", "csv": "x,annual-bill-in-progress"}
-    ctx = _ctx(reset_sc, annual_bill_upcoming=up, annual_bill_in_progress=ip)
-    sorted_notices, subject = psh.sort_notices_and_subject(ctx, REPORT)
-    assert sorted_notices[0] is ip and sorted_notices[1] is up
-    assert subject == "Time Sensitive: mysite annual billing"
-
-
 def test_helper_does_not_mutate_site_context_notices(psh, reset_sc):
-    ip = {"type": "alert", "short": "i", "csv": "x,annual-bill-in-progress"}
-    ctx = _ctx(reset_sc, notices=[_notice("info")], annual_bill_in_progress=ip)
+    up = {"type": "alert", "short": "u", "csv": "x,annual-bill"}
+    ctx = _ctx(reset_sc, notices=[_notice("info")], annual_bill_upcoming=up)
     psh.sort_notices_and_subject(ctx, REPORT)
     assert ctx["notices"] == [_notice("info")]   # billing keys never join the csv source

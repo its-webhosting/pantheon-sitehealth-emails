@@ -1,9 +1,9 @@
-"""check/umich annual-billing hooks (campaign I12, from B50/B51).
+"""check/umich annual-billing hook (campaign I12, from B50; B51 deleted I14a).
 
-The two billing notices are HOOK-PRODUCED site_context keys (CAMPAIGN.md §4, the I10
-drupal_multisite precedent), NOT add_notice calls: main()'s sort_notices_and_subject pins
-them to the front of the *rendered* list and they never enter site_context["notices"] --
-so no -notices.csv rows, the pre-campaign behavior (SPEC I12 §2.2).  This file is the
+The billing notice is a HOOK-PRODUCED site_context key (CAMPAIGN.md §4, the I10
+drupal_multisite precedent), NOT an add_notice call: main()'s sort_notices_and_subject pins
+it to the front of the *rendered* list and it never enters site_context["notices"] -- so
+no -notices.csv rows, the pre-campaign behavior (SPEC I12 §2.2).  This file is the
 runtime cover LEDGER I1 required for the previously-untested umich-only call sites.
 """
 import datetime
@@ -44,14 +44,12 @@ def _wire_facade(psh, monkeypatch, reset_sc):
 
 # --- registration ------------------------------------------------------------------
 
-def test_umich_enabled_registers_both_billing_hooks_in_block_order(psh, reset_sc, request):
+def test_umich_enabled_registers_exactly_the_upcoming_hook(psh, reset_sc, request):
     reset_sc.config = {"UMich": {"enabled": True}}
     load_check_package(psh, "umich", "umich_billing_reg_probe", request)
-    names = [h["name"] for h in reset_sc.hooks["site_pre_render"]]
-    assert names == [
-        "check.umich.annual_billing.check_annual_bill_upcoming",
-        "check.umich.annual_billing.check_annual_bill_in_progress",
-    ]
+    names = [h["name"] for h in reset_sc.hooks.get("site_pre_render", [])
+             if h["name"].startswith("check.umich.annual_billing.")]
+    assert names == ["check.umich.annual_billing.check_annual_bill_upcoming"]
 
 
 def test_billing_declarations(psh, reset_sc, request):
@@ -59,9 +57,7 @@ def test_billing_declarations(psh, reset_sc, request):
     load_check_package(psh, "umich", "umich_billing_decl_probe", request)
     hooks = {h["name"]: h for h in reset_sc.hooks["site_pre_render"]}
     up = hooks["check.umich.annual_billing.check_annual_bill_upcoming"]
-    ip = hooks["check.umich.annual_billing.check_annual_bill_in_progress"]
     assert up["consumes"] == ["end_date", "current_plan"] and up["produces"] == ["annual_bill_upcoming"]
-    assert ip["consumes"] == ["current_plan"] and ip["produces"] == ["annual_bill_in_progress"]
 
 
 def test_umich_disabled_registers_no_billing_hooks(psh, reset_sc, request, monkeypatch):
@@ -92,15 +88,3 @@ def test_upcoming_notice_content_comes_from_config(psh, reset_sc, billing, monke
     assert n["csv"] == f"{SITE},annual-bill,500.0,SC123"
     assert "/sites/42/plan/" in n["message"]
     assert ctx["notices"] == []          # produced key, never a notice (SPEC §2.2)
-
-
-# --- in progress (B51) -------------------------------------------------------------
-
-def test_in_progress_always_produced_when_hook_runs(psh, reset_sc, billing, monkeypatch):
-    reset_sc.config = CONFIG
-    _wire_facade(psh, monkeypatch, reset_sc)
-    ctx = _ctx(reset_sc, end_date=datetime.date(2026, 3, 31))
-    billing.check_annual_bill_in_progress(ctx)
-    n = ctx["annual_bill_in_progress"]
-    assert n["csv"] == f"{SITE},annual-bill-in-progress,500.0,SC123"
-    assert ctx["notices"] == []

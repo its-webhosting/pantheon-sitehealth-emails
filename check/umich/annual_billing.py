@@ -1,15 +1,15 @@
-"""U-M annual-billing notices (campaign I12, from B50/B51), as site_pre_render hooks.
+"""U-M annual-billing notice (campaign I12, from B50; B51 deleted I14a), a site_pre_render hook.
 
-These two notices are published as HOOK-PRODUCED site_context keys (CAMPAIGN.md §4, the
-I10 drupal_multisite precedent) -- `annual_bill_upcoming` and `annual_bill_in_progress` --
-NOT via `add_notice`.  main()'s `sort_notices_and_subject` reads them with `.get()` and
-inserts them at the front of the *rendered* notice list; they NEVER enter
-site_context["notices"].  This is deliberate and load-bearing (SPEC I12 §2.2): the
-pre-campaign code inserted them straight into the render-only `sorted_notices` local, so
-their csv rows have never reached `all_warnings` / `-notices.csv`, and the in-progress
-notice -- inserted after the subject is computed -- renders first yet never influences the
-subject.  Using `add_notice` would break both quirks (csv rows + front ordering), so the
-absence of a csv path here is a feature, not an omission.
+The notice is published as a HOOK-PRODUCED site_context key (CAMPAIGN.md §4, the I10
+drupal_multisite precedent) -- `annual_bill_upcoming` -- NOT via `add_notice`.  main()'s
+`sort_notices_and_subject` reads it with `.get()` and inserts it at the front of the
+*rendered* notice list; it NEVER enters site_context["notices"].  This is deliberate and
+load-bearing (SPEC I12 §2.2): the pre-campaign code inserted it straight into the
+render-only `sorted_notices` local, so its csv rows have never reached `all_warnings` /
+`-notices.csv`.  Using `add_notice` would break that quirk, so the absence of a csv path
+here is a feature, not an omission.  (B51, the "ITS is in the process of billing"
+companion notice, was deleted at campaign I14a -- user-approved early deletion, before its
+Aug-2026 removal marker; CAMPAIGN.md §8 as amended 2026-07-23.)
 
 Registered inside check/umich/__init__.py's [UMich].enabled guard, so the `umich_enabled()`
 test is subsumed by the registration gate (the oidc_login/drupal_ua precedent).
@@ -86,34 +86,6 @@ June 30.
     }
 
 
-def build_annual_bill_in_progress_notice(site_name, plan_name, annual_bill, shortcode):
-    """The "ITS is in the process of billing" alert (BLOCKMAP B51; deletion is I12's call)."""
-    return {
-        "type": "alert",
-        "icon": "&#x1F4B5;",  # dollar banknotes
-        "csv": f"{site_name},annual-bill-in-progress,{annual_bill},{shortcode}",
-        "short": f"${annual_bill:,.2f} is being billed to shortcode {shortcode}",
-        "message": f"""
-                <p style="background-color: #f8d7da; padding: 1em; border: 2px solid #58151c;">
-                    ITS is in the process of billing ${annual_bill:,.2f} to shortcode <strong>{shortcode}</strong>
-                    for a Pantheon {plan_name} plan to cover website hosting for the site
-                    <strong>{site_name}</strong> from July 1, 2026 - June 30, 2027.
-                </p>
-                <p>Any changes to the site's plan between these dates will result in an additional pro-rated bill or credit in the following month.</p>
-                """,
-        "text": f"""
-=======================================================================
-ITS is in the process of billing ${annual_bill:,.2f} to shortcode {shortcode}
-for a Pantheon {plan_name} plan to cover website hosting
-for the site {site_name} from July 1, 2026 - June 30, 2027.
-=======================================================================
-
-Any changes to the site's plan between these dates will result in
-an additional pro-rated bill or credit in the following month.
-""",
-    }
-
-
 def _billing_inputs(site_context) -> tuple[dict, dict, float]:
     site = site_context["site"]
     portal_site = sc.config["UMich"]["portal"]["sites"][site["name"]]
@@ -131,10 +103,3 @@ def check_annual_bill_upcoming(site_context) -> None:
     )
 
 
-# TODO: remove this check at the beginning of August 2026 (BLOCKMAP B51; I14 re-evaluates).
-def check_annual_bill_in_progress(site_context) -> None:
-    """B51: the "ITS is in the process of billing" alert, as a produced key."""
-    site, portal_site, annual_bill = _billing_inputs(site_context)
-    site_context["annual_bill_in_progress"] = build_annual_bill_in_progress_notice(
-        site["name"], site["plan_name"], annual_bill, portal_site["shortcode"]
-    )
