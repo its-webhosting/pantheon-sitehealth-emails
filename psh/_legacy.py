@@ -13,7 +13,6 @@
 import argparse
 import calendar
 import datetime
-import importlib
 import os
 import re
 import signal  # noqa: F401 -- retained as the psh.signal.signal monkeypatch seam (CLAUDE.md § Two mock seams): abort_run's SIGINT guard moved to psh/lifecycle.py at I13, but test_abort_run.py patches the shared signal module object via psh.signal (SPEC I13 §5)
@@ -23,7 +22,7 @@ import time
 import tomllib
 from email.utils import make_msgid
 
-import sqlalchemy as db
+import sqlalchemy as db  # noqa: F401 -- retained as the psh.db.* test seam (tests/conftest.py TempDB uses psh.db.create_engine / psh.db.orm.sessionmaker, which resolve to THIS alias on the _legacy module, not the psh/db.py package): B10's last in-file use (db.create_engine/db.orm.sessionmaker) moved to psh.db.open_database at I13
 from rich.markup import escape
 from rich.padding import Padding
 from rich.pretty import pprint
@@ -186,6 +185,7 @@ from psh.db import (
     insert_traffic_rows,
     load_overage_protection_window,
     load_traffic_rows,
+    open_database,
     record_db_reconnect,
     update_traffic_rows,
 )
@@ -244,6 +244,7 @@ from psh.notice import Notice, Severity, registry
 from psh.modules import (
     HookDagError,
     find_modules,
+    import_packages,
     stuff_envs_contract,
     stuff_gather_contract,
     stuff_traffic_contract,
@@ -288,7 +289,8 @@ sc.db_engine_args = db_engine_args  # plugin/umich/portal.py: ONE URL builder, O
 
 def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite):
     """Return the no-primary-domain info notice dict, or None when it does not apply
-    (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3)."""
+    (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3; rides to psh/cli.py with
+    main() at I14 -- D-i13-1)."""
     if (
         len(custom_domains) > 1
         and len(primary_domain) == 0
@@ -325,7 +327,7 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
 
 
 def sort_notices_and_subject(site_context, report):
-    """B50 sort/subject core + billing-key wiring (pure; final home I13's main()).
+    """B50 sort/subject core + billing-key wiring (pure; rides to psh/cli.py with main() at I14 -- D-i13-1).
 
     Returns ``(sorted_notices, subject)``.  Reads the two hook-produced billing keys
     (`annual_bill_upcoming` / `annual_bill_in_progress`, from check/umich/annual_billing)
@@ -375,24 +377,19 @@ def main() -> None:
     # so a disabled feature's <{secret env ...}> values are never required to exist.
     sc.config = gate_disabled_sections(sc.config)
 
-    sc.debug(f"[bold magenta]=== Loading plugins:")
-    for plugin_name in find_modules("plugin"):
-        sc.debug(f"Loading plugin: {plugin_name}")
-        module = importlib.import_module(plugin_name)
-        sc.plugin[plugin_name] = module
+    sc.plugin = import_packages("plugin")
 
     sc.debug(f"Doing pre-setup configuration substitutions")
     sc.config = process_config(sc.config)
 
-    sc.debug(f"[bold magenta]=== Loading checks:")
-    for check_name in find_modules("check"):
-        sc.debug(f"Loading check: {check_name}")
-        module = importlib.import_module(check_name)
-        sc.check[check_name] = module
+    sc.check = import_packages("check")
 
-    # All modules are loaded; every hook is registered.  Validate the consumes/produces
-    # DAG before anything runs (CAMPAIGN.md section 4) -- a bad declaration is a startup
-    # fatal, not a mid-run surprise.
+    # All modules are loaded; every hook is registered -- registration happens at package
+    # import time (each __init__.py self-registers as import_packages() imports it), so
+    # validate_hooks() below runs ONCE after both import loops.  Validate the consumes/produces
+    # DAG before anything runs (CAMPAIGN.md section 4) -- a bad declaration is a startup fatal,
+    # not a mid-run surprise; a hook somehow registered later (no in-repo case exists) would
+    # bypass DAG conditions 1-4, with only add_hook's own declaration check firing.
     try:
         validate_hooks()
     except HookDagError as e:
@@ -462,20 +459,9 @@ def main() -> None:
         "[bold magenta]=== Connecting to the [green]pantheon-sitehealth-emails[/green] traffic database:"
     )
 
-    traffic_db_conn_str, traffic_db_conn_kwargs = db_engine_args(sc.config["Database"])
-
-    db_engine = db.create_engine(
-        traffic_db_conn_str,
-        echo=True if sc.options.verbose >= 2 else False,
-        **traffic_db_conn_kwargs,
+    db_engine, db_session = open_database(
+        sc.config["Database"], echo=sc.options.verbose >= 2
     )
-    # expire_on_commit=False is REQUIRED, not a tuning knob: load_traffic_rows() commits to
-    # release the connection before the gather (SPEC 3.1), and the report reads those rows
-    # afterwards.  With expiry on, that commit would silently re-SELECT every row.  Safe here
-    # because both models use composite natural primary keys with no server defaults, so nothing
-    # depends on a post-commit refresh.
-    db_session_factory = db.orm.sessionmaker(bind=db_engine, expire_on_commit=False)
-    db_session = db_session_factory()
 
     if sc.options.create_tables:
         Base.metadata.create_all(db_engine)
@@ -582,9 +568,6 @@ def main() -> None:
                 continue
             site["plan_name"] = plan_name
             site_current_plan = site["plan_name"]
-            site_recommended_plan = site["plan_name"]
-            site_current_plan_index = 0
-            site_recommended_plan_index = 0
 
             if site["plan_name"] == "Sandbox":
                 sc.console.print(f"{site['name']} is on the Sandbox plan, skipping it.")
@@ -970,16 +953,8 @@ def main() -> None:
                 banner_cid, chart_cid, site_context["attachments"], site["name"], end_date,
             )
 
-            # BEFORE the send, not after: a Ctrl-C between send_message() and this loop -- a window
-            # that includes smtp_connection.quit(), a network round-trip -- used to set
-            # site_emailed=True and so advance the resume point PAST this site, and its notices
-            # then never reached {ymd}-notices.csv on any run, even though its owner had the email
-            # describing them.  Appending first downgrades that to at worst a duplicate CSV row on
-            # a re-run, which docs/resuming-interrupted-runs.md already documents as tolerable.
-            for n in site_context["notices"]:
-                fields = n["csv"].split(",")
-                fields.insert(1, contacts)
-                run_state.all_warnings.append(",".join(fields))
+            # BEFORE the send -- see RunState.record_site_notices (Invariant 4).
+            run_state.record_site_notices(site_context["notices"], contacts)
 
             # The send is gated on [SMTP].enabled; when disabled we still write the .eml above.
             if smtp_enabled:

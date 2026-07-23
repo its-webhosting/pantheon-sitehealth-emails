@@ -28,15 +28,17 @@ from rich.markup import escape
 from sqlalchemy import (
     Boolean,
     Date,
+    Engine,
     Integer,
     PrimaryKeyConstraint,
     String,
     UniqueConstraint,
+    create_engine,
     insert,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.types import CHAR
 
 import script_context as sc
@@ -379,3 +381,20 @@ def db_engine_args(db_config: dict) -> tuple[str, dict]:
             "pool_recycle": 1800,
         }
     sys.exit(f"Unsupported database type: {db_config['type']}")
+
+
+def open_database(db_config: dict, *, echo: bool = False) -> tuple[Engine, Session]:
+    """Build the traffic-DB engine + session (B10; every DB touch lives in this module).
+
+    db_engine_args() supplies the URL and the pool settings (pre-ping/recycle on MySQL);
+    echo wires -vv SQL logging.
+    """
+    conn_str, conn_kwargs = db_engine_args(db_config)
+    engine = create_engine(conn_str, echo=echo, **conn_kwargs)
+    # expire_on_commit=False is REQUIRED, not a tuning knob: load_traffic_rows() commits to
+    # release the connection before the gather (SPEC 3.1), and the report reads those rows
+    # afterwards.  With expiry on, that commit would silently re-SELECT every row.  Safe here
+    # because both models use composite natural primary keys with no server defaults, so nothing
+    # depends on a post-commit refresh.
+    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    return engine, session

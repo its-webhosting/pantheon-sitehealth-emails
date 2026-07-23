@@ -77,15 +77,15 @@ def test_site_notices_are_recorded_before_the_email_is_sent(psh):
     # The interrupt itself is not reachable from the harness (the subprocess interlock bans --all,
     # and the window is a single unsynchronizable instant), so the ORDER is what is pinned.
     source = inspect.getsource(psh.main)
-    # The bare 'for n in site_context["notices"]:' substring is NOT unique: the --only-warn
-    # early-continue branch (well before the send, and unrelated to this bug) has its own copy,
-    # so source.index() on it alone can silently latch onto the wrong occurrence and
-    # source.count() on it is 2 today, not 1. Anchor on the next line too, which only appears at
-    # the real pre-send append site.
-    append_anchor = 'for n in site_context["notices"]:\n                fields = n["csv"].split(",")'
+    # Since I13 the pre-send append is a single RunState.record_site_notices() call (the loop body
+    # itself moved into psh/lifecycle.py, covered by tests/unit/test_run_state.py). That call is
+    # unique in main(): the --only-warn early-continue branch (well before the send, and unrelated
+    # to this bug) appends via run_state.all_warnings.append, a different-shaped row, so it does not
+    # match this anchor. Assert exactly one so source.index() below cannot latch onto the wrong one.
+    append_anchor = "run_state.record_site_notices("
     assert source.count(append_anchor) == 1, (
-        "expected exactly one notices-append-before-send block; "
-        "a duplicate would defeat the append < send check below"
+        "expected exactly one notices-record-before-send call; "
+        "a duplicate would defeat the record < send check below"
     )
     append = source.index(append_anchor)
     # Anchored on the call itself, not a two-line literal that embeds exact indentation: extracting

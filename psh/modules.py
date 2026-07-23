@@ -17,8 +17,14 @@ modules are fully initialized.  The mutable hook registry itself (sc.hooks) deli
 STAYS in script_context: it is cross-cutting run state (CLAUDE.md), psh/ modules add no
 module-level mutable state (CAMPAIGN.md section 3.4), and tests/conftest.py::reset_sc
 rebinds sc.hooks around every test -- a second copy here would silently desync from it.
+
+Hooks register at package import time (each __init__.py self-registers as import_packages()
+imports it); main() runs validate_hooks() once AFTER both import loops, so a hook registered
+later (no in-repo case exists) would bypass DAG conditions 1-4 and only add_hook's own
+declaration check would fire.
 """
 
+import importlib
 import os
 import stat
 import sys
@@ -67,6 +73,24 @@ def find_modules(module_type: str) -> list[str]:
                     modules.append(target_name)
     modules.sort()  # ensure a consistent order when importing to simplify troubleshooting
     return modules
+
+
+def import_packages(kind: str) -> dict:
+    """Import every `kind` ('plugin' or 'check') package find_modules() discovers.
+
+    Returns {dotted_name: module} in discovery order; main() assigns the result to
+    sc.plugin / sc.check between the two substitution passes (B2/B3/B4 order, CAMPAIGN.md
+    section 3.3 -- the loop mechanics live here, the ordering stays visible in main()).
+    """
+    import script_context as sc  # noqa: PLC0415 -- call-time import; see the module docstring
+
+    label = "plugins" if kind == "plugin" else "checks"
+    sc.debug(f"[bold magenta]=== Loading {label}:")
+    loaded = {}
+    for name in find_modules(kind):
+        sc.debug(f"Loading {kind}: {name}")
+        loaded[name] = importlib.import_module(name)
+    return loaded
 
 
 def _valid_hook_name(hook_name: str) -> bool:
