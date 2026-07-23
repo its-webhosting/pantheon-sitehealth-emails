@@ -102,4 +102,3 @@ def check_annual_bill_upcoming(site_context) -> None:
         site["name"], site["plan_name"], annual_bill, portal_site["shortcode"], portal_site["id"]
     )
 
-
