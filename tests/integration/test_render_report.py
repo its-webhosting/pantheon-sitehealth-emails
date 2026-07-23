@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 # plus one Jinja placeholder per body so rendering is proven.
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<style>p { color: red; }</style></head>
+<style>@media screen { p { color: red; } }</style></head>
 <body><p>{{ site_name }}</p></body></html>
 """
 TXT_TEMPLATE = "report for {{ site_name }}\n"
@@ -58,10 +58,12 @@ def test_render_report_returns_inline2_html_and_rendered_text(workdir):
 def test_render_report_appends_important_to_inlined_css(workdir):
     import psh.render
     html_body, _ = psh.render.render_report("testsite", {"site_name": "testsite"})
-    # Emogrifier inlines p{color:red} onto the <p>; the retained <style> block (if any)
-    # gets !important appended to declarations that lack it.  The observable contract:
-    # no "<style>" declaration in the returned body ends bare when it ended bare in the
-    # template -- assert on the file the regex pass actually rewrites.
+    # The template's @media rule is not inlinable, so Emogrifier retains the <style> block
+    # verbatim in -inline.html; the B54 regex pass then appends !important to it, producing
+    # -inline2.html (returned as html_body).  Guard-of-the-guard: if Emogrifier ever started
+    # deleting/inlining this block, "<style" would vanish from inline1 and the assertion below
+    # would be checking a no-op -- so pin its presence explicitly rather than let that go quiet.
     inline1 = (workdir / "build" / "testsite-inline.html").read_text(encoding="utf-8")
-    if "<style" in inline1 and "color: red;" in inline1:
-        assert "color: red !important;" in html_body
+    assert "<style" in inline1  # the block must survive Emogrifier, or this test is vacuous
+    assert "color: red !important;" not in inline1
+    assert "color: red !important;" in html_body
