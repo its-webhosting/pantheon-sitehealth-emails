@@ -44,6 +44,7 @@ from psh.gateway import (
     wp_error,
     wp_eval,
 )
+from psh.render import escape_url
 
 
 class WordPressGather(NamedTuple):
@@ -71,10 +72,6 @@ def check_wordpress_plugin(  # noqa: PLR0913 -- moved verbatim, signature unchan
     url: str,
     reason: str,
 ) -> list:
-    # Cycle: _legacy imports this module.  escape_url moves to psh.render at I12
-    # (D-i6-2 precedent).
-    from psh._legacy import escape_url  # noqa: PLC0415
-
     notices = []
     if not isinstance(installed_plugins, list):
         return notices  # this error should already have been handled by our caller, so skip additional work
@@ -144,10 +141,6 @@ def check_drupal_module(  # noqa: PLR0913 -- moved verbatim, signature unchanged
     reason: str,
     level: str = "warning",
 ) -> list:
-    # Cycle: _legacy imports this module.  escape_url moves to psh.render at I12
-    # (D-i6-2 precedent).
-    from psh._legacy import escape_url  # noqa: PLC0415
-
     notices = []
     if not isinstance(installed_mods, dict):
         return notices  # this error should already have been handled by our caller, so skip additional work
@@ -353,10 +346,6 @@ def gather_drupal(site: dict, live_site: str, site_context) -> DrupalGather:  # 
     fetch, then D7 pm:updatestatus add-on collection OR D8+ composer dry-run + composer
     audit add-on collection (advisories, abandoned-packages print), verbatim from
     main()."""
-    # Cycle: _legacy imports this module.  escape_url moves to psh.render at I12
-    # (D-i6-2 precedent).
-    from psh._legacy import escape_url  # noqa: PLC0415
-
     drush_smell = ""
     composer_smell = ""
     add_on_updates = []

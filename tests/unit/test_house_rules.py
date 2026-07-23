@@ -111,7 +111,7 @@ def test_exactly_one_sitecustomize_exists():
 # terminus/wp/drush directly."  run_terminus is the ONLY terminus spawner and
 # subprocess.Popen is HOW it spawns; after the I2 gateway extraction run_terminus lives in
 # psh/gateway.py, so that is the one file allowed to name subprocess.Popen.  The match keys on
-# `subprocess.Popen`, NOT bare `subprocess`, because the PHP CSS inliner in psh/_legacy.py
+# `subprocess.Popen`, NOT bare `subprocess`, because the PHP CSS inliner in psh/render.py
 # spawns with subprocess.run (not Popen) and is correctly NOT a terminus/wp/drush call.
 POPEN_SCOPE = ("check", "plugin", "dns_classify.py", "script_context.py", "psh")
 POPEN_ALLOWLIST = {"psh/gateway.py"}

@@ -19,18 +19,16 @@ import os
 import re
 import shlex
 import signal
-import subprocess
+import subprocess  # noqa: F401 -- retained as the psh.subprocess.Popen monkeypatch seam (CLAUDE.md § Two mock seams): run_terminus lives in psh/gateway.py but tests patch the shared module object via psh._legacy.subprocess; render's subprocess.run moved to psh/render.py at I12
 import sys
 import time
 import tomllib
-import urllib.parse
 from email.message import EmailMessage
 from email.policy import SMTP
 from email.utils import make_msgid
 from smtplib import SMTP_SSL
 
 import sqlalchemy as db
-from jinja2 import Template
 from rich.markup import escape
 from rich.padding import Padding
 from rich.pretty import pprint
@@ -173,10 +171,6 @@ def parse_args(argv=None):
     return build_arg_parser().parse_args(argv)
 
 
-def escape_url(url):
-    return urllib.parse.quote(url, safe=":/?#&=", encoding="utf-8", errors="strict")
-
-
 from psh.configuration import (
     cloudflare_enabled,
     config_substitution,
@@ -250,6 +244,7 @@ from psh.plans import (
     resolve_plan_name,
     stuff_plans_contract,
 )
+from psh.render import escape_url, render_report
 from psh.notice import Notice, Severity, registry
 from psh.modules import (
     HookDagError,
@@ -1594,45 +1589,7 @@ def main() -> None:
                 chart_cid=chart_cid[1:-1],
             )
 
-            with open("email_template.html", "r", encoding="utf-8") as f:
-                html_template = Template(f.read())
-            html_body = html_template.render(**template_dict)
-            # Write the results to a file for debugging.  Later, we'll use this file as input to the PHP script that
-            # inlines the CSS. We're not piping the data to/from the script directly because the files are useful
-            # for inspecting/debugging.
-            with open(f"build/{site['name']}.html", "w", encoding="utf-8") as f:
-                f.write(html_body)
-
-            with open("email_template.txt", "r", encoding="utf-8") as f:
-                text_template = Template(f.read())
-            text_body = text_template.render(**template_dict)
-            with open(f"build/{site['name']}.txt", "w", encoding="utf-8") as f:
-                f.write(text_body)
-
-            subprocess.run(
-                [
-                    "php",
-                    "inline-styles.php",
-                    f"build/{site['name']}.html",
-                    f"build/{site['name']}-inline.html",
-                ],
-                stdout=sys.stdout,
-                stderr=sys.stderr,
-                check=True,
-            )
-            with open(f"build/{site['name']}-inline.html", "r", encoding="utf-8") as f:
-                html_body = f.read()
-
-            style_elements = re.findall(r"(<style.*?</style>)", html_body, re.DOTALL)
-            for style in style_elements:
-                # Add !important to the end of each CSS attribute that doesn't already end with !important
-                modified_style = re.sub(
-                    r"(?<!important);", " !important;", style, flags=re.DOTALL
-                )
-                html_body = html_body.replace(style, modified_style)
-
-            with open(f"build/{site['name']}-inline2.html", "w", encoding="utf-8") as f:
-                f.write(html_body)
+            html_body, text_body = render_report(site["name"], template_dict)
 
             msg = EmailMessage()
             # Sender identity + dry-run addressing come from the [Email] config section; the
