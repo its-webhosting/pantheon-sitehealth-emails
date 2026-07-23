@@ -20,7 +20,9 @@ correct for the DNS record and the Cloudflare record alike (SPEC §4.1).
 """
 import html
 
-from .model import Finding    # noqa: F401  -- re-exported for callers/tests; model is pure
+from .model import (
+    Finding,  # noqa: F401  -- re-exported for callers/tests; model is pure
+)
 
 DOCS_URL = "https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup"
 
@@ -61,7 +63,7 @@ SELF_SERVE_TEXT = (
     "Please replace each CNAME record above with the records shown.")
 
 
-def _cloudflare_label(umich: bool) -> str:
+def _cloudflare_label(*, umich: bool) -> str:
     return "U-M Cloudflare" if umich else "our (non-Pantheon) Cloudflare"
 
 
@@ -74,9 +76,9 @@ def where_label(where: str, *, umich: bool) -> str:
     if where == "dns":
         return "DNS"
     if where == "cloudflare":
-        return _cloudflare_label(umich)
+        return _cloudflare_label(umich=umich)
     if where == "both":
-        return f"DNS and {_cloudflare_label(umich)}"
+        return f"DNS and {_cloudflare_label(umich=umich)}"
     raise ValueError(f"unknown Finding.where: {where!r}")
 
 
@@ -130,14 +132,14 @@ UNAVAILABLE_GENERIC_TEXT = (
     "unavailable -- see this site's Domains page in the Pantheon dashboard")
 
 
-def _records_html(finding, umich: bool) -> str:
+def _records_html(finding, *, umich: bool) -> str:
     records = _records(finding)
     if not records:      # F4: no answer at all
         return UNAVAILABLE_UMICH if umich else UNAVAILABLE_GENERIC
     return "<br>".join(f"{rrtype} {html.escape(value)}" for rrtype, value in records)
 
 
-def _records_text(finding, umich: bool) -> str:
+def _records_text(finding, *, umich: bool) -> str:
     records = _records(finding)
     if not records:
         return "      " + (UNAVAILABLE_UMICH_TEXT if umich else UNAVAILABLE_GENERIC_TEXT)
@@ -165,12 +167,12 @@ def cdn_change_notice(site_name: str, findings: list, *, umich: bool, before_cut
         "<tr>"
         + _cell("Domain", html.escape(f.fqdn))
         + _cell("Change it in", html.escape(where_label(f.where, umich=umich)))
-        + _cell("Replace the CNAME record with", _records_html(f, umich))
+        + _cell("Replace the CNAME record with", _records_html(f, umich=umich))
         + "</tr>"
         for f in findings)
     blocks = "\n\n".join(
         f"  {f.fqdn}  (change it in {where_label(f.where, umich=umich)})\n"
-        f"{_records_text(f, umich)}"
+        f"{_records_text(f, umich=umich)}"
         for f in findings)
 
     closing_html = MAINTENANCE_HTML if (umich and before_cutoff) else SELF_SERVE_HTML

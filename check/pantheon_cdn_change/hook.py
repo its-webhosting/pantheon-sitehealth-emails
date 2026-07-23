@@ -29,7 +29,7 @@ UMICH_MAINTENANCE_CUTOFF = datetime.date(2026, 9, 15)
 
 def today() -> datetime.date:
     """The one date seam: tests monkeypatch hook.today so the copy variant is deterministic."""
-    return datetime.date.today()
+    return datetime.date.today()  # noqa: DTZ011 -- verbatim; this selects the U-M maintenance copy variant by the operator's local calendar day, and a tz-aware default risks an off-by-one at midnight UTC (a behavior change this task may not make)
 
 
 def check_pantheon_cdn_change(site_context) -> None:

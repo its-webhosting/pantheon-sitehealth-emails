@@ -78,7 +78,7 @@ def _cloudflare_target(fqdn: str, proxied_fqdns: dict) -> str:
     return ""
 
 
-def _candidates(custom_domains: list, proxied_fqdns: dict, cloudflare_on: bool) -> list:
+def _candidates(custom_domains: list, proxied_fqdns: dict, *, cloudflare_on: bool) -> list:
     """[(fqdn, where, target)] in custom_domains order -- detection only, no Pantheon call."""
     found = []
     for fqdn in custom_domains or []:
@@ -142,12 +142,12 @@ def _warn_on_unexpected_targets(site_name: str, candidates: list) -> None:
 
 
 def find_findings(site_id: str, site_name: str, custom_domains: list, proxied_fqdns: dict,
-                  cloudflare_on: bool) -> list:
+                  cloudflare_on: bool) -> list:  # noqa: FBT001 -- positional form pinned by tests/unit/test_pantheon_cdn_change_detect.py and the hook.py call site
     """Detect candidates, then enrich them with Pantheon's required records (lazily).
 
     site_id is the UUID the terminus command needs; site_name is what operator messages print.
     """
-    candidates = _candidates(custom_domains, proxied_fqdns, cloudflare_on)
+    candidates = _candidates(custom_domains, proxied_fqdns, cloudflare_on=cloudflare_on)
     if not candidates:
         return []      # a clean site issues NO domain:dns call
 

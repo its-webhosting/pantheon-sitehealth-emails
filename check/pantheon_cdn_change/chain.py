@@ -31,11 +31,11 @@ a legacy-GCDN name is a hit with zero queries:
 import ipaddress
 from typing import NamedTuple
 
-import dns.resolver                       # exception classes only; resolution goes via the seam
+import dns.resolver  # exception classes only; resolution goes via the seam
 from rich.markup import escape as rich_escape
 
-import psh.dns_classify as dns_classify
 import script_context as sc
+from psh import dns_classify
 
 LEGACY_GCDN_SUFFIX = ".pantheonsite.io"   # the legacy Pantheon GCDN (Fastly) edge names
 MAX_CNAME_DEPTH = 8
@@ -77,25 +77,25 @@ def walk(start: str) -> ChainResult:
     seen = set()
     for hop in range(MAX_CNAME_DEPTH + 1):
         if is_legacy_gcdn(name):
-            return ChainResult(name, False)
+            return ChainResult(name, transient=False)
         if hop == MAX_CNAME_DEPTH:
             break
         if name in seen:
             sc.console.print(
                 ":exclamation: [bold red] ATTENTION: CNAME chain for "
                 f"{rich_escape(normalize(start))} loops at {rich_escape(name)}")
-            return ChainResult("", False)
+            return ChainResult("", transient=False)
         seen.add(name)
         try:
             answer = dns_classify.resolve(name, "CNAME")
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
-            return ChainResult("", False)          # definitive: no CNAME here, chain ends
+            return ChainResult("", transient=False)  # definitive: no CNAME here, chain ends
         except (dns.resolver.NoNameservers, dns.resolver.Timeout) as e:
             sc.console.print(
                 ":exclamation: [bold red] ATTENTION: could not check "
                 f"{rich_escape(normalize(start))} for a legacy-GCDN CNAME "
                 f"(transient DNS error at {rich_escape(name)}: {type(e).__name__})")
-            return ChainResult("", True)           # UNKNOWN -- never reported as a finding
+            return ChainResult("", transient=True)  # UNKNOWN -- never reported as a finding
         except dns_classify.MalformedNameError as e:
             # F10.  A name that is not syntactically valid cannot be in DNS, so it cannot be
             # CNAME'd to the legacy GCDN -- and this MUST NOT escape (the per-site loop has no
@@ -103,7 +103,7 @@ def walk(start: str) -> ChainResult:
             sc.console.print(
                 ":exclamation: [bold red] ATTENTION: not a valid DNS name, skipping the "
                 f"legacy-GCDN check for it: {rich_escape(str(e))}")
-            return ChainResult("", False)
+            return ChainResult("", transient=False)
         # No empty-answer guard: dns_classify.resolve either raises (every case is handled above)
         # or returns a non-empty rdata set -- an empty CNAME answer surfaces as NoAnswer, never as
         # an empty iterable.  A guard here would be untestable dead code.
@@ -113,4 +113,4 @@ def walk(start: str) -> ChainResult:
     sc.console.print(
         ":exclamation: [bold red] ATTENTION: CNAME chain for "
         f"{rich_escape(normalize(start))} exceeds {MAX_CNAME_DEPTH} hops")
-    return ChainResult("", False)
+    return ChainResult("", transient=False)

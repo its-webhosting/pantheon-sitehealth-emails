@@ -10,8 +10,13 @@ the transient notice).
 """
 import script_context as sc
 
-from .notices import (behind_cloudflare_not_proxied_notice, not_behind_cloudflare_notice,
-                      not_in_dns_notice, proxied_in_multiple_zones_notice, transient_notice)
+from .notices import (
+    behind_cloudflare_not_proxied_notice,
+    not_behind_cloudflare_notice,
+    not_in_dns_notice,
+    proxied_in_multiple_zones_notice,
+    transient_notice,
+)
 
 
 def emit_dns_notices(site_context) -> None:
