@@ -2,8 +2,8 @@
 the verbatim move (campaign I10; move-time evidence is the extracted-block diff in the
 task report, the I2/I9 precedent).
 
-check_drupal_module is still defined in psh/_legacy.py (moves to psh/gather.py at
-Task 4) -- pinned here via the psh fixture so the snapshot is the body production
+check_drupal_module lives in psh/gather.py (exposed via sc.check_drupal_module) --
+pinned here via the psh fixture so the snapshot is the body production
 actually renders regardless of which module currently owns the def."""
 import pytest
 

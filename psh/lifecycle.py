@@ -12,16 +12,23 @@ cite by bare section number.
 
 Import direction (CAMPAIGN.md section 3.4; SPEC section 2.1 cycle proof).  The new top-level
 edge is `script_context -> psh.lifecycle` (script_context.py imports RunState at the top of
-the file).  `psh.db -> script_context` already exists (module-level).  So this module MUST
-NOT import script_context, psh.db, or psh._legacy at MODULE level:
+the file).  `psh.db -> script_context` already exists (module-level), and `psh.cli ->
+psh.lifecycle` exists (psh/cli.py imports RunState/finish_run/... at module level).  So this
+module MUST NOT import script_context, psh.db, or psh.cli at MODULE level:
 
     script_context.py  ──(module-level: imports RunState)──►  psh/lifecycle.py
+
+    psh/cli.py  ──(module-level: imports RunState, finish_run, ...)──►  psh/lifecycle.py
 
     psh/db.py  ──module-level (attr access at call time)──►  script_context.py
 
     psh/lifecycle.py  ──call-time──►  psh/db.py
     psh/lifecycle.py  ──call-time (import script_context as sc, per function)──►  script_context.py
-    psh/lifecycle.py  ──call-time──►  psh/_legacy.py
+    psh/lifecycle.py  ──call-time (build_arg_parser)──►  psh/cli.py
+
+A module-level `from psh.cli import build_arg_parser` here would close the psh.cli ⇄
+psh.lifecycle cycle (D-i14a-4 corrects LEDGER I13, which had called this bridge a temporary
+I14 obligation: it is a permanent cycle, like abort_reason's psh.db bridge below).
 
 If psh.lifecycle imported psh.db at module level, the `import psh.db`-first order fails
 sharply: psh.db (module level) -> script_context -> psh.lifecycle -> `from psh.db import
@@ -327,10 +334,7 @@ def option_strings_taking_a_value() -> set[str]:
     rerun_command() would then mistake that option's VALUE for a site name and delete it.  Same
     denylist-by-omission failure that SPEC 3.5.1 exists to prevent.
     """
-    # I14 obligation: replace with a module-level `from psh.cli import build_arg_parser` when the
-    # argparse pair relocates out of psh/_legacy.py (D-i13-1/D-i13-3); the D-i6-2 escape_url bridge
-    # precedent.
-    from psh._legacy import (  # noqa: PLC0415 -- call-time bridge; see the module docstring
+    from psh.cli import (  # noqa: PLC0415 -- call-time: psh.cli imports psh.lifecycle at module level; a module-level import here is a cycle (SPEC I14a D-i14a-4)
         build_arg_parser,
     )
 

@@ -3,10 +3,11 @@
 See development/2026-07-04-test-harness/SPEC.md and tests/README.md for the design.
 
 Key facts this file encodes:
-  * The program under test is imported as the module psh._legacy, once, cached in a
+  * The program under test is imported as the module psh.cli, once, cached in a
     session-scoped fixture (avoids re-registering the SQLAlchemy models).
-  * matplotlib.pyplot is imported at the top of that module, so MPLBACKEND must be set
-    to "Agg" in the environment BEFORE the load — done here at conftest import time.
+  * matplotlib.pyplot is imported (transitively, via psh.charts) when that module loads,
+    so MPLBACKEND must be set to "Agg" in the environment BEFORE the load — done here at
+    conftest import time.
   * script_context (`sc`) holds process-global mutable state; the reset_sc autouse
     fixture restores it (deep-copied) between tests.
   * run_program() is the ONLY sanctioned way to invoke the program in a subprocess; it
@@ -85,8 +86,8 @@ def _load_main_module():
         # Normal import: run-tests execs `python -m pytest` with cwd = repo root,
         # which puts the repo root on sys.path -- the same mechanism that resolves
         # `import script_context`.  (MPLBACKEND is pinned above, before this ever
-        # runs, because psh._legacy imports matplotlib.pyplot at its top.)
-        _main_module = importlib.import_module("psh._legacy")
+        # runs, because psh.cli transitively imports matplotlib.pyplot -- via psh.charts.)
+        _main_module = importlib.import_module("psh.cli")
     return _main_module
 
 
@@ -98,7 +99,7 @@ def psh():
 
 @pytest.fixture
 def gateway(psh):
-    """The psh.gateway module (psh._legacy has already imported it).
+    """The psh.gateway module (psh.cli has already imported it).
 
     After the I2 gateway extraction the wrappers (terminus/wp/drush) resolve run_terminus in
     THIS module's namespace, so the in-process seam for anything routed through them is

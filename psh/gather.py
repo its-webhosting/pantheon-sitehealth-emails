@@ -19,8 +19,8 @@ they stay with the fetches (D-i9-1/D-i10-1).
 
 check_wordpress_plugin / check_drupal_module are the recommended-plugin/module notice
 builders the papc / sessions / cloudflare_cms / d7_eol hooks call via
-sc.check_wordpress_plugin / sc.check_drupal_module (exposed from psh/_legacy.py's
-re-import).
+sc.check_wordpress_plugin / sc.check_drupal_module (exposed from psh.cli's
+sc-exposure block).
 
 build_smell_notices is the B48 smell-notice *builder* (SPEC D-i10-1 amendment 1): it
 lives here beside its sibling gathers, but its *emission* stays in main() (behind the
@@ -492,8 +492,8 @@ def gather_drupal(site: dict, live_site: str, site_context) -> DrupalGather:  # 
                     vuln = []
                     # advisory_list could theoretically be empty, leaving "advisory"
                     # unbound below -- unreachable in practice (a composer-audit
-                    # "advisories" entry always carries >=1 item), but psh/_legacy.py
-                    # never type-checked this line; init added here for pyright.
+                    # "advisories" entry always carries >=1 item), but the pre-move
+                    # main() was never type-checked; init added here for pyright.
                     advisory = None
                     advisory_list = package_list[package]
                     for advisory in advisory_list:

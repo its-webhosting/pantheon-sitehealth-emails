@@ -1,6 +1,7 @@
 """pantheon-sitehealth-emails core package.
 
-Being carved out of the legacy single-file script one increment at a time --
-see development/2026-07-17-modularization-campaign/CAMPAIGN.md.  Until an
-increment moves a symbol into a real module here, it lives in psh._legacy.
+Carved out of the legacy single-file script by the modularization campaign --
+see development/2026-07-17-modularization-campaign/CAMPAIGN.md.  The orchestrator
+(argparse + main()) lives in psh.cli; the gateway, config, db, traffic, plans,
+gather, charts, render, mail, and lifecycle layers are sibling modules here.
 """

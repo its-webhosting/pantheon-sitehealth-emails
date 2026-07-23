@@ -15,8 +15,9 @@ Web Hosting Services and is written to be reusable by other institutions via a c
 The whole tool is invoked through one executable, `./pantheon-sitehealth-emails` (run it
 directly; it has a `#!/usr/bin/env python` shebang and expects the venv active). It is now a
 thin shim that calls `psh.cli.main()`; the program body lives in the `psh` package
-(`psh/_legacy.py` until the modularization campaign finishes carving it into `psh/` modules —
-see **Modularization campaign** under Architecture). Invocation is unchanged. There is no build
+(`psh/cli.py` holds `main()` and the argparse pair; the gateway/config/db/traffic/plans/gather/
+charts/render/mail/lifecycle layers are sibling `psh/` modules — see **Modularization campaign**
+under Architecture). Invocation is unchanged. There is no build
 step; for the test suite see **Testing** below.
 
 ```bash
@@ -77,8 +78,9 @@ README warning: Terminus does not work with PHP 8.4 — use PHP 8.3 or earlier.
 The several-thousand-line main script is being modularized into a `psh/` core package,
 self-registering `check/`/`plugin/` packages, and a ~250–400-line `main()` orchestrator, across
 15 increments (I0–I14), while the four e2e goldens stay byte-identical. Until it completes, the
-program body lives in `psh/_legacy.py` and the sections below describe the **pre-campaign** layout
-(this file is rewritten wholesale at I14, not incrementally). Anyone starting an increment session
+sections below describe the **pre-campaign** layout (this file is rewritten wholesale at I14d, not
+incrementally; the orchestrator `main()` relocated to `psh/cli.py` at I14a, and `psh/_legacy.py`
+is deleted). Anyone starting an increment session
 reads, in full, that increment's governing documents in
 `development/2026-07-17-modularization-campaign/`: **`CAMPAIGN.md`** (the frozen architecture,
 decisions, and invariants — increment specs cite it by section number and re-derive nothing),
@@ -89,8 +91,9 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 
 ### Single-module core + `script_context` shared state
 
-The remaining program body lives in `psh/_legacy.py` (shrinking each increment); the
-following modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+The program's orchestrator (`main()`, the argparse pair, the per-site pipeline) lives in
+`psh/cli.py` (relocated at I14a; `psh/_legacy.py` deleted); the following modules are carved
+out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
 subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
 transport seam — see the **Terminus/WP/Drush wrappers** bullet). **`psh/configuration.py`**
 (moved in I3) is the config engine — `process_config`/`config_substitution`/
@@ -700,7 +703,8 @@ tool stays reusable by other institutions.
 - **`pantheon-sitehealth-emails.py` is a committed symlink to `pantheon-sitehealth-emails`. It is
   NOT a second copy and NOT the file to edit.** Since the modularization campaign's I0, the
   extension-less `pantheon-sitehealth-emails` is a thin (~17-line) shim that calls `psh.cli.main()`;
-  the program body lives in **`psh/_legacy.py`**, a normal `.py` file that **CodeGraph, pyright, and
+  the program body lives in **`psh/cli.py`** (the orchestrator, relocated from the deleted
+  `psh/_legacy.py` at I14a), a normal `.py` file that **CodeGraph, pyright, and
   ruff index natively** (all three key off the `.py` extension). So the symlink's original reason —
   three tools blind to the several-thousand-line *extension-less* core program — is dissolved for
   the program body; the symlink now only keeps those three tools seeing the extension-less **shim**
@@ -711,7 +715,7 @@ tool stays reusable by other institutions.
   limitation persists: `main` (`psh/_legacy.py:2108`) still reports "no covering tests found", but
   **not** for the reason the old note gave. Tests no longer load the program via `SourceFileLoader`
   on the dash name (that mechanism is gone — `tests/conftest.py` now does a normal
-  `importlib.import_module("psh._legacy")`); the cause now is that this dynamic import happens
+  `importlib.import_module("psh.cli")`); the cause now is that this dynamic import happens
   inside a conftest fixture, which is not a static import edge CodeGraph can follow. The symbol
   index and call graph are unaffected.
 - Generated artifacts land in `build/` (git-ignored); `database.db`, `fqdns.json`, and the
@@ -788,7 +792,7 @@ different prompt (`prompts/add-tests-for-change.prompt.md`).
 
 Non-obvious things the harness relies on:
 - **The script is imported, not re-parsed.** `tests/conftest.py` imports the program as
-  `psh._legacy` via a normal `importlib.import_module("psh._legacy")` (the repo root is on
+  `psh.cli` via a normal `importlib.import_module("psh.cli")` (the repo root is on
   `sys.path` because the suite runs as `python -m pytest`, cwd = repo root); the `psh` fixture
   exposes that module. `SourceFileLoader` is **no longer** used for the program; it survives in
   the suite only for loading individual `check/`/`plugin/` modules standalone — used directly in
@@ -798,13 +802,13 @@ Non-obvious things the harness relies on:
   refactored into `build_arg_parser()`/`parse_args()`; `sc.options` is set by the caller, so a
   test sets it (the `reset_sc` autouse fixture does) before calling functions. `MPLBACKEND=Agg`
   must be set before the load (conftest does this) because `psh/charts.py` imports
-  `matplotlib.pyplot` at module level (reached transitively via `_legacy.py`'s re-import).
+  `matplotlib.pyplot` at module level (reached transitively via `psh/cli.py`'s re-import).
 - **Two mock seams.** All Pantheon/WP/Drush I/O funnels through `run_terminus()` — monkeypatch it
   for in-process tests at **`psh.gateway.run_terminus`** (via the `gateway` conftest fixture), NOT
   `psh.run_terminus`: since I2 the wrappers live in `psh/gateway.py` and resolve `run_terminus` in
-  the gateway module's namespace, so patching the remnant's imported binding would not intercept
+  the gateway module's namespace, so patching `psh.cli`'s imported binding would not intercept
   them (a silent test defect, PD#14). Module-singleton patches are unaffected — `psh.time.sleep`
-  and `psh.subprocess.Popen` mutate shared module objects both gateway and `_legacy` import, so
+  and `psh.subprocess.Popen` mutate shared module objects both gateway and `psh/cli.py` import, so
   they apply without repointing. **`psh/gather.py` binds `run_terminus` in its OWN namespace**
   (`from psh.gateway import run_terminus`) for `gather_drupal`'s composer dry-run, which calls
   `run_terminus(...)` directly (composer's dry-run output is human-readable text, not JSON, so it

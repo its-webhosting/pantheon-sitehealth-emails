@@ -42,5 +42,5 @@ def test_registry_registers_distinct_codes():
 
 
 def test_global_registry_has_the_poc_code(psh):
-    # Importing the program (psh fixture -> psh._legacy) registered the PoC code at import.
+    # Importing the program (psh fixture -> psh.cli) registered the PoC code at import.
     assert "no-domains" in registry.codes()

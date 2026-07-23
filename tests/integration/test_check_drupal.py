@@ -4,8 +4,8 @@ real SiteContext + the gateway fixture -- the check/wordpress/check/umich test p
 sc.drush_php_script/sc.drush_error resolve run_terminus in psh.gateway's namespace, so the
 gateway fixture (monkeypatch of psh.gateway.run_terminus) is the seam for the multisite
 probe (CLAUDE.md "Two mock seams"). papc/d7_eol delegate to the real sc.check_drupal_module
-(still defined in psh/_legacy.py until Task 4 -- resolves through the sc facade either
-way), so they are driven with real module dicts rather than a further mock.
+(defined in psh/gather.py, resolved through the sc facade), so they are driven with real
+module dicts rather than a further mock.
 """
 import json
 

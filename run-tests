@@ -68,7 +68,7 @@ def run_gates():
          files ruff-broad.toml grandfathers.
       2. ruff, the BROAD campaign ratchet from ruff-broad.toml (select=ALL minus a
          grandfathered exclude list; CAMPAIGN.md section 13).
-      3. pyright, standard mode over psh/ minus _legacy.py (pyproject [tool.pyright]).
+      3. pyright, standard mode over psh/ (pyproject [tool.pyright]).
 
     Each gate prints a one-line label first, so a failure names its own gate (PD#1:
     failures surfaced actionably to the operator).  No --select on either ruff pass: the
@@ -131,7 +131,7 @@ def run_gates():
     if completed != 0:
         print(
             "\nType gate FAILED (pyright, campaign ratchet) -- fix the type findings above.\n"
-            "Scope is psh/ minus _legacy.py; it ratchets up as increments move typed code in.",
+            "Scope is psh/; it ratchets up as increments move typed code in.",
             file=sys.stderr,
         )
     return completed

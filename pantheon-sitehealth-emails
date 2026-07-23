@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """Thin launcher for the pantheon-sitehealth-emails program.
 
-The program's code lives in the psh package (psh/_legacy.py until the
-modularization campaign finishes carving it up); this file only preserves the
+The program's code lives in the psh package (psh.cli holds main() and the
+argparse pair, with the gateway/config/db/traffic/plans/gather/charts/render/
+mail/lifecycle layers as sibling modules); this file only preserves the
 operator-facing ./pantheon-sitehealth-emails invocation.  Running it from the
 repo root puts the repo root on sys.path (script-dir rule), which is what
 resolves `import psh` and `import script_context`.

@@ -84,12 +84,11 @@ select = [
 "tests/*" = ["S105", "S106"]
 
 [tool.pyright]
-# Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode at I0 because
-# psh/cli.py re-exports from the untyped legacy module; the strictness ratchets up as
-# increments move typed code in (ledger tracks).  _legacy.py is grandfathered like in
-# ruff-broad.toml.
+# Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode; the whole psh/
+# package is type-checked -- psh/cli.py (the relocated main()) entered the gate at I14a when
+# psh/_legacy.py was deleted, so there is no longer anything to grandfather here.  The
+# strictness ratchets up as later increments tighten typing (ledger tracks).
 include = ["psh"]
-exclude = ["psh/_legacy.py"]
 typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]

@@ -7,7 +7,7 @@ in tests/e2e/test_golden_nonumich.py; here we cover the seams directly.
 """
 import pytest
 
-# Aliased because the `psh` fixture is psh._legacy (which shadows a plain `import psh.mail`
+# Aliased because the `psh` fixture is psh.cli (which shadows a plain `import psh.mail`
 # inside a test taking that fixture); after I12 smtp_login resolves SMTP_SSL in psh.mail's
 # namespace, so patch the seam there, not psh.SMTP_SSL (the I2/I10 two-binding lesson:
 # patching the remnant's binding would silently not intercept).

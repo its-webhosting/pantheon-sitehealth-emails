@@ -2,7 +2,7 @@
 campaign I6 (SPEC D-i6-4).
 
 Pure function (CAMPAIGN.md section 3.4): no sc, no I/O.  Imported from psh.traffic
-directly -- the new gated module, not the psh._legacy fixture (whose re-import also
+directly -- the new gated module, not the psh.cli fixture (whose re-import also
 resolves, but the module is the seam under test).
 """
 import datetime

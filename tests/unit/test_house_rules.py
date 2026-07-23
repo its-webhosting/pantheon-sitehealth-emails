@@ -24,7 +24,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 # test, test_shim_composability.py, and the fake terminus) that set up shims and fixtures.
 # An implementer who globs the repo gets red immediately and "fixes" it by loosening this
 # assertion -- turning the instrument into a lie.
-# "psh" is the program BODY (psh/_legacy.py + the modules the campaign carves out of it);
+# "psh" is the program BODY (psh.cli + the sibling modules the campaign carved out);
 # "pantheon-sitehealth-emails" is the thin shim.  Both are feature code -- the body moved into
 # psh/ at campaign I0, so the scope must name psh/ or this guard would be blind to the largest
 # feature-code files in the repo (added I2).
@@ -59,8 +59,8 @@ def test_only_two_files_read_os_environ_directly():
     reverted.  A green run here is only evidence because that red run happened.
 
     RED DEMONSTRATION (PD#14, observed 2026-07-17, for the `psh` scope added at campaign I2):
-    adding `_x = os.environ` to psh/_legacy.py fails this test naming `psh/_legacy.py` -- the
-    program body, which was outside this scope until I2 and would otherwise have been an
+    adding `_x = os.environ` to the program body (psh/cli.py today) fails this test naming
+    that file -- the program body, which was outside this scope until I2 and would otherwise have been an
     unguarded silent hole (PD#6).  Verified, then reverted.
     """
     sources = _scoped_sources(ENVIRON_SCOPE)
@@ -173,11 +173,11 @@ def test_documented_sc_facade_names_exist(reset_sc):
     check-module test that monkeypatches it (reset_sc escape_url leak, MEMORY.md) and the check
     modules themselves in production -- so this pins the documented facade surface (SPEC §New
     tests #3).  reset_sc yields the loaded script_context, so the sc-exposure block in
-    psh/_legacy.py has already run.
+    psh/cli.py has already run.
 
     RED DEMONSTRATION (PD#14): this is a PINNING test (green when written, like the two rules
     above).  Red was demonstrated by temporarily commenting out `sc.db_engine_args =
-    db_engine_args` in psh/_legacy.py, which made this test fail naming db_engine_args.
+    db_engine_args` in psh/cli.py, which made this test fail naming db_engine_args.
     Verified, then reverted.
 
     (campaign-I3) A second RED demonstration for "Notice"/"Severity": temporarily removed
@@ -187,7 +187,7 @@ def test_documented_sc_facade_names_exist(reset_sc):
     ['Severity']`.  Verified, then reverted.
 
     (campaign-I12) A third RED demonstration for "contract_year_end": temporarily commented
-    out `sc.contract_year_end = contract_year_end` in psh/_legacy.py; the test failed with
+    out `sc.contract_year_end = contract_year_end` in psh/cli.py; the test failed with
     `AssertionError: sc is missing documented facade names ['contract_year_end']`.  Verified,
     then reverted.
     """

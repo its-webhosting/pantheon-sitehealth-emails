@@ -3,7 +3,7 @@
 Moved out of main()'s per-site loop by campaign increment I11 (CAMPAIGN.md section 3.1:
 B13's cap-shape geometry + B44 chart data prep + B45 matplotlib build).  main() calls
 build_chart() with the shaped per-site locals (SPEC D-i11-1) and attaches the returned
-PNG to the report email (B55, still in psh/_legacy.py until I12).
+PNG to the report email (B55 MIME assembly, in psh/mail.py since I12).
 
 Precondition (documented, not handled -- the D-i6-4 posture): plan_on_day must contain
 every month midpoint clamped to [first_plan_day, last_plan_day].  Production data always
