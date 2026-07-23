@@ -171,7 +171,7 @@ git rm -r check/pantheon_cdn_change \
 **Keep** everything below — these are general fixes and shared infrastructure this check
 depended on, not part of the temporary check itself:
 
-- `dns_classify.MalformedNameError` and the `dns_classify.resolve` seam that raises it —
+- `psh.dns_classify.MalformedNameError` and the `psh.dns_classify.resolve` seam that raises it —
   this is a standing core bug fix (a malformed Pantheon domain id could otherwise abort an
   entire `--all` run), unrelated to CDN migration.
 - `sc.terminus` / `sc.fqdn_re` in the core sc-exposure block — the documented, general way

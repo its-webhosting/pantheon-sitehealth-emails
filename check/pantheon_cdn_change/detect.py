@@ -35,7 +35,7 @@ CSV_HOSTILE = (",", "\r", "\n")
 def is_safe_domain_id(fqdn: str) -> bool:
     """True when the id is safe to resolve, display, and write to the CSV (F13).
 
-    NOT a DNS-validity check: fqdn_re ACCEPTS `a..b` (that case is F10's -- dns_classify.resolve
+    NOT a DNS-validity check: fqdn_re ACCEPTS `a..b` (that case is F10's -- psh.dns_classify.resolve
     raises the named MalformedNameError and chain.walk swallows it).  This guards ONE thing: a
     remote domain id must not be able to inject a column break into the ITS work list.
     """

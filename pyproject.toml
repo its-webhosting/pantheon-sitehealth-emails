@@ -106,8 +106,8 @@ markers = [
 ]
 
 [tool.coverage.run]
-# Program code now lives in the psh package plus two top-level modules; measure all
-# three (the old single-file include glob would match only the 7-line shim).
+# Program code now lives in the psh package plus one top-level module; measure both
+# (the old single-file include glob would match only the 7-line shim).
 # In-process tiers only; see tests/README.md for the subprocess-coverage caveat.
-include = ["*/psh/*", "*/script_context.py", "*/dns_classify.py"]
+include = ["*/psh/*", "*/script_context.py"]
 

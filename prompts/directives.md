@@ -111,7 +111,7 @@ explodes, and ensure that what ships, ships at the highest possible standard.
   `prompts/implementation-standards.md`), that skill forbids a test at an unconfirmed seam,
   and implementer subagents have fresh context and cannot ask me. **The spec is the only
   place a seam can be agreed.** For each behavior: name the seam, prefer an existing one
-  (`run_terminus`, `dns_classify.resolve`, `httpseam.fetch`/`sleep`, `egress.probe`, the
+  (`run_terminus`, `psh.dns_classify.resolve`, `httpseam.fetch`/`sleep`, `egress.probe`, the
   pure-helper defs), and use the highest one that reaches the behavior. Fewer seams is better.
   Where a core `main()` change has no seam above the e2e golden, either name the pure helper
   to extract — that extraction is in scope — or state explicitly why no seam is worth making.

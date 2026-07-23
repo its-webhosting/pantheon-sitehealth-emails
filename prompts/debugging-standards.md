@@ -31,7 +31,7 @@ preference, because this list is ordered by tightness:
 1. **`./run-tests --fast`, narrowed to one test** — the offline inner loop, seconds, fully
    deterministic. Always try this first.
 2. **A new test at an existing seam.** All Pantheon/WP/Drush I/O funnels through
-   `run_terminus()` — monkeypatch it. `dns_classify.resolve` is the one DNS seam.
+   `run_terminus()` — monkeypatch it. `psh.dns_classify.resolve` is the one DNS seam.
    `check/cloudflare/httpseam.py` (`fetch`/`sleep`) and `egress.probe` are the HTTP seams.
    Prefer an existing seam to a new one; see `/codebase-design` for the vocabulary.
 3. **The pure-helper seam.** `overage_blocks`, `contract_year_end`, `estimate_month_visits`,

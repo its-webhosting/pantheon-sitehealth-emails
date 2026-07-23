@@ -3,7 +3,9 @@
 Pure data producer for the site_post_dns contract (see CLAUDE.md and
 development/2026-07-10-modular-dns-checks/SPEC.md).  Imports only sc +
 stdlib + dnspython; NEVER the dash-named core script.  Presentation (notices) lives in
-check/dns/, not here.  Named dns_classify (not dns) to avoid shadowing dnspython's `dns`.
+check/dns/, not here.  Named dns_classify (not dns) to avoid shadowing dnspython's `dns` --
+that collision was live when this was a top-level module; moved under psh/ (campaign I14a)
+it is psh.dns_classify, not exposed to it, but the name stays for continuity.
 """
 import ipaddress
 import struct
@@ -36,7 +38,7 @@ class MalformedNameError(Exception):
 
 
 def resolve(hostname: str, rrtype: str):
-    """The one seam over dns.resolver.resolve; tests monkeypatch dns_classify.resolve.
+    """The one seam over dns.resolver.resolve; tests monkeypatch psh.dns_classify.resolve.
 
     Raises MalformedNameError for a syntactically invalid NAME (see that class).  Every other
     dnspython exception (NoAnswer/NXDOMAIN/NoNameservers/Timeout) propagates unchanged to the
@@ -70,15 +72,20 @@ def resolve(hostname: str, rrtype: str):
         # malformed name (see the docstring).  Never let it escape either: the per-site loop has
         # no try/except.  Bare NoNameservers(): passing request=None makes dnspython's own
         # __str__ raise while formatting the message.
-        raise dns.resolver.NoNameservers() from e
+        raise dns.resolver.NoNameservers from e
 
 
 def classify_hostname_dns(
     hostname: str,
-    cloudflare_enabled: bool,
+    cloudflare_enabled: bool,  # noqa: FBT001 -- every call site (main() + the dns test suite,
+    # pinned) passes this positionally; a keyword-only rewrite is not call-site-compatible
+    # without a wider edit out of this task's scope (campaign I14a Task 2, SPEC section 5).
     cf_v4_nets: list,
     cf_v6_nets: list,
-) -> (int, int, bool):
+) -> (int, int, bool):  # pyright: ignore[reportInvalidTypeForm] -- house style
+    # (CLAUDE.md, prompts/implementation-standards.md): the `-> (T1, ..., Tn)` tuple-hint form
+    # used throughout this codebase, kept verbatim rather than "corrected" to `tuple[...]`;
+    # this is the first file to enter pyright's scope carrying it (campaign I14a Task 2).
     """Resolve hostname A/AAAA and count addresses inside/outside the Cloudflare ranges.
 
     Returns (points_at_cloudflare, points_elsewhere, transient).  Timeout/NoNameservers ->
@@ -102,7 +109,10 @@ def classify_hostname_dns(
                     points_elsewhere += 1
                     sc.console.print(
                         f"{hostname} has IP address [red]{rdata.address}[/red]")
-        except dns.resolver.NoAnswer:
+        except dns.resolver.NoAnswer:  # noqa: PERF203 -- the try/except-in-loop IS the
+            # per-name transient-vs-malformed design (each rrtype's resolve() outcome is
+            # classified independently); pulling it out of the loop would lose that per-name
+            # granularity, not just satisfy the linter (campaign I14a Task 2, SPEC section 5).
             sc.console.print(f"No {rrtype} record for {hostname}", style="red")
         except dns.resolver.NXDOMAIN:
             sc.console.print(f"NXDOMAIN for {hostname} ({rrtype})", style="red")
@@ -137,9 +147,14 @@ class DnsFacts(NamedTuple):
     dns_transient: list
 
 
-def classify_domains(
+def classify_domains(  # noqa: C901, PLR0912, PLR0913 -- verbatim move (campaign I14a Task 2,
+    # SPEC section 5); the branch count is the domain-classification decision tree the
+    # docstring diagrams, and splitting the signature or the body is a redesign out of scope
+    # for a relocation task.
     domains,
-    cloudflare_enabled: bool,
+    cloudflare_enabled: bool,  # noqa: FBT001 -- the sole call site (main()) and the whole
+    # dns test suite (pinned) pass this positionally; see classify_hostname_dns's identical
+    # note above.
     cf_v4_nets: list,
     cf_v6_nets: list,
     proxied_fqdns,
@@ -174,7 +189,7 @@ def classify_domains(
     primary_domain = []
 
     if isinstance(domains, dict):
-        for d in domains.keys():
+        for d in domains:
             domain = domains[d]
             # .get(): a malformed domain entry (missing keys) is skipped, never a KeyError.
             if not isinstance(domain, dict) or domain.get("type") == "platform":
@@ -225,7 +240,7 @@ def classify_domains(
                                 "through more than one Cloudflare zone")
                             proxied_in_multiple_zones.append(hostname)
 
-        custom_domains = [d for d in domains.keys()
+        custom_domains = [d for d in domains
                           if isinstance(domains[d], dict) and domains[d].get("type") == "custom"]
         primary_domain = [d for d in custom_domains if domains[d].get("primary")]
 

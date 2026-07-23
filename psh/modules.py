@@ -280,7 +280,7 @@ def stuff_traffic_contract(site_context: MutableMapping[str, Any], traffic_rows,
                            end_date) -> None:
     """Publish the site_post_traffic contract keys (CONTRACT above).  Pure dict writes,
     extracted from main() (campaign I4) so the stuffing is registry-testable -- the
-    dns_classify.stuff_dns_contract precedent."""
+    psh.dns_classify.stuff_dns_contract precedent."""
     site_context["traffic_rows"] = traffic_rows
     site_context["start_date"] = start_date
     site_context["end_date"] = end_date

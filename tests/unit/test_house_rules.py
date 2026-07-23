@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parent.parent.parent
 # "pantheon-sitehealth-emails" is the thin shim.  Both are feature code -- the body moved into
 # psh/ at campaign I0, so the scope must name psh/ or this guard would be blind to the largest
 # feature-code files in the repo (added I2).
-ENVIRON_SCOPE = ("check", "plugin", "dns_classify.py", "script_context.py",
+ENVIRON_SCOPE = ("check", "plugin", "script_context.py",
                  "pantheon-sitehealth-emails", "psh")
 
 # CLAUDE.md § Required runtime credentials: "Credentials are never read from the environment
@@ -113,7 +113,7 @@ def test_exactly_one_sitecustomize_exists():
 # psh/gateway.py, so that is the one file allowed to name subprocess.Popen.  The match keys on
 # `subprocess.Popen`, NOT bare `subprocess`, because the PHP CSS inliner in psh/render.py
 # spawns with subprocess.run (not Popen) and is correctly NOT a terminus/wp/drush call.
-POPEN_SCOPE = ("check", "plugin", "dns_classify.py", "script_context.py", "psh")
+POPEN_SCOPE = ("check", "plugin", "script_context.py", "psh")
 POPEN_ALLOWLIST = {"psh/gateway.py"}
 
 

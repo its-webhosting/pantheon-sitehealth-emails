@@ -34,7 +34,7 @@ from typing import NamedTuple
 import dns.resolver                       # exception classes only; resolution goes via the seam
 from rich.markup import escape as rich_escape
 
-import dns_classify
+import psh.dns_classify as dns_classify
 import script_context as sc
 
 LEGACY_GCDN_SUFFIX = ".pantheonsite.io"   # the legacy Pantheon GCDN (Fastly) edge names

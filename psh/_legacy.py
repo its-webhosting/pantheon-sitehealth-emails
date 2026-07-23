@@ -27,7 +27,7 @@ from rich.markup import escape
 from rich.padding import Padding
 from rich.pretty import pprint
 
-import dns_classify
+import psh.dns_classify as dns_classify
 import script_context as sc
 
 fqdn_re = re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.IGNORECASE)

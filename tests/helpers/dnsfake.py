@@ -44,7 +44,7 @@ def make_resolver(zone, calls=None):
 
 def patch_resolve(monkeypatch, zone, calls=None):
     """Point dns_classify.resolve at `zone` for the duration of one test."""
-    import dns_classify
+    import psh.dns_classify as dns_classify
     monkeypatch.setattr(dns_classify, "resolve", make_resolver(zone, calls))
 
 

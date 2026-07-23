@@ -105,7 +105,7 @@ fi
 #      EVERY file, including the ratchet's grandfathered ones -- no --force-exclude here.
 #   2. BROAD campaign ratchet from ruff-broad.toml (CAMPAIGN.md section 13).  Run in a subshell
 #      cd'd to the repo root, with --force-exclude, so an edit to a grandfathered file
-#      (psh/_legacy.py, script_context.py, dns_classify.py, check/, plugin/, tests/) honors
+#      (psh/_legacy.py, script_context.py, check/, plugin/, tests/) honors
 #      ruff-broad.toml's exclude list instead of drowning in findings: an explicit CLI path
 #      bypasses the exclude WITHOUT --force-exclude, and the exclude patterns resolve relative
 #      to cwd (hence the cd).  ruff-broad.toml owns what is grandfathered -- no second list here.

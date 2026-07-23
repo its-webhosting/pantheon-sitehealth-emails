@@ -12,7 +12,6 @@
 extend-exclude = [
     # Grandfathered until their increment moves/cleans them:
     "psh/_legacy.py",       # the remnant; shrinks I2-I13, dies I14
-    "dns_classify.py",      # cleaned if/when moved (I14 MAY, CAMPAIGN section 3.1)
     "check/cloudflare/",           # untouched tenant; cleaned at I14
     "check/dns/",                  # untouched tenant; cleaned at I14
     "check/pantheon_cdn_change/",  # temporary check; deleted or cleaned at I14

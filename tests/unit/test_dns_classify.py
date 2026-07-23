@@ -4,7 +4,7 @@ import ipaddress
 import dns.resolver
 import pytest
 
-import dns_classify
+import psh.dns_classify as dns_classify
 
 pytestmark = pytest.mark.unit
 
@@ -242,7 +242,7 @@ def test_cf_host_absent_from_proxied_lands_in_behind_cloudflare_not_proxied(psh,
 def test_resolve_converts_a_malformed_name_into_a_named_exception(psh, reset_sc):
     # F10: dns.name.EmptyLabel derives from dns.exception.SyntaxError, which no dns.resolver.*
     # except clause catches -- unconverted, it aborts the whole run from inside the per-site loop.
-    import dns_classify
+    import psh.dns_classify as dns_classify
     with pytest.raises(dns_classify.MalformedNameError):
         dns_classify.resolve("a..b", "CNAME")
     with pytest.raises(dns_classify.MalformedNameError):
@@ -256,7 +256,7 @@ def test_resolve_converts_a_struct_error_from_an_out_of_range_byte_escape(psh, r
     # was NOT covered by the (SyntaxError, NameTooLong) except clause.  This is reachable through
     # an ordinary hostname string -- no monkeypatching -- e.g. via a Cloudflare `origins` value,
     # which is arbitrary remote content not gated by fqdn_re.
-    import dns_classify
+    import psh.dns_classify as dns_classify
     with pytest.raises(dns_classify.MalformedNameError):
         dns_classify.resolve("\\300.com", "CNAME")
 
@@ -272,7 +272,7 @@ def test_resolve_converts_a_real_idna_exception(psh, reset_sc, monkeypatch):
     # instance, to prove resolve()'s except clause converts it -- the fix guards a real dnspython
     # exception class, even though nothing in this codebase's call pattern can trigger it today.
     import dns.name
-    import dns_classify
+    import psh.dns_classify as dns_classify
 
     real_exc = None
     try:
@@ -300,7 +300,7 @@ def test_wire_level_struct_error_is_transient_not_a_malformed_name(psh, reset_sc
 
     import dns.resolver
 
-    import dns_classify
+    import psh.dns_classify as dns_classify
 
     def garbled_wire(hostname, rrtype):
         raise struct.error("unpack requires a buffer of 2 bytes")
@@ -319,7 +319,7 @@ def test_classify_hostname_dns_survives_a_malformed_name(psh, reset_sc, monkeypa
     # the run.  A name that cannot exist in DNS is definitively unresolvable -> (0, 0, False),
     # which the caller aggregates into the existing not_in_dns alert (whose remedy -- "remove
     # these domains from the Pantheon live environment, or add them to DNS" -- is correct here).
-    import dns_classify
+    import psh.dns_classify as dns_classify
 
     def boom(name, rrtype):
         raise dns_classify.MalformedNameError(f"{name}: EmptyLabel")
@@ -333,7 +333,7 @@ def test_malformed_domain_id_does_not_abort_classify_domains(psh, reset_sc, monk
     # classify_domains (which runs inside the per-site loop, which has no try/except).
     import re
 
-    import dns_classify
+    import psh.dns_classify as dns_classify
 
     def boom(name, rrtype):
         raise dns_classify.MalformedNameError(f"{name}: EmptyLabel")

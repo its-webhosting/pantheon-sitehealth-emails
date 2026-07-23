@@ -153,7 +153,7 @@ failure so `main()` can `continue`, `sys.exit` preserved on a missing/unknown SK
 `site_context` itself, the I6 flow-function pattern) plus `stuff_plans_contract()` (which
 `main()` calls with the `cost_same`/`costs_median`/`costs_best` fields nested into the
 single `plan_costs` **contract key** — `{"same": ..., "median": ..., "best": ...}` — not a
-`PlanRecommendation` field of that name) (the `dns_classify.stuff_dns_contract` producer-
+`PlanRecommendation` field of that name) (the `psh.dns_classify.stuff_dns_contract` producer-
 module precedent, publishing the four `site_pre_render` contract keys below) — all
 re-imported by `psh/_legacy.py`, same import-back pattern as the other moved modules, so
 `main()`'s call sites and the `psh.<name>` test references resolve unchanged.
@@ -250,7 +250,7 @@ when the argparse pair moves). The module docstring carries the import-cycle dia
 **`main()` itself and `build_arg_parser`/`parse_args` stay in `psh/_legacy.py` until I14**
 (D-i13-1) — I13 brings `main()` to *content*-final form (622 raw / 445 logic lines, above
 §3.3's 250–400 target — see LEDGER I13), not *address*-final. The last is
-**`dns_classify.py`**, the DNS engine: it resolves each
+**`psh/dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
 those facts into the `site_post_dns` data-contract keys (below). It is a pure data producer —
@@ -367,7 +367,7 @@ configure a `…; UMich; …` user agent) — now they run only for U-M; and `ch
 cache checks, egress-IP test at
 `setup` + per-FQDN HTTP checks at `site_post_dns`, see `docs/cloudflare-cachecheck.md`).
 DNS-resolution notices live in `check/dns/` (`notices.py` builders + the `site_post_dns`
-`hook.py`), fed by the `dns_classify.py` engine; `no-domains`/`no-primary-domain` remain in
+`hook.py`), fed by the `psh/dns_classify.py` engine; `no-domains`/`no-primary-domain` remain in
 core. `check/pantheon/` (I8; the first Tier-2 check package, gated on `[Check.pantheon].enabled`
 — **default true**: an absent `[Check]`/`[Check.pantheon]`/`enabled` still registers, so
 relocating a check that ran unconditionally does not silently disable it) holds four
@@ -444,14 +444,14 @@ before invoking each phase; hooks code against this table (keys always exist, em
 when the source was disabled, malformed, or failed). **The machine-readable copy —
 `psh.modules.CONTRACT` — is authoritative**; this table is its prose rendering, and
 `tests/unit/test_contract_registry.py` pins the stuffers (`stuff_traffic_contract`/
-`stuff_gather_contract` in `psh/modules.py`, `stuff_dns_contract` in `dns_classify.py`)
+`stuff_gather_contract` in `psh/modules.py`, `stuff_dns_contract` in `psh/dns_classify.py`)
 against it, so drift on either side goes red:
 
 | Phase | Guaranteed new keys (beyond `site`/`notices`/`sections`/`attachments`) |
 |---|---|
 | `site_pre` | `envs` (I8, at `site_pre`; dict — the `terminus env:list` JSON keyed by environment id, each value carrying `id, created, domain, connection_mode, locked, initialized, php_version, php_runtime_generation`. `main()`'s guards ensure `envs["live"]` exists with an `initialized` key before any site phase fires; **`php_version` is NOT guaranteed present** — read it with `.get`. Never `None`/empty when a phase fires: a failed `env:list` fetch skips the site. Core-produced — fetched by `main()` where it gates on it, stuffed by `stuff_envs_contract` in `psh/modules.py`. The phase fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
-| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (I10, NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str) — the campaign's first hook-declared produced keys. They are DAG-declared (in the hook's `produces`), present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
+| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `psh.dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (I10, NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str) — the campaign's first hook-declared produced keys. They are DAG-declared (in the hook's `produces`), present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the legacy `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. **I9 keys:** `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy — the B39 table became a `site_post_gather` hook at I10, `main()` no longer reads it), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` (I10) — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (B48's smell emission today) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry. Smell precedence is provably unchanged by I10 — no pair of writers swapped relative order, so no notice-csv value diverges, D-i10-4) |
 | `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (I12, NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a legacy notice dict) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase — the I10 `drupal_multisite` precedent (B51's companion `annual_bill_in_progress` key was deleted at I14a) |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext`; since I13 it receives the run's `RunState` — `finish_run`'s first statement is `invoke_hooks("run_finish", run_state)`, fired on completed and aborted runs, the seam for future run-level artifact hooks. `CONTRACT["run_finish"]` stays `()`: the `RunState` is the hook argument, not a contract key) |
@@ -742,7 +742,7 @@ earlier gate's red (PD#1):
    a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy; runs over the
    **whole tree**, including the files the campaign grandfathers.
 2. **ruff, broad campaign ratchet** (`ruff-broad.toml`: `select = ALL` minus a grandfathered
-   exclude list — `psh/_legacy.py`, `dns_classify.py`, the still-grandfathered check
+   exclude list — `psh/_legacy.py`, the still-grandfathered check
    packages enumerated individually (`check/cloudflare/`, `check/dns/`,
    `check/pantheon_cdn_change/` — the wholesale `check/` was replaced by this
    enumeration at I8 so `check/pantheon/` is born gated; at I9 the `check/umich/` entry
@@ -863,10 +863,10 @@ Non-obvious things the harness relies on:
   move took the bodies, not the call sites; the chart region itself moved at I11 into
   `psh/charts.py`, see § Single-module core).
   **`classify_hostname_dns` is NOT one of these** — it moved out of the script into
-  `dns_classify.py`; import it from there.
-- **DNS tests.** The `dns_classify.py` engine and `check/dns/` package have their own suite:
+  `psh/dns_classify.py`; import it from there.
+- **DNS tests.** The `psh/dns_classify.py` engine and `check/dns/` package have their own suite:
   `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS, and
-  `dns_classify.MalformedNameError` — `resolve()` converts dnspython's syntax errors
+  `psh.dns_classify.MalformedNameError` — `resolve()` converts dnspython's syntax errors
   (`dns.exception.SyntaxError`, `dns.name.NameTooLong`) into this named exception at the single
   DNS seam, and `classify_hostname_dns` catches it and returns `(0, 0, False)`, so a malformed
   hostname — e.g. a Pantheon domain id like `a..b`, which `fqdn_re` accepts — can never escape and
@@ -879,7 +879,7 @@ Non-obvious things the harness relies on:
   `tests/integration/test_check_pantheon_cdn_change.py` (hook/phase registration),
   `tests/integration/test_pantheon_cdn_change_notice_render.py` (syrupy snapshots, and where the
   U-M-before-cutoff copy is pinned), and the 4th e2e golden (below).
-  **`dns_classify.resolve` is the one monkeypatchable DNS seam** — patch it (as those tests do) so
+  **`psh.dns_classify.resolve` is the one monkeypatchable DNS seam** — patch it (as those tests do) so
   nothing hits real DNS; route any new resolution through it.
 - **check/pantheon tests (I8).** The `check/pantheon/` package (frozen/live-env/updates/php-eol)
   has its own suite: `tests/unit/test_php_eol_notice.py` (the `build_php_eol_notice` builder,
@@ -951,7 +951,7 @@ Non-obvious things the harness relies on:
   they are not in `test_contract_registry.py`; `test_hook_dag.py` proves the two new
   `check.umich` hooks validate (`check/umich` already in `ALL_PACKAGES`).
 - **Shared DNS-test infrastructure (`tests/helpers/`).** `dnsfake.py` has the fake
-  `dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`) and
+  `psh.dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`) and
   `recording_console` (a wide `record=True` Console, read back with `export_text()` — not `capsys`,
   which wraps at width 80 and breaks substring assertions as messages grow). `checkload.py` loads a
   `check/` package (or one module of it) standalone via a probe package registered in

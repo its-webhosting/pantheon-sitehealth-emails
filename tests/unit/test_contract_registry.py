@@ -5,7 +5,7 @@ These tests are registry-driven -- set(keys a stuffer writes) == set(CONTRACT[ph
 adding a key to one side and not the other goes red."""
 import pytest
 
-import dns_classify
+import psh.dns_classify as dns_classify
 
 pytestmark = pytest.mark.unit
 
