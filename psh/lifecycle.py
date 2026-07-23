@@ -15,11 +15,13 @@ edge is `script_context -> psh.lifecycle` (script_context.py imports RunState at
 the file).  `psh.db -> script_context` already exists (module-level).  So this module MUST
 NOT import script_context, psh.db, or psh._legacy at MODULE level:
 
-    script_context.py  ── imports RunState ──►  psh/lifecycle.py
-          ▲                                           │
-          │ (call time)          (call time)          │ (call time)
-    psh/db.py  ◄──────────────────────────────────────┤
-    psh/_legacy.py  ◄─────────────────────────────────┘
+    script_context.py  ──(module-level: imports RunState)──►  psh/lifecycle.py
+
+    psh/db.py  ──module-level (attr access at call time)──►  script_context.py
+
+    psh/lifecycle.py  ──call-time──►  psh/db.py
+    psh/lifecycle.py  ──call-time (import script_context as sc, per function)──►  script_context.py
+    psh/lifecycle.py  ──call-time──►  psh/_legacy.py
 
 If psh.lifecycle imported psh.db at module level, the `import psh.db`-first order fails
 sharply: psh.db (module level) -> script_context -> psh.lifecycle -> `from psh.db import

@@ -1599,9 +1599,9 @@ Spec/plan: `development/2026-07-23-mod-I13-lifecycle/` (`SPEC.md` §9 carries th
 acceptance; task reports + reviews under `.superpowers/sdd/`). Two code commits, each green:
 `6f5c282` (Task 1 — `psh/lifecycle.py`: `RunState` + `record_site_notices` + the ten
 lifecycle defs moved verbatim, the `psh/db.py` counter-write retarget, the `script_context.py`
-attr swap, `reset_sc` rework, the counter-seam repoint, seam tests §4.1–§4.6), `3681100`
+attr swap, `reset_sc` rework, the counter-seam repoint, seam tests §4.1–§4.7), `3681100`
 (Task 2 — `main()` final form: `import_packages`, `open_database`, the three dead inits, the
-B56/B57 retarget, the §2.8/§2.9 doc edits, seam tests §4.7–§4.8), plus this closing docs
+B56/B57 retarget, the §2.8/§2.9 doc edits, seam tests §4.8–§4.9), plus this closing docs
 commit (CLAUDE.md / memory / this entry / SPEC §9 acceptance + §2.9 in-place correction / the
 dev folder). Both task reviews clean (spec PASS, quality Approved). Full suite at close
 **including the live tier** (`ls ~/.terminus/cache/tokens/` → `markmont@umich.edu`;
@@ -1665,7 +1665,13 @@ byte-identical across the increment (`git diff 268696c -- tests/e2e/__snapshots_
      **before `invoke_hooks("setup")`**, so a future setup hook using `db_retry` can't write
      into a default `RunState` `main()` then discards (a latent PD#1 shape). The
      `script_context.py` counter attrs are **deleted** (finding 7's loud-failure property, one
-     level up — pinned by `tests/unit/test_run_state.py`).
+     level up — pinned by `tests/unit/test_run_state.py`). This does not conflict with §3.5's
+     NEVER ("NEVER remove or rename an `sc` attribute mid-campaign"): that clause is scoped to
+     the check-facing façade names ("`sc` keeps every name listed in CLAUDE.md's runtime-exposed
+     block"), and the two counters were never façade names (absent from both that block and
+     `test_documented_sc_facade_names_exist`) — their removal was scheduled at I5 (D-i5-1,
+     "scheduled interim home") and in CAMPAIGN §6's `RunState` row, so this deletion discharges a
+     standing obligation rather than breaking Invariant 9.
   3. **D-i13-3** — the two call-time bridges in `psh/lifecycle.py`: `abort_reason`'s
      `from psh.db import DatabaseUnavailableError, db_retryable` (§2.1 cycle rule) and
      `option_strings_taking_a_value`'s `from psh._legacy import build_arg_parser` (both
@@ -1747,6 +1753,12 @@ byte-identical across the increment (`git diff 268696c -- tests/e2e/__snapshots_
     module, watched for the right reason; (2) the transient B56-duplication window is
     by-design and the Task-2 reviewer confirmed the `main()` call-site swap; (3) the brief's
     file list omitted `psh/modules.py` but its edit (the stale `PHASES` comment) was in-scope.
+  - **Whole-branch-review Note** (no-action): the whole moved family now resolves internally in
+    `psh.lifecycle`'s own namespace (`finish_run` → `merge_prior_results`; `abort_run` →
+    `resume_point`/`resume_command`/`rerun_command`; `rerun_command` →
+    `option_strings_taking_a_value`), so a future test faking any of them must patch
+    `psh.lifecycle.<name>`, not `psh.<name>` — nothing patches them today (grep-verified by the
+    whole-branch review); CLAUDE.md documents the `finish_run` case and the general lesson.
   - No others — the two task reports found no further gaps beyond the items above.
 
 - **Open questions for I14:** the §2.4 `build_arg_parser` bridge → a module-level
