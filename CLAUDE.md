@@ -89,8 +89,8 @@ assignments reference), plus this `CLAUDE.md`. Architecture changes are amendmen
 
 ### Single-module core + `script_context` shared state
 
-Nearly all logic lives in the top-level `pantheon-sitehealth-emails` script (~3900 lines).
-Seven modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
+The remaining program body lives in `psh/_legacy.py` (shrinking each increment); the
+following modules are carved out. **`psh/gateway.py`** is the gateway: every Terminus/WP-CLI/Drush
 subprocess flows through it (the eleven wrappers moved there in I2; the future Pantheon-API
 transport seam — see the **Terminus/WP/Drush wrappers** bullet). **`psh/configuration.py`**
 (moved in I3) is the config engine — `process_config`/`config_substitution`/

@@ -345,11 +345,13 @@ Type-checking (pyright, campaign ratchet) ...
 `1021 passed / 1 skipped` (the skip is `test_db_credentials.py`'s
 `importorskip("MySQLdb")` on a sqlite-only install). Baseline at spec time was fast-tier
 994 passed; the increment added the new render/mail/billing/sort tests (Task 1 +3, Task 2
-+4, Task 3 +17) and the full run includes the 2 live tests: fast tier closed at 1019
-passed / 2 deselected, and the full run = 1019 + 2 live = **1021 passed**. Zero snapshot
-churn (107 unchanged). The 4 warnings are the pre-existing `semver.compare`
-PendingDeprecationWarning (`check/umich/oidc_login.py`) and the `load_module`
-DeprecationWarning — both unrelated to this increment.
++4, Task 3 +17, plus +1 auto-parametrized house-rule row —
+`tests/unit/test_owner_facing_encoding.py::test_no_raw_non_ascii_in_html_reachable_literals[check/umich/annual_billing.py]`,
+which picked up the new check module — for +25 total) and the full run includes the 2 live
+tests: fast tier closed at 1019 passed / 2 deselected, and the full run = 1019 + 2 live =
+**1021 passed**. Zero snapshot churn (107 unchanged). The 4 warnings are the pre-existing
+`semver.compare` PendingDeprecationWarning (`check/umich/oidc_login.py`) and the
+`load_module` DeprecationWarning — both unrelated to this increment.
 
 ### `git diff 786822b -- tests/e2e/__snapshots__/` (MUST be empty — Invariant 1)
 

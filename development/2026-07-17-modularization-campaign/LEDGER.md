@@ -1462,8 +1462,9 @@ tests/e2e/__snapshots__/` empty).
     B50-minus-billing **sort/subject core → the pure `sort_notices_and_subject(site_context,
     report)` helper in `psh/_legacy.py`** (I13 absorbs into final `main()`; the I10
     `no_primary_domain_notice` extraction precedent). Column-0 `f"""` billing-notice
-    interiors and the B49/B53/B54/B55 bodies moved byte-for-byte (Invariant 8;
-    extracted-block diffs pasted in the task reports).
+    interiors byte-for-byte (Invariant 8, verified); B49/B53/B54/B55 bodies verbatim
+    modulo the disclosed PTH123/UP015 behavior-identical rewrites and the
+    noqa/pyright-ignore trailers (extracted-block diffs pasted in the task reports).
   Both `psh/render.py` and `psh/mail.py` re-imported by `psh/_legacy.py` (I2–I11 pattern).
 
 - **Produced-keys mechanism (the increment's one non-move design, I10 `drupal_multisite`
@@ -1577,8 +1578,12 @@ tests/e2e/__snapshots__/` empty).
     byte-verbatim**, not introduced here. Recorded for post-campaign consideration (no §8
     surface change, no scope in this increment); I14/post-campaign may add an explicit
     empty-team guard.
-  - No others — the three task reports found no further gaps beyond the ruff/pyright
-    dispositions and the items above.
+  - **`check/umich/__init__.py`'s disabled-branch message is stale** (final-review find):
+    it still prints `'Skipping check.umich.sitelens because UMich plugin is not enabled'`,
+    but the guard it lives in now skips eight modules, including the two I12 billing hooks —
+    **pre-existing**, not introduced here. Ledgered to **I14's sweep**. Disposition: I14.
+  - No others beyond the item above — the three task reports found no further gaps beyond
+    the ruff/pyright dispositions and the items above.
 
 - **Open questions for I13:** proceed per CAMPAIGN.md §11 row I13. Inherited obligations,
   all ledgered (SPEC §8): **absorb `sort_notices_and_subject` into the final `main()`**;
