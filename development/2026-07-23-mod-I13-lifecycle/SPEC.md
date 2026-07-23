@@ -297,6 +297,14 @@ bypasses DAG conditions 1–4 and only `add_hook`'s declaration check fires. Doc
 ("final home I13's main()") stay in `psh/_legacy.py` beside `main()` (D-i13-1) — their
 notes are rewritten to "rides to `psh/cli.py` with `main()` at I14 (D-i13-1)". Doc-only.
 
+> **Correction (Task 3).** This paragraph was wrong about `no_primary_domain_notice`:
+> verified at `6f5c282^` (pre-Task-1), that function's docstring never carried a "final home
+> I13's call" note — only `sort_notices_and_subject` had one ("final home I13's main()"). The
+> Task 2 implementer rewrote `sort_notices_and_subject`'s note to the ride-to-`psh/cli.py`
+> wording and, honoring §2.9's intent for both, **added** the same ride-note to
+> `no_primary_domain_notice`'s docstring (it did not have one to rewrite). Doc-only; the
+> discrepancy is recorded in the Task 2 report and here rather than silently absorbed.
+
 ### 2.10 Flow after I13 (PD#8)
 
 ```
@@ -466,11 +474,44 @@ reviewers as `psh-reviewer`; reports cite directives by number with verbatim quo
   (D-i13-1); the §6 line-count delta adjudication; plus every item I12 already carried
   (Notice dict retirement, `check/umich/__init__.py` message, B51, config renames).
 
-## 9. Acceptance (§16; run and pasted at close — placeholders until then)
+## 9. Acceptance (§16; run and pasted at close — 2026-07-23, closing task)
+
+Environment had a Terminus token (`ls ~/.terminus/cache/tokens/` → `markmont@umich.edu`),
+so `./run-tests` ran the **full** suite including the live tier.
 
 ```
-./run-tests            # all three gates + full suite (live tier if credentials present)
-git diff <start-sha> -- tests/e2e/__snapshots__/   # MUST be empty (Invariant 1)
-uvx ruff check --config ruff-broad.toml psh/lifecycle.py psh/db.py psh/modules.py script_context.py
-# → All checks passed!
+$ ./run-tests
+...
+107 snapshots passed.
+================= 1028 passed, 1 skipped, 4 warnings in 43.31s =================
+Linting (ruff, narrow PD set) ...
+Linting (ruff-broad.toml, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+RUNTESTS_EXIT=0
+```
+
+All three gates green (run-tests aborts on the first failing gate, so `EXIT=0` == pytest +
+both ruff passes + pyright standard all green). The 1 skip is `test_db_credentials.py`'s
+`importorskip("MySQLdb")` on a sqlite-only install. Live tier ran and passed:
+
+```
+$ python -m pytest tests/live/test_live_smoke.py -v
+tests/live/test_live_smoke.py::test_real_terminus_self_info_parses PASSED [ 50%]
+tests/live/test_live_smoke.py::test_real_read_only_site_info PASSED      [100%]
+============================== 2 passed in 1.99s ===============================
+```
+
+Goldens byte-identical across the whole increment (Invariant 1), against the pre-I13
+baseline `268696c` (the I12 archive commit, last before I13 work):
+
+```
+$ git diff 268696c -- tests/e2e/__snapshots__/
+   (empty)
+```
+
+Born-gated files clean under the broad ruff set:
+
+```
+$ uvx ruff check --config ruff-broad.toml psh/lifecycle.py psh/db.py psh/modules.py script_context.py
+All checks passed!
 ```

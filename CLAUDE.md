@@ -120,13 +120,15 @@ resilience layer (`db_retry`, `db_retryable`, `record_db_reconnect`,
 `db_engine_args` — re-imported by `psh/_legacy.py`, same import-back pattern as the
 gateway/configuration modules, so call sites and the `sc.db_engine_args` exposure
 assignment resolve unchanged. The two reconnect counters (`db_reconnects_by_site`,
-`db_reconnect_failures_by_site`) do NOT live in `psh/db.py`: they're `script_context.py`
-module-level attributes (`sc.db_reconnects_by_site`/`sc.db_reconnect_failures_by_site`),
-because `db_retry` (now in `psh/db.py`) and the remnant readers `finish_run`/`abort_run` (staying in
-`psh/_legacy.py` until I13) need one shared, `reset_sc`-isolated namespace rather than two
-separately rebindable module bindings of the same name (the I2 `run_terminus`-seam lesson
-— see § Database's test-seam note below). This is their scheduled interim home; I13's
-`RunState` is where they finally land. **`psh/traffic.py`** (moved in I6) holds the
+`db_reconnect_failures_by_site`) do NOT live in `psh/db.py`: since I13 they are two of the
+six fields of the **`RunState`** dataclass (`psh/lifecycle.py`, § below), reached as
+`sc.run_state.db_reconnects_by_site`/`…failures…` — `db_retry` (in `psh/db.py`) writes them
+via `sc`, and the readers `finish_run`/`abort_run` (in `psh/lifecycle.py`) take the same
+`RunState` as a parameter — one shared, `reset_sc`-isolated namespace (`sc.run_state`)
+rather than two separately rebindable module bindings of the same name (the I2
+`run_terminus`-seam lesson — see § Database's test-seam note below). At I5–I12 they were
+interim `script_context.py` module attributes; I13 landed them on `RunState` as CAMPAIGN
+§6 scheduled. **`psh/traffic.py`** (moved in I6) holds the
 traffic-metrics layer: the move set (`traffic_table_columns`, `get_old_metrics`,
 `estimate_month_visits`, `build_traffic_table_rows`) plus four flow functions extracted from
 `main()`'s per-site loop (`update_site_traffic`, `import_older_site_metrics`,
@@ -221,9 +223,33 @@ build: `[Email]`/dry-run addressing, related inline-image parts, attachment loop
 (`emails_sent += 1`, `site_emailed = True`) sit **between** `send_message()` and
 `quit()`, and hoisting the block into `psh/mail.py` would move those counter updates after
 `quit()` returns, reopening the documented Ctrl-C-during-`quit()` duplicate-email window
-(the accumulators are I13 scope, and B57's residue moves with them). `main()` keeps
+(I13 landed the accumulators on `RunState` but kept the B57 block in `main()` for exactly
+this reason; its residue now targets `run_state.emails_sent`). `main()` keeps
 calling `smtp_login()`. Both re-imported by `psh/_legacy.py`, same import-back pattern.
-The last is
+**`psh/lifecycle.py`** (new in I13) holds the run-lifecycle layer: the **`RunState`**
+dataclass — the one home for `main()`'s run-scoped accumulators (`emails_sent`,
+`site_savings`, `all_warnings`, `site_results`, and the two reconnect counters above),
+constructed once per run and bound to `sc.run_state` **before** `invoke_hooks("setup")` so
+the whole run is one instance — plus its `record_site_notices(notices, contacts)` method
+(the B56 csv append, moved with its load-bearing before-the-send comment), and the ten defs
+relocated verbatim from `main()`'s neighborhood: `ResumeSiteNotFoundError`,
+`sites_from_resume_point`, `merge_prior_results`, `finish_run`, `resume_point`,
+`option_strings_taking_a_value`, `resume_command`, `rerun_command`, `abort_reason`, and
+`abort_run`. `finish_run`/`abort_run` now take `run_state: RunState` and read the
+accumulators from it; `finish_run`'s first statement is `sc.invoke_hooks("run_finish",
+run_state)` — the `run_finish` hook now receives the `RunState` (the I4 deviation-5
+discharge; `CONTRACT["run_finish"]` stays `()` — the `RunState` is the hook argument, not a
+contract key). Re-imported by `psh/_legacy.py`, same import-back pattern, so `main()`'s call
+sites and the `psh.<name>` test references resolve unchanged. It **NEVER imports
+`script_context`/`psh.db`/`psh._legacy` at module level** (module-level imports are stdlib +
+`sqlalchemy.exc` + `rich` only) — `sc` is reached at call time, and two call-time bridges
+live inside functions: `abort_reason`'s `from psh.db import DatabaseUnavailableError,
+db_retryable`, and `option_strings_taking_a_value`'s `from psh._legacy import
+build_arg_parser` (an **I14 obligation**: becomes `from psh.cli import build_arg_parser`
+when the argparse pair moves). The module docstring carries the import-cycle diagram (PD#8).
+**`main()` itself and `build_arg_parser`/`parse_args` stay in `psh/_legacy.py` until I14**
+(D-i13-1) — I13 brings `main()` to *content*-final form (622 raw / 445 logic lines, above
+§3.3's 250–400 target — see LEDGER I13), not *address*-final. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -231,7 +257,9 @@ those facts into the `site_post_dns` data-contract keys (below). It is a pure da
 presentation (notices) lives in `check/dns/`, not here. Cross-cutting state and helpers live
 in **`script_context.py`** (imported everywhere as
 `sc`): `sc.options` (parsed argv), `sc.config` (parsed TOML), `sc.plugin`/`sc.check`
-(loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.substitutions`,
+(loaded modules), `sc.news`, `sc.console` (rich), `sc.hooks`, `sc.run_state` (the current
+run's `RunState`, § above — rebound by `reset_sc` and by `main()` before `setup`),
+`sc.substitutions`,
 `sc.Notice`/`sc.Severity` (the `Notice`/`Severity` names reach `sc` via a plain module-level
 `from psh.notice import Notice, Severity` at the **top** of `script_context.py` — a
 module-level import makes both names module attributes automatically, so this is NOT one of
@@ -268,7 +296,7 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
   later), then per site `site_pre` (rename of the old `check` seam), `site_post_traffic`,
   `site_post_dns`, `site_post_gather`, `site_pre_render`, and per run `run_finish` (fired as
   the first statement of `finish_run()` — before any teardown or artifact write, on completed
-  AND aborted runs; no arguments until I13's `RunState`; no consumer yet). Each site phase
+  AND aborted runs; **receives the run's `RunState`** since I13; no consumer yet). Each site phase
   receives the `SiteContext`; the per-phase guaranteed keys are the data-contract table below.
   Bare names not in `PHASES` are a **fatal error** in both `add_hook` and `invoke_hooks`;
   dotted names (e.g. `setup.umich.portal`) are plugin-defined events, allowed and
@@ -427,7 +455,7 @@ against it, so drift on either side goes red:
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (I10, NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str) — the campaign's first hook-declared produced keys. They are DAG-declared (in the hook's `produces`), present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the legacy `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. **I9 keys:** `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy — the B39 table became a `site_post_gather` hook at I10, `main()` no longer reads it), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` (I10) — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (B48's smell emission today) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry. Smell precedence is provably unchanged by I10 — no pair of writers swapped relative order, so no notice-csv value diverges, D-i10-4) |
 | `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (I12, NOT registry-owned):** `check.umich.annual_billing`'s two `site_pre_render` hooks additionally *produce* `annual_bill_upcoming` / `annual_bill_in_progress` (each a legacy notice dict) — DAG-declared, present **only** when the producing hook ran (absent when `[UMich]` is disabled, or, for `annual_bill_upcoming`, when `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads them with `.get(...)` after the phase — the I10 `drupal_multisite` precedent |
-| `run_finish` | — (run-level, not per-site: receives no `SiteContext` and no arguments until I13's `RunState`; fired first thing in `finish_run()` on completed and aborted runs — the seam for future run-level artifact hooks) |
+| `run_finish` | — (run-level, not per-site: receives no `SiteContext`; since I13 it receives the run's `RunState` — `finish_run`'s first statement is `invoke_hooks("run_finish", run_state)`, fired on completed and aborted runs, the seam for future run-level artifact hooks. `CONTRACT["run_finish"]` stays `()`: the `RunState` is the hook argument, not a contract key) |
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
   `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
@@ -618,13 +646,16 @@ artifacts. The two reconnect counters are **healed vs. failed** and both are pri
 (`Database reconnects: N healed, M failed`): `db_retry()` counts a heal only after the retry
 *returns*, and counts a failure when the retry or the pre-retry rollback dies — an attempt-counting
 version reported "1 reconnect" on the run that aborted *because* nothing reconnected, and zero on
-the rollback failure, the most definite connection loss there is. **Test seam:** the counters are
-`script_context.py` module attributes (`sc.db_reconnects_by_site`/
-`sc.db_reconnect_failures_by_site`), not `psh/db.py` or `psh/_legacy.py` state — a test patches or
-asserts against **`script_context`** (e.g. `monkeypatch.setattr(sc, "db_reconnects_by_site", {})`).
-The old `psh.db_reconnect[s|_failures]_by_site`-shaped binding no longer exists, so a stale
-`psh`-targeted patch fails loudly (`AttributeError`), not silently — there is nothing on `psh`
-left to shadow.
+the rollback failure, the most definite connection loss there is. **Test seam:** since I13 the
+counters are two fields of the run's `RunState` (`psh/lifecycle.py`), reached as
+`sc.run_state.db_reconnects_by_site`/`sc.run_state.db_reconnect_failures_by_site`, not `psh/db.py`
+or `psh/_legacy.py` state — a test patches or asserts against **`sc.run_state`** (e.g.
+`monkeypatch.setattr(sc.run_state, "db_reconnects_by_site", {})`), or constructs a fresh `RunState`
+and passes it straight to `finish_run`/`abort_run` (the preferred new idiom). The old
+`sc.db_reconnect[s|_failures]_by_site` module attributes (their I5–I12 interim home) and the even
+older `psh.db_reconnect[s|_failures]_by_site` binding **no longer exist**, so a stale patch or read
+against either fails loudly (`AttributeError`), not silently — pinned by
+`tests/unit/test_run_state.py`.
 
 **Two rich gotchas, both shipped as bugs once.** (1) `sc.console` has markup enabled, so **every
 `sc.console.print()` interpolating text the program did not author must
@@ -791,6 +822,13 @@ Non-obvious things the harness relies on:
   `AttributeError`, the same two-binding lesson as `run_terminus`). `test_email_config.py`
   can't rebind its `psh` fixture parameter to reach it, so it aliases `import psh.mail as
   psh_mail` and patches `psh_mail.SMTP_SSL` while still invoking `psh.smtp_login()`.
+  **`abort_run` calls `finish_run` internally** (both in `psh/lifecycle.py` since I13), so
+  that call resolves in **`psh.lifecycle`'s** namespace: a test faking the flush must patch
+  **`psh.lifecycle.finish_run`**, NOT `psh.finish_run` (the `_legacy` re-import binding a stale
+  patch would hit no longer intercepts the internal call — the same two-binding lesson as
+  `run_terminus`/`SMTP_SSL`; the fake's positional signature is the `run_state` shape). The
+  `abort_run` SIGINT guard is unaffected: `psh/lifecycle.py` imports the shared `signal` module
+  object, so `monkeypatch.setattr(psh.signal, "signal", …)` still reaches it.
 - **The suite must stay green on a sqlite-only install.** `[mysql]` is an optional extra and the
   setup line above sanctions dropping it, so a test needing a real MySQL engine
   (`tests/integration/test_db_credentials.py`, which drives `db_retry()` against a URL that really

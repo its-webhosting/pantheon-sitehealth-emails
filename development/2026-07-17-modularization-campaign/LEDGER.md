@@ -1592,3 +1592,167 @@ tests/e2e/__snapshots__/` empty).
   inits**. Note for I13's spec author: `psh/mail.py` binds `SMTP_SSL` in its own namespace,
   so a test exercising `smtp_login()` patches `psh.mail.SMTP_SSL` (not `psh.SMTP_SSL`) — the
   same two-binding seam trap as `run_terminus`/`psh.gather.run_terminus`.
+
+## I13 — lifecycle + RunState + main() final form (2026-07-23, commits 6f5c282/3681100 + closing docs commit)
+
+Spec/plan: `development/2026-07-23-mod-I13-lifecycle/` (`SPEC.md` §9 carries the pasted
+acceptance; task reports + reviews under `.superpowers/sdd/`). Two code commits, each green:
+`6f5c282` (Task 1 — `psh/lifecycle.py`: `RunState` + `record_site_notices` + the ten
+lifecycle defs moved verbatim, the `psh/db.py` counter-write retarget, the `script_context.py`
+attr swap, `reset_sc` rework, the counter-seam repoint, seam tests §4.1–§4.6), `3681100`
+(Task 2 — `main()` final form: `import_packages`, `open_database`, the three dead inits, the
+B56/B57 retarget, the §2.8/§2.9 doc edits, seam tests §4.7–§4.8), plus this closing docs
+commit (CLAUDE.md / memory / this entry / SPEC §9 acceptance + §2.9 in-place correction / the
+dev folder). Both task reviews clean (spec PASS, quality Approved). Full suite at close
+**including the live tier** (`ls ~/.terminus/cache/tokens/` → `markmont@umich.edu`;
+`tests/live/test_live_smoke.py` → 2 passed) = **1028 passed / 1 skipped** (the skip is
+`test_db_credentials.py`'s `importorskip("MySQLdb")` on a sqlite-only install), all three
+gates (`All checks passed!` ×2, pyright `0 errors`), 107 snapshots; four goldens
+byte-identical across the increment (`git diff 268696c -- tests/e2e/__snapshots__/` empty —
+`268696c` is the I12 archive commit, the last before I13 work).
+
+- **Moved:** exactly the §11-row-I13 move set (the B14 accumulators, B56, B59–B60, the resume
+  helpers I5 left behind), into the new **`psh/lifecycle.py`** (born gated, re-imported by
+  `psh/_legacy.py` — the I2–I12 pattern):
+  - **The `RunState` dataclass** (§6's exhaustive six-field set: `emails_sent`, `site_savings`,
+    `all_warnings`, `site_results`, `db_reconnects_by_site`, `db_reconnect_failures_by_site`;
+    the two counter-dict contract comments moved onto the fields verbatim) + its
+    **`record_site_notices(notices, contacts)`** method (the B56 append loop, moved with its
+    load-bearing before-the-send comment intact).
+  - **The ten lifecycle defs** relocated verbatim (modulo the §5/§6 annotation fixes and the
+    §2.2/§2.4 edits): `ResumeSiteNotFoundError`, `sites_from_resume_point`,
+    `merge_prior_results`, `finish_run`, `resume_point`, `option_strings_taking_a_value`,
+    `resume_command`, `rerun_command`, `abort_reason`, `abort_run`. `finish_run`/`abort_run`
+    now take `run_state: RunState`; every accumulator read/write in `main()`, `psh/db.py`
+    (`db_retry`), and the two moved targets retargets it. The extracted-block self-diff (Task 1
+    report) confirmed every residual hunk is a sanctioned edit.
+  - **`main()` final form** (Task 2, still hosted in `psh/_legacy.py` — D-i13-1): B2/B4
+    import loops → `psh.modules.import_packages(kind)`; B10 engine+sessionmaker →
+    `psh.db.open_database(db_config, *, echo=False)`; the three I7 dead tail inits deleted
+    (`site_recommended_plan`/`site_current_plan_index`/`site_recommended_plan_index`;
+    `site_current_plan` kept); B56 loop → `run_state.record_site_notices(...)`; B57's
+    `emails_sent += 1` → `run_state.emails_sent += 1`.
+
+- **`run_finish` receives the `RunState`** (the I4 deviation-5 discharge): `finish_run`'s
+  first statement is `sc.invoke_hooks("run_finish", run_state)`. `CONTRACT["run_finish"]`
+  stays `()` — the `RunState` is the hook *argument*, not a contract key. The one in-repo
+  test with a `run_finish` probe (`test_finish_run.py`) gained the `run_state` parameter; the
+  stale "no arguments until I13" comments (invoke site + `psh/modules.py` `PHASES`) were
+  rewritten (PD#7).
+
+- **New two-binding seam trap (spec-review finding 2):** `abort_run` calls `finish_run`
+  internally, so after the move that call resolves in `psh.lifecycle`'s namespace — a test
+  faking the flush patches **`psh.lifecycle.finish_run`**, NOT `psh.finish_run`. Joins the
+  documented trap family (CLAUDE.md § Two mock seams — entry added this closing commit).
+  `abort_run`'s SIGINT guard is unaffected (`psh/lifecycle.py` imports the shared `signal`
+  module object).
+
+- **Deviations from CAMPAIGN.md:** none of architecture; SPEC-level ledger notes (the
+  D-i6-1 "bodies move, glue stays" family):
+  1. **D-i13-1 (user-approved 2026-07-23 in the I13 session)** — `psh/_legacy.py` continues to
+     host `main()` + `build_arg_parser`/`parse_args` this increment; "`main()` reaches final
+     form" is read as *content*-final, not *address*-final. The verbatim relocation to
+     `psh/cli.py`, `_legacy.py` deletion, and `psh` fixture redesign are an I0-style zero-logic
+     move deferred to **I14** (LEDGER I0 left the timing "I13/I14"). Keeps I13 — the increment
+     that rewires `db_retry`, the abort flush path, and Invariant 4 — within session limits
+     (D4, split-never-compress).
+  2. **D-i13-2** — the one shared home for the accumulators is `sc.run_state` (a single
+     `RunState` instance), not parameter threading: `db_retry` (the counter writer) is reached
+     from `psh/traffic.py`/`psh/plans.py`/`main()`'s lambda, so threading a `RunState` param
+     would widen five already-pinned signatures for no observable gain (the D-i5-1 rule, one
+     level up). §3.4 honored — the accumulators *live in* `RunState`; `sc` holds the pointer,
+     exactly as it holds `hooks`. Construction (finding 8): `sc.run_state = RunState()` placed
+     **before `invoke_hooks("setup")`**, so a future setup hook using `db_retry` can't write
+     into a default `RunState` `main()` then discards (a latent PD#1 shape). The
+     `script_context.py` counter attrs are **deleted** (finding 7's loud-failure property, one
+     level up — pinned by `tests/unit/test_run_state.py`).
+  3. **D-i13-3** — the two call-time bridges in `psh/lifecycle.py`: `abort_reason`'s
+     `from psh.db import DatabaseUnavailableError, db_retryable` (§2.1 cycle rule) and
+     `option_strings_taking_a_value`'s `from psh._legacy import build_arg_parser` (both
+     `# noqa: PLC0415` two-line form, the I6 precedent). The latter is an **I14 obligation** —
+     replace with a module-level `from psh.cli import build_arg_parser` when the argparse pair
+     moves (recorded at the bridge and in Open questions below).
+  4. **D-i13-4** — B10 (engine + sessionmaker + session construction, with the load-bearing
+     `expire_on_commit=False` comment) moved into `psh.db.open_database`, finally making
+     CLAUDE.md's "`psh/db.py` holds every DB touch this program makes" true.
+  5. **D-i13-5 (spec-review finding 4)** — the B11 `--create-tables` short-circuit
+     (`Base.metadata.create_all` + `sys.exit`) **stays in `main()`**: it is option gating on
+     the orchestrator's control flow (`sys.exit` cannot cross a function boundary usefully —
+     the D-i6-1 loop-control reading), preserving today's B10→B11 order. A ledger note, not an
+     amendment (the D-i5-3 interim precedent).
+  Spec-review (APPROVE-WITH-FIXES) findings 1–9 were **all folded into the SPEC
+  pre-implementation** (finding 1 the run_finish probe arity; 2 the two-binding trap; 3
+  excluding the 7 `-run.json` artifact-key hits from the counter repoint; 4 the D-i13-5
+  disposition ledgered here; 5 the corrected raw `main()` figure; 7 the `sc.debug` location
+  stamps at `-v` are §8-sanctioned; 8 the pre-`setup` construction point; 9 the `B904`
+  `from None` + the `import psh.db`-first `ImportError` cycle mode) — no post-implementation
+  surprises from them.
+
+- **Contract/config/sc additions:** **`sc.run_state`** (the current run's `RunState`; a
+  process-global pointer like `sc.hooks`, rebound by `reset_sc` and by `main()` before
+  `setup` — **not** check-facing API, so it does NOT join `test_documented_sc_facade_names_exist`,
+  the D-i5-1 precedent for the counters it absorbs). **No new contract keys**
+  (`CONTRACT["run_finish"]` stays `()`). **No config keys.** Two `script_context.py` module
+  attributes **deleted** (`db_reconnects_by_site`/`db_reconnect_failures_by_site` — their
+  I5–I12 interim home). New functions `psh.modules.import_packages(kind)` and
+  `psh.db.open_database(db_config, *, echo=False)`.
+
+- **`main()` final-form measurement (§6, §17-Q1 honesty clause):** `def main()` at
+  `psh/_legacy.py:370`; body spans 370–991. Measured this session:
+  `sed -n '370,991p' psh/_legacy.py | wc -l` → **622 raw**;
+  `… | grep -vc '^\s*$\|^\s*#'` → **445 logic**. This is **ABOVE** §3.3's 250–400 target, as
+  §6 predicts and attributes to the ledgered "stays"-list call-site decisions (D-i6-1,
+  D-i8-2, D-i12-2/3/4) plus the file's comment density — the 250–400 figure was a planning
+  estimate that did not price those stays. **Flagged for I14's §17 Q1 audit** (the line-count
+  delta adjudication). Per PD#14 the spec did NOT invent extra extractions to game the number
+  — each §3.3 "stays" line would be the thing extracted, contradicting the frozen architecture.
+
+- **Ratchet (§13):** `psh/lifecycle.py` **born gated** (broad ruff + pyright standard, 0
+  findings after dispositions), never in `ruff-broad.toml`'s `extend-exclude`; **I13 deletes
+  nothing from and adds nothing to** the exclude list (`psh/_legacy.py` stays grandfathered
+  until I14 — I2–I12 precedent). `psh/db.py`/`psh/modules.py`/`script_context.py` stayed
+  0-findings. Dispositions confirmed against real tool output (PD#14): predicted §5 findings
+  applied as predicted (the `-> str | None`/`-> set[str]`/`-> list[str]` house-style
+  annotations + RUF013; `SLF001` on `build_arg_parser()._actions`; `DTZ002` on
+  `datetime.today()`; `PLC0415` ×2 on the bridges; `B904` `from None`;
+  `C901`/`PLR0912`/`PLR0915`/`PLR0913` on the two verbatim large bodies; `PTH110`/`PTH123`
+  **noqa** — verbatim artifact-path IO kept byte-identical, pathlib migration left to I14
+  de-grandfathering). **Unpredicted findings**, dispositioned per the §3.1 "moves get no
+  algorithmic redesign" precedent (noqa + inline reason, body byte-verbatim): `TRY004`+`TRY301`
+  (`merge_prior_results`' `raise ValueError`), `FURB122` (`finish_run`'s `f.write` loop),
+  `F541`, `FBT001` (`resume_point`'s `emailed: bool`), `RUF005` (`resume_command`'s list
+  concat), `RET505` (`abort_reason`'s `elif`-after-return) — the real cleanup rides with the
+  bodies' eventual I14 rewrite. Two **unpredicted pyright ignores** — a consequence of the
+  sanctioned `site_name: str | None`/`resume_point -> str | None` widenings surfaced now that
+  `psh/lifecycle.py` is in scope: `reportArgumentType`/`reportCallIssue` on
+  `site_results.pop(site_name, None)` and `resume_command(sys.argv, resume_site)`, both guarded
+  at runtime (the `psh/gather.py` "unreachable in practice" precedent). Pyright scope
+  **UNCHANGED** (`psh/` minus `_legacy.py`) — the D-i8-7 lineage; **I14 inherits it**.
+
+- **Discovered tasks (dispositions):**
+  - **`import sqlalchemy as db` in `psh/_legacy.py` is now a pure test seam** (Task 2): removing
+    B10's in-file `db.create_engine`/`db.orm.sessionmaker` left it with zero in-file uses, but
+    `tests/conftest.py`'s `TempDB` reaches `psh.db.create_engine`/`psh.db.orm.sessionmaker`
+    through THIS alias (the `db` attribute of `_legacy`), not the `psh/db.py` package. **Kept**,
+    `# noqa: F401` + inline reason in the adjacent seam-import house style, so a future cleanup
+    can't mistake it for dead code (PD#1). → **fixed/documented here** (Task 2).
+  - **SPEC §2.9 was wrong about `no_primary_domain_notice`** (Task 2): verified at `6f5c282^`,
+    that function's docstring never carried a "final home I13's call" note — only
+    `sort_notices_and_subject` had one. The implementer rewrote `sort_notices_and_subject`'s
+    note and **added** the ride-to-`psh/cli.py` note to `no_primary_domain_notice` to honor
+    §2.9's intent. → **SPEC §2.9 corrected in place** (this closing commit, "correction
+    (Task 3)" — the I12 precedent).
+  - **Task-1 review Notes** (all no-action, adjudicated correct): (1) the two new unit tests
+    went red only via a collection-error `ModuleNotFoundError` — structural for a brand-new
+    module, watched for the right reason; (2) the transient B56-duplication window is
+    by-design and the Task-2 reviewer confirmed the `main()` call-site swap; (3) the brief's
+    file list omitted `psh/modules.py` but its edit (the stale `PHASES` comment) was in-scope.
+  - No others — the two task reports found no further gaps beyond the items above.
+
+- **Open questions for I14:** the §2.4 `build_arg_parser` bridge → a module-level
+  `from psh.cli import build_arg_parser` when the argparse pair moves; the
+  `main()`/argparse relocation to `psh/cli.py` + `psh/_legacy.py` deletion + the `psh`
+  conftest-fixture redesign (D-i13-1); the §6 622/445-line delta adjudication (§17 Q1); plus
+  every item I12 already carried (Notice dict retirement + the §6 field-set amendment for
+  extra-csv notices; `check/umich/__init__.py`'s stale disabled-branch message; the B51
+  Aug-2026 "annual bill in progress" deletion, whose date will have passed; config renames).
