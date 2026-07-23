@@ -1306,3 +1306,115 @@ byte-identical across the increment (`git diff eff1b40 -- tests/e2e/__snapshots_
   `Notice`-adoption for extra-csv notices remains I12/I14; the `escape_url` bridges in
   `psh/gather.py` (now two Drupal ones beside the WP one) are all the I12 obligation
   (module-level `from psh.render import escape_url` when it moves).
+
+## I11 — charts (2026-07-23, commits f55e13d/7392d9f + closing docs commit)
+
+Spec/plan: `development/2026-07-23-mod-I11-charts/` (`SPEC.md` §9 carries the pasted
+acceptance; the measured scratch assembly is archived there as
+`charts-scratch-measured.py`, and the byte-preservation hash records as
+`chart-hashes-{before,after}.txt`; task report + review under `.superpowers/sdd/`).
+One atomic code commit `f55e13d` (Tasks 1+2 — RED tests + the move; a partial move
+cannot be green, the I5/I6 single-commit precedent), one review-fix commit `7392d9f`
+(the relocated SVG-chart TODO marker, below), plus this closing docs commit
+(CLAUDE.md / memory / this entry / SPEC §9 / the dev folder). Full suite at close
+**including the live tier** (`terminus auth:login` succeeded from the cached machine
+token; the 2 live-marked tests ran) = **996 passed / 1 skipped** (the skip is
+`test_db_credentials.py`'s `importorskip("MySQLdb")` on a sqlite-only install), all
+three gates (`All checks passed!` ×2, pyright `0 errors`), 107 snapshots; four goldens
+byte-identical across the increment (`git diff 2c79b05 -- tests/e2e/__snapshots__/`
+empty).
+
+- **Moved:** exactly the §11-row-I11 move set (B13's cap geometry + B44's
+  post-`--only-warn` chart data prep + B45's matplotlib build) → the new
+  `psh/charts.py`, one public function `build_chart(...) -> bytes` (PNG), re-imported
+  by `psh/_legacy.py` (I2–I10 pattern). `main()`'s chart region collapsed to a single
+  call threading the 13 shaped locals (`site`, `site_url`, `visits_by_month`,
+  `plan_on_day`, `plan_info`, `plan_over_time`, `dates`, `estimate`,
+  `first_plan_day`, `last_plan_day`, `start_date`, `end_date`, `plot_right_date`) —
+  the LEDGER-I10 "threads shaped data rather than re-deriving" instruction, honored.
+  Eight imports orphaned from `_legacy.py` and removed (`io`, `numpy`, all five
+  matplotlib forms) — grep-verified chart-only before deletion.
+
+- **Deviations from CAMPAIGN.md:** none of architecture; SPEC-level ledger notes:
+  1. **D-i11-2 — cap geometry became the function prologue**, recomputed per call
+     (was a once-per-run pre-loop precompute). §3.4 bars new module-level mutable
+     state in `psh/` and module-level numpy arrays would be exactly that; the
+     recompute is pure constant math (~µs vs a ~1 s chart build), values identical.
+  2. **D-i11-3 — the chart-only `end_date_yyyy_mm`/`visits` derivations moved
+     inside** `build_chart` and their `main()` lines were deleted (orphan-removal;
+     value-identity verified — nothing mutates `visits_by_month` after aggregation).
+     `dates` IS passed (shared with the pre-gate `estimate_month_visits` call).
+     `end_date_yyyy_mm` is read as chart-only formatting, not §3.3's "date window".
+  3. **D-i11-4 — `estimates = []` prologue init** (the I7 `costs_best = {}`
+     precedent) for pyright; the other conditionally-bound names (`ax_surge`,
+     `est_bars`, `bars`) keep scoped ignores instead — a `None` init would trade
+     unbound-errors for optional-member errors and a fabricated default would
+     silently draw on the wrong axes (PD#1); the loud NameError is the correct
+     failure mode.
+  4. **D-i11-7 — the `plan_on_day` precondition is documented, not handled** (every
+     clamped month midpoint must be a key; production data always satisfies it; a
+     violation KeyErrors exactly as pre-move — the D-i6-4 posture).
+
+- **D-i11-6 — behavior evidence (the increment's load-bearing finding): the chart PNG
+  is NOT golden-pinned.** The goldens snapshot only the normalized HTML/txt; the chart
+  bytes live in the `.eml`, which has no byte golden. So the goldens prove `main()`
+  still drives the chart path, but not byte-preservation. Evidence shipped instead:
+  (a) before/after sha256 of the chart payload extracted from the offline golden
+  pipeline's `.eml` — byte-identical (`2bca16a2…9afcb`), with the task reviewer
+  independently reproducing the pre-move hash from a `2c79b05` worktree; records
+  committed in the dev folder. (b) Permanent seam tests
+  (`tests/integration/test_charts.py`, 5 tests): PNG validity, surge-vs-plain IHDR
+  height (proves the GridSpec branch ran), estimate-visibility byte difference,
+  determinism across calls, zero leaked figures. **No committed image golden, by
+  design**: it would freeze matplotlib's exact rendering and trap post-campaign
+  matplotlib/font upgrades against Invariant 1's no-refresh rule.
+
+- **Contract/config/sc additions:** none. No new contract keys, no config keys, no new
+  `sc` façade names (the region's only `sc` use is `sc.debug`; grep-verified per SPEC
+  §1 non-scope).
+
+- **Ratchet (§13):** `psh/charts.py` born gated (broad ruff + pyright standard, 0
+  findings after dispositions; measured on the archived assembly before implementation,
+  then re-verified on the shipped file). Ruff dispositions (17 measured):
+  ICN001 → `import matplotlib as mpl` (+ the one `rcParams` site); B905 →
+  `zip(..., strict=True)` (provably equal-length linspace outputs); quadruple
+  `C901`/`PLR0912`/`PLR0913`/`PLR0915` noqa on the def (verbatim ~360-line move,
+  pinned 13-arg set — the I6 precedent); SIM118 ×3 / PLC0206 / PLR1730 ×3 / SIM210 /
+  C408 / ISC003 rewrites (each behavior-identical, I6/I7 precedents); DTZ007 noqa +
+  reason (naive month-label bin edges); I001 canonical import order. Pyright (25
+  measured → 0): the D-i11-4 init; `kwargs: dict[str, Any]` on the axes-caps literal
+  (dissolves 6 `Axes.plot(**kwargs)` findings honestly); 14 scoped
+  `# pyright: ignore` lines in exactly two families — matplotlib-stub
+  `reportArgumentType` on runtime-valid dynamic API use, and
+  `reportPossiblyUnboundVariable` on surge-conditional locals — both families
+  documented once in the module docstring. Nothing added to or removed from
+  `ruff-broad.toml` (fresh gated file; `_legacy.py` stays grandfathered). **Pyright
+  scope UNCHANGED** (`psh/` minus `_legacy.py`) — D-i8-7/D-i9-8/D-i10-9 inherited;
+  **I12 inherits it.**
+
+- **Discovered tasks (dispositions):**
+  - **The `# TODO: Create SVG chart` marker was dropped instead of relocated** (task
+    review, Minor; PD#9) → **fixed here** (`7392d9f`). Process note for future
+    relocations: the implementer's Invariant-8 raw-extract self-diff structurally
+    could not catch it — the extract range ended at `plt.close(fig)` and the marker
+    lived two lines below, so "every hunk accounted for" had a blind spot at trailing
+    relocated markers (PD#14: the instrument was blind exactly where the defect was).
+  - SPEC §Observations, recorded for post-campaign, no action: the `estimates`
+    def/use guard mismatch (`!= -1` vs `>= 0`, equivalent today); `est_bars`/`bars`
+    loop-variable leakage past the axes loop (deliberate; scoped ignores record it);
+    the hand-tuned `x + w - 0.00001` vlines epsilon.
+  - No others — the task report and review found no further gaps.
+
+- **Open questions for I12:** proceed per CAMPAIGN.md §11 row I12 (`psh/render.py` +
+  `psh/mail.py`; B49–B57 minus sort/subject core; annual billing → `check/umich/` at
+  `site_pre_render`; B51 deletion if past its Aug-2026 date). Inherited obligations,
+  all previously ledgered: the three `escape_url` call-time bridges in `psh/gather.py`
+  become a module-level `from psh.render import escape_url` (LEDGER I9/I10); the
+  `main()` umich-only annual-bill call sites have NO runtime test — I12's spec author
+  MUST cover them when relocating (LEDGER I1); `Notice`-class adoption for extra-csv
+  notices remains I12/I14 (needs the reserved §6 field-set amendment); the B55 MIME
+  assembly consumes `chart_image` (bytes) and `wordmark_image` — both plain locals,
+  no charts coupling beyond the one call. Note for I12's spec author: `psh/charts.py`
+  imports nothing from the gateway, so the two-binding seam trap does not extend to
+  it; and the `.eml` chart-payload hash procedure in SPEC I11 §6 is reusable as-is if
+  I12's MIME move needs the same evidence class.

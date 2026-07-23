@@ -186,7 +186,20 @@ D-i6-2 precedent — replaced by a module-level `from psh.render import escape_u
 I12 moves it there). Re-imported by `psh/_legacy.py`, same import-back pattern, so
 `main()`'s call sites and the `sc.check_wordpress_plugin`/`sc.check_drupal_module`
 exposure lines resolve
-unchanged. The last is
+unchanged. **`psh/charts.py`** (new in I11) holds the per-site traffic-chart build:
+one public function, `build_chart(...) -> bytes` (PNG), moved verbatim from `main()`
+(B13's cap-shape geometry — now the function prologue, recomputed per call — plus the
+B44 chart data prep and B45 matplotlib build). `main()` threads 13 shaped locals into
+it (`site`, `site_url`, `visits_by_month`, `plan_on_day`, `plan_info`,
+`plan_over_time`, `dates`, `estimate`, `first_plan_day`, `last_plan_day`,
+`start_date`, `end_date`, `plot_right_date`) and hands the returned bytes to the B55
+MIME assembly; the chart-only `end_date_yyyy_mm`/`visits` derivations moved inside
+(D-i11-3). The chart PNG is **not** golden-pinned (the `.eml` has no byte golden), so
+`tests/integration/test_charts.py` is the permanent cover (valid PNG, surge-vs-plain
+figure geometry, estimate visibility, byte determinism, no leaked figures); its
+docstring records the `plan_on_day` precondition (every clamped month midpoint must be
+a key — production data always satisfies it). Re-imported by `psh/_legacy.py`, same
+import-back pattern. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -489,7 +502,8 @@ against it, so drift on either side goes red:
   declaration → `build/<site>-inline2.html`, which is the HTML actually attached to the
   message (not `-inline.html`). Charts
   (traffic surge bars, SiteLens gauges) are generated with matplotlib and attached as inline
-  images (`make_msgid` CIDs). Everything is assembled into a MIME `EmailMessage` and written
+  images (`make_msgid` CIDs) — the traffic chart via `psh.charts.build_chart` (since I11),
+  the SiteLens gauges in `check/umich/sitelens.py`. Everything is assembled into a MIME `EmailMessage` and written
   to `build/<site>.eml`. **The SMTP send (`smtp_login()`/`send_message`) is live but gated on
   `[SMTP].enabled`**: when disabled (or `[SMTP]` absent) only the `.eml` files are written; when
   enabled the tool sends (to test addresses unless `--for-real`). `--for-real` selects the real
@@ -714,8 +728,8 @@ Non-obvious things the harness relies on:
   `importlib.util.spec_from_file_location` + `exec_module` instead. Argparse was
   refactored into `build_arg_parser()`/`parse_args()`; `sc.options` is set by the caller, so a
   test sets it (the `reset_sc` autouse fixture does) before calling functions. `MPLBACKEND=Agg`
-  must be set before the load (conftest does this) because the module imports `matplotlib.pyplot`
-  at the top.
+  must be set before the load (conftest does this) because `psh/charts.py` imports
+  `matplotlib.pyplot` at module level (reached transitively via `_legacy.py`'s re-import).
 - **Two mock seams.** All Pantheon/WP/Drush I/O funnels through `run_terminus()` — monkeypatch it
   for in-process tests at **`psh.gateway.run_terminus`** (via the `gateway` conftest fixture), NOT
   `psh.run_terminus`: since I2 the wrappers live in `psh/gateway.py` and resolve `run_terminus` in
@@ -764,7 +778,8 @@ Non-obvious things the harness relies on:
   (`tests/unit/test_traffic_aggregation.py`), covering seeding traffic-free months to 0 and the
   last-row-wins `plan_on_day` map; the `pprint` diagnostics, the empty-`plan_on_day` guard, and
   `build_plan_over_time`'s call stay in `main()` (loop control/ordering — I7's `psh/plans.py`
-  move took the bodies, not the call sites; I11 is the chart-region increment still to come).
+  move took the bodies, not the call sites; the chart region itself moved at I11 into
+  `psh/charts.py`, see § Single-module core).
   **`classify_hostname_dns` is NOT one of these** — it moved out of the script into
   `dns_classify.py`; import it from there.
 - **DNS tests.** The `dns_classify.py` engine and `check/dns/` package have their own suite:
