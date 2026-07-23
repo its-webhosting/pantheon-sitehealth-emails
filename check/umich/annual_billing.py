@@ -114,7 +114,7 @@ an additional pro-rated bill or credit in the following month.
     }
 
 
-def _billing_inputs(site_context) -> tuple[dict, str, float]:
+def _billing_inputs(site_context) -> tuple[dict, dict, float]:
     site = site_context["site"]
     portal_site = sc.config["UMich"]["portal"]["sites"][site["name"]]
     annual_bill = float(sc.config["Pantheon"]["plan_info"][site_context["current_plan"]]["cost"])
