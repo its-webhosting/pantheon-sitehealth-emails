@@ -1768,3 +1768,34 @@ byte-identical across the increment (`git diff 268696c -- tests/e2e/__snapshots_
   every item I12 already carried (Notice dict retirement + the §6 field-set amendment for
   extra-csv notices; `check/umich/__init__.py`'s stale disabled-branch message; the B51
   Aug-2026 "annual bill in progress" deletion, whose date will have passed; config renames).
+
+## Amendments — Wave-4 split + B51 early deletion (2026-07-23, user-approved; applied to CAMPAIGN.md at I14a spec time)
+
+Two CAMPAIGN.md amendments, both user-approved 2026-07-23 in the I14a session (via an
+explicit four-option decision round), applied to the document the same day per the
+preamble's edit-the-document-AND-ledger rule. Appended at I14a **spec** time — before
+implementation — so CAMPAIGN.md's "LEDGER I14a" citations resolve for the whole
+increment (adversarial spec-review finding 11); the full I14a increment entry follows
+separately at its close.
+
+1. **Wave 4 split into four ordered sub-increments** (§11 wave diagram + row I14 →
+   rows I14a–I14d). The closing sweep's measured scope — the `psh/cli.py` relocation,
+   a **2,729-finding** ratchet flip (measured 2026-07-23: tests 2,540 of which 1,727
+   S101; `psh/_legacy.py` 69; `check/cloudflare` 41; `plugin/` 39; `check/umich`
+   legacy pair 16; `check/pantheon_cdn_change` 14; `dns_classify.py` 9; `check/dns` 1),
+   the `Notice` retirement, and the full docs refresh — is several sessions of work;
+   the §11 split-never-compress rule applied at spec time rather than mid-session.
+   I14a = structural finish; I14b = ratchet flip; I14c = Notice retirement;
+   I14d = closing (config-migration doc, docs refresh, §17 audit, retrospective).
+2. **B51 deleted at I14a, ahead of its date** (§8 "Notice csv values" row; §14 risk
+   row). The "annual bill in progress" notice's marker says "remove at the beginning
+   of August 2026"; I12/I13 assumed I14 would run after that date, but I14a runs
+   2026-07-23 — the date has NOT passed. Per §11's frozen rule ("deletion if past its
+   date") B51 would be kept; the user chose early deletion over carrying it
+   post-campaign. Zero golden/artifact impact (goldens run umich-disabled; the billing
+   produced-keys never reach `-notices.csv` — LEDGER I12).
+
+Related decisions locked the same round: **no config renames at I14d**
+(`docs/config-migration.md` will record "no key changes required" with its audit
+trail — the schema survey found every section already in final shape), and the
+**§3.1 `dns_classify.py` MAY is exercised** (→ `psh/dns_classify.py`, I14a).

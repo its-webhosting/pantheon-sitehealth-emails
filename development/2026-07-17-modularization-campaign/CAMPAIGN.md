@@ -289,7 +289,7 @@ scope; (2) follow `prompts/implementation-standards.md` (subagent-driven, test-f
 |---|---|---|
 | Rendered emails (4 goldens) | NEVER change (byte-identical) | end of campaign |
 | `-results.json` / `-notices.csv` / `-run.json` structure (keys, row shape) | NEVER change | end of campaign |
-| Notice csv *values* | MAY change only in I1 (named bug fixes), I12 (scheduled B51 deletion), I7 (`its-recommends-plan` savings-field format, D-i7-5 — amendment), and I9 (wp-smell precedence when theme-list and OCP-probe stderr co-occur without favicon stderr — see LEDGER I9) | — |
+| Notice csv *values* | MAY change only in I1 (named bug fixes), I7 (`its-recommends-plan` savings-field format, D-i7-5 — amendment), I9 (wp-smell precedence when theme-list and OCP-probe stderr co-occur without favicon stderr — see LEDGER I9), and I14a (B51 deletion — originally scheduled for I12 "if past its date"; the Aug-2026 marker date had not passed at I12 nor by 2026-07-23, and the user approved deleting it early at I14a rather than carrying it post-campaign — amendment, LEDGER I14a) | — |
 | stdout / console / error messages | MAY improve freely | — |
 | Config: existing keys | NEVER break | I14 (renames with migration table) |
 | Config: new keys | MUST land in final schema shape | — |
@@ -347,8 +347,15 @@ Wave 0: I0 bootstrap ──► I1 bug fixes
 Wave 1: I2 gateway ──► I3 config ──► I4 hooks+DAG ──► I5 DB
 Wave 2: I6 traffic ──► I7 plans ──► I8 check/pantheon ──► I9 wordpress ──► I10 drupal
 Wave 3: I11 charts ──► I12 render+mail ──► I13 lifecycle
-Wave 4: I14 closing sweep
+Wave 4: I14a structural ──► I14b ratchet ──► I14c notice ──► I14d closing
 ```
+
+Wave 4 was split from the single "I14 closing sweep" into four ordered sub-increments
+(user-approved 2026-07-23, LEDGER I14a — the §11 sizing note's split-never-compress rule,
+applied at spec time rather than mid-session: the closing sweep's measured scope — the
+`psh/cli.py` relocation, a 2,729-finding ratchet flip, the `Notice` retirement, and the
+full docs refresh — is several sessions of work). Each sub-increment carries the full §7
+obligations and its own session, spec, review, commits, and archive.
 
 | Inc | Scope (blocks / functions) | Delivers |
 |---|---|---|
@@ -366,7 +373,10 @@ Wave 4: I14 closing sweep
 | **I11** | B13 (caps), B44–B45 | `psh/charts.py` |
 | **I12** | B49–B57 minus sort/subject core | `psh/render.py`, `psh/mail.py`; annual billing → `check/umich/` at `site_pre_render`; B51 deletion if past its date |
 | **I13** | B14 (accumulators), B56, B59–B60; 1649–2107 plus the resume helpers I5 left behind (1281–1284, 1528–1542, 1576–1607) | `psh/lifecycle.py`; `RunState`; `main()` reaches final form |
-| **I14** | — | Config renames + migration doc + sample rewrite + production-config instructions; global ratchet flip + remnant cleanup; docs/README/CLAUDE.md full refresh; `Notice` dict form retired; ledger fully resolved; retrospective + closing audit (§17) |
+| **I14a** | B51; `main()`+argparse relocation (D-i13-1 discharge); `dns_classify.py` | Structural finish: B51 deleted (user-approved early deletion 2026-07-23 — see §8); `main()`, `build_arg_parser`/`parse_args`, and the riding helpers → `psh/cli.py`; `psh/_legacy.py` deleted; conftest `psh`-fixture + test-seam redesign; `dns_classify.py` → `psh/dns_classify.py` (the §3.1 MAY, exercised); D-i13-3 bridge discharged; §17 Q5 symlink decision |
+| **I14b** | — | Global ratchet flip: remaining grandfathered trees un-grandfathered + cleaned; `ruff-broad.toml` merged into `pyproject.toml`; pyright-scope decision (D-i8-7 lineage) |
+| **I14c** | — | `Notice` dict form retired: the reserved §6 csv-field amendment + every producer converted; artifacts byte-identical |
+| **I14d** | — | Closing: config migration doc (decision 2026-07-23: **no renames** — the schema is already in final shape, the doc records that with its audit trail) + sample-toml refresh + production-config instructions; docs/README/CLAUDE.md full refresh; ledger fully resolved; retrospective + closing audit (§17) |
 
 Sizing note: the largest moves are I9 (~330 main-loop lines + helpers) and I10 (~320 +
 helpers). If any increment proves oversized mid-session: **split, never compress** —
@@ -445,7 +455,7 @@ the dev container yet; installing it is I0 scope.)
 | Ratchet churn on moved code | Rules fixed at I0; cleaning is part of each move |
 | Goldens blind to stdout/artifacts | Invariants 4–5 name the artifact/abort test suites as the cover; artifact structure frozen until campaign end |
 | Implementer sessions lack context | `psh-implementer`/`psh-reviewer` carry the read list; specs name seams (Spine spec bar); §7 reading list |
-| Two annual-bill notices / removal date passes mid-campaign | Explicitly scheduled: codes split in I1, deletion decision in I12, ledger tracks |
+| Two annual-bill notices / removal date passes mid-campaign | Explicitly scheduled: codes split in I1, deletion decision in I12 (kept — date unpassed), resolved at I14a (user-approved early deletion; §8 amendment, LEDGER I14a) |
 
 ## 15. NOT in scope (reasoning preserved so it is never re-litigated)
 
