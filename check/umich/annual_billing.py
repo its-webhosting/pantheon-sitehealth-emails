@@ -101,4 +101,3 @@ def check_annual_bill_upcoming(site_context) -> None:
     site_context["annual_bill_upcoming"] = build_annual_bill_upcoming_notice(
         site["name"], site["plan_name"], annual_bill, portal_site["shortcode"], portal_site["id"]
     )
-
