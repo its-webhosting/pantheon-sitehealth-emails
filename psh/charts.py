@@ -427,4 +427,7 @@ def build_chart(  # noqa: C901, PLR0912, PLR0913, PLR0915  # moved verbatim from
     chart_image = buf.read()
     buf.close()
     plt.close(fig)
+
+    # TODO: Create SVG chart
+
     return chart_image
