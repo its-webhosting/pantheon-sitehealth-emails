@@ -1799,3 +1799,110 @@ Related decisions locked the same round: **no config renames at I14d**
 (`docs/config-migration.md` will record "no key changes required" with its audit
 trail — the schema survey found every section already in final shape), and the
 **§3.1 `dns_classify.py` MAY is exercised** (→ `psh/dns_classify.py`, I14a).
+
+## I14a — structural finish (2026-07-23, commits cd084e9/745967e/d94c31a/f22950e/9b1fe35/b39e435 + closing docs commit)
+
+Spec/plan: `development/2026-07-23-mod-I14a-structural/` (`SPEC.md` §9 carries the pasted
+acceptance; spec committed BEFORE implementation at `7e7e803` with the Wave-4-split/B51
+amendment records appended to this ledger at spec time — see the Amendments entry above;
+plan at `d1d3d1a`; task reports under `.superpowers/sdd/`). Adversarial spec review:
+APPROVE-WITH-FIXES round 1, all 11 findings folded pre-implementation (incl. the
+non-mutation-pin rescue and the six-import-site count correction). Per-task commits, each
+green; whole-branch review (fable): **STANDARDS PASS-WITH-FIXES** (two one-line
+doc-accuracy fixes, applied in the closing commit) + **SPEC PASS**. Full suite at close
+**including the live tier** (`ls ~/.terminus/cache/tokens/` → `markmont@umich.edu`) =
+**1023 passed / 1 skipped** (the skip is `test_db_credentials.py`'s
+`importorskip("MySQLdb")`), 107 snapshots, all three gates, EXIT=0; four goldens
+byte-identical across the increment (`git diff 5902b76 -- tests/e2e/__snapshots__/`
+empty). Fast-tier count 1021/1/2 = I13's 1026/1/2 − the 5 sanctioned B51 test deletions.
+
+- **Delivered (SPEC §2.1–§2.3, exhaustively verified by per-task + whole-branch review):**
+  - **B51 DELETED** (`cd084e9`+`745967e`+`f22950e`) — the user-approved early deletion
+    (§8 amendment; the Aug-2026 date had NOT passed). `build_annual_bill_in_progress_notice`,
+    `check_annual_bill_in_progress`, its registration, and the `annual_bill_in_progress`
+    produced key are gone; `_billing_inputs` + the upcoming hook stay; the
+    non-mutation-of-`site_context["notices"]` pin was REWRITTEN onto `annual_bill_upcoming`
+    (never deleted); `test_both_keys_render_in_progress_first_then_upcoming` was DELETED
+    not rewritten (its unique content was the two-key interaction, now unreachable; the
+    single-key property stays pinned by `test_upcoming_key_overrides_subject_and_leads` —
+    reviewer-verified, the SPEC §6 ±1 adjudication).
+  - **`dns_classify.py` → `psh/dns_classify.py`** (`9b1fe35`) — the §3.1 MAY, exercised.
+    All import sites now `import psh.dns_classify as dns_classify` (call sites qualified;
+    single-module-object patch seam preserved — no `from … import` form exists). Born
+    gated: 9 ruff findings + 1 pyright `reportInvalidTypeForm` (the house-style tuple
+    hint) dispositioned. House-rule scopes: `dns_classify.py` entries dropped from
+    `ENVIRON_SCOPE`/`POPEN_SCOPE` (`"psh"` covers it) with the temporary-offender RED
+    check recorded. Coverage include entry dropped (`*/psh/*` covers it).
+  - **The remnant → `psh/cli.py`; `psh/_legacy.py` DELETED** (`b39e435`, D-i13-1
+    discharged) — `build_arg_parser`, `parse_args`, `fqdn_re`, the psh.* re-import blocks
+    (the re-export surface: 111 module-level names, baseline-identical, AST-verified),
+    `registry.register("no-domains")`, the 13-assignment sc-exposure block (verbatim),
+    `no_primary_domain_notice`, `sort_notices_and_subject`, `main()` — bodies verbatim
+    (self-diff reproduced independently by the task reviewer AND the whole-branch review:
+    zero unaccounted hunks). The inert `if __name__` tail deleted (D-i14a-5). conftest:
+    `importlib.import_module("psh.cli")` one-line repoint + comment updates; TempDB, the
+    seam patches, reset_sc, run_program unchanged. pyright now gates ALL of `psh/`
+    (the `exclude = ["psh/_legacy.py"]` line is gone); `ruff-broad.toml` lost both
+    file entries. cli.py chmod 644 (EXE002); shim stays 755.
+
+- **Deviations from CAMPAIGN.md:** none of architecture. SPEC-level decisions
+  D-i14a-1…8 (SPEC §2.4) all landed as specced, plus two SPEC §5 disposition
+  deviations adjudicated REQUIRED by both reviews: **SIM102 → noqa not rewrite** (the
+  nested-if body is the golden-pinned column-16 `no-domains` Notice literal — ruff's
+  merge dedents it, an Invariant-8 violation) and **C408 → noqa** (28-kwarg `dict()` in
+  a verbatim-moved block). **D-i13-3's "module-level" wording was WRONG and is hereby
+  corrected**: `psh/cli.py` imports `psh.lifecycle` at module level, so the lifecycle
+  bridge CANNOT become module-level — it stays call-time, retargeted to
+  `from psh.cli import build_arg_parser` (`psh/lifecycle.py:337`, noqa PLC0415 + cycle
+  reason; docstring diagram updated). **§17 Q5 answered: the `pantheon-sitehealth-emails.py`
+  symlink is KEPT** — it still buys ruff/pyright/CodeGraph coverage of the extension-less
+  shim's own lines; I14d records it in the rewritten CLAUDE.md.
+
+- **Discovered tasks (dispositions):**
+  - **`uvx ruff` drift** — mid-session, unpinned `uvx ruff` began resolving 0.16.0, which
+    graduated `PLR0917` from preview: 9 findings in six UNTOUCHED `psh/` files,
+    reproduced at baseline in a throwaway worktree. Root cause: the gate's fallback was
+    version-unpinned, violating D2's fixed-bar premise. → **fixed here** (`d94c31a`):
+    `run-tests` + `.claude/hooks/ruff-check.sh` pin `uvx ruff@0.15.22`. Residual
+    exposure, **ledgered to I14b** (which owns the ratchet flip/config merge): a
+    PATH-installed ruff is not version-checked, `uvx pyright` is likewise unpinned, and
+    upgrading ruff (and dispositioning PLR0917 deliberately) is I14b's call.
+  - **`time` is a FOURTH seam import** (Task 3 discovery): 13 tests patch
+    `psh.time.sleep`; retained in `psh/cli.py` with noqa+reason beside
+    signal/subprocess/sqlalchemy-as-db (whose reason texts were rewritten to `psh.cli`
+    phrasing).
+  - **Task-1's report Write failed silently** (the LEDGER I1 class, again) — caught by
+    the task reviewer (report file absent); rewritten with full evidence, then
+    re-review verified content + spot-grepped the directive quotes. Later dispatches
+    carried an explicit verify-the-report-exists instruction.
+  - **Blame caveat**: `psh/cli.py` pre-existed (the 9-line re-export), so git records
+    delete+modify, not a rename — `git log --follow` won't chain across `b39e435`;
+    `git blame -M -C` still finds the verbatim blobs.
+  - **Report-text corrections** (whole-branch triage, scratch-file only, no committed
+    artifact): task-3-report cited `psh/mail.py:144` as a C408 precedent (it is PTH123 —
+    principle right, label wrong) and its ratchet table omitted the applied DTZ011.
+  - **CLAUDE.md retains ~22 stale `psh/_legacy.py` narrative mentions** — sanctioned
+    deferral (D-i14a-7) to **I14d's wholesale rewrite**; in-document warnings added at
+    the top of both architecture subsections. The one falsified *config claim* (the
+    exclude-list description still naming `psh/_legacy.py`) was fixed at close per the
+    whole-branch review, as were the two future-tense "rides to psh/cli.py" docstrings
+    in `psh/cli.py` itself.
+
+- **Contract/config/sc additions:** none. No new contract keys, no config keys, no new
+  `sc` façade names; one produced key REMOVED with its hook (`annual_bill_in_progress` —
+  hook-produced, never registry-owned, so `CONTRACT` is untouched).
+
+- **Ratchet (§13):** `psh/cli.py` and `psh/dns_classify.py` born gated;
+  `ruff-broad.toml`'s `extend-exclude` lost `psh/_legacy.py` and `dns_classify.py` (the
+  first exclude-list deletions of the campaign — every prior increment moved code into
+  fresh files instead). pyright scope is now genuinely `psh/` entire. Remaining
+  grandfathered: the check/plugin/tests/development entries — I14b's flip.
+
+- **Open questions for I14b:** proceed per CAMPAIGN.md §11 row I14b (un-grandfather the
+  remaining trees; merge `ruff-broad.toml` into `pyproject.toml`; pyright-scope decision).
+  Inherited: the ruff version pin (upgrade + PLR0917 disposition is I14b's deliberate
+  call, plus pinning `uvx pyright`); the D-i14a-3/8 option (repointing tests off the
+  `psh.<name>` re-export surface onto real module homes, and the deeper conftest/TempDB
+  redesign) — take it or re-ledger it; the I14b baseline measurements in the Amendments
+  entry above (2,540 findings in `tests/`, 1,727 of them S101 → the reserved
+  per-file-ignores block; ~120 in the non-test trees).

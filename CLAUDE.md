@@ -746,7 +746,7 @@ earlier gate's red (PD#1):
    a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy; runs over the
    **whole tree**, including the files the campaign grandfathers.
 2. **ruff, broad campaign ratchet** (`ruff-broad.toml`: `select = ALL` minus a grandfathered
-   exclude list — `psh/_legacy.py`, the still-grandfathered check
+   exclude list — the still-grandfathered check
    packages enumerated individually (`check/cloudflare/`, `check/dns/`,
    `check/pantheon_cdn_change/` — the wholesale `check/` was replaced by this
    enumeration at I8 so `check/pantheon/` is born gated; at I9 the `check/umich/` entry

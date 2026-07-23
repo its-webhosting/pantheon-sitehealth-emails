@@ -351,3 +351,39 @@ python -c "import psh.cli, psh.dns_classify; print('import ok')"
 ```
 
 Results are pasted into this section at close (an unrun acceptance suite is PD#14).
+
+**ACCEPTANCE — run and pasted at close (2026-07-23, HEAD = b39e435 + the two
+whole-branch-review doc fixes):**
+
+```
+$ ./run-tests --llm            (full suite; live tier ran — terminus token present)
+EXIT=0
+LLM_SUMMARY passed=1023 failed=0 error=0 skipped=1 xfailed=0 xpassed=0
+107 snapshots passed.
+1023 passed, 1 skipped, 4 warnings in 39.71s
+(three gates: narrow ruff, broad ruff, pyright — all ran, exit 0)
+# 1023 = the fast tier's 1021 + the 2 live-marked tests; the 1 skip is
+# test_db_credentials.py's importorskip("MySQLdb") on a sqlite-only install.
+# Fast-tier count 1021/1/2 = I13 baseline 1026/1/2 minus the 5 Deliverable-A
+# test deletions (predicted before observed — task-1-report.md).
+
+$ git diff 5902b76 -- tests/e2e/__snapshots__/
+(empty)
+
+$ uvx ruff@0.15.22 check .
+All checks passed!
+
+$ uvx ruff@0.15.22 check --config ruff-broad.toml .
+All checks passed!
+
+$ test ! -e psh/_legacy.py && test ! -e dns_classify.py && echo gone
+gone
+
+$ python -c "import psh.cli, psh.dns_classify; print('import ok')"
+import ok
+
+$ ./pantheon-sitehealth-emails --help | head -3
+usage: pantheon-sitehealth-emails [-h] [--all] [--resume-from SITE_NAME]
+                                  [--date DATE] [--update] [--for-real]
+                                  [--config CONFIG] [--only-warn]
+```

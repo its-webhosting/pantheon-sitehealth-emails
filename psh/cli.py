@@ -290,8 +290,8 @@ def parse_args(argv=None):
 
 def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite):
     """Return the no-primary-domain info notice dict, or None when it does not apply
-    (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3; rides to psh/cli.py with
-    main() at I14 -- D-i13-1)."""
+    (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3; rode to psh/cli.py with
+    main() at I14a -- D-i13-1 discharged)."""
     if (
         len(custom_domains) > 1
         and len(primary_domain) == 0
@@ -328,7 +328,7 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
 
 
 def sort_notices_and_subject(site_context, report):
-    """B50 sort/subject core + billing-key wiring (pure; rides to psh/cli.py with main() at I14 -- D-i13-1).
+    """B50 sort/subject core + billing-key wiring (pure; rode to psh/cli.py with main() at I14a -- D-i13-1 discharged).
 
     Returns ``(sorted_notices, subject)``.  Reads the hook-produced billing key
     (`annual_bill_upcoming`, from check/umich/annual_billing) with ``.get()`` and inserts
