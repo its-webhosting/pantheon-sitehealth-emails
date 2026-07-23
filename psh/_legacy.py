@@ -14,11 +14,9 @@ import argparse
 import calendar
 import datetime
 import importlib
-import json
 import os
 import re
-import shlex
-import signal
+import signal  # noqa: F401 -- retained as the psh.signal.signal monkeypatch seam (CLAUDE.md § Two mock seams): abort_run's SIGINT guard moved to psh/lifecycle.py at I13, but test_abort_run.py patches the shared signal module object via psh.signal (SPEC I13 §5)
 import subprocess  # noqa: F401 -- retained as the psh.subprocess.Popen monkeypatch seam (CLAUDE.md § Two mock seams): run_terminus lives in psh/gateway.py but tests patch the shared module object via psh._legacy.subprocess; render's subprocess.run moved to psh/render.py at I12
 import sys
 import time
@@ -29,7 +27,6 @@ import sqlalchemy as db
 from rich.markup import escape
 from rich.padding import Padding
 from rich.pretty import pprint
-from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 import dns_classify
 import script_context as sc
@@ -252,62 +249,21 @@ from psh.modules import (
     stuff_traffic_contract,
     validate_hooks,
 )
+from psh.lifecycle import (
+    RunState,
+    ResumeSiteNotFoundError,
+    abort_reason,
+    abort_run,
+    finish_run,
+    merge_prior_results,
+    option_strings_taking_a_value,
+    rerun_command,
+    resume_command,
+    resume_point,
+    sites_from_resume_point,
+)
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
-
-
-class ResumeSiteNotFoundError(Exception):
-    """--resume-from named a site not present in the org site list."""
-
-
-
-
-
-def sites_from_resume_point(sorted_site_names: list, resume_from: str) -> list:
-    """
-    Return the suffix of sorted_site_names starting at resume_from (inclusive).
-
-    sorted_site_names is the already-sorted list of org site names; resume_from is the
-    --resume-from value.  Raises ResumeSiteNotFoundError if resume_from is absent, so that a
-    typo becomes a fatal error rather than degrading into "silently skip every site".
-    """
-    try:
-        i = sorted_site_names.index(resume_from)
-    except ValueError:
-        raise ResumeSiteNotFoundError(resume_from)
-    return sorted_site_names[i:]
-
-
-def merge_prior_results(path: str, new_results: dict, *, what: str = "results") -> dict:
-    """
-    Return the JSON dict already at path merged with new_results, which wins on key collision
-    (a site processed by the resumed run supersedes any earlier entry for it).
-
-    A missing file yields new_results alone.  A malformed existing file warns loudly and yields
-    new_results alone, rather than crashing at the very end of an otherwise-complete run.
-    "Malformed" covers valid JSON that is not an object (a hand-edited `[]` or `null`) as well as
-    unparseable or unreadable content: both would otherwise blow up on merged.update() below.
-
-    `what` names, in the warning, the kind of content being merged/read -- this helper reads
-    both {ymd}-results.json ("results") and {ymd}-run.json ("run metadata"; see finish_run()),
-    and the warning must name whichever file actually failed to read.
-    """
-    merged = {}
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                merged = json.load(f)
-            if not isinstance(merged, dict):
-                raise ValueError(f"expected a JSON object, found {type(merged).__name__}")
-        # json.JSONDecodeError is a ValueError, so this catches an unparseable file too.
-        except (ValueError, OSError) as e:
-            sc.console.print(
-                f":warning: [bold yellow]could not read existing {path} "
-                f"({escape(str(e))}); writing only this run's {what}."
-            )
-            merged = {}
-    merged.update(new_results)
-    return merged
 
 
 # Expose helpers for check/ packages, which cannot import this dash-named script.
@@ -328,468 +284,6 @@ sc.contract_year_end = contract_year_end  # check packages: U-M billing-window t
 sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
 sc.db_engine_args = db_engine_args  # plugin/umich/portal.py: ONE URL builder, ONE set of pool
                                     # settings for every database this program connects to
-
-
-def finish_run(
-    db_session,
-    db_engine,
-    site_count: int,
-    emails_sent: int,
-    all_warnings: list,
-    site_results: dict,
-    site_savings: list,
-    *,
-    aborted_at: str = None,
-    reason: str = None,
-) -> None:
-    """Close out a run: release the DB, print the totals, write the summary artifacts.
-
-    Called from two places -- normal completion, and abort_run() (SPEC 3.5).  One epilogue with
-    two callers is what makes an aborted run's artifacts identical in shape to a completed run's.
-
-    `aborted_at` / `reason` are None on a normal run.  When set, the totals say so instead of
-    claiming success, and both are recorded in {ymd}-run.json so the outcome outlives the terminal
-    (SPEC 3.6).
-
-    The run metadata gets its OWN artifact rather than a `_run` key inside {ymd}-results.json:
-    results.json is consumed (monthly-report.txt) with `jq to_entries`, which enumerates every key
-    as a site -- a metadata key there silently becomes a bogus site row in the operator's monthly
-    stats.  {ymd}-results.json is site-keyed and nothing else.
-    """
-    # Run-level seam (CAMPAIGN.md section 4): fire before ANY teardown or artifact write so
-    # future hooks see the run intact.  No arguments until I13's RunState.
-    sc.invoke_hooks("run_finish")
-    # Two separate try blocks, deliberately: a failing close() must not skip dispose().  The
-    # catches are narrow -- (SQLAlchemyError, OSError), not Exception -- so a TypeError from a
-    # future edit still crashes loudly.  Neither failure may cost the operator the artifacts:
-    # finish_run() is called from the abort path, on a session whose database is already sick
-    # (SPEC 3.3.3).
-    # escape() on every interpolated exception, here and everywhere else this file prints one:
-    # rich parses `[parameters: (...)]` -- a lowercase-initial bracket, exactly what SQLAlchemy
-    # appends to a DBAPIError -- as a style tag and DELETES it, and an unmatched `[/x]` raises
-    # MarkupError from inside the very handler that exists so nothing is lost.
-    try:
-        db_session.close()
-    except (SQLAlchemyError, OSError) as e:
-        sc.console.print(
-            f":warning: [yellow]Could not close the database session: {escape(str(e))}"
-        )
-    try:
-        db_engine.dispose()
-    except (SQLAlchemyError, OSError) as e:
-        sc.console.print(
-            f":warning: [yellow]Could not dispose the database engine: {escape(str(e))}"
-        )
-
-    reconnects = sum(sc.db_reconnects_by_site.values())
-    reconnect_failures = sum(sc.db_reconnect_failures_by_site.values())
-
-    # --update and --import-older-metrics `continue` before a report is ever built, so they have no
-    # notices and no results to write.  Writing anyway would open {ymd}-notices.csv in "w" mode with
-    # an empty list and overwrite {ymd}-results.json with an empty object -- DESTROYING the
-    # artifacts of a report run made earlier the same day.  Print the totals, write nothing.
-    write_artifacts = not (sc.options.update or sc.options.import_older_metrics)
-
-    if sc.options.all:
-        # On a resumed run these two on-disk summaries accumulate across the original and the
-        # resumed run instead of being truncated to just the resumed subset.  (The console-only
-        # totals printed here and below still cover only this run's sites.)
-        resuming = sc.options.resume_from is not None
-        # An ABORTED run accumulates too, for the same reason it flushes at all: the artifacts on
-        # disk may belong to an earlier, COMPLETED run of the same day (the monthly --all --for-real
-        # run in the morning, a Ctrl-C'd dry run in the afternoon).  Truncating them would destroy
-        # a good run's record to make room for a partial one's.  Only a run that reaches the end
-        # legitimately truncates; the worst case here is duplicate rows on a re-run, which
-        # docs/resuming-interrupted-runs.md already documents as tolerable.
-        accumulating = resuming or reason is not None
-        if reason is None:
-            sc.console.print(
-                f"\n[bold green]Email sent for {emails_sent} of {site_count} sites"
-                + (f" (resumed from {sc.options.resume_from}).\n" if resuming else ".\n")
-            )
-        elif aborted_at is None:
-            # An interrupt landing before the first site's body ran passes aborted_at=None --
-            # there is no "at X" to report (SPEC 3.5.4).
-            sc.console.print(
-                f"\n[bold yellow]Email sent for {emails_sent} sites before aborting.\n"
-            )
-        else:
-            sc.console.print(
-                f"\n[bold yellow]Email sent for {emails_sent} sites before aborting at "
-                f"{aborted_at}.\n"
-            )
-        if write_artifacts:
-            ymd = datetime.datetime.today().strftime("%Y%m%d")
-            with open(
-                f"{ymd}-notices.csv", "a" if accumulating else "w", encoding="utf-8"
-            ) as f:
-                for n in all_warnings:
-                    f.write(n + "\n")
-
-            results_path = f"{ymd}-results.json"
-            # merge_prior_results() rather than a hand-rolled {**prior, **site_results}: it owns
-            # the "new wins" rule AND the malformed-prior-file handling, and that logic must live
-            # in one place.
-            payload = (
-                merge_prior_results(results_path, site_results)
-                if accumulating
-                else site_results
-            )
-            # A results.json written by an older version carries a "_run" metadata key, which is
-            # exactly the bogus-site-row bug this split exists to remove.  Drop it on the way
-            # through; nothing writes it any more -- but keep it: if this run is the FIRST since
-            # the upgrade (no {ymd}-run.json yet), this legacy key is the ONLY copy of the prior
-            # run's reconnect evidence, and dropping it here would silently lose the exact thing
-            # "previous" exists to preserve.  Migrated into run_meta["previous"] below.
-            legacy_run = payload.pop("_run", None)
-            with open(results_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=4)
-
-            run_path = f"{ymd}-run.json"
-            run_json_existed = os.path.exists(run_path)
-            # Read the prior metadata first so this run's block can NEST the earlier run's under
-            # "previous" -- an aborted run's block carries the reconnect evidence that prompted
-            # the resume in the first place.  merge_prior_results() is just the reader here (with
-            # its malformed-file handling); the file is then overwritten, not merged, because the
-            # nesting IS the accumulation.
-            prior_run = (
-                merge_prior_results(run_path, {}, what="run metadata") if accumulating else {}
-            )
-            # "this_run" in the names, not "processed": the artifacts on disk describe the original
-            # run plus this one, while these numbers describe only this one.  (An --only-warn run
-            # emails nobody, so this counts sites processed, not sites emailed.)
-            run_meta = {
-                "aborted_at": aborted_at,
-                "reason": reason,
-                "sites_completed_this_run": len(site_results),
-                # Healed vs. failed, never one ambiguous "reconnects" number: a run that aborted
-                # on the database healed NOTHING, and saying otherwise misleads the operator about
-                # the one thing this counter exists to answer.
-                "db_reconnects_healed_this_run": reconnects,
-                "db_reconnect_failures_this_run": reconnect_failures,
-                "reconnects_by_site": dict(sc.db_reconnects_by_site),
-                "reconnect_failures_by_site": dict(sc.db_reconnect_failures_by_site),
-            }
-            if prior_run:
-                run_meta["previous"] = prior_run
-            elif legacy_run is not None and not run_json_existed:
-                # First run since the upgrade: {ymd}-run.json didn't exist yet, so the only
-                # record of the prior run's reconnect evidence was the "_run" key we just popped
-                # out of results.json above.  Carry it forward instead of discarding it.
-                run_meta["previous"] = legacy_run
-            with open(run_path, "w", encoding="utf-8") as f:
-                json.dump(run_meta, f, indent=4)
-    else:
-        for n in all_warnings:
-            sc.console.print(n)
-        pprint(site_results)
-
-    sc.console.print(f"\n[bold green]Site savings:\n")
-    pprint(site_savings)
-    sc.console.print(f"Sites with savings: {len(site_savings)}")
-    sc.console.print(
-        f"Total savings: ${sum([s['savings'] for s in site_savings]):,.2f}"
-    )
-    # Both numbers, always: "Database reconnects: 1" used to mean "one retry was attempted",
-    # printed identically whether the connection came back or the run died of it.
-    sc.console.print(
-        f"Database reconnects: {reconnects} healed, {reconnect_failures} failed"
-    )
-
-    sc.debug("Done!")
-
-
-def resume_point(site_names: list, site_name: str, emailed: bool) -> str:
-    """Where a resumed run must start.
-
-    Normally the aborting site itself: --resume-from is inclusive, so it is redone from the top.
-    But if the interrupt landed AFTER that site's report was emailed, restarting there would send
-    its owner a SECOND copy of the same monthly report, so the resume point is the next site.
-    Returns None when the emailed site was the last one (nothing remains).  See SPEC 3.5.3.
-    """
-    if not emailed:
-        return site_name
-    i = site_names.index(site_name)
-    return site_names[i + 1] if i + 1 < len(site_names) else None
-
-
-def option_strings_taking_a_value() -> set:
-    """Every option string that consumes a following argument, derived from the parser itself.
-
-    Derived rather than hardcoded: a hardcoded list rots the first time an option is added, and
-    rerun_command() would then mistake that option's VALUE for a site name and delete it.  Same
-    denylist-by-omission failure that SPEC 3.5.1 exists to prevent.
-    """
-    return {
-        opt
-        for action in build_arg_parser()._actions
-        if action.option_strings and action.nargs != 0
-        for opt in action.option_strings
-    }
-
-
-def resume_command(argv: list, site_name: str) -> str:
-    """Rebuild an --all invocation with --resume-from <site_name>.
-
-    Built from argv rather than from sc.options on purpose.  Re-enumerating flags would be a
-    denylist by omission -- the first flag added next year would silently vanish from the hint, and
-    an operator pasting the command would get a run that does something DIFFERENT from the one that
-    died (e.g. a full report-and-send instead of an --import-older-metrics backfill).
-    allow_abbrev=False guarantees only these two spellings exist.  See SPEC 3.5.1.
-    """
-    args = []
-    skip_next = False
-    for arg in argv:
-        if skip_next:
-            skip_next = False
-            continue
-        if arg == "--resume-from":
-            skip_next = True  # drop its value too
-            continue
-        if arg.startswith("--resume-from="):
-            continue
-        args.append(arg)
-    return shlex.join(args + ["--resume-from", site_name])
-
-
-def rerun_command(argv: list, original_sites: list, remaining_sites: list) -> str:
-    """Rebuild an explicit-SITE invocation with only the sites that were not processed.
-
-    NOT --resume-from: that flag requires --all (main() exits otherwise), so printing it here would
-    hand the operator a command that fails the moment they paste it.
-
-    Only POSITIONAL site names are dropped.  A site name sitting in an option's value slot
-    (`-c its-wws-test1`) must survive, or `-c` swallows the next token and the command is mangled.
-    See SPEC 3.5.1.
-    """
-    value_opts = option_strings_taking_a_value()
-    args = []
-    previous = None
-    for arg in argv:
-        is_option_value = previous in value_opts
-        if not is_option_value and arg in original_sites:
-            previous = arg
-            continue  # a site positional: dropped here, re-appended below if still pending
-        args.append(arg)
-        previous = arg
-    return shlex.join(args + list(remaining_sites))
-
-
-def abort_reason(error: BaseException) -> str:
-    """Classify an exception escaping the site loop into an abort reason.
-
-    "database" -> exit 1;  "interrupted" -> exit 130;  "fatal" -> re-raise the original error.
-
-    A DBAPIError is a database abort only when it is one db_retry() would have retried
-    (db_retryable() is the single source of truth for that -- SPEC 2.2); an IntegrityError or
-    other non-retryable DBAPIError is a data bug and belongs on the fatal path, with its
-    traceback.
-    """
-    if isinstance(error, DatabaseUnavailableError) or (
-        isinstance(error, DBAPIError) and db_retryable(error)
-    ):
-        # A database failure raised OUTSIDE a unit of work (a future code path, an expired-row
-        # lazy load) must still land on the named abort path (SPEC 3.3.3).
-        return "database"
-    elif isinstance(error, KeyboardInterrupt):
-        return "interrupted"
-    else:
-        return "fatal"
-
-
-def abort_run(
-    db_session,
-    db_engine,
-    site_name: str,
-    reason: str,
-    error: BaseException,
-    *,
-    emailed: bool,
-    site_names: list,
-    site_count: int,
-    emails_sent: int,
-    all_warnings: list,
-    site_results: dict,
-    site_savings: list,
-) -> None:
-    """Report an aborted run, flush its artifacts, print how to finish it, and exit.  Never returns.
-
-    `reason` is "database" (exit 1), "interrupted" (exit 130, the conventional SIGINT code), or
-    "fatal" -- anything else that escaped the site loop (a SystemExit("Bailing out."), an SMTP
-    hiccup on site 250 of 300, a KeyError from changed terminus JSON).  A fatal RE-RAISES the
-    original exception after the flush, so its traceback -- or a SystemExit's own code and message
-    -- reaches the operator unchanged.  Nothing is swallowed.
-
-    This is the ONE flush path, so every exit has the same invariants: the aborting site is popped
-    from the results unless its report was already emailed, and a runnable continuation command is
-    printed.  `emailed` says whether that report went out; every caller passes the real value,
-    because a report that has gone out must never be re-sent by the resumed run.
-
-    This function runs when things are ALREADY broken, so it must not be able to crash: every input
-    it slices on is guarded (SPEC 3.5.4).
-    """
-    # A second Ctrl-C must not truncate the flush -- losing the artifacts is exactly the failure
-    # this function exists to prevent.  The flush is sub-second (SPEC 3.5).
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-
-    try:
-        db_session.rollback()
-    except (SQLAlchemyError, OSError) as e:  # the database is already sick; see finish_run()
-        sc.console.print(
-            f":warning: [yellow]Could not roll back the database session: {escape(str(e))}"
-        )
-
-    if not emailed:
-        # site_results[site] is written DURING the gather, ~1400 lines before the failure point --
-        # so the aborting site is already in there, while its notices (appended at the END of a
-        # successful site) are not.  Drop it, so the artifacts contain exactly the sites that
-        # completed end-to-end.  --resume-from is inclusive, so the resumed run redoes this site
-        # and rewrites the entry.  See SPEC 3.5.2.
-        site_results.pop(site_name, None)
-        # site_savings is appended to just as early, so the same rule applies to it: leaving the
-        # aborting site in would make the epilogue's "Sites with savings" / "Total savings" count
-        # the very site it is telling the operator to redo -- and the resumed run would count it
-        # again.  A list of dicts, not a dict, hence the filter rather than a pop.
-        site_savings[:] = [s for s in site_savings if s.get("site") != site_name]
-
-    # escape() every interpolated exception.  A SQLAlchemy DBAPIError's message ends with
-    # `[SQL: ...]` and `[parameters: (...)]`; rich's markup parser reads the lowercase-initial
-    # `[parameters: ...]` as a style tag and DELETES it from the output -- silently dropping the
-    # bound values from the very message the operator has to debug.  An unmatched `[/...]` in an
-    # error is worse: it raises MarkupError HERE, after SIGINT was ignored and BEFORE finish_run(),
-    # losing every artifact this function exists to save.  The [bold] markup around the site name
-    # is ours and stays live.
-    if reason == "database":
-        if site_name is None:
-            # Reached before any site's body ran -- there is no "processing X" to name, and
-            # interpolating site_name here would render the literal word "None" (SPEC 3.5.4).
-            sc.console.print(
-                f"\n:exclamation: [bold red]FATAL: a database operation failed and could not "
-                f"be retried before any site was processed:\n{escape(str(error))}"
-            )
-        else:
-            sc.console.print(
-                f"\n:exclamation: [bold red]FATAL: a database operation failed and could not be "
-                f"retried.  Aborting while processing [bold]{escape(site_name)}[/bold]:\n"
-                f"{escape(str(error))}"
-            )
-    elif reason == "fatal":
-        # The traceback (or the SystemExit message) follows when we re-raise below; this line is
-        # what ties it to the site that was in flight and tells the operator the artifacts are safe.
-        detail = escape(f"{type(error).__name__}: {error}")
-        if site_name is None:
-            sc.console.print(
-                f"\n:exclamation: [bold red]FATAL: the run failed before any site was "
-                f"processed:\n{detail}"
-            )
-        else:
-            sc.console.print(
-                f"\n:exclamation: [bold red]FATAL: aborting while processing "
-                f"[bold]{escape(site_name)}[/bold]:\n{detail}"
-            )
-    elif site_name is None:
-        sc.console.print("\n:hand: [bold yellow]Interrupted before any site was processed.")
-    else:
-        sc.console.print(
-            f"\n:hand: [bold yellow]Interrupted while processing [bold]{escape(site_name)}[/bold]."
-            + (
-                "  Its report had already been sent, so resuming will start at the next site."
-                if emailed
-                else ""
-            )
-        )
-
-    finish_run(
-        db_session,
-        db_engine,
-        site_count,
-        emails_sent,
-        all_warnings,
-        site_results,
-        site_savings,
-        aborted_at=site_name,
-        reason=reason,
-    )
-
-    # Everything below is guarded: an interrupt can land before the first site's body runs
-    # (site_name is None), or -- on a non---all run, which iterates every org site and `continue`s
-    # the ones it was not asked for -- on a site the operator never requested.  Slicing on either
-    # would raise INSIDE this handler, after SIGINT was ignored and the artifacts were written, and
-    # the operator would get a traceback instead of a command.  See SPEC 3.5.4.
-    resume_site = (
-        resume_point(site_names, site_name, emailed)
-        if site_name in site_names
-        else None
-    )
-
-    if resume_site is None and emailed:
-        sc.console.print("\n[bold]Every site was processed; nothing remains to resume.\n")
-    elif sc.options.all:
-        if site_name is None:
-            # The interrupt landed before any site was processed -- there is no "sites before X"
-            # to report, and {resume_site or site_name} would render as the literal word "None".
-            # soft_wrap=True on EVERY print that emits a copy-pasteable command.  sc.console is a
-            # bare Console(), so on a non-tty -- cron, nohup, a redirect, i.e. exactly how a
-            # multi-hour --all run is launched -- rich falls back to width 80 and puts a REAL
-            # newline in the output.  These commands are longer than that, and bash treats the
-            # newline as a command separator: the operator pastes it and the first line re-parses
-            # as a complete `--all --for-real` run with no --resume-from, re-mailing every owner
-            # who already got their report.
-            sc.console.print(
-                "\n[bold]No sites were processed.  Continue this run with:\n\n"
-                f"    {shlex.join(sys.argv)}\n",
-                soft_wrap=True,
-            )
-        else:
-            # resume_site is necessarily set here: an --all run only ever aborts on a site the
-            # loop is iterating, so site_name is in site_names and resume_point() returned None
-            # only if the emailed site was the last one -- which the "nothing remains" branch
-            # above already consumed.  There is deliberately NO shlex.join(sys.argv) fallback: a
-            # command without --resume-from would re-process and, on --for-real, re-mail every
-            # owner who already has their report.
-            sc.console.print(
-                f"\n[bold]The sites before {resume_site} were processed and their "
-                "results written.  Continue this run with:\n\n"
-                f"    {resume_command(sys.argv, resume_site)}\n",
-                soft_wrap=True,  # never wrap a command; see above
-            )
-    else:
-        # --resume-from requires --all, so an explicit-SITE run gets a re-run command listing the
-        # sites it never reached.  The site loop iterates every ORG site (site_names) and `continue`s
-        # the ones not requested, so slicing the requested list at resume_site (an org site name) is
-        # wrong -- it is frequently not even a member of the requested list.  Instead, compute what
-        # the loop actually walked past in ORG order and drop that from the requested list: this is
-        # correct whether or not the aborting site was requested, and whether or not it was emailed.
-        if site_name in site_names:
-            i = site_names.index(site_name) + (1 if emailed else 0)
-            done = set(site_names[:i])  # every org site the loop already walked past
-            remaining = [s for s in sorted(sc.options.sites) if s not in done]
-        else:
-            # site_name is not a known org site -- in practice this means None (the interrupt
-            # landed before any site was processed).  Kept general, not assumed-None-only: this
-            # handler must not crash on any input (SPEC 3.5.4), and the guard above this whole
-            # if/elif/else already treats "not in site_names" as the general case, not a
-            # None-only one.
-            remaining = sorted(sc.options.sites)
-
-        # The org list being exhausted (resume_site is None and emailed, above) is the --all
-        # check for "nothing remains"; here the equivalent signal is an empty explicit-SITE
-        # remaining list -- e.g. the requested SITE was the last one processed before the abort.
-        if not remaining:
-            sc.console.print("\n[bold]Every site was processed; nothing remains to resume.\n")
-        else:
-            sc.console.print(
-                "\n[bold]Continue this run with:\n\n"
-                f"    {rerun_command(sys.argv, sc.options.sites, remaining)}\n",
-                soft_wrap=True,  # never wrap a command; see above
-            )
-
-    if reason == "fatal":
-        # Re-raise, do not exit: a SystemExit keeps its own code and message, and anything else
-        # keeps its traceback.  The flush above is all this path adds.
-        raise error
-
-    sys.exit(1 if reason == "database" else 130)
 
 
 def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite):
@@ -946,6 +440,13 @@ def main() -> None:
     if not os.path.exists("build"):
         os.makedirs("build")
 
+    # The run's accumulators live on ONE RunState, bound to sc.run_state BEFORE any hook fires:
+    # a setup hook that reached db_retry would otherwise write into a RunState main() then
+    # discards (SPEC 2.1).  db_retry() writes the reconnect counters through sc.run_state; the
+    # site loop below fills the rest; finish_run/abort_run read it back as a parameter.
+    sc.run_state = RunState()
+    run_state = sc.run_state
+
     sc.invoke_hooks("setup")
 
     sc.debug(f"Doing post-setup configuration substitutions")
@@ -1011,10 +512,6 @@ def main() -> None:
         sys.exit(f"Could not list organization sites: {e}")
     site_count = len(sites)
     current_site_number = 1
-    emails_sent = 0
-    site_savings = []
-    all_warnings = []
-    site_results = {}
     sc.debug(
         "Cloudflare is "
         + ("[bold green]enabled" if cloudflare_enabled() else "[bold red]DISABLED")
@@ -1255,7 +752,7 @@ def main() -> None:
                 add_on_updates = gather.add_on_updates
                 if gather.wp_smell != "":
                     wp_smell = gather.wp_smell
-                site_results[site["name"]] = gather.results_entry
+                run_state.site_results[site["name"]] = gather.results_entry
 
             elif site["framework"].startswith("drupal"):
                 gather = gather_drupal(site, live_site, site_context)
@@ -1266,13 +763,13 @@ def main() -> None:
                     drush_smell = gather.drush_smell
                 if gather.composer_smell != "":
                     composer_smell = gather.composer_smell
-                site_results[site["name"]] = gather.results_entry
+                run_state.site_results[site["name"]] = gather.results_entry
 
             else:
                 sc.console.print(
                     f":exclamation: [bold red] ATTENTION: unknown framework for {site['name']}: {site['framework']}"
                 )
-                site_results[site["name"]] = {
+                run_state.site_results[site["name"]] = {
                     "framework": site["framework"],
                     "version": "unknown",
                     "plan_name": site["plan_name"],
@@ -1384,11 +881,11 @@ def main() -> None:
             estimate_start_date = rec.estimate_start_date
             estimate_end_date = rec.estimate_end_date
             if rec.savings_entry is not None:
-                site_savings.append(rec.savings_entry)
+                run_state.site_savings.append(rec.savings_entry)
 
             if sc.options.only_warn:
                 for n in site_context["notices"]:
-                    all_warnings.append(n["csv"])
+                    run_state.all_warnings.append(n["csv"])
                 continue
 
             chart_image = build_chart(
@@ -1482,13 +979,13 @@ def main() -> None:
             for n in site_context["notices"]:
                 fields = n["csv"].split(",")
                 fields.insert(1, contacts)
-                all_warnings.append(",".join(fields))
+                run_state.all_warnings.append(",".join(fields))
 
             # The send is gated on [SMTP].enabled; when disabled we still write the .eml above.
             if smtp_enabled:
                 smtp_connection = smtp_login()
                 smtp_connection.send_message(msg)
-                emails_sent += 1
+                run_state.emails_sent += 1
                 site_emailed = True
                 smtp_connection.quit()
 
@@ -1508,18 +1005,14 @@ def main() -> None:
         abort_run(
             db_session, db_engine, site_name, reason, e,
             emailed=site_emailed,
-            site_names=site_names, site_count=site_count, emails_sent=emails_sent,
-            all_warnings=all_warnings, site_results=site_results, site_savings=site_savings,
+            site_names=site_names, site_count=site_count, run_state=run_state,
         )
 
     finish_run(
         db_session,
         db_engine,
         site_count,
-        emails_sent,
-        all_warnings,
-        site_results,
-        site_savings,
+        run_state,
     )
 
 

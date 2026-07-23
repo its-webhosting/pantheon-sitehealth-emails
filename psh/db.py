@@ -13,10 +13,11 @@ development/2026-07-13-db-connection-resilience/SPEC.md, which the docstrings be
 bare section number.
 
 The run-scoped reconnect counters (db_reconnects_by_site / db_reconnect_failures_by_site)
-live in script_context, NOT here: CAMPAIGN.md section 3.4 bars module-level mutable state in
-psh/ modules, and the remnant's finish_run/abort_run read them until I13's RunState absorbs
-them -- one owning namespace (sc), attribute-accessed at call time by the writer (db_retry,
-below) and the remnant readers (SPEC D-i5-1).
+live on the run's RunState (psh/lifecycle.py), NOT here: CAMPAIGN.md section 3.4 bars
+module-level mutable state in psh/ modules.  db_retry (below) reaches them at call time via
+sc.run_state -- the one owning namespace (script_context) that joins this writer and the
+lifecycle readers finish_run/abort_run, which take the same RunState as a parameter (campaign
+I13, absorbing D-i5-1's interim script_context.db_reconnect*_by_site attributes).
 """
 import datetime
 import sys
@@ -184,7 +185,7 @@ def db_retry(session, unit, *, what: str, site: str | None = None):
             # DBAPIError escape past main()'s handler -- SPEC 3.3.3.  It is also the run's most
             # definite connection loss, so it is COUNTED (as a failure): reporting zero here would
             # tell the operator nothing went wrong on the very run that died of it.
-            record_db_reconnect(sc.db_reconnect_failures_by_site, site)
+            record_db_reconnect(sc.run_state.db_reconnect_failures_by_site, site)
             raise DatabaseUnavailableError(
                 f"{what}: rollback failed after {first_error}"
             ) from rollback_error
@@ -200,15 +201,15 @@ def db_retry(session, unit, *, what: str, site: str | None = None):
                 # Not a connection issue itself, but first_error's connection loss never got
                 # healed -- record it as a failure so it lands in a dict, not neither (the
                 # comment above promises every lost connection lands in exactly one).
-                record_db_reconnect(sc.db_reconnect_failures_by_site, site)
+                record_db_reconnect(sc.run_state.db_reconnect_failures_by_site, site)
                 raise  # a real bug surfacing on the retry: still not ours to rename
-            record_db_reconnect(sc.db_reconnect_failures_by_site, site)
+            record_db_reconnect(sc.run_state.db_reconnect_failures_by_site, site)
             raise DatabaseUnavailableError(f"{what}: {retry_error}") from retry_error
         # Counted HERE, not before the retry: a reconnect is a connection that came BACK.  An
         # abort that reported "1 reconnect" alongside "reason: database" was claiming a heal that
         # never happened -- and the operator reads this number to judge whether the connection
         # fix is working.
-        record_db_reconnect(sc.db_reconnects_by_site, site)
+        record_db_reconnect(sc.run_state.db_reconnects_by_site, site)
         return result
 
 

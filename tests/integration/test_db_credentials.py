@@ -23,7 +23,7 @@ def test_db_retry_error_leaks_no_credentials(psh, monkeypatch):
     # and this assertion can fail.  (A hand-built OperationalError contains no URL at all, which
     # is what made an earlier draft of this test vacuous.)
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "run_state", psh.RunState())
     # connect_timeout=1: loopback port 1 normally REFUSES instantly, but a host that DROPs it
     # would otherwise hang the suite for MySQLdb's default timeout.
     engine = db.create_engine(

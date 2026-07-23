@@ -79,7 +79,7 @@ def test_build_traffic_table_rows_is_idempotent_under_retry(psh, monkeypatch):
     # An earlier draft of this test raised on call 2, where session.new is empty: it proved
     # nothing.  The assert below fails loudly if the fixture ever drifts back to that position.
     monkeypatch.setattr(psh.time, "sleep", lambda _s: None)
-    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
+    monkeypatch.setattr(sc, "run_state", psh.RunState())
     session = make_session(psh)
     expected_rows = call(psh, session)
     expected_ops = op_rows(psh, session)

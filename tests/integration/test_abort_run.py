@@ -36,8 +36,7 @@ def abort(
     console = recording_console(monkeypatch, reset_sc, width=width)
     reset_sc.options = psh.parse_args(argv[1:])
     monkeypatch.setattr(psh.sys, "argv", argv)
-    monkeypatch.setattr(sc, "db_reconnects_by_site", {})
-    monkeypatch.setattr(sc, "db_reconnect_failures_by_site", {})
+    monkeypatch.setattr(sc, "run_state", psh.RunState())
 
     # abort_run() sets SIGINT to SIG_IGN, which is PROCESS-GLOBAL and restored by no fixture:
     # without this patch, the rest of the pytest session would silently ignore Ctrl-C
@@ -47,22 +46,26 @@ def abort(
 
     captured = {}
 
-    def fake_finish_run(
-        _session, _engine, _site_count, _emails_sent, _warnings, results, savings, *_a, **kw
-    ):
+    import psh.lifecycle as psh_lifecycle
+
+    def fake_finish_run(_session, _engine, _site_count, run_state, *_a, **kw):
         captured.update(kw)
-        captured["site_results"] = results
-        captured["site_savings"] = savings
+        captured["site_results"] = run_state.site_results
+        captured["site_savings"] = run_state.site_savings
         captured["ran"] = True
 
-    monkeypatch.setattr(psh, "finish_run", fake_finish_run)
+    # abort_run calls finish_run in psh.lifecycle's namespace now -- patching psh.finish_run
+    # would silently not intercept (the I2 two-binding lesson; CLAUDE.md § Two mock seams).
+    monkeypatch.setattr(psh_lifecycle, "finish_run", fake_finish_run)
     with pytest.raises(expect) as excinfo:
         psh.abort_run(
             FakeSession(), FakeEngine(), site_name, reason, error,
-            emailed=emailed, site_names=SITE_NAMES,
-            site_count=10, emails_sent=4, all_warnings=[],
-            site_results=site_results if site_results is not None else {},
-            site_savings=site_savings if site_savings is not None else [],
+            emailed=emailed, site_names=SITE_NAMES, site_count=10,
+            run_state=psh.RunState(
+                emails_sent=4,
+                site_results=site_results if site_results is not None else {},
+                site_savings=site_savings if site_savings is not None else [],
+            ),
         )
     assert (signal.SIGINT, signal.SIG_IGN) in signals_set  # the flush is protected
     captured["raised"] = excinfo.value          # the fatal path re-raises rather than exiting

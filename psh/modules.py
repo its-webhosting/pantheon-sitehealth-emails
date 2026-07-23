@@ -47,9 +47,9 @@ PHASES = (
     'site_pre_render',
     'run_finish',          # once per run, inside finish_run(), before any artifact is
                            # written -- on completed AND aborted runs (both call finish_run).
-                           # Fired with no arguments until I13 introduces RunState
-                           # (CAMPAIGN.md section 4); no consumer yet, like site_pre_render
-                           # at its introduction.
+                           # Fired with the run's RunState (CAMPAIGN.md section 4; since
+                           # campaign I13); no consumer yet, like site_pre_render at its
+                           # introduction.
 )
 
 
