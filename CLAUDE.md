@@ -196,9 +196,9 @@ it (`site`, `site_url`, `visits_by_month`, `plan_on_day`, `plan_info`,
 MIME assembly; the chart-only `end_date_yyyy_mm`/`visits` derivations moved inside
 (D-i11-3). The chart PNG is **not** golden-pinned (the `.eml` has no byte golden), so
 `tests/integration/test_charts.py` is the permanent cover (valid PNG, surge-vs-plain
-figure geometry, estimate visibility, byte determinism, no leaked figures); its
-docstring records the `plan_on_day` precondition (every clamped month midpoint must be
-a key — production data always satisfies it). Re-imported by `psh/_legacy.py`, same
+figure geometry, estimate visibility, byte determinism, no leaked figures); the
+`psh/charts.py` module docstring records the `plan_on_day` precondition (every clamped
+month midpoint must be a key — production data always satisfies it). Re-imported by `psh/_legacy.py`, same
 import-back pattern. The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges

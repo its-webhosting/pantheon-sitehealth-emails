@@ -1332,8 +1332,10 @@ empty).
   `plan_on_day`, `plan_info`, `plan_over_time`, `dates`, `estimate`,
   `first_plan_day`, `last_plan_day`, `start_date`, `end_date`, `plot_right_date`) —
   the LEDGER-I10 "threads shaped data rather than re-deriving" instruction, honored.
-  Eight imports orphaned from `_legacy.py` and removed (`io`, `numpy`, all five
-  matplotlib forms) — grep-verified chart-only before deletion.
+  Eight imports orphaned from `_legacy.py` and removed (`io`, `numpy`, all six
+  matplotlib forms) — grep-verified chart-only before deletion. CLAUDE.md delta for
+  the closing commit: +20/−5 (no chart logic-prose block existed to delete — the
+  chart region had almost no CLAUDE.md prose standing in for it).
 
 - **Deviations from CAMPAIGN.md:** none of architecture; SPEC-level ledger notes:
   1. **D-i11-2 — cap geometry became the function prologue**, recomputed per call

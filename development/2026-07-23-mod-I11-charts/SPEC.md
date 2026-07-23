@@ -154,8 +154,8 @@ Grep-verified 2026-07-23: `end_date_yyyy_mm` (def 1086) and `visits` (def 1417) 
 (`end_date.strftime("%Y-%m")`; `list(visits_by_month.values())`) and the `main()`
 lines are deleted (the orphan-removal rule). Value-identity of the relocated `visits`
 derivation: nothing mutates `visits_by_month` between line 1417 and the chart —
-grep-verified, the only writer anywhere is `aggregate_visits_by_month`'s seeding loop
-(`psh/traffic.py:350`), which runs before 1417. `dates` (def 1416) **is** passed as a
+grep-verified, the only writers anywhere are `aggregate_visits_by_month`'s seeding and
+summing loops (`psh/traffic.py:350`/`:355`), which run before 1417. `dates` (def 1416) **is** passed as a
 parameter: it has a pre-gate consumer (the `estimate_month_visits` call at 1420).
 `end_date_yyyy_mm` is read as chart-only formatting, not part of §3.3's "date window"
 (which is `end_date`/`start_date`/`end_of_contract_year`).
