@@ -181,9 +181,9 @@ I1 Obs. 4 fix, D-i10-8). The `wp_error`/`drush_error` notices for *failed gather
 with the fetches (they describe the gather, not a check); the notice-emitting checks that
 used to be interleaved here live in `check/wordpress/`, `check/drupal/`, and `check/umich/`
 (below). `escape_url`
-is reached via a call-time bridge import from `psh._legacy` (`# noqa: PLC0415`, the
-D-i6-2 precedent — replaced by a module-level `from psh.render import escape_url` when
-I12 moves it there). Re-imported by `psh/_legacy.py`, same import-back pattern, so
+is reached by a module-level `from psh.render import escape_url` (I12 moved it into
+`psh/render.py` and discharged the I9/I10 bridge obligation — the three call-time
+`from psh._legacy import escape_url` bridges are gone). Re-imported by `psh/_legacy.py`, same import-back pattern, so
 `main()`'s call sites and the `sc.check_wordpress_plugin`/`sc.check_drupal_module`
 exposure lines resolve
 unchanged. **`psh/charts.py`** (new in I11) holds the per-site traffic-chart build:
@@ -199,7 +199,31 @@ MIME assembly; the chart-only `end_date_yyyy_mm`/`visits` derivations moved insi
 figure geometry, estimate visibility, byte determinism, no leaked figures); the
 `psh/charts.py` module docstring records the `plan_on_day` precondition (every clamped
 month midpoint must be a key — production data always satisfies it). Re-imported by `psh/_legacy.py`, same
-import-back pattern. The last is
+import-back pattern. **`psh/render.py`** (new in I12) holds the report-rendering step:
+`escape_url(url)` (the one-line `urllib.parse.quote` wrapper, moved here so `check/`
+modules and `psh/gather.py` reach it without importing `_legacy`) and
+`render_report(site_name: str, template_dict: dict) -> tuple[str, str]` (the B53 Jinja
+render + B54 PHP inline: reads `email_template.html`/`.txt`, renders to
+`build/{site}.html`/`.txt`, runs `php inline-styles.php` via `subprocess.run(...,
+check=True)` → `build/{site}-inline.html`, applies the `!important` regex pass →
+`build/{site}-inline2.html`, and returns `(html_body, text_body)` where `html_body` is
+the `-inline2` content actually attached). The inliner's `check=True` failure raises the
+named `subprocess.CalledProcessError` into `main()`'s `except BaseException` abort path,
+unchanged. **`psh/mail.py`** (new in I12) holds the SMTP/MIME layer: `smtp_login() ->
+SMTP_SSL` (verbatim, `sys.exit` on missing creds preserved), `resolve_recipients(site,
+site_id) -> tuple[str, str] | None` (the B49 recipient resolution — `(recipients,
+contacts)`, `None` on a fatal team fetch so `main()` `continue`s; the U-M
+`lsa-disko-project`/`umma-inside-wp` special case rides along inside the
+`umich_enabled()` branch), and `assemble_message(...) -> EmailMessage` (the B55 MIME
+build: `[Email]`/dry-run addressing, related inline-image parts, attachment loop — and it
+**writes `build/{site}.eml`** itself). **D-i12-4: the B57 send block (`smtp_login()` …
+`send_message()` … `quit()`) stays in `main()`** — its B14 accumulator writes
+(`emails_sent += 1`, `site_emailed = True`) sit **between** `send_message()` and
+`quit()`, and hoisting the block into `psh/mail.py` would move those counter updates after
+`quit()` returns, reopening the documented Ctrl-C-during-`quit()` duplicate-email window
+(the accumulators are I13 scope, and B57's residue moves with them). `main()` keeps
+calling `smtp_login()`. Both re-imported by `psh/_legacy.py`, same import-back pattern.
+The last is
 **`dns_classify.py`**, the DNS engine: it resolves each
 domain's A/AAAA records and classifies them against the Cloudflare IP ranges
 (`classify_domains`, returning a `DnsFacts` NamedTuple), and `stuff_dns_contract()` publishes
@@ -296,7 +320,19 @@ only register if `[Cloudflare].enabled`). **Exception:** `plugin.env` (the `<{en
 (umich-oidc-login reinstall; the U-M Hummingbird fork), both `site_post_gather`,
 registered after `cloudflare_cms`, plus `drupal_ua.py` (I10) — the Drupal user-agent check
 (consumes `framework`/`drupal_version`), a `site_post_gather` hook registered after
-`hummingbird` — all under the existing `[UMich].enabled` gate. That gate is
+`hummingbird`, plus `annual_billing.py` (I12) — the two U-M annual-billing notices
+(upcoming contract-year rollover + the temporary "annual bill in progress" section),
+relocated from `main()`'s B50/B51 as **two `site_pre_render` hooks** registered after
+`drupal_ua`, upcoming-then-in_progress. They do **not** call `add_notice`: each **produces**
+a hook-declared contract key (`annual_bill_upcoming` iff `sc.contract_year_end(end_date)`,
+`annual_bill_in_progress` unconditionally when it runs; the I10 `drupal_multisite`
+hook-produced-key precedent), and `sort_notices_and_subject` reads them with `.get()` after
+the phase — this is deliberate, so the billing rows never enter `site_context["notices"]`
+and never reach `-notices.csv` (load-bearing history, preserved). The in-progress hook
+carries the verbatim "TODO: remove this section at the beginning of August 2026" marker;
+its Aug-2026 date had **not** passed at I12 (2026-07-23) so B51 relocated intact, and I14
+re-evaluates deletion. Both share a `_billing_inputs` derivation helper (DRY, deletion-
+friendly for B51) — all under the existing `[UMich].enabled` gate. That gate is
 a **deliberate behavior change** (D-i9-6 for the two WP checks, D-i10-6 for the Drupal UA
 check): these checks previously ran un-gated,
 so a non-U-M run got U-M-specific advice (e.g. a non-U-M Drupal 8+ site was told to
@@ -357,7 +393,8 @@ dash-named main script; the helpers they need are exposed as `sc` attributes nea
 `sc.check_drupal_module`, `sc.umich_enabled`, `sc.cloudflare_enabled`, `sc.terminus`,
 `sc.fqdn_re`, since I9 `sc.wp_eval`/`sc.wp_error` — needed by the relocated
 OCP/favicon checks — and since I10 `sc.drush_php_script`/`sc.drush_error` — needed by the
-relocated multisite/UA checks) — extend that block for new ones (tests
+relocated multisite/UA checks, and since I12 `sc.contract_year_end` — needed by the
+relocated annual-billing hooks) — extend that block for new ones (tests
 monkeypatch these when loading check modules standalone). A few façade names are exposed
 **elsewhere**, not in that block: `sc.db_engine_args` (assigned in `_legacy.py`, see § Database)
 and `sc.Notice`/`sc.Severity` (which reach `sc` via a top-of-`script_context.py`
@@ -389,7 +426,7 @@ against it, so drift on either side goes red:
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (I10, NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str) — the campaign's first hook-declared produced keys. They are DAG-declared (in the hook's `produces`), present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the legacy `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. **I9 keys:** `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy — the B39 table became a `site_post_gather` hook at I10, `main()` no longer reads it), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` (I10) — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (B48's smell emission today) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry. Smell precedence is provably unchanged by I10 — no pair of writers swapped relative order, so no notice-csv value diverges, D-i10-4) |
-| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks) |
+| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (I12, NOT registry-owned):** `check.umich.annual_billing`'s two `site_pre_render` hooks additionally *produce* `annual_bill_upcoming` / `annual_bill_in_progress` (each a legacy notice dict) — DAG-declared, present **only** when the producing hook ran (absent when `[UMich]` is disabled, or, for `annual_bill_upcoming`, when `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads them with `.get(...)` after the phase — the I10 `drupal_multisite` precedent |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext` and no arguments until I13's `RunState`; fired first thing in `finish_run()` on completed and aborted runs — the seam for future run-level artifact hooks) |
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
@@ -495,16 +532,18 @@ against it, so drift on either side goes red:
   through `merge_prior_results()` (new wins on key collision; missing/malformed prior file →
   warn + this run's results only). The old commented-out manual site-exclusion hack this
   replaced is gone. See `docs/resuming-interrupted-runs.md`.
-- **Rendering**: Jinja2 templates `email_template.html` and `email_template.txt` are
+- **Rendering**: the Jinja render + PHP inline is `psh.render.render_report` (since I12).
+  Templates `email_template.html` and `email_template.txt` are
   rendered per site into `build/<site>.{html,txt}`. The HTML is then run through
   `inline-styles.php` (PHP Emogrifier via `vendor/`) to inline CSS for email clients →
   `build/<site>-inline.html`, and a regex pass then appends `!important` to every inlined CSS
   declaration → `build/<site>-inline2.html`, which is the HTML actually attached to the
-  message (not `-inline.html`). Charts
+  message (not `-inline.html`) — `render_report` returns that `-inline2` body. Charts
   (traffic surge bars, SiteLens gauges) are generated with matplotlib and attached as inline
   images (`make_msgid` CIDs) — the traffic chart via `psh.charts.build_chart` (since I11),
-  the SiteLens gauges in `check/umich/sitelens.py`. Everything is assembled into a MIME `EmailMessage` and written
-  to `build/<site>.eml`. **The SMTP send (`smtp_login()`/`send_message`) is live but gated on
+  the SiteLens gauges in `check/umich/sitelens.py`. The MIME `EmailMessage` is assembled by
+  `psh.mail.assemble_message` (since I12), which also writes
+  `build/<site>.eml`. **The SMTP send (`smtp_login()`/`send_message`) is live but gated on
   `[SMTP].enabled`**: when disabled (or `[SMTP]` absent) only the `.eml` files are written; when
   enabled the tool sends (to test addresses unless `--for-real`). `--for-real` selects the real
   `To`/`Bcc` recipients vs. the dry-run addressing; on a dry run the operator copy
@@ -746,6 +785,12 @@ Non-obvious things the harness relies on:
   isn't, I10 Task 4). See `tests/integration/test_gather_drupal.py`'s module docstring.
   Or use the PATH-shim fake `terminus` (`tests/shims/terminus`,
   record/replay) for full subprocess e2e. The `php inline-styles.php` CSS inliner uses **real php**.
+  **`psh/mail.py` binds `SMTP_SSL` in its OWN namespace** (`from smtplib import SMTP_SSL`,
+  since I12), so a test exercising `smtp_login()` patches **`psh.mail.SMTP_SSL`**, NOT
+  `psh.SMTP_SSL` (the old `_legacy` binding is gone — a stale patch fails loudly with
+  `AttributeError`, the same two-binding lesson as `run_terminus`). `test_email_config.py`
+  can't rebind its `psh` fixture parameter to reach it, so it aliases `import psh.mail as
+  psh_mail` and patches `psh_mail.SMTP_SSL` while still invoking `psh.smtp_login()`.
 - **The suite must stay green on a sqlite-only install.** `[mysql]` is an optional extra and the
   setup line above sanctions dropping it, so a test needing a real MySQL engine
   (`tests/integration/test_db_credentials.py`, which drives `db_retry()` against a URL that really
@@ -848,6 +893,26 @@ Non-obvious things the harness relies on:
   `tests/unit/test_smell_notices.py` gained the D-i10-8 column-0 assertions.
   `test_hook_dag.py`'s `ALL_PACKAGES` gained all four then-missing packages (I8/I9 drift
   repair); `test_documented_sc_facade_names_exist` pins `sc.drush_php_script`/`sc.drush_error`.
+- **psh/render + psh/mail + annual-billing tests (I12).** Integration tier:
+  `tests/integration/test_render_report.py` (the `render_report` I/O contract at its seam
+  in a tmp workdir with the real templates + **real php** — `pytest.skip("php not on
+  PATH")` when php is absent, the `test_css_inliner_encoding.py` precedent; incl. the
+  non-vacuous `!important`-pass assertion using a retained `@media` block, the review-fix
+  PD#14 pin), `tests/integration/test_mail_recipients.py` (`psh.mail.resolve_recipients`
+  via the `gateway` fixture + `recording_console` — the generic `None`-return, the U-M
+  special cases), `tests/integration/test_check_umich_annual_billing.py` (the two hooks'
+  gating/window boundaries/produced keys/declarations via `checkload.py` + `sc.SiteContext`;
+  the umich-disabled-registers-nothing symmetry pin), and
+  `tests/integration/test_sort_notices_and_subject.py` (the pure `sort_notices_and_subject`
+  helper — the I1-flagged never-tested umich-only billing call sites, now runtime-covered:
+  subject override + `[in-progress, upcoming, …]` front order, and the
+  non-mutation-of-`site_context["notices"]` pin). Unit tier:
+  `tests/unit/test_annual_billing_notices.py` (repointed to the relocated builders, the I8
+  `php_eol` precedent). `test_email_config.py` was repointed to the `psh.mail.SMTP_SSL`
+  seam (via the `psh_mail` alias, above); `test_documented_sc_facade_names_exist` pins
+  `sc.contract_year_end`; the two billing hook-produced keys are NOT registry-owned, so
+  they are not in `test_contract_registry.py`; `test_hook_dag.py` proves the two new
+  `check.umich` hooks validate (`check/umich` already in `ALL_PACKAGES`).
 - **Shared DNS-test infrastructure (`tests/helpers/`).** `dnsfake.py` has the fake
   `dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`) and
   `recording_console` (a wide `record=True` Console, read back with `export_text()` — not `capsys`,
@@ -914,12 +979,13 @@ Non-obvious things the harness relies on:
   (`tests/vendor/axe.min.js`) so it stays offline.
 - **The reusable (non-UMich) path is only partly de-U-M-ified.** Bugs hide here because production
   always runs with the UMich plugin enabled, so the non-U-M golden is the only guard. **Still
-  hardcoded U-M** in core (not yet relocated to the `umich` packages): the date-driven
-  annual-billing notices (until I12), and the
+  hardcoded U-M** in core (not yet relocated to the `umich` packages): the
   branding in `email_template.html` (its.umich.edu URLs, `webmaster@umich.edu`, `node/4705`).
-  (The Drupal user-agent check LEFT this list at I10: it relocated to
-  `check/umich/drupal_ua.py` and is now `[UMich].enabled`-gated — U-M content living in the
-  U-M package where it belongs, the umich-oidc-login/Hummingbird I9 precedent.)
+  (The date-driven annual-billing notices LEFT this list at I12: they relocated to
+  `check/umich/annual_billing.py` and are now `[UMich].enabled`-gated. The Drupal
+  user-agent check LEFT it at I10: it relocated to `check/umich/drupal_ua.py` and is now
+  `[UMich].enabled`-gated — U-M content living in the U-M package where it belongs, the
+  umich-oidc-login/Hummingbird I9 precedent.)
   Also **hardcoded U-M but living in the generic check packages** (un-gated U-M links moved
   verbatim when the checks relocated — the packages are generic because §3.2 assigns these
   platform checks there; de-U-M-ifying them is post-campaign/I14 work): in `check/pantheon/`

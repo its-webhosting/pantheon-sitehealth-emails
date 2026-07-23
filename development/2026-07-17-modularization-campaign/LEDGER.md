@@ -1420,3 +1420,170 @@ empty).
   imports nothing from the gateway, so the two-binding seam trap does not extend to
   it; and the `.eml` chart-payload hash procedure in SPEC I11 §6 is reusable as-is if
   I12's MIME move needs the same evidence class.
+
+## I12 — render + mail + annual billing (2026-07-23, commits abd4763/8dbaf75/b972192/f0bab1c/79eee7a + closing docs commit)
+
+Spec/plan: `development/2026-07-23-mod-I12-render-mail/` (`SPEC.md` §9 carries the pasted
+acceptance; task reports + reviews under `.superpowers/sdd/`). Five code commits, each
+green: `abd4763` (Task 1 — `psh/render.py`: `escape_url` + `render_report`, gather bridge
+consolidation, house-rule comment), `8dbaf75` (Task 1 review-fix — the non-vacuous
+`!important`-pass assertion via an `@media` block, a PD#14 instance below), `b972192`
+(Task 2 — `psh/mail.py`: `smtp_login` + `resolve_recipients` + `assemble_message`,
+`test_email_config` seam repoint), `f0bab1c` (Task 3 — `check/umich/annual_billing.py` +
+the `sort_notices_and_subject` helper + `sc.contract_year_end` façade), `79eee7a` (Task 3
+review-fix — the `_billing_inputs` return annotation, a Minor below), plus this closing
+docs commit (CLAUDE.md / memory / this entry / SPEC §9 correction + §5 correction / the
+dev folder). Full suite at close **including the live tier** (`ls ~/.terminus/cache/tokens/`
+→ `markmont@umich.edu`; `tests/live/test_live_smoke.py ..` ran and passed) = **1021 passed
+/ 1 skipped** (the skip is `test_db_credentials.py`'s `importorskip("MySQLdb")` on a
+sqlite-only install), all three gates (`All checks passed!` ×2, pyright `0 errors`), 107
+snapshots; four goldens byte-identical across the increment (`git diff 786822b --
+tests/e2e/__snapshots__/` empty).
+
+- **Moved:** exactly the §11-row-I12 move set (B49, B50/B51 billing, B53, B54,
+  B55-assembly, `smtp_login`, `escape_url`), split by destination:
+  - **B53 Jinja render + B54 PHP inline → `psh/render.py` `render_report(site_name,
+    template_dict) -> tuple[str, str]`** (verbatim bodies; returns the `-inline2` HTML
+    actually attached + the rendered text). `escape_url` moved here too — the one-line
+    `urllib.parse.quote` wrapper — which **discharges the I9/I10 bridge obligation**: the
+    three call-time `from psh._legacy import escape_url` bridges in `psh/gather.py` became
+    one module-level `from psh.render import escape_url` (no cycle; render imports only
+    stdlib + jinja2 + `sc`).
+  - **B49 recipient resolution + `smtp_login` + B55 MIME assembly → `psh/mail.py`**:
+    `resolve_recipients(site, site_id) -> tuple[str, str] | None` (`None` on a fatal team
+    fetch, D-i6-1 `continue` pattern; the U-M `lsa-disko-project`/`umma-inside-wp` special
+    case rides along inside the `umich_enabled()` branch), `smtp_login() -> SMTP_SSL`
+    (verbatim, `sys.exit` on missing creds), `assemble_message(...) -> EmailMessage` (the
+    B55 build **and** the `build/{site}.eml` write). `main()`'s per-site tail collapses to
+    three calls.
+  - **B50 billing branch + B51 + both builders → `check/umich/annual_billing.py`**, two
+    `site_pre_render` hooks (`check_annual_bill_upcoming`, `check_annual_bill_in_progress`)
+    + a shared `_billing_inputs` derivation helper (DRY, deletion-friendly for B51). The
+    B50-minus-billing **sort/subject core → the pure `sort_notices_and_subject(site_context,
+    report)` helper in `psh/_legacy.py`** (I13 absorbs into final `main()`; the I10
+    `no_primary_domain_notice` extraction precedent). Column-0 `f"""` billing-notice
+    interiors and the B49/B53/B54/B55 bodies moved byte-for-byte (Invariant 8;
+    extracted-block diffs pasted in the task reports).
+  Both `psh/render.py` and `psh/mail.py` re-imported by `psh/_legacy.py` (I2–I11 pattern).
+
+- **Produced-keys mechanism (the increment's one non-move design, I10 `drupal_multisite`
+  precedent):** the billing hooks do **NOT** call `add_notice`. Each **produces** a
+  DAG-declared contract key — `annual_bill_upcoming` (iff `sc.contract_year_end(end_date)`)
+  and `annual_bill_in_progress` (unconditionally when it runs) — read with `.get()` by
+  `sort_notices_and_subject` after the phase. These are the increment's **two new
+  hook-produced keys, NOT registry-owned** (not in `CONTRACT`, not in
+  `test_contract_registry.py`; present only when `[UMich].enabled` registered the hooks and
+  the window condition held). This preserves load-bearing history: the billing rows never
+  enter `site_context["notices"]`, so they never reach `all_warnings`/`-notices.csv`, and
+  the in-progress notice (inserted last so it renders first) still never influences the
+  subject. An `add_notice` hook would have broken both — rejected in SPEC §2.2.
+
+- **Deviations from CAMPAIGN.md:** none of architecture; SPEC-level ledger notes (the
+  D-i6-1 "bodies move, glue stays" family, verbatim SPEC §2.6):
+  1. **D-i12-1 — loop control** stays in `main()`: the `resolve_recipients` `None` →
+     `continue`.
+  2. **D-i12-2 — the `make_msgid` CID pair and the `template_dict` literal stay in
+     `main()`.** Moving the dict build would create a ~25-parameter function strictly worse
+     than the dict literal (I11 threaded 13 and was already the campaign's widest); the
+     dict is `main()`-local data-shaping, I13 material.
+  3. **D-i12-3 — the `report`/`subject` strings and the `sort_notices_and_subject` call
+     stay in `main()`** (the helper lives in `_legacy.py` as a module-level def — the I10
+     `no_primary_domain_notice` precedent).
+  4. **D-i12-4 — the send block (B57) does NOT move.** Its five statements interleave the
+     B14 accumulator writes (`emails_sent += 1`, `site_emailed = True`) between
+     `send_message()` and `quit()`; hoisting them into `psh/mail.py` would put the counter
+     updates after `quit()` returns, reopening the documented Ctrl-C-during-`quit()`
+     duplicate-email window (Invariant 4: resume-point next-site-after-email; CLAUDE.md §
+     Database, notices-before-send paragraph). The accumulators are §11-row-I13 scope;
+     B57's residue moves with them. `psh/mail.py` ships `smtp_login` and `main()` keeps
+     calling it.
+
+- **Seam improvement, ledgered (SPEC §3, §8 last row):** the sort/subject region moved
+  **below** `invoke_hooks("site_pre_render")` (nothing between its old position and the
+  phase read `sorted_notices`/`subject`). So a FUTURE `site_pre_render` hook's `add_notice`
+  would now render — the deliberate improvement the I1 MUST flagged. **No in-repo consumer
+  exists today** (I7: "still no consumer"), so no observable change now; the billing hooks
+  use produced keys, not `add_notice`, precisely to keep the artifacts unchanged. The
+  `invoke_hooks("site_pre_render")` "No consumer yet" comment was rewritten (Task 3, the
+  Directives-#7 stale-diagram rule).
+
+- **B51 KEPT, not deleted (SPEC §1 NOT-in-scope):** the "annual bill in progress" section's
+  marker says "remove at the beginning of August 2026"; today is 2026-07-23, the date has
+  **not** passed, so per §11 ("B51 deletion if past its date") B51 relocated intact, TODO
+  comment included. **I14 re-evaluates** (its Aug-2026 date will have passed). Consequently
+  the **§8-sanctioned I12 csv change goes UNUSED** (SPEC §3 behavior bar: `-notices.csv`
+  NONE — the only sanctioned change was B51's deletion, which did not happen).
+
+- **`Notice`-class adoption re-deferred to I14** (PD#9, re-ledgered — the I3/I10/I11
+  candidate list): every notice I12 touched (the two billing notices) carries extra csv
+  fields, which `psh/notice.py`'s `Notice` cannot hold without the reserved §6 field-set
+  amendment. Taking it here would widen the increment for zero behavioral gain. I14
+  inherits it with the accumulated candidates.
+
+- **Contract/config/sc additions:** **no new core-stuffed CONTRACT keys** (I12 adds only
+  the two hook-produced billing keys, above — DAG-declared, not registry-owned). No new
+  config keys (billing stays under existing `[UMich]`). One new façade line
+  **`sc.contract_year_end`** (`SC_FACADE_NAMES` += it; needed by the relocated billing
+  hooks, which cannot import `psh.plans.contract_year_end` directly, Invariant 9), pinned
+  by `test_documented_sc_facade_names_exist` (RED demonstration in the Task 3 report).
+
+- **Ratchet (§13):** `psh/render.py`, `psh/mail.py`, `check/umich/annual_billing.py`
+  **born gated** — new files never in `ruff-broad.toml`'s `extend-exclude`. **I12 deletes
+  NOTHING from and adds nothing to the exclude list** (I2–I11 precedent — moved/new code
+  lands in fresh gated files; `psh/_legacy.py` stays grandfathered until I14). Dispositions
+  confirmed against real tool output (PD#14), from the three task reports: on
+  `psh/render.py` — S603/S607 noqa + reasons on the `subprocess.run(["php", …])` call
+  (fixed argv, no shell, the sanctioned non-gateway subprocess; the
+  `test_house_rules.py:114` inliner-home comment repointed `psh/_legacy.py` →
+  `psh/render.py`), PTH123 ×6 + UP015 ×3 behavior-identical rewrites; `C901`/`PLR0915`/
+  `PLR0913` did NOT fire (predicted-possible, recorded absent). On `psh/mail.py` — PLR0913
+  noqa on `assemble_message` (11 args, pinned signature, I6/I11 precedent) + PTH123 noqa on
+  the verbatim `.eml` write (both proven load-bearing — RUF100 passed clean), and **3
+  `add_related` pyright ignores** (`get_payload()[1].add_related(...)`: the `[1]` index +
+  `add_related` attr — a real ratchet consequence, the inline `_legacy` original was
+  pyright-exempt; the one unpredicted-but-real finding). On `annual_billing.py` — **zero
+  `noqa`** (only an I001 autofix on `__init__.py`); `_billing_inputs` uses a real
+  annotation. **Pyright scope UNCHANGED** (`psh/` minus `_legacy.py`) — D-i8-7/D-i9-8/
+  D-i10-9/I11 inherited; **I13 inherits it.**
+
+- **Discovered tasks (dispositions):**
+  - **`subprocess` is NOT orphaned in `_legacy.py`** (Task 1, PD#14 grep-verify): SPEC §5's
+    orphan-prediction list named it, but `psh.subprocess.Popen` is a documented monkeypatch
+    seam (`test_terminus_contract.py`, `test_run_terminus_markup.py` — the shared-module-
+    object seam). The grep-verify rule (which SPEC §5 itself mandated) kept it, with a
+    `# noqa: F401` + inline reason. The five other named imports (`urllib.parse`,
+    `jinja2.Template`, `EmailMessage`, `email.policy.SMTP`, `SMTP_SSL`) were genuinely
+    orphaned and removed. → **SPEC §5 corrected in place** (this closing commit, "correction
+    (Task 1)").
+  - **jinja2 `keep_trailing_newline` test-literal correction** (Task 1): a brief-provided
+    test literal `"report for testsite\n"` was wrong — Jinja2's default
+    `keep_trailing_newline=False` strips the trailing newline, and `render_report`
+    reproduces the original bare `Template(f.read())` verbatim. The authoritative oracle for
+    a verbatim move is the original code + the empty golden diff, not a hand-written literal
+    (PD#14). → **fixed in the test** (`abd4763`), annotated inline; `render_report` was NOT
+    changed to satisfy the wrong literal.
+  - **Vacuous `!important`-pass assertion** (Task 1 review, Important, PD#14): the test's
+    `<style>p { color: red; }</style>` is fully inlinable, so Emogrifier deletes the
+    `<style>` block and the guarded `assert "color: red !important;"` line never executed —
+    a green run proved nothing. → **fixed** (`8dbaf75`): a retained `@media` block gives the
+    B54 regex pass a real target, the assertion is unconditional, plus a guard-of-the-guard
+    and a before/after contrast assertion; red-capability demonstrated.
+  - **`_billing_inputs` return annotation** (Task 3 review, Minor): `-> tuple[dict, str,
+    float]` — the middle element `portal_site` is a **dict**, not `str` (both call sites
+    subscript it). → **fixed** (`79eee7a`, this task's Step 0).
+  - **`resolve_recipients` empty-team → silent `""` recipients** (Task 2, a PD#3
+    empty/zero-length shadow): when the U-M team list resolves empty, the recipients string
+    is `""` and the report addresses nobody without an error — **pre-existing behavior moved
+    byte-verbatim**, not introduced here. Recorded for post-campaign consideration (no §8
+    surface change, no scope in this increment); I14/post-campaign may add an explicit
+    empty-team guard.
+  - No others — the three task reports found no further gaps beyond the ruff/pyright
+    dispositions and the items above.
+
+- **Open questions for I13:** proceed per CAMPAIGN.md §11 row I13. Inherited obligations,
+  all ledgered (SPEC §8): **absorb `sort_notices_and_subject` into the final `main()`**;
+  **move the B56 csv append + the B57 send block's residue with the B14 accumulators** (the
+  D-i12-4 coupling — the accumulators land in I13's `RunState`); the **three I7 dead tail
+  inits**. Note for I13's spec author: `psh/mail.py` binds `SMTP_SSL` in its own namespace,
+  so a test exercising `smtp_login()` patches `psh.mail.SMTP_SSL` (not `psh.SMTP_SSL`) — the
+  same two-binding seam trap as `run_terminus`/`psh.gather.run_terminus`.

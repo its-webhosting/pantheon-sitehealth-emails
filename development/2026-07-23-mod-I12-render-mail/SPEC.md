@@ -266,6 +266,11 @@ dispositions follow I2–I11 precedent):
 - Orphans in `_legacy.py` after the moves (grep-verify each before removal, I3 rule):
   `urllib.parse`, `subprocess`, `jinja2.Template`, `EmailMessage`, `email.policy.SMTP`,
   `SMTP_SSL` orphan; `re` (fqdn_re), `make_msgid` (CIDs stay), `datetime` etc. do NOT.
+  **Correction (Task 1):** `subprocess` is NOT orphaned — `psh.subprocess.Popen` is a
+  documented monkeypatch seam (`test_terminus_contract.py`, `test_run_terminus_markup.py`,
+  the shared-module-object seam in § Two mock seams), so the grep-verify rule (which this
+  bullet already mandates) kept it, with a `# noqa: F401` + inline reason. The five other
+  named imports were genuinely orphaned and removed.
 - `Invariant 8`: the two billing builders' f-string literals and B49/B53/B54/B55 bodies
   move byte-for-byte; extracted-block diff evidence pasted in task reports (I2 pattern).
 
@@ -312,4 +317,54 @@ churn (107 snapshots unchanged).
 
 ## 9. Acceptance results (pasted at close)
 
-*(filled by the closing task)*
+Run 2026-07-23 (Task 4). Terminus credentials present (`ls ~/.terminus/cache/tokens/` →
+`markmont@umich.edu`), so the **live tier ran** (`tests/live/test_live_smoke.py ..` — 2
+tests passed, not deselected).
+
+### `./run-tests` (all three gates + full suite, EXIT=0)
+
+Gate order (each aborts on first failure — the gates run before pytest):
+
+```
+All checks passed!                       (ruff, narrow PD set)
+All checks passed!                       (ruff-broad.toml, campaign ratchet)
+0 errors, 0 warnings, 0 informations     (pyright, standard)
+```
+
+```
+tests/live/test_live_smoke.py ..                                         [ 46%]
+...
+--------------------------- snapshot report summary ----------------------------
+107 snapshots passed.
+================= 1021 passed, 1 skipped, 4 warnings in 46.68s =================
+Linting (ruff, narrow PD set) ...
+Linting (ruff-broad.toml, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+`1021 passed / 1 skipped` (the skip is `test_db_credentials.py`'s
+`importorskip("MySQLdb")` on a sqlite-only install). Baseline at spec time was fast-tier
+994 passed; the increment added the new render/mail/billing/sort tests (Task 1 +3, Task 2
++4, Task 3 +17) and the full run includes the 2 live tests: fast tier closed at 1019
+passed / 2 deselected, and the full run = 1019 + 2 live = **1021 passed**. Zero snapshot
+churn (107 unchanged). The 4 warnings are the pre-existing `semver.compare`
+PendingDeprecationWarning (`check/umich/oidc_login.py`) and the `load_module`
+DeprecationWarning — both unrelated to this increment.
+
+### `git diff 786822b -- tests/e2e/__snapshots__/` (MUST be empty — Invariant 1)
+
+```
+(empty — 0 lines; the four e2e goldens are byte-identical across the whole increment)
+```
+
+### `uvx ruff check --config ruff-broad.toml psh/render.py psh/mail.py check/umich/annual_billing.py`
+
+```
+All checks passed!
+```
+
+The three born-gated files (broad ruff + pyright standard) pass with the dispositions
+recorded in the task reports (`psh/render.py`: S603/S607 + PTH123/UP015 rewrites;
+`psh/mail.py`: PLR0913 + PTH123 noqa, 3 `add_related` pyright ignores; `annual_billing.py`:
+no `noqa`, `_billing_inputs` real annotation `-> tuple[dict, dict, float]` after the Task 3
+review fix). Pyright scope UNCHANGED (`psh/` minus `_legacy.py`) — D-i8-7 lineage inherited.
