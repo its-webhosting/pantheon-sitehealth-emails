@@ -23,10 +23,7 @@ import subprocess  # noqa: F401 -- retained as the psh.subprocess.Popen monkeypa
 import sys
 import time
 import tomllib
-from email.message import EmailMessage
-from email.policy import SMTP
 from email.utils import make_msgid
-from smtplib import SMTP_SSL
 
 import sqlalchemy as db
 from rich.markup import escape
@@ -245,6 +242,7 @@ from psh.plans import (
     stuff_plans_contract,
 )
 from psh.render import escape_url, render_report
+from psh.mail import assemble_message, resolve_recipients, smtp_login
 from psh.notice import Notice, Severity, registry
 from psh.modules import (
     HookDagError,
@@ -256,22 +254,6 @@ from psh.modules import (
 )
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
-
-
-def smtp_login() -> SMTP_SSL:
-    smtp_cfg = sc.config.get("SMTP", {})
-    host = smtp_cfg.get("host", "smtp.mail.umich.edu")
-    port = smtp_cfg.get("port", 465)
-    username = sc.smtp_username()
-    password = smtp_cfg.get("password")
-    if not username or not password:
-        sys.exit(
-            "SMTP is enabled but the username or password is not configured "
-            "(set [SMTP].username / [SMTP].password, or pass --smtp-username)."
-        )
-    smtp_connection = SMTP_SSL(host, port=port)
-    smtp_connection.login(username, password)
-    return smtp_connection
 
 
 class ResumeSiteNotFoundError(Exception):
@@ -1478,25 +1460,10 @@ def main() -> None:
             sc.debug("===== Notices:\n", site_context["notices"])
             sc.debug("===== Sections:\n", site_context["sections"])
 
-            if umich_enabled():
-                r = sc.config["UMich"]["portal"]["sites"][site["name"]]["owner_group"]
-                r = r.replace(" ", ".")
-                recipients = f"{r}@umich.edu, {r}-owners@umich.edu"
-                if site_name in ("lsa-disko-project", "umma-inside-wp"):
-                    # special case, see TDx 10112051, 10165816
-                    recipients = f"{r}@umich.edu"
-                contacts = f"{r}@umich.edu"
-            else:
-                site_team, errors, fatal = terminus("site:team:list", site_id)
-                if fatal or site_team is None:
-                    sc.console.print(
-                        f":exclamation: [bold red] ERROR: could not fetch team for {site_name}: {escape(errors)}"
-                    )
-                    continue
-                recipients = ", ".join(
-                    [site_team[team_member]["email"] for team_member in site_team]
-                )
-                contacts = recipients.replace(",", "")
+            resolved = resolve_recipients(site, site_id)
+            if resolved is None:
+                continue
+            recipients, contacts = resolved
 
             # Create email from template
             sorted_notices = (
@@ -1591,68 +1558,10 @@ def main() -> None:
 
             html_body, text_body = render_report(site["name"], template_dict)
 
-            msg = EmailMessage()
-            # Sender identity + dry-run addressing come from the [Email] config section; the
-            # defaults reproduce the historical U-M literals byte-for-byte so an institution that
-            # does not set [Email] gets the same output (P8a).
-            email_cfg = sc.config.get("Email", {})
-            msg["From"] = email_cfg.get(
-                "from", "University of Michigan Webmaster Team <webmaster@umich.edu>"
+            msg = assemble_message(
+                subject, recipients, text_body, html_body, wordmark_image, chart_image,
+                banner_cid, chart_cid, site_context["attachments"], site["name"], end_date,
             )
-            if sc.options.for_real:
-                msg["To"] = recipients
-                msg["Bcc"] = email_cfg.get(
-                    "bcc", "januside@go.mail.umich.edu, its-webmaster@go.mail.umich.edu"
-                )
-            else:
-                dry_run_to = email_cfg.get("dry_run_to", "januside@go.mail.umich.edu")
-                dry_run_domain = email_cfg.get("dry_run_username_domain", "umich.edu")
-                # Address the dry run to the configured dry_run_to plus, when a username is
-                # resolvable (--smtp-username or [SMTP].username), an operator copy.  When no
-                # username is available (e.g. SMTP disabled and no --smtp-username), the operator
-                # copy is omitted rather than reading USER from the environment directly.
-                username = sc.smtp_username()
-                parts = [dry_run_to]
-                if username:
-                    parts.append(f"{username}@{dry_run_domain}")
-                msg["To"] = ", ".join(p for p in parts if p)
-            msg["Reply-to"] = email_cfg.get("reply_to", "webmaster@umich.edu")
-            msg["Date"] = datetime.datetime.now(datetime.UTC).strftime("%a, %d %b %Y %T %z")
-            msg["Subject"] = subject
-
-            msg.set_content(text_body, subtype="plain", charset="utf-8")
-            msg.add_alternative(html_body, subtype="html", charset="utf-8")
-
-            msg.get_payload()[1].add_related(
-                wordmark_image,
-                maintype="image",
-                subtype="png",
-                filename="pantheon-traffic-email-banner.png",
-                cid=banner_cid,
-                disposition="inline",
-            )
-
-            msg.get_payload()[1].add_related(
-                chart_image,
-                maintype="image",
-                subtype="png",
-                filename=f"pantheon-traffic_{site['name']}_{end_date.strftime('%Y%m%d')}.png",
-                cid=chart_cid,
-                disposition="inline",
-            )
-
-            for attachment in site_context["attachments"]:
-                msg.get_payload()[1].add_related(
-                    attachment["data"],
-                    maintype=attachment["maintype"],
-                    subtype=attachment["subtype"],
-                    filename=attachment["filename"],
-                    cid=attachment["cid"],
-                    disposition=attachment["disposition"],
-                )
-
-            with open(f"build/{site['name']}.eml", "wb") as f:
-                f.write(msg.as_bytes(policy=SMTP))
 
             # BEFORE the send, not after: a Ctrl-C between send_message() and this loop -- a window
             # that includes smtp_connection.quit(), a network round-trip -- used to set

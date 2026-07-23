@@ -7,6 +7,12 @@ in tests/e2e/test_golden_nonumich.py; here we cover the seams directly.
 """
 import pytest
 
+# Aliased because the `psh` fixture is psh._legacy (which shadows a plain `import psh.mail`
+# inside a test taking that fixture); after I12 smtp_login resolves SMTP_SSL in psh.mail's
+# namespace, so patch the seam there, not psh.SMTP_SSL (the I2/I10 two-binding lesson:
+# patching the remnant's binding would silently not intercept).
+import psh.mail as psh_mail
+
 pytestmark = pytest.mark.integration
 
 
@@ -25,7 +31,7 @@ class _FakeSMTP:
 def test_smtp_login_uses_config(psh, reset_sc, monkeypatch):
     """Host/port and BOTH credentials come from the [SMTP] config section, not the environment."""
     captured = {}
-    monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: captured.setdefault("c", _FakeSMTP(host, port)))
+    monkeypatch.setattr(psh_mail, "SMTP_SSL", lambda host, port: captured.setdefault("c", _FakeSMTP(host, port)))
     monkeypatch.delenv("SMTP_PASSWORD", raising=False)  # must NOT be read from the environment
     reset_sc.options.smtp_username = None
     reset_sc.config = {"SMTP": {"host": "smtp.example.org", "port": 587,
@@ -40,7 +46,7 @@ def test_smtp_login_uses_config(psh, reset_sc, monkeypatch):
 
 def test_smtp_login_cli_username_overrides_config(psh, reset_sc, monkeypatch):
     captured = {}
-    monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: captured.setdefault("c", _FakeSMTP(host, port)))
+    monkeypatch.setattr(psh_mail, "SMTP_SSL", lambda host, port: captured.setdefault("c", _FakeSMTP(host, port)))
     reset_sc.options.smtp_username = "cli_user"
     reset_sc.config = {"SMTP": {"username": "config_user", "password": "config_pw"}}
 
@@ -50,7 +56,7 @@ def test_smtp_login_cli_username_overrides_config(psh, reset_sc, monkeypatch):
 
 def test_smtp_login_defaults_to_umich_host(psh, reset_sc, monkeypatch):
     captured = {}
-    monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: captured.setdefault("c", _FakeSMTP(host, port)))
+    monkeypatch.setattr(psh_mail, "SMTP_SSL", lambda host, port: captured.setdefault("c", _FakeSMTP(host, port)))
     reset_sc.options.smtp_username = "someone"
     reset_sc.config = {"SMTP": {"password": "pw"}}  # host/port omitted -> U-M defaults
 
@@ -61,7 +67,7 @@ def test_smtp_login_defaults_to_umich_host(psh, reset_sc, monkeypatch):
 
 def test_smtp_login_missing_password_exits(psh, reset_sc, monkeypatch):
     """No password configured -> a clear exit, never a silent send with empty credentials."""
-    monkeypatch.setattr(psh, "SMTP_SSL", lambda host, port: pytest.fail("must not connect"))
+    monkeypatch.setattr(psh_mail, "SMTP_SSL", lambda host, port: pytest.fail("must not connect"))
     reset_sc.options.smtp_username = "someone"
     reset_sc.config = {"SMTP": {}}  # no password
     with pytest.raises(SystemExit):
