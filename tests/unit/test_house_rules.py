@@ -162,7 +162,7 @@ def test_only_the_gateway_spawns_a_subprocess():
 SC_FACADE_NAMES = ("escape_url", "check_wordpress_plugin", "check_drupal_module",
                    "umich_enabled", "cloudflare_enabled", "terminus", "fqdn_re",
                    "db_engine_args", "Notice", "Severity", "wp_eval", "wp_error",
-                   "drush_php_script", "drush_error")
+                   "drush_php_script", "drush_error", "contract_year_end")
 
 
 def test_documented_sc_facade_names_exist(reset_sc):
@@ -185,6 +185,11 @@ def test_documented_sc_facade_names_exist(reset_sc):
     (Notice/Severity reach sc via that module-level import, not a `sc.Notice = ...`
     assignment); the test failed with `AssertionError: sc is missing documented facade names
     ['Severity']`.  Verified, then reverted.
+
+    (campaign-I12) A third RED demonstration for "contract_year_end": temporarily commented
+    out `sc.contract_year_end = contract_year_end` in psh/_legacy.py; the test failed with
+    `AssertionError: sc is missing documented facade names ['contract_year_end']`.  Verified,
+    then reverted.
     """
     sc = reset_sc
     missing = [name for name in SC_FACADE_NAMES if not hasattr(sc, name)]

@@ -324,6 +324,7 @@ sc.wp_eval = wp_eval        # check packages: WP-CLI eval probes (check/wordpres
 sc.wp_error = wp_error      # check packages: WP command-failure notices
 sc.drush_php_script = drush_php_script  # check packages: drush php probes (check/drupal multisite, check/umich drupal_ua)
 sc.drush_error = drush_error            # check packages: drush command-failure notices
+sc.contract_year_end = contract_year_end  # check packages: U-M billing-window test (check/umich annual_billing)
 sc.fqdn_re = fqdn_re        # check packages: validate remote domain ids with the SAME regex
 sc.db_engine_args = db_engine_args  # plugin/umich/portal.py: ONE URL builder, ONE set of pool
                                     # settings for every database this program connects to
@@ -829,100 +830,45 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
     return None
 
 
-def build_annual_bill_upcoming_notice(site_name, plan_name, annual_bill, shortcode, portal_site_id):
-    """The contract-year-end "will be billed July 1" alert (BLOCKMAP B50)."""
-    return {
-        "type": "alert",
-        "icon": "&#x1F4B5;",  # dollar banknotes
-        "csv": f"{site_name},annual-bill,{annual_bill},{shortcode}",
-        "short": f"${annual_bill:,.2f} will be billed to shortcode {shortcode} on July 1",
-        "message": f"""
-                <p style="background-color: #f8d7da; padding: 1em; border: 2px solid #58151c;">
-                    On July 1, ${annual_bill:,.2f} will be billed to shortcode <strong>{shortcode}</strong>
-                    when ITS runs its billing process.  This charge will be for a
-                    full year (July 1 - June 30) of Pantheon hosting on the {plan_name} plan for the site
-                    <strong>{site_name}</strong>.
-                </p>
-                <p>Please see if a different plan would be better:</p>
-                <ul>
-                    <li><a href="#estimated-costs">Estimated Plan Costs for {site_name}</a> (see the table, below)</li>
-                    <li><a href="https://docs.pantheon.io/guides/account-mgmt/plans/resources">Pantheon Plan Resources</a></li>
-                    <li><a href="https://its.umich.edu/computing/web-mobile/pantheon/pricing">U-M Pantheon pricing</a></li>
-                </ul>
-                <p>Do you want to change to a different plan or have use a different shortcode?</p>
-                <ul>
-                    <li>
-                        <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/">Change the plan for {site_name}</a>.
-                        Changes must be made by the end of the day on June 29 for the July 1 annual billing.
-                    </li>
-                    <li>
-                        <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/edit/">Change the shortcode for {site_name}</a>.
-                        (for all future billing).
-                    </li>
-                </ul>
-                <p>On July 1, you will be billed for the plan the site was on as of June 30.</p>
-                """,
-        "text": f"""
-=======================================================================
-On July 1, ${annual_bill:,.2f} will be billed to shortcode {shortcode}
-when ITS runs its billing process.  This charge will be for a full
-year (July 1 - June 30) of Pantheon hosting on the
-{plan_name} plan for the site {site_name}.
-=======================================================================
+def sort_notices_and_subject(site_context, report):
+    """B50 sort/subject core + billing-key wiring (pure; final home I13's main()).
 
-Please see if a different plan would be better:
+    Returns ``(sorted_notices, subject)``.  Reads the two hook-produced billing keys
+    (`annual_bill_upcoming` / `annual_bill_in_progress`, from check/umich/annual_billing)
+    with ``.get()`` and inserts them into the render-only `sorted_notices` list -- they
+    never enter ``site_context["notices"]``, so no -notices.csv rows (SPEC I12 §2.2).
+    Preserved quirks: `annual_bill_upcoming` overrides the subject and is inserted at
+    subject-computation time; `annual_bill_in_progress` is inserted LAST (so it renders
+    first) but AFTER the subject is fixed, so it never influences the subject.
+    """
+    site_name = site_context["site"]["name"]
+    sorted_notices = (
+        [n for n in site_context["notices"] if n["type"] == "alert"]
+        + [n for n in site_context["notices"] if n["type"] == "warning"]
+        + [n for n in site_context["notices"] if n["type"] == "info"]
+    )
+    subject = f"{site_name}: {report}"
+    # U-M-specific annual-billing subject + notice: the `annual_bill_upcoming` key exists iff
+    # the upcoming hook was registered ([UMich].enabled) AND its window condition held
+    # (end_of_contract_year) -- equivalent by construction to the old inline guard.
+    if (upcoming := site_context.get("annual_bill_upcoming")) is not None:
+        subject = f"Time Sensitive: {site_name} annual billing"
+        sorted_notices.insert(0, upcoming)
+    elif len(sorted_notices) > 0:
+        if sorted_notices[0]["type"] == "alert":
+            subject = f"Action Required: {site_name}: {sorted_notices[0]['short']} | {report}"
+        elif sorted_notices[0]["type"] == "warning":
+            subject = f"Action Recommended: {site_name}: {sorted_notices[0]['short']} | {report}"
+        # no subject prefix for info notices
 
-  * See the Estimated Plan Costs for {site_name}
-    in the table below.
-  * See the Pantheon Plan Resources table at
-    <https://docs.pantheon.io/guides/account-mgmt/plans/resources>
-  * See U-M Pantheon pricing at
-    <https://its.umich.edu/computing/web-mobile/pantheon/pricing>
+    # TODO: remove this section at the beginning of August 2026:
+    # the `annual_bill_in_progress` key, produced by check/umich/annual_billing's in-progress
+    # hook.  Inserted last so it renders first, but AFTER the subject computation so it never
+    # influences the subject (preserved quirk).
+    if (in_progress := site_context.get("annual_bill_in_progress")) is not None:
+        sorted_notices.insert(0, in_progress)
 
-Do you want to change to a different plan or have use a different
-shortcode?
-
-  * Change the plan for {site_name}:
-    <https://admin.webservices.umich.edu/sites/{portal_site_id}/plan/>
-    Changes must be made by the end of the day on June 29 for the
-    July 1 annual billing.
-
-  * Change the shortcode for {site_name}</a>
-    <https://admin.webservices.umich.edu/sites/{portal_site_id}/edit/>
-    (for all future billing).
-
-On July 1, you will be billed for the plan the site was on as of
-June 30.
-""",
-    }
-
-
-def build_annual_bill_in_progress_notice(site_name, plan_name, annual_bill, shortcode):
-    """The "ITS is in the process of billing" alert (BLOCKMAP B51; deletion is I12's call)."""
-    return {
-        "type": "alert",
-        "icon": "&#x1F4B5;",  # dollar banknotes
-        "csv": f"{site_name},annual-bill-in-progress,{annual_bill},{shortcode}",
-        "short": f"${annual_bill:,.2f} is being billed to shortcode {shortcode}",
-        "message": f"""
-                <p style="background-color: #f8d7da; padding: 1em; border: 2px solid #58151c;">
-                    ITS is in the process of billing ${annual_bill:,.2f} to shortcode <strong>{shortcode}</strong>
-                    for a Pantheon {plan_name} plan to cover website hosting for the site
-                    <strong>{site_name}</strong> from July 1, 2026 - June 30, 2027.
-                </p>
-                <p>Any changes to the site's plan between these dates will result in an additional pro-rated bill or credit in the following month.</p>
-                """,
-        "text": f"""
-=======================================================================
-ITS is in the process of billing ${annual_bill:,.2f} to shortcode {shortcode}
-for a Pantheon {plan_name} plan to cover website hosting
-for the site {site_name} from July 1, 2026 - June 30, 2027.
-=======================================================================
-
-Any changes to the site's plan between these dates will result in
-an additional pro-rated bill or credit in the following month.
-""",
-    }
+    return sorted_notices, subject
 
 
 def main() -> None:
@@ -1465,48 +1411,6 @@ def main() -> None:
                 continue
             recipients, contacts = resolved
 
-            # Create email from template
-            sorted_notices = (
-                [n for n in site_context["notices"] if n["type"] == "alert"]
-                + [n for n in site_context["notices"] if n["type"] == "warning"]
-                + [n for n in site_context["notices"] if n["type"] == "info"]
-            )
-            report = f"Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}"
-            subject = f"{site['name']}: {report}"
-            # U-M-specific annual-billing subject + notice; only when the UMich plugin is enabled
-            # (this block reads the U-M portal config).  end_of_contract_year is date-driven, so
-            # without the UMich guard a non-U-M June-dated report crashed with KeyError('UMich').
-            if end_of_contract_year and umich_enabled():
-                subject = f"Time Sensitive: {site['name']} annual billing"
-                shortcode = sc.config["UMich"]["portal"]["sites"][site["name"]]["shortcode"]
-                annual_bill = float(plan_info[site_current_plan]["cost"])
-                sorted_notices.insert(
-                    0,
-                    build_annual_bill_upcoming_notice(
-                        site["name"], site["plan_name"], annual_bill, shortcode, portal_site_id
-                    ),
-                )
-            elif len(sorted_notices) > 0:
-                if sorted_notices[0]["type"] == "alert":
-                    subject = f"Action Required: {site['name']}: {sorted_notices[0]['short']} | {report}"
-                elif sorted_notices[0]["type"] == "warning":
-                    subject = f"Action Recommended: {site['name']}: {sorted_notices[0]['short']} | {report}"
-                # no subject prefix for info notices
-
-            # TODO: remove this section at the beginning of August 2026:
-            # U-M-specific annual-billing notice; only for institutions running the UMich
-            # plugin (it reads the U-M portal config).  Previously an unconditional `if True:`,
-            # which crashed every non-U-M / plugin-disabled run with KeyError('UMich').
-            if umich_enabled():
-                shortcode = sc.config["UMich"]["portal"]["sites"][site["name"]]["shortcode"]
-                annual_bill = float(plan_info[site_current_plan]["cost"])
-                sorted_notices.insert(
-                    0,
-                    build_annual_bill_in_progress_notice(
-                        site["name"], site["plan_name"], annual_bill, shortcode
-                    ),
-                )
-
             stuff_plans_contract(
                 site_context,
                 site_current_plan,
@@ -1519,8 +1423,14 @@ def main() -> None:
             )
 
             # Last per-site seam before rendering (full-report path only; --only-warn continued
-            # above).  No consumer yet -- the documented seam for future report-shaping hooks.
+            # above).  check.umich.annual_billing's two hooks run here, producing the billing
+            # keys the sort/subject helper wires in below; other future hooks may add notices.
             sc.invoke_hooks("site_pre_render", site_context)
+
+            # Sort + subject AFTER the phase (campaign I12): hooks that add notices now
+            # render, and the billing hooks' produced keys are wired in by the helper.
+            report = f"Pantheon Traffic Report, {end_date.strftime('%b %e, %Y')}"
+            sorted_notices, subject = sort_notices_and_subject(site_context, report)
 
             banner_cid = make_msgid(domain=sc.msgid_domain())
             chart_cid = make_msgid(domain=sc.msgid_domain())
