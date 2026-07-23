@@ -82,12 +82,19 @@ case "$ABS" in
 esac
 
 # --- Binary resolution: same fallback as ./run-tests's ruff_argv() -- the hook and the gate
-# MUST agree on the binary just as they agree on the rule sets (existing invariant, now
-# covering BOTH ruff passes below).  `ruff` is not on PATH in this environment; uvx is.
+# MUST agree on the binary AND version just as they agree on the rule sets (existing
+# invariant, now covering BOTH ruff passes below).  `ruff` is not on PATH in this
+# environment; uvx is.  The uvx fallback is PINNED to 0.15.22, mirroring run-tests's
+# ruff_argv() docstring: CAMPAIGN.md section 13 / decision D2 fixes the lint bar at
+# increment I0 and never shifts it mid-campaign, and ruff 0.16.0 graduated PLR0917 to
+# stable, which turns the broad gate red with no code change.  Upgrading is a deliberate
+# post-campaign decision, not something a `uvx` cache refresh may do silently.  If `ruff` is
+# on PATH instead, its version is NOT checked here -- a PATH-installed ruff must match the
+# pin above (0.15.22) or this hook can silently drift from the uvx fallback's guarantee.
 if command -v ruff >/dev/null 2>&1; then
     RUFF=(ruff)
 elif command -v uvx >/dev/null 2>&1; then
-    RUFF=(uvx ruff)
+    RUFF=(uvx ruff@0.15.22)
 else
     exit 0   # Upstream error: no linter.  Advisory hook, so stay quiet and let ./run-tests gate.
 fi

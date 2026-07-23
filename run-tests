@@ -23,13 +23,28 @@ def ruff_argv():
     """How to invoke ruff here, or None if it cannot be invoked at all.
 
     `ruff` is not necessarily on PATH (this repo installs deps with uv), so fall back to
-    `uvx ruff`.  Mirrors .claude/hooks/ruff-check.sh -- the two must agree on the binary
-    just as they agree on the rule set (both read pyproject.toml; neither passes --select).
+    `uvx ruff@0.15.22` -- PINNED, not `uvx ruff`.  Mirrors .claude/hooks/ruff-check.sh -- the
+    two must agree on the binary AND version just as they agree on the rule set (both read
+    pyproject.toml; neither passes --select).
+
+    WHY PINNED (CAMPAIGN.md section 13, decision D2): the campaign's lint bar is fixed at
+    increment I0 and never shifts mid-campaign.  ruff 0.16.0 graduated the preview rule
+    PLR0917 to stable, and the broad gate (ruff-broad.toml, select=ALL) newly fails against
+    it -- 9 findings in six files that were clean under 0.15.22.  An unpinned `uvx ruff`
+    would silently move the bar on the next `uvx` cache refresh, turning a clean tree red
+    with no code change (PD#14: an instrument -- the lint gate -- that changes verdict for
+    reasons outside the diff is exactly the kind of lying instrument that directive names).
+    Upgrading ruff is a deliberate post-campaign / ratchet-flip decision, made on purpose and
+    reviewed like any other ratchet change -- not something a cache refresh may do silently.
+    If `ruff` is on PATH instead (the `shutil.which("ruff")` branch below), it is trusted
+    as-is with NO version check -- a residual, accepted exposure.  Keep that branch (it's how
+    a real dev install runs faster than `uvx`), but whoever installs it must match the pin
+    above (0.15.22) or this gate can silently drift from the uvx fallback's guarantee.
     """
     if shutil.which("ruff"):
         return ["ruff"]
     if shutil.which("uvx"):
-        return ["uvx", "ruff"]
+        return ["uvx", "ruff@0.15.22"]
     return None
 
 
