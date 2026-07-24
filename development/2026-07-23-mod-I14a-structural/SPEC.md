@@ -101,6 +101,18 @@ the pure-builder seam, both already under test in the three files above. No new 
   keeps its qualified `dns_classify.<attr>` form, and the monkeypatch seam stays a
   single module object (**verified: no `from dns_classify import` exists anywhere**, so
   the `run_terminus` two-binding trap class does not arise).
+
+  > **Correction (I14b Task 1).** D-i14a-2's binding invariant is a single shared module
+  > object reached through a qualified `dns_classify.<attr>` call-site form — not the
+  > specific `import psh.dns_classify as dns_classify` alias syntax. That syntax was the
+  > correct choice pre-gate; once `check/pantheon_cdn_change/chain.py` came under the
+  > broad ruff gate at I14b, `PLR0402` mandated `from psh import dns_classify` there
+  > instead. Proof the invariant survives the syntax change: `import psh.dns_classify as
+  > a; from psh import dns_classify as b; a is b` → `True` (both forms bind the same
+  > `sys.modules` entry, so `tests/helpers/dnsfake.py`'s monkeypatch seam still
+  > intercepts every call site). `check/pantheon_cdn_change/chain.py:37` now reads `from
+  > psh import dns_classify`; every other site this deliverable touched is unaffected and
+  > keeps the alias form. Ledgered at I14b.
 - Config: `pyproject.toml:112` — drop `"*/dns_classify.py"` from
   `[tool.coverage.run] include` (now covered by `"*/psh/*"`); `ruff-broad.toml:15` —
   delete the `"dns_classify.py"` exclude line (the file is born-gated at its new home).
@@ -218,6 +230,14 @@ new test would duplicate (b) without adding a failure mode it can catch.
    importing `psh.dns_classify`.
 2. **dns_classify import form** — `import psh.dns_classify as dns_classify` (§2.2): keeps
    every qualified call site and the single-object patch seam byte-compatible.
+
+   > **Correction (I14b Task 1).** The decision's invariant is the single shared module
+   > object + qualified `dns_classify.<attr>` call sites, not the specific alias
+   > syntax — see the §2.2 correction note for the full proof and the one site (
+   > `check/pantheon_cdn_change/chain.py:37`) where the PLR0402-mandated `from psh import
+   > dns_classify` form now applies instead, once that file came under the broad ruff
+   > gate at I14b. Equivalent for the monkeypatch seam: `import psh.dns_classify as a;
+   > from psh import dns_classify as b; a is b` → `True`. Ledgered at I14b.
 3. **The re-export surface moves intact to `psh/cli.py`.** The alternative — repointing
    every `psh.<name>` test reference to real module homes — touches hundreds of sites
    across the grandfathered `tests/` tree for zero behavior gain; that cleanup belongs
