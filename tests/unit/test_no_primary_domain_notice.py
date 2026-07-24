@@ -15,6 +15,7 @@ def test_gate_true_returns_the_notice(psh):
     notice = psh.no_primary_domain_notice(SITE, ["a.example.com", "b.example.com"], "", False)
     assert notice is not None
     assert notice.code == "no-primary-domain"
+    assert notice.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     # The trailing empty csv field is real and load-bearing (SPEC I14c §2.1): the row has
     # always ended in a comma, so csv_extra carries one empty field.
     assert notice.csv_extra == ("",)

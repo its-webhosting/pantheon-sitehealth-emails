@@ -2052,3 +2052,170 @@ two-field `{site},{code}` form; 37 − 9 = 28), reproduced by
 required and which now produces every such figure in the I14c SPEC. The amendment's substance is
 unaffected — the field set still gains `csv_extra` for the same reason — but a ratified campaign
 document does not carry a wrong number silently (CAMPAIGN.md §7 obligation 4).
+
+## I14c — the `Notice` dict-form retirement (2026-07-24, commits `b3ffd29`…`b619b7d` + closing docs commit)
+
+Spec/plan: `development/2026-07-24-mod-I14c-notice/` (`SPEC.md` §8 carries the pasted
+acceptance; spec committed BEFORE implementation at `982589f`, its adversarial-review fold at
+`b3ffd29`, plan at `7affff8`; task reports under `.superpowers/sdd/`). Adversarial spec review
+(fresh-context `psh-reviewer`): APPROVE-WITH-FIXES round 1, **all 14 findings folded
+pre-implementation**. Per-task commits, each green, with per-task reviews after Tasks 1 and 2
+and a batched review of Tasks 3–5 (both PASS-WITH-FIXES; every finding folded in a labelled
+follow-up commit). Whole-branch review (fresh context): **SPEC PASS-WITH-FIXES + STANDARDS PASS-WITH-FIXES**, 12
+findings — the five pre-close ones fixed in the closing commit (below), the other seven
+ledgered to I14d (below). Full suite at close
+**including the live tier** (`ls ~/.terminus/cache/tokens/` → `markmont@umich.edu`) =
+**1055 passed / 1 skipped**, 107 snapshots, both gates, EXIT=0.
+
+- **Delivered (SPEC §1.1 A–F):** all **37** dict-form notice producers across 20 files now
+  construct a `psh.notice.Notice`; `SiteContext.add_notice` accepts nothing else (a dict raises
+  a named `TypeError`); the six-key **render dict** stays the storage form, built by the one
+  public projection `SiteContext.notice_to_dict`. The reserved §6 field-set amendment landed as
+  **`csv_extra: tuple[str, ...]`** (28 of the 37 producers carry extra csv fields), joined after
+  `site,code` by the projection — so **the site name now comes from the `SiteContext`, never
+  from the producer**. All **36** roster codes are registered at import through `NOTICE_*`
+  constants and pinned by the new `tests/integration/test_notice_roster.py`.
+
+- **Byte-identity (the increment's prime rule, held):** the four e2e goldens are byte-identical
+  across the whole increment (`git diff 982589f -- tests/e2e/__snapshots__/` empty), and the
+  ONLY snapshot change anywhere is the **7 sanctioned added `'icon'` lines** in
+  `tests/integration/__snapshots__/test_dns_notice_render.ambr` (SPEC §3, enumerated in advance:
+  those five builders omit `icon`, and the test snapshotted the builder return *before*
+  `add_notice` would fill it; it now snapshots the projection, which always emits it). Zero
+  deletions in that diff. No notice csv value changed.
+
+- **Deviations from CAMPAIGN.md:** one, amended in the document this commit — **§3.5's
+  "checks and plugins import only `sc`" gains a single sanctioned exception**:
+  `check/pantheon_cdn_change/notices.py` imports `Notice`/`Severity`/`registry` directly from
+  `psh.notice`. That module is deliberately pure and
+  `tests/unit/test_pantheon_cdn_change_notices.py::test_notices_module_is_pure` asserts its
+  namespace holds exactly one module object; measured, `import psh.notice` adds 18 stdlib
+  modules where `import script_context` adds 276 (sqlalchemy, rich, html2text, all of `psh`).
+  `psh/notice.py` is itself pure, so the exception introduces no cycle. Every other `check/`
+  module uses `sc.Notice`/`sc.Severity`/`sc.registry`. Extending it needs its own amendment.
+  SPEC-level decisions D-i14c-1…11 all landed as specced.
+
+- **Contract/config/sc additions:** **`sc.registry`** (via the top-of-`script_context.py`
+  `from psh.notice import Notice, Severity, registry` import — the I3 mechanism; added to
+  CLAUDE.md's façade list and to `test_house_rules.py`'s `SC_FACADE_NAMES`, which is what can
+  actually go red). No new contract keys, no config keys. `annual_bill_upcoming` keeps its
+  render-dict type — the builder returns a `Notice` and the hook publishes
+  `site_context.notice_to_dict(...)`, so `sort_notices_and_subject` and its tests are untouched
+  (SPEC §2.5).
+
+- **What the increment fixed on the way through:**
+  - `check_drupal_module`'s hand-rolled `level`→icon map (a duplicate of `sc.icon` that would
+    have shipped a warning triangle on an `alert`) is gone; `Severity(level)` derives it from
+    the one map and raises `ValueError` on an unknown level. Both reachable levels
+    (`warning`, and `info` via `check/umich/cloudflare_cms.py:31`) are byte-preserved.
+  - **26 explicit icon literals deleted** (measured equal to the severity default); exactly one
+    custom icon survives, the 💵 on `annual-bill`, and now has its own pin.
+  - `wp_error`/`drush_error`'s second parameter renamed `code` → `operation`: after conversion
+    it sat next to `Notice.code` meaning something else entirely (PD#11).
+  - `tests/unit/test_php_eol_notice.py` loaded a producing module at **module import**, which
+    registers before `reset_sc` snapshots the registry and so cannot be undone — moved into a
+    function-scoped fixture. That is now a stated invariant: **no producing module may be
+    executed outside a function-scoped fixture or test body.**
+  - `sitelens-url-paths` had no csv assertion anywhere in the suite (and no severity
+    assertion); both now exist.
+  - A stale test fake in `tests/integration/test_check_umich_cloudflare_cms.py` had been
+    returning a dict where the real builder returns `Notice`s — green but wrong-shaped for four
+    tasks; caught by the retirement.
+  - `check/cloudflare/notices.py`'s `build_cache_notices` lost its now-dead `site_name`
+    parameter, and with it a line-scoped `# noqa: ARG001` that was silently covering two other
+    parameters as well.
+
+- **Instruments (PD#14), both committed under
+  `development/2026-07-24-mod-I14c-notice/tools/`:** `notice_inventory.py` produced every
+  measured figure in the SPEC (the drafted "34 icons"/"22 extra-field csvs" were both wrong and
+  were corrected from it), and its `--gate` is the close gate — AST-based because a
+  `grep '"csv":'` is quote-blind and would have missed `check/umich/sitelens.py`.
+  `literal_equality.py` is the Invariant-8 proof: an `ast.dump` multiset over notice-body
+  literals, with a built-in `--self-test` that re-indents a real literal in memory and asserts
+  the comparison goes red (after an unparse/reparse control). **Both instruments were found
+  defective mid-increment and fixed** — the first version could not see `sc.Notice(...)` calls
+  (an `ast.Name`-only match), so it reported "identical" for every converted `check/` file while
+  seeing zero literals in it; and a zero-literal file counted toward the `N/N` pass tally. Final
+  state: 20/20 converted files byte-identical from the increment base, 2 files reported
+  separately as having no literals.
+
+- **Discovered tasks (dispositions):**
+  - `uvx pyright@1.1.411` (the `./run-tests` fallback when no pyright is on PATH) runs in an
+    isolated environment with none of the project's dependencies and reports **34 false
+    `reportMissingImports`**. The venv binary the gate normally resolves is correct. Loud, not
+    silent, so not a defect in the gate — but the fallback is useless in practice.
+    → **README TODO / I14d** (it belongs with the pinned-tool discussion I14b started).
+  - Five now-unused `site_name` parameters were reviewed; four in `check/dns/notices.py` are
+    **kept** deliberately (a five-builder family called at one seam, one of which genuinely uses
+    it, keeps a uniform signature — `# noqa: ARG001` with the reason at the first) and the
+    cloudflare one was dropped. → **done here**.
+  - `pyproject.toml`'s `[tool.pyright]` still includes only `psh/`, so the 24 converted `check/`
+    producers are un-type-checked; `Notice.__post_init__`'s `csv_extra` element check is the
+    runtime stand-in. → the existing post-campaign README TODO (typed `sc` stubs + pyright
+    widening) already covers it; **no new item**.
+
+- **Whole-branch review findings fixed at close (5):**
+  1. **The convergence finding, and the increment's own lesson.** The Tasks-3–5 review found
+     that `sitelens-url-paths` had no severity assertion; Task 6 pinned that one and its comment
+     declared it "the only notice code" in that state. It was not: the whole-branch review
+     measured **six more** (`composer-update`, the three smells, `no-primary-domain`,
+     `drupal7-eol`) whose severity this increment rewrote with nothing asserting it, none of
+     them in any golden. Severity drives `sort_notices_and_subject`, so a silent demotion
+     changes a real report's notice order **and its email subject prefix** ("Action Required" →
+     "Action Recommended") with every test green. Root cause: SPEC §4 measured "every other code
+     appears in at least one test file" — *appearing in* is not *asserted by* (PD#14 exactly).
+     All six pinned, each shown red by flipping the producer's severity; the false comment
+     corrected. This is the `fix-the-class-not-the-instance` memory note, missed by a review
+     that had itself just named the class.
+  2. SPEC §2.2's "those parameters stay: the builders' console messages use them" was falsified
+     by the Tasks-3–5 fold (which dropped `build_cache_notices`'s `site_name`) — corrected
+     **in place with the correction recorded**, per `prompts/adversarial-review.md`, not
+     silently rewritten.
+  3. SPEC §8 promised pasted acceptance output and carried a stale pre-run expectation
+     (`1023`); the real seven-command output is now pasted there.
+  4. `notice_inventory.py --gate` did not enforce the contract its own docstring states — it
+     excluded *every* dict in `script_context.py` rather than requiring **exactly one**, so a
+     second hand-built render dict in the very file that owns the projection would have passed
+     silently. **The third defect found in this increment's two instruments**, and the same
+     failure mode each time: a tool printing a verdict it had not actually checked.
+  5. `psh/notice.py`'s module docstring stated "checks/plugins reach Notice/Severity via sc"
+     without the sanctioned exception — a reader arriving at the type's definition was told a
+     rule the tree violates.
+
+- **Ledgered to I14d (7 whole-branch findings, none blocking):**
+  - `Notice.__post_init__` validates `csv_extra` element types but not `severity`, on identical
+    reasoning (an ungated `check/` module passing `severity="warn"` surfaces as an anonymous
+    `KeyError: 'warn'` from the projection). Latent today — every producer passes an enum member.
+  - Nothing structurally requires a `Notice.code` to be **registered**: the roster test compares
+    the registry against the roster, and an unregistered code never enters the registry, so a
+    future producer writing `code="whatever"` passes everything. CLAUDE.md states the rule as if
+    it were enforced.
+  - The registration comment block is 17 near-identical copies (~75 lines) now that CLAUDE.md
+    carries the rationale, with two visible drifts (a sentence present in two Task-4 single-code
+    modules but not the nine other single-code ones; every `check/` copy ending "added at I14c
+    Task 6" on files whose block landed at Task 3/4/5). Collapse with the CLAUDE.md rewrite.
+  - CLAUDE.md's "every producing module registers … through `NOTICE_* = sc.registry.register(...)`"
+    is wrong for five modules (the four in `psh/`, which cannot use the façade, plus the
+    cdn-change exception).
+  - Three stale test comments describing a fill `add_notice` no longer performs, and one section
+    banner naming `multisite-check` as a notice code when it is the `operation` argument — the
+    exact collision D-i14c-8 renamed the parameter to prevent.
+  - `tests/unit/test_cachecheck_consolidation.py`'s `_CACHED` executes a producing module once
+    per **session** while satisfying the §2.3 invariant literally. Fails loud if it ever
+    collides, but the invariant as stated is necessary, not sufficient — restate it as "and no
+    producing module may be cached across tests", or drop `_CACHED`.
+  - `Severity(level)`'s new named `ValueError` has no test; SPEC §5(1)'s "exhaustive" list
+    over-included two files that correctly needed no change; and `literal_equality.py`'s
+    disclosed blind spot ("field renames are invisible") is narrower than the truth — the
+    multiset is per file across `html|text|short` combined, so a producer whose `html` and
+    `text` bodies were *swapped* also compares equal (covered in practice by the `.ambr`
+    pins, but the tool should say so).
+
+- **Open questions for I14d:** proceed per CAMPAIGN.md §11 row I14d (config-migration doc
+  recording "no key changes required" with its audit trail; sample-toml refresh; the wholesale
+  docs/README/CLAUDE.md rewrite; ledger fully resolved; retrospective + the §17 closing audit).
+  Inherited specifically: **§17 Q4 is now answerable for `NoticeRegistry`** — it is load-bearing,
+  not dead façade surface; CLAUDE.md's "Notices vs. news" bullet was rewritten factually here but
+  is I14d's to re-integrate; the two `tools/` instruments are increment artifacts under
+  `development/2*` (ruff-excluded) and I14d should decide whether anything in them deserves to
+  become a permanent test.

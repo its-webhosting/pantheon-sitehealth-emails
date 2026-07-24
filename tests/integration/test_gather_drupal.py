@@ -170,6 +170,11 @@ def test_d8_composer_dry_run_fatal_adds_alert_and_no_smell(gateway, reset_sc, mo
     ctx = _ctx(reset_sc)
     result = gather_drupal(SITE_D8, LIVE, ctx)
     assert [n["csv"] for n in ctx["notices"]] == [f"{SITE_D8['name']},composer-update"]
+    # Severity, not just the csv row: I14c rewrote 'type': 'alert' -> severity=Severity.ALERT
+    # here, and severity drives sort_notices_and_subject's ordering AND the email subject
+    # prefix ("Action Required" vs "Action Recommended"), which no golden covers for this
+    # notice (whole-branch review finding 1).
+    assert ctx["notices"][0]["type"] == "alert"
     assert result.composer_smell == ""
 
 

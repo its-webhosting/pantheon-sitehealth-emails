@@ -19,6 +19,7 @@ def test_no_smells_returns_empty_list(psh):
 def test_wp_smell_alone(psh):
     (n,) = psh.build_smell_notices("s", "wp broke", "", "")
     assert n.code == "wp-smell"
+    assert n.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     assert n.csv_extra == (json.dumps("wp broke").replace(",", "\\,"),)
     assert "wp broke" in n.html and "wp broke" in n.text
 
@@ -26,6 +27,7 @@ def test_wp_smell_alone(psh):
 def test_drush_smell_alone(psh):
     (n,) = psh.build_smell_notices("s", "", "drush broke", "")
     assert n.code == "drush-smell"
+    assert n.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     assert n.csv_extra == (json.dumps("drush broke").replace(",", "\\,"),)
     assert "drush broke" in n.html and "drush broke" in n.text
 
@@ -35,6 +37,7 @@ def test_composer_smell_alone_is_reported(psh):
     # smell without a drush smell was silently dropped.
     (n,) = psh.build_smell_notices("s", "", "", "composer broke")
     assert n.code == "composer-smell"
+    assert n.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     assert n.csv_extra == (json.dumps("composer broke").replace(",", "\\,"),)
 
 

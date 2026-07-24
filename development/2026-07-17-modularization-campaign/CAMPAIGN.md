@@ -177,6 +177,18 @@ listed in CLAUDE.md's runtime-exposed block, re-exporting from `psh/` modules as
 move. NEVER remove or rename an `sc` attribute mid-campaign; additions are fine. The
 house-rules test suite gains an assertion that every documented `sc` name exists (I2).
 
+**One sanctioned exception, added at I14c** (amendment; see LEDGER I14c):
+`check/pantheon_cdn_change/notices.py` imports `Notice`/`Severity`/`registry` **directly from
+`psh.notice`**, not via `sc`. That module is deliberately pure —
+`tests/unit/test_pantheon_cdn_change_notices.py::test_notices_module_is_pure` asserts its
+namespace holds exactly one module object (`html`) — and the two imports are not equivalent in
+cost: `import psh.notice` pulls in 18 stdlib modules, `import script_context` pulls in 276
+(sqlalchemy, rich, html2text, the whole `psh` package). `psh/notice.py` is itself pure and
+imports nothing from `script_context`, so the exception introduces no cycle and no coupling the
+façade rule exists to prevent. Every other `check/` module reaches the type and the registry
+through `sc.Notice` / `sc.Severity` / `sc.registry`. Extending this exception to a second module
+requires its own amendment.
+
 ## 4. Phases, hooks, and the DAG
 
 Phases stay the coarse spine: `setup`, `site_pre`, `site_post_traffic`, `site_post_dns`,

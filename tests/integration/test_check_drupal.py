@@ -190,6 +190,11 @@ def test_drupal_7_gets_eol_alert_and_tag1_delegation(d7_eol_mod, reset_sc):
     d7_eol_mod.check_d7_eol(ctx)
     codes = [n["csv"] for n in ctx["notices"]]
     assert f"{SITE_NAME},drupal7-eol" in codes
+    # Severity pin: see the note in test_gather_drupal.py -- a silent demotion to "warning"
+    # would change this alert's sort position and the email subject prefix, and nothing else
+    # in the suite or the goldens would notice (whole-branch review finding 1).
+    eol = next(n for n in ctx["notices"] if n["csv"] == f"{SITE_NAME},drupal7-eol")
+    assert eol["type"] == "alert"
     assert f"{SITE_NAME},not-installed,tag1_d7es" in codes
 
 

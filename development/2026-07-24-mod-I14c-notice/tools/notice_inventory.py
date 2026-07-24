@@ -90,11 +90,17 @@ def main() -> int:
 
     found = producers()
     if args.gate:
-        remaining = [p for p in found if not p["where"].startswith("script_context.py:")]
+        # BOTH halves of the contract, or the gate does not enforce what its docstring says:
+        # a SECOND hand-built render dict inside script_context.py -- the single most likely
+        # place for one, since that is where the projection lives -- would otherwise pass
+        # silently (whole-branch review finding 4; the third defect in this instrument family).
+        projection = [p for p in found if p["where"].startswith("script_context.py:")]
+        remaining = [p for p in found if p not in projection]
         for producer in remaining:
             print(f"STILL A DICT PRODUCER: {producer['where']}  {producer['csv']}")
         print(f"dict-form producers outside script_context.py: {len(remaining)} (expected 0)")
-        return 1 if remaining else 0
+        print(f"projection dicts in script_context.py: {len(projection)} (expected 1)")
+        return 1 if remaining or len(projection) != 1 else 0
 
     for producer in found:
         icon = "derived" if producer["icon"] is None else (

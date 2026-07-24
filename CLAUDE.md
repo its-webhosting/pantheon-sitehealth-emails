@@ -478,7 +478,7 @@ against it, so drift on either side goes red:
   `site,code,*csv_extra`. **The site name comes from the `SiteContext`, never from the
   producer**, so it cannot be mismatched; `csv_extra` is the tuple of csv fields that follow
   `site,code` (e.g. `turned-off,{name}` → `csv_extra=(name,)`), and its elements MUST already
-  be strings (`Notice.__post_init__` raises a naming `TypeError` otherwise — the projection does
+  be strings (`Notice.__post_init__` raises a named `TypeError` otherwise — the projection does
   not coerce, so `f"{savings:.2f}"`/`str(n)` stays visible at the producer). `order`
   (`prepend`/`first` → front) is honored by `add_notice` and is *not* stored in the render dict.
   `code` is enforced unique at import time by `psh.notice.registry` (`NoticeRegistry.register`,

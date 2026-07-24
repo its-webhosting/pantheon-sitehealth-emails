@@ -205,8 +205,15 @@ Three consequences, each deliberate:
    `check/wordpress/ocp.py:29`, `check/wordpress/favicon.py:25`, `check/drupal/multisite.py:30`,
    `check/umich/drupal_ua.py:50,65`, `check/umich/cloudflare_cms.py:36`,
    `check/cloudflare/cache.py:276`, `check/pantheon_cdn_change/hook.py:37`,
-   `check/pantheon/php_eol.py:75`, `check/umich/sitelens.py:88`, `psh/cli.py:874`. Those
-   parameters stay: the builders' console messages use them.
+   `check/pantheon/php_eol.py:75`, `check/umich/sitelens.py:88`, `psh/cli.py:874`.
+   **CORRECTED at close** (this sentence originally read "those parameters stay: the builders'
+   console messages use them", which the implementation falsified — recorded rather than
+   silently fixed, per `prompts/adversarial-review.md`): most builders keep the parameter
+   because their HTML or console text uses it; `check/cloudflare/notices.py`'s
+   `build_cache_notices` had no other use and **dropped** it at the Tasks-3–5 review fold; the
+   four `check/dns/notices.py` builders keep an **unused** one under `# noqa: ARG001` so a
+   five-builder family called at one seam keeps one uniform signature (`not_in_dns_notice`
+   genuinely uses it).
 2. **`order` is no longer stored in the render dict.** `add_notice` was its only reader (the
    other two `'order'` hits in the tree are `add_news_item`'s and the projection's), and no
    producer sets a non-default order today.
@@ -541,6 +548,37 @@ python development/2026-07-24-mod-I14c-notice/tools/literal_equality.py --self-t
     <spec-commit> psh/gather.py                                                  # the I2a red demo
 ```
 
-Expected at close: the I14b close counts (**1023 passed / 1 skipped** with the live tier; fast
-tier 1021/1/2) **plus** the new tests of §5(3); zero golden bytes changed; exactly seven
-`.ambr` lines added; both gates green; `--gate` reporting `0` surviving dict producers.
+**Measured at close (run and pasted, 2026-07-24):**
+
+```
+$ ./run-tests                       # live tier present (~/.terminus/cache/tokens/ -> markmont@umich.edu)
+LLM_SUMMARY passed=1055 failed=0 error=0 skipped=1 xfailed=0 xpassed=0
+107 snapshots passed.
+1055 passed, 1 skipped, 15 warnings in 43.53s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+EXIT=0
+
+$ git diff 982589f -- tests/e2e/__snapshots__/ | wc -l
+0
+
+$ git diff 982589f --stat -- '*.ambr'
+ tests/integration/__snapshots__/test_dns_notice_render.ambr | 7 +++++++
+ 1 file changed, 7 insertions(+)          # seven added 'icon' lines, zero deletions
+
+$ python development/2026-07-24-mod-I14c-notice/tools/notice_inventory.py --gate
+dict-form producers outside script_context.py: 0 (expected 0)
+projection dicts in script_context.py: 1 (expected 1)
+exit=0
+
+$ python development/2026-07-24-mod-I14c-notice/tools/literal_equality.py 982589f \
+      $(git diff --name-only 982589f -- 'psh/*.py' 'check/**/*.py')
+20/20 files with byte-identical notice literals (2 file(s) with no notice literals, excluded)
+
+$ python development/2026-07-24-mod-I14c-notice/tools/literal_equality.py --self-test 982589f psh/gather.py
+SELF-TEST PASSED: re-indenting one literal in psh/gather.py makes the comparison report
+2 changed literal(s) -- the check can go red
+```
+
+The 1055 is the I14b close count (1023) plus this increment's 32 new tests. The final gate
+numbers, and the per-task evidence, are also recorded in the LEDGER I14c entry.

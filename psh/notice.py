@@ -2,7 +2,8 @@
 
 A typed, frozen replacement for the ad-hoc notice dicts.  Pure: imports nothing from script_context,
 so the sc facade and every psh/ module can import it without a cycle; checks/plugins reach
-Notice/Severity via sc.  Adoption was per-increment (CAMPAIGN.md §6) and completed at I14c: every
+Notice/Severity via sc -- with one sanctioned exception, check/pantheon_cdn_change/notices.py,
+whose purity test pins its imported-module set (CAMPAIGN.md §3.5 as amended at I14c).  Adoption was per-increment (CAMPAIGN.md §6) and completed at I14c: every
 producer in psh/, check/ and plugin/ builds a Notice, SiteContext.add_notice accepts nothing else,
 and this module's `csv_extra` field is that increment's CAMPAIGN.md §6 amendment.  The roster of
 codes registered below is pinned by tests/integration/test_notice_roster.py.
