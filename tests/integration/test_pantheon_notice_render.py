@@ -71,6 +71,6 @@ def test_updates_notice_snapshots(psh, reset_sc, request, monkeypatch, snapshot,
 def test_php_eol_notice_snapshots(psh, reset_sc, request, snapshot, version, variant):  # noqa: PLR0913 -- parametrized snapshot test; fixtures + parametrize values
     mod = load_check_module(psh, "pantheon", "php_eol", f"pantheon_php_snap_{variant}", request)
     n = mod.build_php_eol_notice(SITE, version)
-    assert n["message"] == snapshot
-    assert n["text"] == snapshot
-    assert n["short"] == snapshot
+    assert n.html == snapshot
+    assert n.text == snapshot
+    assert n.short == snapshot

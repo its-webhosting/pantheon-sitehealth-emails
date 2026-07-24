@@ -19,6 +19,14 @@ import html
 from rich.pretty import pprint
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).
+NOTICE_UPDATES_ADDONS = registry.register(
+    "updates-addons", description="pending plugin/theme/module updates")
 
 
 def check_add_on_updates(site_context):
@@ -63,14 +71,14 @@ def check_add_on_updates(site_context):
 
 """
         site_context.add_notice(
-            {
-                "type": "warning",
-                "icon": "&#x26A0;",  # warning sign
-                "csv": f"{site['name']},updates-addons,{num_updates}",
-                "short": f"{num_updates} pending add-on updates"
+            sc.Notice(
+                severity=sc.Severity.WARNING,
+                code=NOTICE_UPDATES_ADDONS,
+                csv_extra=(str(num_updates),),
+                short=f"{num_updates} pending add-on updates"
                 if num_updates > 1
                 else "1 pending add-on update",
-                "message": f"""
+                html=f"""
 <p><strong>{site["name"]}</strong> has {num_updates} pending add-on updates.</p>
 <p>Please update these add-ons in the site's Dev environment and
 <a href="https://docs.pantheon.io/pantheon-workflow">deploy them to the Live environment</a>.
@@ -83,7 +91,7 @@ Uninstall any add-ons you are not using to improve your site's security, size, a
 </table>
 </div>
 """,
-                "text": f"""
+                text=f"""
 {site["name"]} has {num_updates} pending add-on updates
 <https://dashboard.pantheon.io/sites/{site["id"]}#dev/code>.
 Please update these add-ons in the site's Dev environment and deploy
@@ -98,5 +106,5 @@ A variety of support options are available.
 
 {update_bullet_list}
 """,
-            }
+            )
         )

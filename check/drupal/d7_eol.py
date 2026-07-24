@@ -1,6 +1,15 @@
 """The Drupal 7 end-of-life alert + tag1_d7es module check (campaign I10, from B35)."""
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).  The tag1_d7es module notice
+# below is built by sc.check_drupal_module, which registers its own codes in psh/gather.py.
+NOTICE_DRUPAL7_EOL = registry.register(
+    "drupal7-eol", description="Drupal 7 extended support ends December 2026")
 
 
 def check_d7_eol(site_context):
@@ -10,19 +19,18 @@ def check_d7_eol(site_context):
         return
     site = site_context["site"]
     site_context.add_notice(
-        {
-            "type": "alert",
-            "icon": "&#x1F6A8;",  # police car light
-            "csv": f"{site['name']},drupal7-eol",
-            "short": "Migrate off Drupal 7 ASAP",
-            "message": f"""
+        sc.Notice(
+            severity=sc.Severity.ALERT,
+            code=NOTICE_DRUPAL7_EOL,
+            short="Migrate off Drupal 7 ASAP",
+            html=f"""
 <p><b>Drupal 7 Extended Support for {site["name"]} will end in December 2026.</b>
 Please migrate this site's content to a new site as soon as possible and
 then switch {site["name"]} to the Sandbox plan. Plan on a large amount of
 time being needed to design the new website, set it up, migrate content, and
 then launch the new website before December.</p>
                 """,
-            "text": f"""
+            text=f"""
 Drupal 7 Extended Support for {site["name"]} will end in
 December 2026.  Please migrate this site's content to a new site
 as soon as possible and then switch {site["name"]} to
@@ -30,7 +38,7 @@ the Sandbox plan. Plan on a large amount of time being needed to
 design the new website, set it up, migrate content, and then
 launch the new website before December.
                 """,
-        }
+        )
     )
     site_context.add_notices(
         sc.check_drupal_module(

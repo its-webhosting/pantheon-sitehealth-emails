@@ -32,6 +32,22 @@ BODY_KEYS = ("message", "text", "short")
 BODY_KWARGS = ("html", "text", "short")
 
 
+def is_notice_call(node: ast.AST) -> bool:
+    """True for `Notice(...)` AND for the facade form `sc.Notice(...)`.
+
+    check/ modules reach the type through sc (CAMPAIGN.md section 3.5, "checks and plugins
+    import only sc"), so the call node is an Attribute, not a Name.  Matching only Name would
+    make this instrument blind to every converted check/ producer while still printing a
+    verdict -- PD#14's "your instruments can lie" in its purest form.  Added at I14c Task 3,
+    the first task to convert a check/ package.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id == "Notice") or (
+        isinstance(func, ast.Attribute) and func.attr == "Notice")
+
+
 def literal_nodes(source: str) -> list[ast.expr]:
     """Every notice-body literal node in `source`, dict form and Notice form alike."""
     nodes: list[ast.expr] = []
@@ -42,7 +58,7 @@ def literal_nodes(source: str) -> list[ast.expr]:
                      if isinstance(k, ast.Constant) and isinstance(k.value, str)}
             if "csv" in pairs:
                 nodes.extend(pairs[key] for key in BODY_KEYS if key in pairs)
-        elif isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Notice":
+        elif is_notice_call(node):
             nodes.extend(kw.value for kw in node.keywords if kw.arg in BODY_KWARGS)
     return nodes
 

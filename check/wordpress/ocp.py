@@ -5,6 +5,14 @@ environment's OCP config via a WP-CLI eval.  Rebinds site_context["wp_smell"] on
 non-fatal stderr -- the one sanctioned mutate-during-phase contract key (SPEC D-i9-3)."""
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).
+NOTICE_OCP_CONFIG = registry.register(
+    "ocp-config-fix-needed", description="Object Cache Pro analytics persistence needs fixing")
 
 
 def check_ocp_config(site_context):
@@ -38,12 +46,11 @@ def check_ocp_config(site_context):
                 "true"
             ):
                 site_context.add_notice(
-                    {
-                        "type": "alert",
-                        "icon": "&#x1F6A8;",  # police car light
-                        "csv": f"{site['name']},ocp-config-fix-needed",
-                        "short": "Fix Object Cache Pro configuration",
-                        "message": '<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>',
-                        "text": "Please fix this site's Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config",
-                    }
+                    sc.Notice(
+                        severity=sc.Severity.ALERT,
+                        code=NOTICE_OCP_CONFIG,
+                        short="Fix Object Cache Pro configuration",
+                        html='<p>Please <a href="https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config">fix this site\'s Object Cache Pro configuration</a>.</p>',
+                        text="Please fix this site's Object Cache Pro configuration: https://docs.pantheon.io/release-notes/2025/10/updated-ocp-config",
+                    )
                 )

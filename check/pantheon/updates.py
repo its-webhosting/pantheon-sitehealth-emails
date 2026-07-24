@@ -7,6 +7,19 @@ import datetime
 from rich.pretty import pprint
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered, and a second register() of
+# the same code raises DuplicateNoticeCodeError.  `registry` comes from psh.notice rather
+# than sc because sc.registry does not exist yet -- I14c Task 6 adds it and repoints every
+# check/ module (CAMPAIGN.md section 3.5).
+NOTICE_UPDATES_INFO = registry.register(
+    "updates-info", description="unapplied upstream updates, newest tier (<= 1 week)")
+NOTICE_UPDATES_WARNING = registry.register(
+    "updates-warning", description="unapplied upstream updates, middle tier (<= 1 month)")
+NOTICE_UPDATES_ALERT = registry.register(
+    "updates-alert", description="unapplied upstream updates, oldest tier (> 1 month)")
 
 
 def check_upstream_updates(site_context):
@@ -56,14 +69,14 @@ def check_upstream_updates(site_context):
 """
             if oldest_update_days <= 7:  # noqa: PLR2004 -- verbatim age tier from B38 (<=1wk = info)
                 site_context.add_notice(
-                    {
-                        "type": "info",
-                        "icon": "&#x1F50E;",  # magnifying glass
-                        "csv": f"{site['name']},updates-info,{num_updates},{oldest_update_days}",
-                        "short": f"{num_updates} pending Pantheon updates"
+                    sc.Notice(
+                        severity=sc.Severity.INFO,
+                        code=NOTICE_UPDATES_INFO,
+                        csv_extra=(str(num_updates), str(oldest_update_days)),
+                        short=f"{num_updates} pending Pantheon updates"
                         if num_updates > 1
                         else "1 pending Pantheon update",
-                        "message": f"""
+                        html=f"""
 <p><strong>{site["name"]}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site["id"]}#dev/code">{num_updates} pending recent updates from Pantheon</a>.</p>
 <div class="container">
@@ -76,7 +89,7 @@ def check_upstream_updates(site_context):
 <a href="https://docs.pantheon.io/pantheon-workflow">deploy updates</a>,
 <a href="https://its.umich.edu/computing/web-mobile/pantheon/support">get support</a>.</p>
 """,
-                        "text": f"""
+                        text=f"""
 {site["name"]} has {num_updates} pending recent updates from Pantheon
 <https://dashboard.pantheon.io/sites/{site["id"]}#dev/code>.
 
@@ -86,18 +99,18 @@ How to:
   * deploy updates <https://docs.pantheon.io/pantheon-workflow>,
   * get support <https://its.umich.edu/computing/web-mobile/pantheon/support>
 """,
-                    }
+                    )
                 )
             elif oldest_update_days <= 30:  # noqa: PLR2004 -- verbatim age tier from B38 (<=1mo = warning)
                 site_context.add_notice(
-                    {
-                        "type": "warning",
-                        "icon": "&#x26A0;",  # warning sign
-                        "csv": f"{site['name']},updates-warning,{num_updates},{oldest_update_days}",
-                        "short": f"{num_updates} pending Pantheon updates"
+                    sc.Notice(
+                        severity=sc.Severity.WARNING,
+                        code=NOTICE_UPDATES_WARNING,
+                        csv_extra=(str(num_updates), str(oldest_update_days)),
+                        short=f"{num_updates} pending Pantheon updates"
                         if num_updates > 1
                         else "1 pending Pantheon update",
-                        "message": f"""
+                        html=f"""
 <p><strong>{site["name"]}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site["id"]}#dev/code">{num_updates} pending updates from Pantheon</a>, the oldest
 from {oldest_update_days} days ago.</p>
@@ -111,7 +124,7 @@ from {oldest_update_days} days ago.</p>
 </table>
 </div>
 """,
-                        "text": f"""
+                        text=f"""
 {site["name"]} has {num_updates} pending updates from Pantheon
 <https://dashboard.pantheon.io/sites/{site["id"]}#dev/code>, the
 oldest from {oldest_update_days} days ago. Please apply these updates
@@ -122,18 +135,18 @@ A variety of support options are available.
 
 {update_bullet_list}
 """,
-                    }
+                    )
                 )
             else:
                 site_context.add_notice(
-                    {
-                        "type": "alert",
-                        "icon": "&#x1F6A8;",  # police car light
-                        "csv": f"{site['name']},updates-alert,{num_updates},{oldest_update_days}",
-                        "short": f"needs maintenance: {num_updates} Pantheon updates, oldest {oldest_update_days} days old"
+                    sc.Notice(
+                        severity=sc.Severity.ALERT,
+                        code=NOTICE_UPDATES_ALERT,
+                        csv_extra=(str(num_updates), str(oldest_update_days)),
+                        short=f"needs maintenance: {num_updates} Pantheon updates, oldest {oldest_update_days} days old"
                         if num_updates > 1
                         else f"needs maintenance: 1 Pantheon update, {oldest_update_days} days old",
-                        "message": f"""
+                        html=f"""
 <p><strong>{site["name"]}</strong> has
 <a href="https://dashboard.pantheon.io/sites/{site["id"]}#dev/code">{num_updates} pending updates from Pantheon</a>, the oldest
 from {oldest_update_days} days ago.</p>
@@ -151,7 +164,7 @@ support through either Pantheon or ITS</a>.</p>
 </table>
 </div>
 """,
-                        "text": f"""
+                        text=f"""
 {site["name"]} has {num_updates} pending updates from Pantheon
 <https://dashboard.pantheon.io/sites/{site["id"]}#dev/code>, the
 oldest from {oldest_update_days} days ago.
@@ -172,7 +185,7 @@ support through either Pantheon or ITS.
 
 {update_bullet_list}
 """,
-                    }
+                    )
                 )
 
     else:

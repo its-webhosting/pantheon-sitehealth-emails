@@ -8,6 +8,14 @@ Still hardcoded U-M: the notice body's its.umich.edu link moved verbatim from B3
 (Invariant 8; de-U-M-ifying it is post-campaign work, CLAUDE.md still-hardcoded-U-M list)."""
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).
+NOTICE_NO_FAVICON = registry.register(
+    "no-favicon", description="no /favicon.ico file in the live environment")
 
 
 def check_favicon(site_context):
@@ -37,12 +45,11 @@ def check_favicon(site_context):
         and len(site_context["fqdns_not_behind_cloudflare"]) > 0
     ):
         site_context.add_notice(
-            {
-                "type": "warning",
-                "icon": "&#x26A0;",  # warning sign
-                "csv": f"{site['name']},no-favicon",
-                "short": "add favicon.ico file",
-                "message": '<p><a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Put this site behind Cloudflare</a> or add a <a href="https://en.wikipedia.org/wiki/Favicon"><code>/code/favicon.ico</code> file</a> to lower Pantheon visitor numbers and increase the site\'s traffic capacity.</p>',
-                "text": "Put this site behind Cloudflare\n<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>\nor add a /code/favicon.ico file\n<https://en.wikipedia.org/wiki/Favicon>\nto lower Pantheon visitor numbers and increase the amount of traffic the site can handle at any time.",
-            }
+            sc.Notice(
+                severity=sc.Severity.WARNING,
+                code=NOTICE_NO_FAVICON,
+                short="add favicon.ico file",
+                html='<p><a href="https://its.umich.edu/computing/web-mobile/cloudflare/getting-started">Put this site behind Cloudflare</a> or add a <a href="https://en.wikipedia.org/wiki/Favicon"><code>/code/favicon.ico</code> file</a> to lower Pantheon visitor numbers and increase the site\'s traffic capacity.</p>',
+                text="Put this site behind Cloudflare\n<https://its.umich.edu/computing/web-mobile/cloudflare/getting-started>\nor add a /code/favicon.ico file\n<https://en.wikipedia.org/wiki/Favicon>\nto lower Pantheon visitor numbers and increase the amount of traffic the site can handle at any time.",
+            )
         )
