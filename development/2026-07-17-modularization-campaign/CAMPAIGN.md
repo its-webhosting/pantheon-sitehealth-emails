@@ -3,6 +3,10 @@
 **Status:** approved design, 2026-07-17. Brainstormed and approved section-by-section in
 the campaign planning session (see `transcript.md` once archived); prompt in `PROMPT.md`.
 
+**Completed:** 2026-07-24 at I14d.  Closing audit: `CLOSING-AUDIT.md`.  Retrospective:
+`RETROSPECTIVE.md`.  The architecture below is the shipped architecture; `CLAUDE.md` describes
+it in present tense, and `LEDGER.md` holds how it was reached.
+
 This is the **one** copy of the campaign's architecture, decisions, invariants, and
 increment plan. Increment specs **cite this document and re-derive nothing** — the
 campaign-level brainstorm and adversarial review run once, here; increments inherit that

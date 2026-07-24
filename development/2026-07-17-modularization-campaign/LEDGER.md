@@ -2219,3 +2219,137 @@ ledgered to I14d (below). Full suite at close
   is I14d's to re-integrate; the two `tools/` instruments are increment artifacts under
   `development/2*` (ruff-excluded) and I14d should decide whether anything in them deserves to
   become a permanent test.
+
+## I14d — closing the campaign (2026-07-24, commits `55964fc`…`4893046` + this closing commit)
+
+Spec/plan: `development/2026-07-24-mod-I14d-closing/` (`SPEC.md` §8 carries the pasted
+acceptance; spec committed BEFORE implementation at `6d405f7` = **increment base `$BASE`**,
+plan at `96dfdf0`; task reports + reviews under `.superpowers/sdd/`). This is the campaign's
+**final increment** — it makes the documentation true and answers the closing audit; it is
+documentation-only save one production edit (finding 1's `Notice.severity` validation, §2.5).
+Per-task commits, each green (Task 5 the seven findings `5962d3e` ran early per the SPEC's
+"T5 MAY move earlier"; then Task 2 CLAUDE.md `e371d03`, Task 3 docs `1378cf8`, Task 4 config
+`0a65eb5`, Task-5-review fold `4893046`). Full suite at close **including the live tier**
+(`ls ~/.terminus/cache/tokens/` → `markmont@umich.edu`) = **1060 passed / 1 skipped**, 107
+snapshots, both gates (merged ruff + pyright), EXIT=0; four goldens AND all 107 `.ambr`
+snapshots byte-identical across the increment (`git diff 6d405f7 -- tests/e2e/__snapshots__/`
+and `-- '*.ambr'` both empty).
+
+- **Delivered (SPEC §1.1 A–F):**
+  - **A — the claim instrument + inventory** (`55964fc`): `tools/claim_check.py`
+    (dependency-free; decides path/symbol/test-node/`sc.<name>`/count claims, marks everything
+    else `PROSE`, `--self-test` proves each decision kind can go red — PD#14) + the committed
+    `CLAIMS.md` disposition table (mechanizable rows decided by the tool, `PROSE` rows
+    dispositioned by a fresh-context `psh-reviewer`).
+  - **B — CLAUDE.md rewritten to final state** (`e371d03` + review fold `c04b87c`): no `I<n>`
+    archaeology, the 22-row Keep list intact (each load-bearing warning kept with the bug it
+    prevents), the campaign section replaced by a short pointer to this folder. `claim_check.py
+    --gate CLAUDE.md` green.
+  - **C — README / docs/ / prompts/ / tests/README.md / CONTEXT.md / memory refreshed**
+    (`1378cf8`): the two-config ruff prose → the merged single pass; pyright scope → all of
+    `psh/`; the campaign-in-progress banner → complete, pointing at `CLOSING-AUDIT.md` +
+    `RETROSPECTIVE.md`; the nine memory files' `psh/_legacy.py`/`ruff-broad.toml`/top-level
+    `dns_classify.py` mentions → final state.
+  - **D — `docs/config-migration.md`** (`0a65eb5` + review fold `4893046`): headline **no key
+    changes required**, with the audit trail (section inventory vs. every reader; why each new
+    key needed no rename; what an operator MAY add, all defaulting to today's behavior); the
+    sample toml verified key-by-key.
+  - **E — the seven findings LEDGER I14c ledgered here** (`5962d3e`) — see Discovered tasks.
+  - **F — ledger fully resolved + `CLOSING-AUDIT.md` (nine §17 answers) + `RETROSPECTIVE.md` +
+    this entry** (this closing commit).
+
+- **Deviations from CAMPAIGN.md:** none of architecture. One amendment landed at I14a **spec**
+  time and is *executed* here — the **Wave-4 split** completes: I14d is the fourth and last of
+  the four sub-increments the "I14 closing sweep" was split into (LEDGER "Amendments — Wave-4
+  split", 2026-07-23). This closing commit adds the **CAMPAIGN.md `**Completed:**` status
+  line** under the existing `**Status:**` line (the frozen document gains one amendment marking
+  it done, per its preamble's edit-the-document-AND-ledger rule; the architecture below stays
+  frozen). SPEC-level decisions D-i14d-1…11 all landed as specced.
+
+- **The seven I14c-ledgered findings (§2.5) — dispositions:**
+  1. `Notice.__post_init__` now validates `severity` with a strict `isinstance(self.severity,
+     Severity)` → named `TypeError` (validate, never coerce — the `csv_extra` posture, D-i14d-9).
+     **Precondition measured and stated** (D-i14d-9): every current producer and test fake
+     passes a `Severity` member, so no call site needed correcting. Red first:
+     `tests/unit/test_notice.py::test_severity_must_be_a_severity_member` — a bare string
+     constructed fine before.
+  2. **New permanent `tests/integration/test_notice_registration.py`** (AST over `psh/` +
+     `check/` + `plugin/`, D-i14d-3): every `Notice(...)`/`sc.Notice(...)` passes `code=` a
+     module-level `NOTICE_*` constant, and every `NOTICE_*` is a `registry.register(...)`
+     result. **The two red demonstrations:** shown red by a temporary literal-code producer
+     AND a temporary non-registering constant, each reverted after recording. This makes
+     `NoticeRegistry` load-bearing — §17 Q4(a).
+  3. **Registration-comment-block count correction.** LEDGER I14c stated **17**; the measured
+     figure at spec time was **19 files carry a block**, and `psh/cli.py` registered
+     `no-domains` with **no** block — so the collapse produced **20** files each reading alike
+     (the 19 + `psh/cli.py`, which gained the one-liner: `psh/cli.py | 1 +` in `5962d3e`). A
+     ratified document does not carry a wrong number silently (§7 obligation 4). **Distinct
+     from that block count**, the Task-2 review confirmed only **2 STALE COMMENT sites** (part
+     of finding 5): the `add_notice`-fills comment at
+     `tests/integration/test_check_pantheon_cdn_change.py:57` and the `multisite-check` section
+     banner at `tests/integration/test_drupal_notice_render.py:63` — finding 5's "three stale
+     `add_notice` comments" estimate was high; only these two were real, both corrected in
+     place. The two counts (20 blocks collapsed; 2 stale comments corrected) are independent.
+  4. CLAUDE.md's "every producing module registers through `NOTICE_* = sc.registry.register(...)`"
+     — corrected in the §2.2 rewrite: `psh/` uses `registry` directly (cannot use the façade),
+     `check/`/`plugin/` use `sc.registry`, with `check/pantheon_cdn_change/notices.py` named as
+     the one sanctioned direct importer.
+  5. Stale test comments / the `multisite-check`-as-code banner — the 2 sites above, corrected.
+  6. `_CACHED` **dropped** from `tests/unit/test_cachecheck_consolidation.py` (D-i14d-11): the
+     file's 33 tests load the small pure module per test now; the invariant is simultaneously
+     restated in CLAUDE.md Keep-list #15 as "and never cached across tests".
+  7. `Severity(level)`'s named `ValueError` gained a test at `psh.gather.check_drupal_module`
+     (`tests/integration/test_gather_drupal.py`; red demo: temporarily restore a plain-string
+     severity, showing the test passes without the conversion, then revert). Both I14c SPEC
+     over-statements (§5(1)'s two over-included files; `literal_equality.py`'s narrower-than-
+     truth blind spot) corrected in place with the correction recorded, per
+     `prompts/adversarial-review.md`.
+
+- **`literal_equality.py` stays an archive artifact** (D-i14d-6, not promoted to a permanent
+  test): it compares a file against a git baseline commit, so it would need a moving reference
+  point and would go red on every legitimate notice-copy edit; its Invariant-8 guarantee is
+  already held permanently by the four e2e goldens + the 107 `.ambr` snapshots. **Disclosed
+  blind spot:** its `ast.dump` multiset is per file across `html|text|short` *combined*, so a
+  producer whose `html` and `text` bodies were *swapped* also compares equal (covered in
+  practice by the `.ambr` pins). It stays a committed increment artifact under `development/2*`
+  (ruff-excluded); `test_notice_registration.py`'s registration guarantee is what earned
+  permanence instead (finding 2).
+
+- **Contract/config/sc additions:** none. No new contract keys, no config keys, no new `sc`
+  façade names. The only production-code edit in the whole increment is finding 1's
+  `Notice.severity` validation in `psh/notice.py`; everything else is documents, comments, and
+  tests. Every §8 behavior surface unchanged (goldens/`.ambr`/csv/stdout/config byte-identical).
+
+- **Final test count with arithmetic:** I14c closed at **1055 passed / 1 skipped**; I14d adds
+  **5** tests — `test_severity_must_be_a_severity_member` (1) + `test_notice_registration.py`
+  (3) + the `Severity(level)` `ValueError` pin (1) — so **1055 + 5 = 1060 passed / 1 skipped**,
+  107 snapshots. Matches the SPEC §5 expectation exactly; no unexplained delta.
+
+- **Discovered tasks (dispositions):**
+  - **The whole ledger-resolution walk** (Step 1 / §17 Q6): every "Discovered tasks" and "Open
+    questions" item in entries I0…I14c given exactly one terminal disposition (done / README
+    TODO / declined) — the table is in `CLOSING-AUDIT.md` Q6; nothing resolves to "carried".
+    Two items surfaced as genuine **README TODO** additions during the walk: the semver-3
+    `PendingDeprecationWarning` (LEDGER I9) folds into the pre-existing "dependency updates"
+    item (CAMPAIGN §15), and the **stale `check/umich/__init__.py` disabled-branch message**
+    (LEDGER I12, ledgered to "I14's sweep", never fixed I14a–c) is added to README's
+    post-campaign list — a stdout-only accuracy fix outside I14d's documentation-only scope
+    (SPEC §3 permits only finding 1's production edit).
+  - **Four post-campaign README TODOs created** (SPEC §7, none executed here): further `main()`
+    extraction toward §3.3's target (D-i14d-1, §17 Q1); the useless `uvx pyright@1.1.411`
+    fallback (LEDGER I14c); the declined docs path-guard with its reasoning (D-i14d-7); the
+    stale-umich-message reword above. The Q4 scan found **no dead `sc` name** to add
+    (§17 Q4(b) — all 16 façade names have live `check/`/`plugin/` consumers; reported not
+    deleted per D-i14d-10 / Invariant 9).
+  - No others — the six task reports and their reviews found no further gaps.
+
+- **Ratchet (§13):** no code moved; the merged single ruff pass + pyright (all of `psh/`) stay
+  as I14a/I14b left them. `tools/claim_check.py` lives under `development/2*` (ruff-excluded,
+  D-i14b-2), like I14c's two instruments. Both gates green at close.
+
+- **Open questions: none.** This is the campaign's last increment; everything unresolved is a
+  **README TODO** by now, and this entry says which (the four post-campaign items above, plus
+  the standing four from before — ruff upgrade + PLR0917; typed `sc` stubs + pyright widening;
+  repoint tests off the `psh.<name>` re-export surface; the `mutates` hook declaration). The
+  campaign is **complete**: CAMPAIGN.md carries its `**Completed:**` status line, the closing
+  audit and retrospective are written, and the ledger is fully resolved.

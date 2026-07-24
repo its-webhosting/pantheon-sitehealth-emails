@@ -442,3 +442,58 @@ git status --porcelain            # MUST be clean at close
 
 The memory files live outside the repository; `claim_check.py` therefore resolves every
 repo-relative claim against the repo root regardless of where the containing document sits.
+
+### Acceptance results (run 2026-07-24 at I14d close; `$BASE` = `6d405f7`)
+
+```
+$ ./run-tests                                  # full suite incl. live tier (token present)
+...
+107 snapshots passed.
+================ 1060 passed, 1 skipped, 15 warnings in 49.07s =================
+Linting (ruff, campaign ratchet) ...
+All checks passed!
+Type-checking (pyright, campaign ratchet) ...
+0 errors, 0 warnings, 0 informations
+EXIT=0
+
+$ git diff 6d405f7 -- tests/e2e/__snapshots__/     # MUST be empty
+                                                    # (no output — empty, PASS)
+
+$ git diff 6d405f7 -- '*.ambr'                      # MUST be empty
+                                                    # (no output — empty, PASS)
+
+$ python development/2026-07-24-mod-I14d-closing/tools/claim_check.py --self-test
+SELF-TEST PASS  8 verdicts + COUNT both ways (registered codes = 36)
+
+$ python development/2026-07-24-mod-I14d-closing/tools/claim_check.py --gate \
+      --allow development/2026-07-24-mod-I14d-closing/claims-allow.txt \
+      CLAUDE.md README.md CONTEXT.md tests/README.md docs/*.md \
+      ~/.claude/projects/-workspace/memory/*.md
+#   669 lines over 32 documents; every row is PASS or PROSE except the five FAIL rows
+#   below, and every one of those five is an allowed claim in claims-allow.txt (a document
+#   deliberately naming a name that no longer exists).  The decision-bearing lines, verbatim:
+| `sc.text_maker` | SC | FAIL | sc has no 'text_maker' |
+| `sc.add_notice` | SC | FAIL | sc has no 'add_notice' |
+| `psh.SMTP_SSL` | SYMBOL | FAIL | psh/__init__.py defines no 'SMTP_SSL' |
+| `psh.SMTP_SSL` | SYMBOL | FAIL | psh/__init__.py defines no 'SMTP_SSL' |
+| `sc.text_maker` | SC | FAIL | sc has no 'text_maker' |
+
+0 unallowed FAIL/ERROR verdict(s)
+#   gate exit status: 0
+
+$ git status --porcelain                       # clean immediately after the closing commit
+ M README.md
+ M development/2026-07-17-modularization-campaign/CAMPAIGN.md
+ M development/2026-07-17-modularization-campaign/LEDGER.md
+ M development/2026-07-24-mod-I14d-closing/SPEC.md
+?? development/2026-07-17-modularization-campaign/CLOSING-AUDIT.md
+?? development/2026-07-17-modularization-campaign/RETROSPECTIVE.md
+#   These six paths ARE the closing commit's contents (the two ?? files are the audit +
+#   retrospective the README links to); `git add -A && commit` empties the tree.
+```
+
+**Result:** full suite **1060 passed / 1 skipped, 107 snapshots** (= I14c's 1055 + the 5 new
+I14d tests), both ratchet gates green (ruff "All checks passed!", pyright "0 errors"); both
+byte-identity diffs against `6d405f7` empty; `--self-test` PASS; `--gate` exit 0 with zero
+unallowed FAIL/ERROR; the tree is clean once the closing commit lands. No number differs from
+the SPEC §5 expectation, so nothing needs explaining.

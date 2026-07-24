@@ -329,6 +329,13 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   the tests onto the real module homes — plus the deeper `conftest` / `TempDB` redesign it enables —
   is the follow-up (D-i14a-3 / D-i14a-8, disposed: deferred at I14b).
 
+* **Correct `check/umich/__init__.py`'s stale disabled-branch message** **(post-campaign)** — when
+  `[UMich]` is disabled it prints `Skipping check.umich.sitelens because UMich plugin is not enabled`,
+  but the guard now skips **eight** U-M modules, not just `sitelens`. Stdout-only (§8 permits
+  improving console text freely), so it changes no artifact — ledgered to "I14's sweep" at campaign
+  I12 but left for post-campaign because I14d is documentation-only (its one sanctioned production
+  edit was `Notice.severity` validation). Reword to name the set it actually skips.
+
 * update dependencies
 * * git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
 * add SendGrid API support as an alternative to SMTP
