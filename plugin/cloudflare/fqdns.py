@@ -1,15 +1,14 @@
 
+import json
 import os
 import sys
-import json
-import time
 import tempfile
+import time
 
 import cloudflare  # for cloudflare.CloudflareError
 import rich.progress
 
 import script_context as sc
-
 
 # ---------------------------------------------------------------------------------------------
 # Move the old standalone `get_proxied_fqdns` here, as a Cloudflare-plugin setup hook.
@@ -44,11 +43,15 @@ def progress_bar() -> rich.progress.Progress:
         rich.progress.TimeElapsedColumn(),
         rich.progress.TimeRemainingColumn(),
         console=sc.console,
-        transient=False if sc.options.verbose else True,
+        transient=not sc.options.verbose,
     )
 
 
-def decide_fqdns_update(*, exists, age_seconds, multi_site, force, suppress, traffic_only):
+def decide_fqdns_update(*, exists, age_seconds, multi_site, force, suppress,  # noqa: PLR0913
+                        traffic_only):
+    # -- pure decision function, six keyword-only inputs pinned by
+    # tests/unit/test_fqdns_decision.py (I14b SPEC §2.1 rule 2: signatures pinned by tests
+    # stay); each name is enumerated in the docstring below and used nowhere else
     """Pure decision: should we refresh fqdns.json?  Returns (should_update, reason).  No I/O.
 
     Order matters:
@@ -69,7 +72,9 @@ def decide_fqdns_update(*, exists, age_seconds, multi_site, force, suppress, tra
     return False, "fqdns.json present (fresh, single-site, or update suppressed)"
 
 
-def fetch_proxied_fqdns(client) -> tuple:
+def fetch_proxied_fqdns(client) -> tuple:  # noqa: C901 -- the account/zone/DNS-record
+    # walk this docstring documents, plus the cross-zone-conflict bookkeeping CLAUDE.md
+    # names as "now consumed" (I14b SPEC §2.1 rule 5, verbatim-complexity noqa)
     """Query Cloudflare for every proxied FQDN across every account/zone the credentials can see.
 
     Returns (websites, conflicts) where:
@@ -143,7 +148,10 @@ def _load_existing(path) -> dict:
     Invalid JSON -> fatal.  Tolerates both the old array-value and new object-value formats
     (the program reads only the keys)."""
     try:
-        with open(path, "r") as f:
+        with open(path, "r") as f:  # noqa: PTH123, UP015 -- fqdns.json read/write is a
+            # documented behavior surface (CLAUDE.md "atomic write"; I14b SPEC §2.1 rule 1);
+            # this line's FileNotFoundError/JSONDecodeError handling below is this
+            # atomic-cache design's control flow, so it is not touched mechanically
             return json.load(f)
     except FileNotFoundError:
         return {}
@@ -157,7 +165,12 @@ def write_fqdns_atomic(path, data) -> None:
     Atomic: an interrupted write never leaves a half-written or truncated fqdns.json.  Replacing
     onto a symlink path replaces the symlink itself with the new plain file.
     """
-    directory = os.path.dirname(os.path.abspath(path)) or "."
+    directory = os.path.dirname(os.path.abspath(path)) or "."  # noqa: PTH120, PTH100 --
+    # feeds tempfile.mkstemp's dir=, load-bearing for the atomic-rename-needs-same-filesystem
+    # guarantee this docstring documents; Path.resolve() follows symlinks where
+    # os.path.abspath() does not, a real semantic difference for exactly the
+    # symlink-replacement case this function exists for (CLAUDE.md "atomic write";
+    # I14b SPEC §2.1 rule 1 -- behavior surface, noqa instead of restructure)
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".fqdns-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
@@ -168,11 +181,14 @@ def write_fqdns_atomic(path, data) -> None:
         # the previous fqdns.json.
         current_umask = os.umask(0)
         os.umask(current_umask)
-        os.chmod(tmp, 0o666 & ~current_umask)
-        os.replace(tmp, path)
+        os.chmod(tmp, 0o666 & ~current_umask)  # noqa: PTH101 -- behavior surface (rule 1),
+        # see the PTH120/PTH100 note above
+        os.replace(tmp, path)  # noqa: PTH105 -- THE atomic-replace call this function's
+        # docstring documents ("then os.replace() it onto `path`"); behavior surface (rule 1)
     except BaseException:  # incl. KeyboardInterrupt: clean up the temp file, leave fqdns.json intact
-        try:
-            os.unlink(tmp)
+        try:  # noqa: SIM105 -- behavior surface (rule 1); not restructuring the
+              # BaseException cleanup handler's exception flow
+            os.unlink(tmp)  # noqa: PTH108 -- cleanup path of the same behavior surface (rule 1)
         except FileNotFoundError:
             pass
         raise
@@ -181,8 +197,10 @@ def write_fqdns_atomic(path, data) -> None:
 def update_and_load_proxied_fqdns() -> None:
     """setup hook: refresh fqdns.json from Cloudflare when appropriate, then load it into
     sc.plugin_context['plugin.cloudflare']['proxied_fqdns'] for the per-site loop to consume."""
-    exists = os.path.exists(FQDNS_FILE)
-    age_seconds = (time.time() - os.path.getmtime(FQDNS_FILE)) if exists else 0
+    exists = os.path.exists(FQDNS_FILE)  # noqa: PTH110 -- feeds decide_fqdns_update's
+    # refresh-decision gate; behavior surface (I14b SPEC §2.1 rule 1)
+    age_seconds = (time.time() - os.path.getmtime(FQDNS_FILE)) if exists else 0  # noqa: PTH204
+    # -- same refresh-decision gate; behavior surface (rule 1)
     multi_site = sc.options.all or len(sc.options.sites) > 1
     force = sc.options.update_cloudflare_fqdns
     suppress = sc.options.no_update_cloudflare_fqdns

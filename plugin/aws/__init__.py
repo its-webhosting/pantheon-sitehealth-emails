@@ -3,7 +3,6 @@ import os
 
 import script_context as sc
 
-
 if 'AWS' in sc.config and 'enabled' in sc.config['AWS'] and sc.config['AWS']['enabled']:
 
     # set the following for boto to use

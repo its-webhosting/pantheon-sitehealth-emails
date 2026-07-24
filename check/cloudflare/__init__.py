@@ -15,7 +15,13 @@ _cf = sc.config.get('Cloudflare', {})
 _cachecheck = _cf.get('cachecheck', {})
 if _cf.get('enabled') and isinstance(_cachecheck, dict) and _cachecheck.get('enabled'):
     try:
-        from .egress import check_egress_ip
+        # Order is load-bearing, NOT alphabetical/isort-sorted (I14b SPEC §2.1 rule 1 --
+        # behavior first): tests/integration/test_check_cloudflare_init.py's broken-sibling
+        # tests stub only egress.py in a bare temp dir and rely on THIS import failing
+        # before `.cache` is ever attempted, so the ImportError they assert on is the one
+        # from the intentionally-broken egress.py, not a spurious "no module named .cache"
+        # from the unrelated missing sibling.
+        from .egress import check_egress_ip  # noqa: I001
         from .cache import check_cloudflare_cache
     except ImportError as e:
         if e.name and e.name.startswith(__name__):

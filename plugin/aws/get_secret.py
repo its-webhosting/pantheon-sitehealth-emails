@@ -7,7 +7,6 @@ import botocore.exceptions
 
 import script_context as sc
 
-
 secrets = {}
 session = None
 client = None
@@ -15,7 +14,10 @@ client = None
 
 def get_secret(secret_name, key_name = None, region_name='', profile_name=''):
 
-    global secrets, session, client
+    global secrets, session, client  # noqa: PLW0602, PLW0603 -- module-state cache idiom
+    # (I14b SPEC §2.1 rule 3): `secrets` is mutated in place by key and never reassigned
+    # (PLW0602: no assignment target), while `session`/`client` ARE reassigned inside the
+    # cache-miss branch below so callers reuse the same AWS session/client across calls
 
     # Load and cache the secret if it hasn't been loaded yet
     if secret_name not in secrets:
@@ -54,5 +56,4 @@ def get_secret(secret_name, key_name = None, region_name='', profile_name=''):
         # in config_substitution() prints the offending config path + this message and exits,
         # instead of surfacing a bare KeyError traceback.
         raise sc.ConfigSubstitutionError(f"key '{key_name}' not found in AWS secret '{secret_name}'")
-    #sc.debug(f'Secret {secret_name}.{key_name}: {secrets[secret_name][key_name]}')
     return secrets[secret_name][key_name]

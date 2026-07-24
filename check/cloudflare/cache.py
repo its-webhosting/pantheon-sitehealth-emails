@@ -34,14 +34,22 @@ import script_context as sc
 
 from . import httpseam
 from .cfg import cachecheck_config
-from .headers import (MISS_RETRY_ATTEMPTS, MISS_RETRY_DELAY_SECONDS, evaluate_headers,
-                      should_retry_miss)
+from .headers import (
+    MISS_RETRY_ATTEMPTS,
+    MISS_RETRY_DELAY_SECONDS,
+    evaluate_headers,
+    should_retry_miss,
+)
 from .notices import build_cache_notices, console_line
 from .pages import choose_assets, choose_pages, extract_assets, extract_page_links
 
 
 def _make_rng(site_name: str, date_iso: str) -> random.Random:
-    return random.Random(f"{site_name}:{date_iso}")
+    return random.Random(f"{site_name}:{date_iso}")  # noqa: S311 -- NOT
+    # cryptographic use.  Deliberately seeded `{site}:{report_date}` (module docstring, D6)
+    # so re-runs of the same report test the same URLs/selections and selections rotate
+    # month to month -- reproducibility is the point (CLAUDE.md cachecheck note; I14b SPEC
+    # §2.1 rule 6 NAMED disposition)
 
 
 make_rng = _make_rng  # module attribute = test seam for selection determinism
@@ -95,8 +103,12 @@ def _transport_item(result, kind: str, cfg: dict) -> dict:
     return {"id": item_id, "kind": kind, "url": result.url, "params": params}
 
 
-def _run_miss_retries(result, url: str, fqdn: str, cfg: dict, items: list, found: list,
-                      kind: str, status, pool) -> None:
+def _run_miss_retries(  # noqa: PLR0913 -- private, single call site (below); each
+        # parameter is a distinct D9 retry-protocol input (the module docstring's MISS-retry
+        # diagram), so bundling them into a config object would just relocate the same nine
+        # names behind one more level of indirection for the one caller (I14b SPEC §2.1 rule 2)
+        result, url: str, fqdn: str, cfg: dict, items: list, found: list,
+        kind: str, status, pool) -> None:
     """D9: distinguish 'cache warming up' from 'never caches' for a cacheable MISS."""
     if not should_retry_miss(result.headers, found):
         return
@@ -117,8 +129,11 @@ def _run_miss_retries(result, url: str, fqdn: str, cfg: dict, items: list, found
     _emit(items, {"id": "miss-persistent", "kind": kind, "url": url, "params": {}})
 
 
-def _test_url(url: str, fqdn: str, cfg: dict, items: list, *,
-              kind: str, status, pool):  # -> FetchResult | None
+def _test_url(  # noqa: PLR0913 -- private, three call sites in this file, all keyword-form
+        # already for kind/status/pool; each parameter is a distinct SPEC §8.8 transport-policy
+        # input, not incidental (I14b SPEC §2.1 rule 2)
+        url: str, fqdn: str, cfg: dict, items: list, *,
+        kind: str, status, pool):  # -> FetchResult | None
     """Fetch one URL and run the battery; transport policy in one place (SPEC §8.8).
     Returns the FetchResult the battery ran against (callers mine ONLY successful 2xx
     results for links/assets), or an errored result."""
@@ -158,7 +173,10 @@ def _test_url(url: str, fqdn: str, cfg: dict, items: list, *,
 
 def _ok(result) -> bool:
     return (result is not None and result.error is None
-            and result.status_code is not None and 200 <= result.status_code < 300)
+            and result.status_code is not None
+            and 200 <= result.status_code < 300)  # noqa: PLR2004 -- the HTTP 2xx range; the
+            # same `200 <= status_code < 300` check also appears in headers.py's
+            # evaluate_headers and egress.py's _probe (I14b SPEC §2.1 rule 5)
 
 
 def _check_fqdn(fqdn: str, cfg: dict, rng, status) -> (list, dict):

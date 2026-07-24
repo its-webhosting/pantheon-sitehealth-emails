@@ -93,8 +93,8 @@ def parse_cache_control(value) -> dict:
     directives = {}
     if not isinstance(value, str):
         return directives
-    for part in value.split(","):
-        part = part.strip()
+    for raw_part in value.split(","):
+        part = raw_part.strip()
         if not part:
             continue
         name, sep, raw = part.partition("=")
@@ -138,15 +138,21 @@ def _item(item_id: str, kind: str, **params) -> dict:
     return {"id": item_id, "kind": kind, "url": None, "params": params}
 
 
-def evaluate_headers(headers: dict, *, kind: str,
-                     now: datetime, status_code: int) -> list:
+def evaluate_headers(  # noqa: C901, PLR0912 -- one battery rule per branch, itemized in the
+                       # module docstring's decision-flow diagram; splitting the battery would
+                       # scatter that single documented decision tree across functions (I14b
+                       # SPEC §2.1 rule 5, verbatim-complexity noqa)
+        headers: dict, *, kind: str,
+        now: datetime, status_code: int) -> list:
     """Run the battery against one response's headers (lowercased keys; 'set-cookie' may
     be a list).  Returns result items; the caller fills in each item's 'url'."""
     items = []
 
     # Non-2xx: nothing else is evaluated for this URL (PROMPT: "do not check anything
     # else, move on"); the caller also skips link/asset extraction.
-    if not 200 <= status_code < 300:
+    if not 200 <= status_code < 300:  # noqa: PLR2004 -- the HTTP 2xx range; this exact
+        # `200 <= status_code < 300` check also appears in cache.py's _ok and egress.py's
+        # _probe (I14b SPEC §2.1 rule 5)
         return [_item("http-error", kind, status=status_code)]
 
     cf_status = headers.get("cf-cache-status")
@@ -167,7 +173,11 @@ def evaluate_headers(headers: dict, *, kind: str,
             items.append(_item("short-cache-time", kind, seconds=seconds))
         for directive in UNCACHEABLE_DIRECTIVES:
             if directive in cc:
-                items.append(_item(f"cc-{directive}", kind))
+                items.append(_item(f"cc-{directive}", kind))  # noqa: PERF401 -- one
+                # `items` accumulator collects results from three separate loops/branches in
+                # this function (I14b SPEC §2.1 rule 5); folding just this one into a
+                # comprehension would leave the others as appends, a stylistic split with no
+                # behavior benefit
 
     # Outside the max-age branch on purpose: these directives matter whenever they are
     # present, even with no parseable cache time (that case used to be silent).

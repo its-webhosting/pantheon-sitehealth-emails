@@ -40,7 +40,10 @@ FALLBACK_RADAR = "https://ip-check-perf.radar.cloudflare.com/"  # JSON: ip_addre
 # The bare / path of ifconfig.me content-negotiates on User-Agent and can return HTML;
 # /ip always returns the bare address:
 FALLBACK_IFCONFIG = "https://ifconfig.me/ip"
-LOCAL_ADDR = {4: "0.0.0.0", 6: "::"}
+LOCAL_ADDR = {4: "0.0.0.0", 6: "::"}  # noqa: S104 -- NOT a listen/bind address; this is
+# httpx.HTTPTransport(local_address=...), which selects the OUTBOUND source address for the
+# egress-discovery probe (module docstring: force the family via a local_address-bound
+# transport), the seam surface this file exists for (I14b SPEC §2.1 rule 6 NAMED disposition)
 
 
 def _parse_trace(text: str):  # -> str | None
@@ -84,7 +87,8 @@ def _probe(url: str, family: int, timeout: float, user_agent: str):  # -> str | 
         return None
     except OSError:  # e.g. no IPv6 support at the socket level
         return None
-    if response.status_code != 200:
+    if response.status_code != 200:  # noqa: PLR2004 -- probe seam (I14b SPEC §2.1 rule 6:
+        # httpseam.py/egress.py seams resolve by noqa, never restructuring)
         return None
     return response.text
 
@@ -130,7 +134,10 @@ def _fetch_allowlist(cfg: dict) -> list:
     except cloudflare.CloudflareError as e:
         sys.exit(f"ERROR: unable to fetch the Cloudflare lists for account {account_id}: "
                  f"{e}  (the credentials may lack the \"Account Filter Lists: Read\" scope)")
-    matches = [l for l in lists if getattr(l, "name", None) == list_name]
+    matches = [l for l in lists if getattr(l, "name", None) == list_name]  # noqa: E741 --
+    # egress.py seam (I14b SPEC §2.1 rule 6: noqa, never restructure); `l` is a Cloudflare SDK
+    # list-object, harmless to rename but this file's findings are dispositioned as a whole
+    # per the rule-6 seam-surface carve-out, not case-by-case
     if not matches:
         sys.exit(f"ERROR: Cloudflare list '{list_name}' was not found in account "
                  f"{account_id}.  Check [Cloudflare.cachecheck].list_name and the "

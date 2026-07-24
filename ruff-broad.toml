@@ -11,8 +11,6 @@
 # masks the 3.12-only f-string syntax detection).
 extend-exclude = [
     # Grandfathered until their increment moves/cleans them:
-    "check/cloudflare/",           # untouched tenant; cleaned at I14
-    "plugin/",              # cleaned as increments touch them
     "tests/",               # cleaned per-increment alongside their code
     "development/",         # historical archive, never linted
 ]

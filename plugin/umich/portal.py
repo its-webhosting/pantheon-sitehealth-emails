@@ -1,17 +1,18 @@
 
 import sqlalchemy as db
-
 from rich.pretty import pprint
 
 import script_context as sc
-
 
 setup_completed = False
 portal_plan_info = {}
 
 
 def setup_portal_db():
-    global portal_plan_info, setup_completed
+    global portal_plan_info, setup_completed  # noqa: PLW0602, PLW0603 -- module-state
+    # cache idiom (I14b SPEC §2.1 rule 3): `portal_plan_info` is mutated in place by plan
+    # name and never reassigned (PLW0602: no assignment target); `setup_completed` IS
+    # reassigned below, and is the `plan_info` substitution's defer/ready flag
     sc.debug('Getting information from portal database')
     portal_sites = {}
     db_info = sc.config['UMich']['portal']['db']
@@ -20,7 +21,9 @@ def setup_portal_db():
     # so supply it here rather than requiring it in the config.
     conn_str, engine_kwargs = sc.db_engine_args({**db_info, 'type': 'mysql'})
     portal_db_engine = db.create_engine(conn_str,
-                                        echo=True if sc.options.verbose >= 2 else False,
+                                        echo=sc.options.verbose >= 2,  # noqa: PLR2004 -- -vv;
+                                        # numeric verbosity levels are the CLI's own convention
+                                        # (CLAUDE.md; I14b SPEC §2.1 rule 5)
                                         **engine_kwargs)
 
     with portal_db_engine.connect() as connection:
@@ -62,13 +65,13 @@ def setup_portal_db():
 
     sc.config['UMich']['portal']['sites'] = portal_sites
 
-    if sc.options.verbose >= 2:
+    if sc.options.verbose >= 2:  # noqa: PLR2004 -- -vv; numeric verbosity levels are the
+        # CLI's own convention (CLAUDE.md; I14b SPEC §2.1 rule 5)
         pprint(portal_sites)
         pprint(portal_plan_info)
         pprint(sc.config['Pantheon']['plan_sku_to_name'])
 
     setup_completed = True
-    return
 
 
 def plan_info(plan: str, field: str):

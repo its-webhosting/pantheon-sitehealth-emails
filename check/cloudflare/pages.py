@@ -63,7 +63,7 @@ def _path_excluded(path: str) -> bool:
                 return True
         # Bare-word entries match only on a segment boundary, so legitimate pages like
         # /registered-programs or /profiles are still cache-checked:
-        elif path == marker or path.startswith(marker + "/") or path.startswith(marker + "."):
+        elif path == marker or path.startswith((marker + "/", marker + ".")):
             return True
     return False
 
@@ -129,7 +129,10 @@ def choose_assets(assets: dict, rng) -> list:
     chosen = []
     for cls in ("js", "css", "img"):
         if assets.get(cls):
-            chosen.append((cls, rng.choice(assets[cls])))
+            chosen.append((cls, rng.choice(assets[cls])))  # noqa: PERF401 -- rng.choice is
+            # a stateful draw from the seeded RNG stream (module docstring, D6); a
+            # comprehension form would evaluate in the same iteration order (behavior-
+            # identical here) but this task treats PERF401 as rule-5 verbatim-complexity noqa
     return chosen
 
 

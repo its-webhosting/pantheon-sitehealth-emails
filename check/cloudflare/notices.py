@@ -97,11 +97,11 @@ def _kind_noun(item: dict) -> str:
 
 
 def _human_seconds(seconds: int) -> str:
-    if seconds >= 86400:
+    if seconds >= 86400:  # noqa: PLR2004 -- seconds-per-day; self-evident (rule 5)
         return _plural(seconds // 86400, "day")
-    if seconds >= 3600:
+    if seconds >= 3600:  # noqa: PLR2004 -- seconds-per-hour; self-evident (rule 5)
         return _plural(seconds // 3600, "hour")
-    if seconds >= 60:
+    if seconds >= 60:  # noqa: PLR2004 -- seconds-per-minute; self-evident (rule 5)
         return _plural(seconds // 60, "minute")
     return _plural(seconds, "second")
 
@@ -146,8 +146,13 @@ def _cms_link(framework: str):  # -> str | None
     return None
 
 
-def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
-               count: int = 1) -> str:
+def _item_html(  # noqa: C901, PLR0912, PLR0915 -- the notice-text builder itself: one
+        # elif branch per item id, each a distinct owner-facing sentence pinned by
+        # tests/integration/test_cachecheck_notice_render.py.  Splitting this function would
+        # risk exactly the literal/message-text drift I14b SPEC §2.1 rule 1 forbids, so this
+        # is both a rule-1 (behavior first) and rule-5 (verbatim-complexity) noqa
+        item: dict, *, umich: bool, doc_url: str, framework: str,
+        count: int = 1) -> str:
     """One short, actionable sentence-or-two of HTML for a distinct item.  U-M variants
     link {doc_url}#<id>; generic variants never do.
 
@@ -213,9 +218,13 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
         # BOTH readings the owner-visible outcome is the same and is the part that matters --
         # Cloudflare never serves the visitor from its cache, so every request goes to the
         # origin.  Say that, and it is exactly true for all three directives.
-        effect = ("Cloudflare will not serve {it} from its cache without first checking with "
+        effect = ("Cloudflare will not serve {it} from its cache without first checking with "  # noqa: UP032
                   "your web server").format(it=it) if directive == "no-cache" else (
                  f"Cloudflare cannot serve {it} from its cache")
+        # -- inside the notice-text builder (rule 1); `.format` vs an f-string is source
+        # syntax only, not rendered text (`{it}` substitutes identically either way), but
+        # UP032 is not one of rule 4's named mechanical fixes, so this stays noqa rather
+        # than assume the F541 precedent extends to it
         # NB: no punctuation immediately after </strong> -- html2text renders "</strong>:" as
         # "** :", leaving a stray space before the colon in the plaintext part.
         text = (f"{possessive} <code>Cache-Control</code> {contains_hdr} "
@@ -240,8 +249,8 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
         links = [learn] if umich else [_a(MDN_CACHE_CONTROL, "About the Cache-Control header")]
     elif item_id == "expires-short":
         text = (f"{subject} "
-                + (f"rely on legacy <code>Expires</code> headers that expire" if many
-                   else f"relies on a legacy <code>Expires</code> header that expires")
+                + ("rely on legacy <code>Expires</code> headers that expire" if many
+                   else "relies on a legacy <code>Expires</code> header that expires")
                 + f" in under 3 days. Replace {it} with "
                 f"<code>Cache-Control: max-age=31536000</code> (1 year)." + sitewide)
         links = [learn] if umich else [_a(MDN_EXPIRES, "About the Expires header")]
@@ -303,7 +312,7 @@ def _item_html(item: dict, *, umich: bool, doc_url: str, framework: str,
         cms = _cms_link(framework)
         if cms:
             links.append(cms)
-    links = [l for l in links if l]
+    links = [link for link in links if link]
     return text + (" " + " &middot; ".join(links) if links else "")
 
 
@@ -313,8 +322,12 @@ def item_key(item: dict) -> tuple:
     return (item["id"], item["kind"], tuple(sorted(item["params"].items())))
 
 
-def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
-                        doc_url: str, framework: str, sample_by_fqdn: dict) -> list:
+def build_cache_notices(  # noqa: C901, PLR0913 -- consolidation + assembly (SPEC §9); one
+        # input per PROMPT-step-3 ingredient, private to this module, single call site
+        # (check/cloudflare/cache.py's check_cloudflare_cache); restructuring would relocate
+        # the same six names, not remove them (I14b SPEC §2.1 rules 2 and 5)
+        site_name: str, items_by_fqdn: dict, *, umich: bool,
+        doc_url: str, framework: str, sample_by_fqdn: dict) -> list:
     """One notice (type 'info', magnifying-glass icon) per group of FQDNs whose items are
     identical except for the URLs tested (PROMPT step 3).  Returns notice dicts ready for
     site_context.add_notice.
@@ -334,7 +347,9 @@ def build_cache_notices(site_name: str, items_by_fqdn: dict, *, umich: bool,
         groups.setdefault(signature, []).append(fqdn)
 
     notices = []
-    for signature, fqdns in sorted(groups.items(), key=lambda kv: kv[1][0]):
+    for signature, fqdns in sorted(groups.items(), key=lambda kv: kv[1][0]):  # noqa: B007
+        # -- destructures groups.items() (signature -> fqdns); only fqdns is needed in the
+        # body, but `signature` self-documents what the dict's key is (I14b SPEC §2.1 rule 5)
         # Distinct items in first-occurrence order (all group members share the same set):
         first = populated[fqdns[0]]
         seen, distinct = set(), []

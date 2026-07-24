@@ -2,7 +2,6 @@ import os
 
 import script_context as sc
 
-
 _UNSET = object()  # distinguishes "no default supplied" from an empty-string default
 
 

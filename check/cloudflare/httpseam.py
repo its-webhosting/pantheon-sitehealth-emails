@@ -46,7 +46,9 @@ def _headers_dict(response) -> dict:
     """Lowercased header dict; Set-Cookie kept as a list (folding cookies with commas
     would corrupt them), everything else comma-folded like httpx does."""
     headers = {}
-    for key in {k.lower() for k in response.headers.keys()}:
+    for key in {k.lower() for k in response.headers.keys()}:  # noqa: SIM118 -- httpx's
+        # own Headers.keys() (not a plain dict); httpseam.py seam, resolved by noqa per
+        # I14b SPEC §2.1 rule 6, never by restructuring
         values = response.headers.get_list(key)
         headers[key] = values if key == "set-cookie" else ", ".join(values)
     return headers
@@ -63,14 +65,18 @@ def _is_cert_error(exc: Exception) -> bool:
     return "certificate verify failed" in str(exc).lower()
 
 
-def _result(url, final_url, error, *, status=None, headers=None, text="", chain=None,
+def _result(url, final_url, error, *, status=None, headers=None, text="", chain=None,  # noqa: PLR0913
+            # -- httpseam.py seam (I14b SPEC §2.1 rule 6: noqa, never restructure); one field
+            # per FetchResult attribute, private, single call site pattern used throughout
+            # this module
             insecure=False, detail=""):
     return FetchResult(url=url, final_url=final_url, status_code=status,
                        headers=headers or {}, text=text, error=error,
                        redirect_chain=chain or [], insecure=insecure, error_detail=detail)
 
 
-def _make_client(timeout: float, user_agent: str, verify: bool) -> httpx.Client:
+def _make_client(timeout: float, user_agent: str, verify: bool) -> httpx.Client:  # noqa: FBT001
+    # -- httpseam.py seam (I14b SPEC §2.1 rule 6: noqa, never restructure)
     return httpx.Client(follow_redirects=False, verify=verify, timeout=timeout,
                         headers={"user-agent": user_agent}, trust_env=False)
 
@@ -88,7 +94,8 @@ class ClientPool:
         self.user_agent = user_agent
         self._clients = {}
 
-    def client(self, verify: bool) -> httpx.Client:
+    def client(self, verify: bool) -> httpx.Client:  # noqa: FBT001 -- httpseam.py seam
+        # (I14b SPEC §2.1 rule 6: noqa, never restructure)
         if verify not in self._clients:
             self._clients[verify] = _make_client(self.timeout, self.user_agent, verify)
         return self._clients[verify]
@@ -105,8 +112,12 @@ class ClientPool:
         self.close()
 
 
-def _fetch(url: str, *, fqdn: str, timeout: float, user_agent: str,
-           verify: bool = True, pool: "ClientPool | None" = None) -> FetchResult:
+def _fetch(  # noqa: C901, PLR0911, PLR0912, PLR0913 -- THE monkeypatch seam (module
+        # docstring: "the single HTTP seam"); the redirect decision tree in the module
+        # docstring's ASCII diagram accounts for the branch/return count (I14b SPEC §2.1
+        # rule 6: noqa, never restructure)
+        url: str, *, fqdn: str, timeout: float, user_agent: str,
+        verify: bool = True, pool: "ClientPool | None" = None) -> FetchResult:
     chain = []
     current = url
     insecure = not verify
@@ -126,7 +137,9 @@ def _fetch(url: str, *, fqdn: str, timeout: float, user_agent: str,
                 return _result(url, current, "challenge", status=response.status_code,
                                headers=headers, chain=chain, insecure=insecure)
             location = headers.get("location")
-            if 300 <= response.status_code < 400 and location:
+            if 300 <= response.status_code < 400 and location:  # noqa: PLR2004 -- the
+                # HTTP 3xx redirect range; httpseam.py seam (I14b SPEC §2.1 rule 6: noqa,
+                # never restructure)
                 target = urllib.parse.urljoin(current, location)
                 if classify_redirect(current, target, fqdn) == "cross":
                     return _result(url, target, "cross_fqdn_redirect",

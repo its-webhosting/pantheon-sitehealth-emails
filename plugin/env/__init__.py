@@ -2,7 +2,6 @@ import script_context as sc
 
 from .get_env import get_env
 
-
 # The `env` substitution has no external dependency and is needed by core [SMTP] config
 # (e.g. username = "<{env USER}"), so it is registered unconditionally rather than gated on an
 # `enabled` flag -- gating it would create a chicken-and-egg problem (a disabled [Env] would

@@ -5,7 +5,6 @@ from cloudflare import Cloudflare
 
 import script_context as sc
 
-
 # The whole Cloudflare plugin shares ONE Cloudflare client instance (one auth, one HTTP
 # session).  It is built lazily on first use by get_client() and cached in
 # sc.plugin_context['plugin.cloudflare']['client'].  __init__ stores a reference to get_client in

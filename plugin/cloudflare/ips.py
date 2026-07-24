@@ -1,6 +1,6 @@
 
-import sys
 import ipaddress
+import sys
 
 import cloudflare
 from rich.pretty import pprint
@@ -24,7 +24,8 @@ def get_cloudflare_ips():
         # traceback.  tests/integration/test_plugin_cloudflare_ips.py guards both halves.
         except cloudflare.CloudflareError as e:
             sys.exit(f'ERROR: Unable to get lists of Cloudflare IPs: {e}')
-        if sc.options.verbose > 2:
+        if sc.options.verbose > 2:  # noqa: PLR2004 -- -vvv; numeric verbosity levels are
+            # the CLI's own convention (CLAUDE.md; I14b SPEC §2.1 rule 5)
             sc.debug('Cloudflare IPs:')
             pprint(cloudflare_ips)
         sc.plugin_context['plugin.cloudflare']['cloudflare_ipv4_nets'] = [ipaddress.ip_network(cidr) for cidr in cloudflare_ips.ipv4_cidrs]
