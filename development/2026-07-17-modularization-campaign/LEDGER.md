@@ -2044,3 +2044,11 @@ duplicate-code guard load-bearing rather than dead façade surface — §17 Q4),
 suite loads `check/` modules standalone once per test and a second `register()` of the same
 code would otherwise raise; and I14c stays **one increment** of six tasks under §11's
 split-never-compress backstop.
+
+**Correction (2026-07-24, I14c adversarial spec review round 1).** The paragraph above says
+"22 of the 37 carry extra csv fields". The measured figure is **28** (9 producers use the plain
+two-field `{site},{code}` form; 37 − 9 = 28), reproduced by
+`development/2026-07-24-mod-I14c-notice/tools/notice_inventory.py`, which the review's finding 7
+required and which now produces every such figure in the I14c SPEC. The amendment's substance is
+unaffected — the field set still gains `csv_extra` for the same reason — but a ratified campaign
+document does not carry a wrong number silently (CAMPAIGN.md §7 obligation 4).
