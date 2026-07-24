@@ -61,3 +61,11 @@ def test_registry_snapshot_and_restore_round_trip():
     assert r.codes() == frozenset({"a"})
     r.register("b")          # restore must make a re-registration legal again
     assert r.codes() == frozenset({"a", "b"})
+
+
+def test_csv_extra_rejects_a_non_str_element_by_name():
+    # Most producers live in check/, outside pyright's scope, so a forgotten str() around an int
+    # csv field must fail AT the producer with the notice code in the message, not later inside
+    # script_context's ",".join (PD#2 -- every error has a name).
+    with pytest.raises(TypeError, match=r"Notice\('updates-addons'\)\.csv_extra"):
+        Notice(severity=Severity.WARNING, code="updates-addons", html="<p>x</p>", csv_extra=(3,))

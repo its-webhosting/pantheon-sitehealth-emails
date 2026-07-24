@@ -401,7 +401,7 @@ costs no call-site churn beyond the two definitions.
 | `.ambr` snapshots — the 7 whole-dict entries in `tests/integration/__snapshots__/test_dns_notice_render.ambr` | **Each gains exactly one `'icon': …` line** and changes in no other byte. Cause: those builders omit `icon` today and are snapshotted *before* `add_notice` fills it; under D-i14c-10 they are snapshotted through the projection, which always emits it. The diff MUST be pasted in the task report and the ledger entry, and MUST show only added `'icon'` lines. (`test_plan_recommendation_notice_render.ambr`'s 2 whole-dict entries already carry all six keys, so they stay byte-identical — measured.) |
 | Notice csv **values** | **Unchanged.** I14c is NOT one of §8's sanctioned-change increments (I1, I7, I9, I14a) |
 | `-results.json` / `-notices.csv` / `-run.json` | Unchanged (structure and values) |
-| stdout / console | One change, sanctioned by §8: key order in the `-v` notices dump (`psh/cli.py:879`) for the 8 icon-less producers (§2.2 consequence 3) |
+| stdout / console | One change, sanctioned by §8: key order in the `-v` notices dump (`psh/cli.py:879`) for the 8 icon-less producers (§2.2 consequence 3) — **plus `no-domains`, and starting at Task 1**, since that notice has been `Notice`-based since I3 and so takes the new projection the moment it exists (measured at Task-1 review; `['type','csv','short','message','text','icon']` → `['type','icon','csv','short','message','text']`) |
 | Config keys | None added, renamed, or removed |
 | Exit codes, resume semantics, artifact gates | Unchanged |
 | Invariants 1–11 (CAMPAIGN.md §9) | All preserved. **Invariant 8** (column-0 `f"""` literals move verbatim) is this increment's top risk — instrument I2a (§4) is its mechanical proof |
@@ -526,7 +526,14 @@ canonical-alongside-`Notice`; I14c updates it factually, I14d rewrites it wholes
 git diff <spec-commit> -- tests/e2e/__snapshots__/     # MUST be empty
 git diff <spec-commit> -- '*.ambr'                     # MUST show ONLY the 7 added 'icon' lines
 uvx ruff@0.15.22 check .                               # merged config, single pass
-uvx pyright@1.1.411                                    # standard mode over psh/
+pyright                                                # the VENV binary (pinned 1.1.411 by the
+                                                       # test extra), which is what ./run-tests
+                                                       # resolves first.  A bare `uvx
+                                                       # pyright@1.1.411` runs in an isolated env
+                                                       # with none of the project's dependencies
+                                                       # and reports 34 false reportMissingImports
+                                                       # -- measured at Task 1; see the ledger's
+                                                       # discovered-tasks entry.
 python development/2026-07-24-mod-I14c-notice/tools/notice_inventory.py --gate   # MUST exit 0
 python development/2026-07-24-mod-I14c-notice/tools/literal_equality.py <spec-commit> \
     $(git diff --name-only <spec-commit> -- 'psh/*.py' 'check/*.py')             # MUST exit 0

@@ -19,11 +19,11 @@ class Severity(StrEnum):
 class Notice:
     """One report notice.  `code` is the stable unique slug (registry-enforced) that maps to the
     notices-CSV code field; `html` is the report-body HTML, `text` its plaintext (empty -> derived by
-    SiteContext.add_notice via html2text, as the dict form does); `short` is the one-line summary;
-    `icon` empty -> filled from `severity`; `order` places the notice ('prepend'/'first' -> front).
-    `csv_extra` holds the notices-CSV fields that follow `site,code` (CAMPAIGN.md §6 as amended at
-    I14c); elements MUST already be strings -- the projection does not coerce, so a format spec like
-    f"{savings:.2f}" stays visible at the producer."""
+    SiteContext.notice_to_dict via html2text); `short` is the one-line summary; `icon` empty ->
+    filled from `severity` by that same projection; `order` places the notice ('prepend'/'first' ->
+    front).  `csv_extra` holds the notices-CSV fields that follow `site,code` (CAMPAIGN.md §6 as
+    amended at I14c); elements MUST already be strings -- the projection does not coerce, so a
+    format spec like f"{savings:.2f}" stays visible at the producer."""
 
     severity: Severity
     code: str
@@ -33,6 +33,20 @@ class Notice:
     icon: str = ""
     order: str = "append"
     csv_extra: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject a non-str csv_extra element AT THE PRODUCER, by name.
+
+        VALIDATION, not coercion (SPEC I14c D-i14c-1 keeps the format spec at the producer).  Most
+        producers live in check/, which pyright does not gate (pyproject [tool.pyright] includes
+        only psh/), so a forgotten str() around an int csv field would otherwise surface much later
+        as an anonymous `TypeError: sequence item 2: expected str instance, int found` from
+        script_context's ",".join -- naming neither the notice nor the module (PD#2)."""
+        bad = [x for x in self.csv_extra if not isinstance(x, str)]
+        if bad:
+            raise TypeError(
+                f"Notice({self.code!r}).csv_extra elements must be str; got {bad!r}"
+            )
 
 
 class DuplicateNoticeCodeError(RuntimeError):

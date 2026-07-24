@@ -46,6 +46,9 @@ registers its notice codes at import through module-level constants, making
   (CLAUDE.md § Dispatching subagents).
 - Before dispatching, purge stale reports: `rm -f .superpowers/sdd/task-*-report.md`
   (LEDGER I1 process note — a stale report was once misreported as success).
+- **Run the type gate as `./run-tests` does: `pyright`, the venv binary** (pinned to 1.1.411 by
+  the test extra). A bare `uvx pyright@1.1.411` runs in an isolated environment with none of the
+  project's dependencies and reports ~34 false `reportMissingImports` — measured at Task 1.
 
 ## File Structure
 
