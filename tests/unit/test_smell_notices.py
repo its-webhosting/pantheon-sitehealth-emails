@@ -38,11 +38,19 @@ def test_composer_smell_alone_is_reported(psh):
     assert n.csv_extra == (json.dumps("composer broke").replace(",", "\\,"),)
 
 
-def test_smell_csv_field_escapes_embedded_commas(psh):
+@pytest.mark.parametrize(("wp", "drush", "composer", "expected"), [
+    ("a, b\nc", "", "", '"a\\, b\\nc"'),
+    ("", "d, e", "", '"d\\, e"'),
+    ("", "", "f, g", '"f\\, g"'),
+])
+def test_smell_csv_field_escapes_embedded_commas(psh, wp, drush, composer, expected):
     # The json.dumps(...).replace(",", "\\,") escaping is what keeps a multi-line stderr
-    # containing commas inside ONE csv field; csv_extra carries it verbatim.
-    (n,) = psh.build_smell_notices("s", "a, b\nc", "", "")
-    assert n.csv_extra == ('"a\\, b\\nc"',)
+    # containing commas inside ONE csv field; csv_extra carries it verbatim.  All THREE
+    # builders carry their own copy of the expression, so all three are pinned against a
+    # comma-bearing input -- a comma-free one makes the .replace a no-op and the assertion
+    # unable to go red (Task-2 review finding 3).
+    (n,) = psh.build_smell_notices("s", wp, drush, composer)
+    assert n.csv_extra == (expected,)
 
 
 def test_composer_html_interpolates_composer_not_drush(psh):

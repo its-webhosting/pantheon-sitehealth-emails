@@ -148,7 +148,7 @@ def build_plan_over_time(plan_on_day: dict, plot_right_date: datetime.date) -> l
 
 def build_plan_recommendation_notice(  # noqa: PLR0913 -- moved verbatim (CAMPAIGN.md section 3.1: moves get no algorithmic redesign); 6-arg signature pinned by test_plan_recommendation_notice.py and the recommend_plan call site
     site_name, current_plan, recommended_plan, savings, portal_site_id, umich
-):
+) -> Notice:
     """The its-recommends-plan notice.  umich selects the U-M (portal-linked) or generic copy."""
     if umich:
         message = f"""

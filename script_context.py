@@ -156,7 +156,10 @@ class SiteContext(dict):
         }
 
     def add_notices(self, notices: list) -> None:
-        """Add each notice dict returned by a builder (wp_error/drush_error/check_*module)."""
+        """Add each notice returned by a builder (wp_error/drush_error/check_*module).
+
+        Those builders return Notice objects since campaign I14c; the legacy dict arm of
+        add_notice survives only until this increment's last task retires it."""
         for notice in notices:
             self.add_notice(notice)
 

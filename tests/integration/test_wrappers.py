@@ -103,8 +103,12 @@ def test_drush_error_shape(psh):
     assert "<strong>its-wws-test2</strong>" in n.html
 
 
-def test_wp_error_csv_escapes_commas_in_the_command_stderr(psh):
+@pytest.mark.parametrize("builder", ["wp_error", "drush_error"])
+def test_error_csv_escapes_commas_in_the_command_stderr(psh, builder):
     # The json.dumps(...).replace(",", "\\,") escaping keeps a comma-bearing stderr inside
-    # ONE csv field; csv_extra carries the escaped string verbatim (SPEC I14c §2.1).
-    (n,) = psh.wp_error("s", "plugin-list", "Site s broke.", "a, b")
+    # ONE csv field; csv_extra carries the escaped string verbatim (SPEC I14c §2.1).  BOTH
+    # builders carry their own copy of the expression, so both are pinned against a
+    # comma-bearing input -- with comma-free stderr the .replace is a no-op and the
+    # assertion cannot go red on it (Task-2 review finding 3).
+    (n,) = getattr(psh, builder)("s", "plugin-list", "Site s broke.", "a, b")
     assert n.csv_extra == ("plugin-list", '"a\\, b"')

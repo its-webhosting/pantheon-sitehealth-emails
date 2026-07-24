@@ -89,7 +89,7 @@ def check_wordpress_plugin(  # noqa: PLR0913 -- moved verbatim, signature unchan
     display_name: str,
     url: str,
     reason: str,
-) -> list:
+) -> list[Notice]:
     notices = []
     if not isinstance(installed_plugins, list):
         return notices  # this error should already have been handled by our caller, so skip additional work
