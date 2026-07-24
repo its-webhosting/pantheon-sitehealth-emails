@@ -138,6 +138,8 @@ fqdn_re = re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.IGNORECASE)
 
 
 registry.register("no-domains", description="paid plan with no custom domains connected")
+NOTICE_NO_PRIMARY_DOMAIN = registry.register(
+    "no-primary-domain", description="multiple custom domains, none primary")
 
 
 # Expose helpers for check/ packages, which cannot import this dash-named script.
@@ -288,22 +290,25 @@ def parse_args(argv=None):
     return build_arg_parser().parse_args(argv)
 
 
-def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite):
-    """Return the no-primary-domain info notice dict, or None when it does not apply
+def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite) -> Notice | None:
+    """Return the no-primary-domain info Notice, or None when it does not apply
     (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3; rode to psh/cli.py with
-    main() at I14a -- D-i13-1 discharged)."""
+    main() at I14a -- D-i13-1 discharged).
+
+    csv_extra is one EMPTY field: this row has always ended in a trailing comma, and the
+    empty field is part of the historical -notices.csv shape (SPEC I14c §2.1)."""
     if (
         len(custom_domains) > 1
         and len(primary_domain) == 0
         and site["framework"] != "wordpress_network"
         and not is_multisite
     ):
-        return {
-            "type": "info",
-            "icon": "&#x1F50E;",  # magnifying glass
-            "csv": f"{site['name']},no-primary-domain,",
-            "short": "set a primary domain",
-            "message": f"""
+        return Notice(
+            severity=Severity.INFO,
+            code=NOTICE_NO_PRIMARY_DOMAIN,
+            csv_extra=("",),
+            short="set a primary domain",
+            html=f"""
                     <p><strong>{site["name"]}</strong>
                     <a href="https://dashboard.pantheon.io/sites/{site["id"]}#live/DomainsHTTPS/list">
                     does not have a primary domain set</a> in the Pantheon dashboard. Setting a
@@ -311,7 +316,7 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
                     It will also increase the Cloudflare cache hit ratio, lowering Pantheon visitor numbers.</p>
                     <p><i>Do not set a primary domain if </i><strong>{site["name"]}</strong><i> is a multisite.</i></p>
                     """,
-            "text": f"""
+            text=f"""
                     {site["name"]} does not have a primary domain set
                     in the Pantheon dashboard.
                     <https://dashboard.pantheon.io/sites/{site["id"]}#live/DomainsHTTPS/list>
@@ -323,7 +328,7 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
                     DO NOT set a primary domain if {site["name"]} is a
                     multisite.
                     """,
-        }
+        )
     return None
 
 

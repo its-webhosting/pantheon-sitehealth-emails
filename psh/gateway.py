@@ -20,6 +20,11 @@ from typing import Any, NamedTuple
 from rich.markup import escape
 
 import script_context as sc
+from psh.notice import Notice, Severity, registry
+
+# Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6).
+NOTICE_WP_ERROR = registry.register("wp-error", description="wp-cli command failed")
+NOTICE_DRUSH_ERROR = registry.register("drush-error", description="drush command failed")
 
 
 class GatewayResult(NamedTuple):
@@ -212,20 +217,24 @@ def wp_eval(siteenv: str, *args) -> GatewayResult:
     return GatewayResult(output.strip(), errors.strip(), fatal)
 
 
-def wp_error(site: str, code: str, message: str, errors: str) -> list[dict[str, str]]:
+def wp_error(site: str, operation: str, message: str, errors: str) -> list[Notice]:
+    """The wp-error alert for a FAILED wp command.  `operation` is the failing operation
+    ("version-check", "plugin-list", ...) and becomes the first extra csv field -- it is NOT
+    the notice code, which is wp-error (renamed from `code` at campaign I14c, D-i14c-8:
+    two different things named `code` in one call is the collision PD#11 forbids)."""
     html_message = message.replace(site, f"<strong>{site}</strong>")
     return [
-        {
-            "type": "alert",
-            "icon": "&#x1F6A8;",  # police car light
-            "csv": f"{site},wp-error,{code},{json.dumps(errors).replace(',', '\\,')}",
-            "short": "fix WP CLI error",
-            "message": f"""
+        Notice(
+            severity=Severity.ALERT,
+            code=NOTICE_WP_ERROR,
+            csv_extra=(operation, json.dumps(errors).replace(',', '\\,')),
+            short="fix WP CLI error",
+            html=f"""
 <p>{html_message}
 <code>wp</code> (WP CLI) returned the following error:</p>
 <pre>{html.escape(errors)}</pre>
 """,
-            "text": f"""
+            text=f"""
 {message}
 "wp" (WP CLI) returned the following error:
 
@@ -234,7 +243,7 @@ def wp_error(site: str, code: str, message: str, errors: str) -> list[dict[str, 
 ----- END WP CLI ERROR -----
 
 """,
-        }
+        )
     ]
 
 
@@ -294,20 +303,23 @@ def drush_php_script(siteenv: str, script: str) -> GatewayResult:
     return GatewayResult(result, errors.strip(), fatal)
 
 
-def drush_error(site: str, code: str, message: str, errors: str) -> list[dict[str, str]]:
+def drush_error(site: str, operation: str, message: str, errors: str) -> list[Notice]:
+    """The drush-error alert for a FAILED drush command.  `operation` is the failing operation
+    ("core-status", "pm-list", ...) and becomes the first extra csv field -- it is NOT the
+    notice code, which is drush-error (renamed from `code` at campaign I14c, D-i14c-8)."""
     html_message = message.replace(site, f"<strong>{site}</strong>")
     return [
-        {
-            "type": "alert",
-            "icon": "&#x1F6A8;",  # police car light
-            "csv": f"{site},drush-error,{code},{json.dumps(errors).replace(',', '\\,')}",
-            "short": "fix drush error",
-            "message": f"""
+        Notice(
+            severity=Severity.ALERT,
+            code=NOTICE_DRUSH_ERROR,
+            csv_extra=(operation, json.dumps(errors).replace(',', '\\,')),
+            short="fix drush error",
+            html=f"""
 <p>{html_message}
 <code>drush</code> returned the following error:</p>
 <pre>{html.escape(errors)}</pre>
 """,
-            "text": f"""
+            text=f"""
 {message}
 drush returned the following error:
 
@@ -316,5 +328,5 @@ drush returned the following error:
 ----- END ERROR -----
 
 """,
-        }
+        )
     ]

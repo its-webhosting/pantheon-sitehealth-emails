@@ -44,7 +44,25 @@ from psh.gateway import (
     wp_error,
     wp_eval,
 )
+from psh.notice import Notice, Severity, registry
 from psh.render import escape_url
+
+# Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered, and a second register() of
+# the same code raises DuplicateNoticeCodeError.  not-installed / turned-off are registered
+# ONCE even though check_wordpress_plugin and check_drupal_module both emit them.
+NOTICE_NOT_INSTALLED = registry.register(
+    "not-installed", description="recommended plugin/module not installed")
+NOTICE_MULTIPLE_INSTALLED = registry.register(
+    "multiple-installed", description="plugin installed more than once")
+NOTICE_TURNED_OFF = registry.register(
+    "turned-off", description="recommended plugin/module installed but inactive")
+NOTICE_COMPOSER_UPDATE = registry.register(
+    "composer-update", description="composer update dry run failed")
+NOTICE_WP_SMELL = registry.register("wp-smell", description="wp-cli wrote to stderr")
+NOTICE_DRUSH_SMELL = registry.register("drush-smell", description="drush wrote to stderr")
+NOTICE_COMPOSER_SMELL = registry.register(
+    "composer-smell", description="composer wrote to stderr")
 
 
 class WordPressGather(NamedTuple):
@@ -83,14 +101,14 @@ def check_wordpress_plugin(  # noqa: PLR0913 -- moved verbatim, signature unchan
             f":exclamation: [bold red] ATTENTION: {site} does not have the {display_name} plugin installed."
         )
         notices.append(
-            {
-                "type": "warning",
-                "icon": "&#x26A0;",  # warning sign
-                "csv": f"{site},not-installed,{name}",
-                "short": f"install the {name} plugin",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be installed:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} WordPress plugin\n<{url}>\nneeds to be installed: {reason}",
-            }
+            Notice(
+                severity=Severity.WARNING,
+                code=NOTICE_NOT_INSTALLED,
+                csv_extra=(name,),
+                short=f"install the {name} plugin",
+                html=f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be installed:</p><p>{html.escape(reason)}</p>',
+                text=f"The {display_name} WordPress plugin\n<{url}>\nneeds to be installed: {reason}",
+            )
         )
         return notices
 
@@ -99,14 +117,14 @@ def check_wordpress_plugin(  # noqa: PLR0913 -- moved verbatim, signature unchan
             f":exclamation: [bold red] ATTENTION: {site} has more than one {display_name} plugin installed."
         )
         notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site},multiple-installed,{name}",
-                "short": f"plugin {name} installed multiple times",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin is installed multiple times.</p>',
-                "text": f"The {display_name} WordPress plugin\n<{url}>\nis installed multiple times.",
-            }
+            Notice(
+                severity=Severity.INFO,
+                code=NOTICE_MULTIPLE_INSTALLED,
+                csv_extra=(name,),
+                short=f"plugin {name} installed multiple times",
+                html=f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin is installed multiple times.</p>',
+                text=f"The {display_name} WordPress plugin\n<{url}>\nis installed multiple times.",
+            )
         )
 
     plugin = installed[0]
@@ -119,14 +137,14 @@ def check_wordpress_plugin(  # noqa: PLR0913 -- moved verbatim, signature unchan
             f":exclamation: [bold red] ATTENTION: {site} has the {display_name} plugin installed but it is not active."
         )
         notices.append(
-            {
-                "type": "warning",
-                "icon": "&#x26A0;",  # warning sign
-                "csv": f"{site},turned-off,{name}",
-                "short": f"activate plugin {name}",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be activated:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} WordPress plugin\n<{url}>\nneeds to be activated: {reason}",
-            }
+            Notice(
+                severity=Severity.WARNING,
+                code=NOTICE_TURNED_OFF,
+                csv_extra=(name,),
+                short=f"activate plugin {name}",
+                html=f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> WordPress plugin needs to be activated:</p><p>{html.escape(reason)}</p>',
+                text=f"The {display_name} WordPress plugin\n<{url}>\nneeds to be activated: {reason}",
+            )
         )
 
     return notices
@@ -140,28 +158,29 @@ def check_drupal_module(  # noqa: PLR0913 -- moved verbatim, signature unchanged
     url: str,
     reason: str,
     level: str = "warning",
-) -> list:
+) -> list[Notice]:
+    """`level` is the notice severity: "warning" (default) or "info" (check/umich/
+    cloudflare_cms.py's purge_processor_cron).  It reaches Severity(level), so an unknown
+    level raises ValueError HERE, at the producer -- campaign I14c replaced a hand-rolled
+    2-entry severity->icon map that silently shipped a warning triangle on an alert
+    notice (SPEC I14c §2.4, PD#1/PD#2)."""
     notices = []
     if not isinstance(installed_mods, dict):
         return notices  # this error should already have been handled by our caller, so skip additional work
-
-    icon = "&#x26A0;"  # warning sign
-    if level == "info":
-        icon = "&#x1F50E;"  # magnifying glass
 
     if name not in installed_mods:
         sc.console.print(
             f":exclamation: [bold red] ATTENTION: {site} does not have the {display_name} module installed."
         )
         notices.append(
-            {
-                "type": level,
-                "icon": icon,
-                "csv": f"{site},not-installed,{name}",
-                "short": f"install module {name}",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be installed:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} Drupal module\n<{url}>\nneeds to be installed: {reason}",
-            }
+            Notice(
+                severity=Severity(level),
+                code=NOTICE_NOT_INSTALLED,
+                csv_extra=(name,),
+                short=f"install module {name}",
+                html=f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be installed:</p><p>{html.escape(reason)}</p>',
+                text=f"The {display_name} Drupal module\n<{url}>\nneeds to be installed: {reason}",
+            )
         )
         return notices
 
@@ -171,14 +190,14 @@ def check_drupal_module(  # noqa: PLR0913 -- moved verbatim, signature unchanged
             f":exclamation: [bold red] ATTENTION: {site} has the {display_name} module installed but it is not enabled."
         )
         notices.append(
-            {
-                "type": level,
-                "icon": icon,
-                "csv": f"{site},turned-off,{name}",
-                "short": f"enable module {name}",
-                "message": f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be enabled:</p><p>{html.escape(reason)}</p>',
-                "text": f"The {display_name} Drupal module\n<{url}>\nneeds to be enabled: {reason}",
-            }
+            Notice(
+                severity=Severity(level),
+                code=NOTICE_TURNED_OFF,
+                csv_extra=(name,),
+                short=f"enable module {name}",
+                html=f'<p>The <a href="{escape_url(url)}">{html.escape(display_name)}</a> Drupal module needs to be enabled:</p><p>{html.escape(reason)}</p>',
+                text=f"The {display_name} Drupal module\n<{url}>\nneeds to be enabled: {reason}",
+            )
         )
 
     return notices
@@ -443,17 +462,16 @@ def gather_drupal(site: dict, live_site: str, site_context) -> DrupalGather:  # 
         updates, errors, fatal = run_terminus(command)
         if fatal or updates is None:
             site_context.add_notice(
-                {
-                    "type": "alert",
-                    "icon": "&#x1F6A8;",  # police car light
-                    "csv": f"{site['name']},composer-update",
-                    "short": "fix composer error",
-                    "message": f"""
+                Notice(
+                    severity=Severity.ALERT,
+                    code=NOTICE_COMPOSER_UPDATE,
+                    short="fix composer error",
+                    html=f"""
                     <p>Unable to run <code>composer update --dry-run</code> for {site["name"]}.
                     <code>composer</code> returned the following error:</p>
                     <pre>{html.escape(errors)}</pre>
                     """,
-                    "text": f"""
+                    text=f"""
                     Unable to run 'composer update --dry-run' for {site["name"]}.
                     composer returned the following error:
 
@@ -462,7 +480,7 @@ def gather_drupal(site: dict, live_site: str, site_context) -> DrupalGather:  # 
                     ----- END ERROR -----
 
                     """,
-                }
+                )
             )
         elif errors != "":
             composer_smell = errors
@@ -571,24 +589,24 @@ def gather_drupal(site: dict, live_site: str, site_context) -> DrupalGather:  # 
     )
 
 
-def build_smell_notices(site_name, wp_smell, drush_smell, composer_smell):
-    """Return the list of smell notice dicts (possibly empty) for one site (BLOCKMAP
+def build_smell_notices(site_name, wp_smell, drush_smell, composer_smell) -> list[Notice]:
+    """Return the list of smell Notices (possibly empty) for one site (BLOCKMAP
     B48). The emission call stays in main() (SPEC D-i10-1 amendment 1); this is only
     the builder."""
     notices = []
     if wp_smell != "":
         notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site_name},wp-smell,{json.dumps(wp_smell).replace(',', '\\,')}",
-                "short": "PHP code problems",
-                "message": f"""
+            Notice(
+                severity=Severity.INFO,
+                code=NOTICE_WP_SMELL,
+                csv_extra=(json.dumps(wp_smell).replace(',', '\\,'),),
+                short="PHP code problems",
+                html=f"""
 <p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site_name}</strong>.
 Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
 <pre>{html.escape(wp_smell)}</pre>
 """,
-                "text": f"""
+                text=f"""
 The "wp" (WP CLI) command is reporting PHP code problems with
 {site_name}. Even if this is not breaking anything at
 the moment, it should be fixed to avoid possible future problems:
@@ -598,22 +616,22 @@ the moment, it should be fixed to avoid possible future problems:
 ----- END OF WP CLI REPORTED PROBLEMS -----
 
     """,
-            }
+            )
         )
 
     if drush_smell != "":
         notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site_name},drush-smell,{json.dumps(drush_smell).replace(',', '\\,')}",
-                "short": "PHP code problems",
-                "message": f"""
+            Notice(
+                severity=Severity.INFO,
+                code=NOTICE_DRUSH_SMELL,
+                csv_extra=(json.dumps(drush_smell).replace(',', '\\,'),),
+                short="PHP code problems",
+                html=f"""
 <p>The <code>drush</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
 if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
 <pre>{html.escape(drush_smell)}</pre>
 """,
-                "text": f"""
+                text=f"""
 The "drush" command is reporting PHP code problems with
 {site_name}. Even if this is not breaking anything
 at the moment, it should be fixed to avoid possible future problems:
@@ -623,22 +641,22 @@ at the moment, it should be fixed to avoid possible future problems:
 ----- END OF DRUSH REPORTED PROBLEMS -----
 
 """,
-            }
+            )
         )
 
     if composer_smell != "":
         notices.append(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site_name},composer-smell,{json.dumps(composer_smell).replace(',', '\\,')}",
-                "short": "PHP code problems",
-                "message": f"""
+            Notice(
+                severity=Severity.INFO,
+                code=NOTICE_COMPOSER_SMELL,
+                csv_extra=(json.dumps(composer_smell).replace(',', '\\,'),),
+                short="PHP code problems",
+                html=f"""
 <p>The <code>composer</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
 if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
 <pre>{html.escape(composer_smell)}</pre>
 """,
-                "text": f"""
+                text=f"""
 The "composer" command is reporting PHP code problems with
 {site_name}. Even if this is not breaking anything
 at the moment, it should be fixed to avoid possible future problems:
@@ -648,6 +666,6 @@ at the moment, it should be fixed to avoid possible future problems:
 ----- END OF COMPOSER REPORTED PROBLEMS -----
 
 """,
-            }
+            )
         )
     return notices

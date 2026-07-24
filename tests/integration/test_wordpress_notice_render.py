@@ -68,11 +68,12 @@ PAPC_ARGS = (
 def test_papc_builder_not_installed_snapshot(reset_sc, monkeypatch, snapshot):
     recording_console(monkeypatch, reset_sc)
     notices = check_wordpress_plugin(SITE, [], *PAPC_ARGS)
-    assert [n["csv"] for n in notices] == [f"{SITE},not-installed,pantheon-advanced-page-cache"]
-    assert notices[0]["type"] == "warning"
-    assert notices[0]["message"] == snapshot
-    assert notices[0]["text"] == snapshot
-    assert notices[0]["short"] == snapshot
+    assert [(n.code, n.csv_extra) for n in notices] == [
+        ("not-installed", ("pantheon-advanced-page-cache",))]
+    assert notices[0].severity == "warning"
+    assert notices[0].html == snapshot
+    assert notices[0].text == snapshot
+    assert notices[0].short == snapshot
 
 
 def test_papc_builder_multiple_installed_snapshot(reset_sc, monkeypatch, snapshot):
@@ -82,23 +83,24 @@ def test_papc_builder_multiple_installed_snapshot(reset_sc, monkeypatch, snapsho
         {"name": "pantheon-advanced-page-cache", "status": "active"},
     ]
     notices = check_wordpress_plugin(SITE, plugins, *PAPC_ARGS)
-    assert [n["csv"] for n in notices] == [
-        f"{SITE},multiple-installed,pantheon-advanced-page-cache"]
-    assert notices[0]["type"] == "info"
-    assert notices[0]["message"] == snapshot
-    assert notices[0]["text"] == snapshot
-    assert notices[0]["short"] == snapshot
+    assert [(n.code, n.csv_extra) for n in notices] == [
+        ("multiple-installed", ("pantheon-advanced-page-cache",))]
+    assert notices[0].severity == "info"
+    assert notices[0].html == snapshot
+    assert notices[0].text == snapshot
+    assert notices[0].short == snapshot
 
 
 def test_papc_builder_turned_off_snapshot(reset_sc, monkeypatch, snapshot):
     recording_console(monkeypatch, reset_sc)
     plugins = [{"name": "pantheon-advanced-page-cache", "status": "inactive"}]
     notices = check_wordpress_plugin(SITE, plugins, *PAPC_ARGS)
-    assert [n["csv"] for n in notices] == [f"{SITE},turned-off,pantheon-advanced-page-cache"]
-    assert notices[0]["type"] == "warning"
-    assert notices[0]["message"] == snapshot
-    assert notices[0]["text"] == snapshot
-    assert notices[0]["short"] == snapshot
+    assert [(n.code, n.csv_extra) for n in notices] == [
+        ("turned-off", ("pantheon-advanced-page-cache",))]
+    assert notices[0].severity == "warning"
+    assert notices[0].html == snapshot
+    assert notices[0].text == snapshot
+    assert notices[0].short == snapshot
 
 
 def test_papc_builder_active_plugin_returns_nothing(reset_sc):

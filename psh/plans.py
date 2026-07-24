@@ -15,6 +15,11 @@ import script_context as sc
 from psh.configuration import umich_enabled
 from psh.db import db_retry, load_overage_protection_window
 from psh.gateway import terminus
+from psh.notice import Notice, Severity, registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6).
+NOTICE_ITS_RECOMMENDS_PLAN = registry.register(
+    "its-recommends-plan", description="a cheaper plan fits this site's traffic")
 
 cost_table_columns = [
     {"name": "plan", "label": "Plan"},
@@ -182,14 +187,16 @@ You may want to stay on the {current_plan} plan if the site
 has had one-time traffic spikes or you think site traffic will be
 decreasing soon.
 """
-    return {
-        "type": "info",
-        "icon": "&#x1F50E;",  # magnifying glass
-        "csv": f"{site_name},its-recommends-plan,{current_plan},{recommended_plan},{savings:.2f}",
-        "short": "plan change recommended",
-        "message": message,
-        "text": text,
-    }
+    return Notice(
+        severity=Severity.INFO,
+        code=NOTICE_ITS_RECOMMENDS_PLAN,
+        # D-i7-5: the savings field is comma-free -- a thousands separator inside a
+        # comma-separated row would split the field and make the column count variable.
+        csv_extra=(current_plan, recommended_plan, f"{savings:.2f}"),
+        short="plan change recommended",
+        html=message,
+        text=text,
+    )
 
 
 @dataclasses.dataclass(frozen=True)

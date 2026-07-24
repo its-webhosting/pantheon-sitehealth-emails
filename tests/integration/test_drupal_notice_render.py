@@ -26,24 +26,24 @@ PAPC_ARGS = (
 def test_check_drupal_module_not_installed_snapshot(psh, reset_sc, monkeypatch, snapshot):
     recording_console(monkeypatch, reset_sc)
     notices = psh.check_drupal_module(SITE, {}, *PAPC_ARGS)
-    assert [n["csv"] for n in notices] == \
-        [f"{SITE},not-installed,pantheon_advanced_page_cache"]
-    assert notices[0]["type"] == "warning"
-    assert notices[0]["message"] == snapshot
-    assert notices[0]["text"] == snapshot
-    assert notices[0]["short"] == snapshot
+    assert [(n.code, n.csv_extra) for n in notices] == \
+        [("not-installed", ("pantheon_advanced_page_cache",))]
+    assert notices[0].severity == "warning"
+    assert notices[0].html == snapshot
+    assert notices[0].text == snapshot
+    assert notices[0].short == snapshot
 
 
 def test_check_drupal_module_turned_off_snapshot(psh, reset_sc, monkeypatch, snapshot):
     recording_console(monkeypatch, reset_sc)
     modules = {"pantheon_advanced_page_cache": {"status": "Disabled"}}
     notices = psh.check_drupal_module(SITE, modules, *PAPC_ARGS)
-    assert [n["csv"] for n in notices] == \
-        [f"{SITE},turned-off,pantheon_advanced_page_cache"]
-    assert notices[0]["type"] == "warning"
-    assert notices[0]["message"] == snapshot
-    assert notices[0]["text"] == snapshot
-    assert notices[0]["short"] == snapshot
+    assert [(n.code, n.csv_extra) for n in notices] == \
+        [("turned-off", ("pantheon_advanced_page_cache",))]
+    assert notices[0].severity == "warning"
+    assert notices[0].html == snapshot
+    assert notices[0].text == snapshot
+    assert notices[0].short == snapshot
 
 
 # ── drupal7-eol (check/drupal/d7_eol.py) ─────────────────────────────────────────────
@@ -81,6 +81,6 @@ def test_no_primary_domain_notice_snapshot(psh, snapshot):
     site = {"name": SITE, "id": SITE_ID, "framework": "drupal9"}
     notice = psh.no_primary_domain_notice(
         site, ["a.example.com", "b.example.com"], "", False)
-    assert notice["message"] == snapshot
-    assert notice["text"] == snapshot
-    assert notice["short"] == snapshot
+    assert notice.html == snapshot
+    assert notice.text == snapshot
+    assert notice.short == snapshot

@@ -11,10 +11,22 @@ pytestmark = pytest.mark.unit
 SITE = {"name": "its-wws-test1", "id": "abc123", "framework": "drupal9"}
 
 
-def test_gate_true_returns_the_notice_dict(psh):
+def test_gate_true_returns_the_notice(psh):
     notice = psh.no_primary_domain_notice(SITE, ["a.example.com", "b.example.com"], "", False)
     assert notice is not None
-    assert notice["csv"] == f"{SITE['name']},no-primary-domain,"
+    assert notice.code == "no-primary-domain"
+    # The trailing empty csv field is real and load-bearing (SPEC I14c §2.1): the row has
+    # always ended in a comma, so csv_extra carries one empty field.
+    assert notice.csv_extra == ("",)
+
+
+def test_gate_true_projects_to_the_historical_csv_row(psh, reset_sc):
+    # End-to-end pin of the exact -notices.csv row, through the projection that now owns
+    # the site-name half (instrument I3).
+    ctx = reset_sc.SiteContext(SITE)
+    ctx.add_notice(psh.no_primary_domain_notice(
+        SITE, ["a.example.com", "b.example.com"], "", False))
+    assert ctx["notices"][0]["csv"] == f"{SITE['name']},no-primary-domain,"
 
 
 def test_multisite_suppresses_the_notice(psh):

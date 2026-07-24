@@ -81,21 +81,30 @@ def test_fix_drush_output_empty(psh):
 
 
 # ── error-notice builders ────────────────────────────────────────────────────────────
+# Repointed at campaign I14c: these return Notice objects.  The second positional argument
+# is the failing OPERATION (renamed from `code` at D-i14c-8) and becomes csv_extra[0]; the
+# notice code is wp-error / drush-error.  Asserted values are unchanged.
 def test_wp_error_shape(psh):
     notices = psh.wp_error("its-wws-test1", "PLUGIN_FAIL", "Site its-wws-test1 broke.", "boom")
     assert isinstance(notices, list) and len(notices) == 1
     n = notices[0]
-    assert n["type"] == "alert"
-    assert {"type", "icon", "csv", "short", "message", "text"} <= set(n)
-    assert "<strong>its-wws-test1</strong>" in n["message"]
-    assert n["csv"].startswith("its-wws-test1,wp-error,PLUGIN_FAIL,")
-    assert "boom" in n["text"]
+    assert n.severity == "alert"
+    assert "<strong>its-wws-test1</strong>" in n.html
+    assert (n.code, n.csv_extra) == ("wp-error", ("PLUGIN_FAIL", '"boom"'))
+    assert "boom" in n.text
 
 
 def test_drush_error_shape(psh):
     notices = psh.drush_error("its-wws-test2", "DRUSH_FAIL", "Site its-wws-test2 broke.", "kaboom")
     assert len(notices) == 1
     n = notices[0]
-    assert n["type"] == "alert"
-    assert n["csv"].startswith("its-wws-test2,drush-error,DRUSH_FAIL,")
-    assert "<strong>its-wws-test2</strong>" in n["message"]
+    assert n.severity == "alert"
+    assert (n.code, n.csv_extra) == ("drush-error", ("DRUSH_FAIL", '"kaboom"'))
+    assert "<strong>its-wws-test2</strong>" in n.html
+
+
+def test_wp_error_csv_escapes_commas_in_the_command_stderr(psh):
+    # The json.dumps(...).replace(",", "\\,") escaping keeps a comma-bearing stderr inside
+    # ONE csv field; csv_extra carries the escaped string verbatim (SPEC I14c §2.1).
+    (n,) = psh.wp_error("s", "plugin-list", "Site s broke.", "a, b")
+    assert n.csv_extra == ("plugin-list", '"a\\, b"')
