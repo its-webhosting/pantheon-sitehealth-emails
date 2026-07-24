@@ -15,6 +15,15 @@ gating fix.
 """
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).  The drush-error notices this
+# check also emits are built by sc.drush_error, which registers its code in psh/gateway.py.
+NOTICE_DRUPAL_UA = registry.register(
+    "drupal-ua", description="Drupal outgoing HTTP user agent is not configured for U-M")
 
 
 def check_drupal_ua(site_context):
@@ -76,18 +85,18 @@ echo( json_encode( array( 'result' => "{$result}" ) ) );
         or "your_site" in ua["result"].lower()
     ):
         site_context.add_notice(
-            {
-                "type": "info",
-                "icon": "&#x1F50E;",  # magnifying glass
-                "csv": f"{site['name']},drupal-ua,{ua['result']}",
-                "short": "Drupal user agent needs to be configured",
-                "message": f"""
+            sc.Notice(
+                severity=sc.Severity.INFO,
+                code=NOTICE_DRUPAL_UA,
+                csv_extra=(ua["result"],),
+                short="Drupal user agent needs to be configured",
+                html=f"""
 <p>Please <a href="https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent">
 configure the user agent string</a> that <strong>{site["name"]}</strong> uses for outgoing HTTP requests.
 This will ensure that requests for data that this site makes of other University of Michigan websites do
 not get blocked.</p>
 """,
-                "text": f"""
+                text=f"""
 Please configure the user agent string that {site["name"]}
 uses for outgoing HTTP requests.  This will ensure that requests for
 data that this site makes of other University of Michigan websites do
@@ -95,5 +104,5 @@ not get blocked.
 
 <https://documentation.its.umich.edu/node/4242#:~:text=Configure%20site%20User%20Agent>
 """,
-            }
+            )
         )

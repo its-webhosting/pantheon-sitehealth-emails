@@ -13,19 +13,39 @@ Aug-2026 removal marker; CAMPAIGN.md §8 as amended 2026-07-23.)
 
 Registered inside check/umich/__init__.py's [UMich].enabled guard, so the `umich_enabled()`
 test is subsumed by the registration gate (the oidc_login/drupal_ua precedent).
+
+The builder returns a Notice; the hook publishes the PROJECTED render dict, so the produced
+key's type and every consumer (`sort_notices_and_subject`) are unchanged (SPEC I14c §2.5).
 """
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).
+NOTICE_ANNUAL_BILL = registry.register(
+    "annual-bill", description="the site's annual Pantheon plan cost is billed on July 1")
 
 
 def build_annual_bill_upcoming_notice(site_name, plan_name, annual_bill, shortcode, portal_site_id):
-    """The contract-year-end "will be billed July 1" alert (BLOCKMAP B50)."""
-    return {
-        "type": "alert",
-        "icon": "&#x1F4B5;",  # dollar banknotes
-        "csv": f"{site_name},annual-bill,{annual_bill},{shortcode}",
-        "short": f"${annual_bill:,.2f} will be billed to shortcode {shortcode} on July 1",
-        "message": f"""
+    """The contract-year-end "will be billed July 1" alert (BLOCKMAP B50).
+
+    The ONE notice in the program that keeps an explicit `icon` (SPEC I14c §2.4 #30,
+    D-i14c-5): the banknote is not the alert severity's default, so deleting it would change
+    the rendered email.  `csv_extra` reproduces the pre-I14c csv field-for-field --
+    str(annual_bill) is the plain `{annual_bill}` rendering the row has always used, NOT the
+    `${annual_bill:,.2f}` of `short` below; the two renderings of the same number are both
+    load-bearing and deliberately different.
+    """
+    return sc.Notice(
+        severity=sc.Severity.ALERT,
+        code=NOTICE_ANNUAL_BILL,
+        icon="&#x1F4B5;",  # dollar banknotes
+        csv_extra=(str(annual_bill), str(shortcode)),
+        short=f"${annual_bill:,.2f} will be billed to shortcode {shortcode} on July 1",
+        html=f"""
                 <p style="background-color: #f8d7da; padding: 1em; border: 2px solid #58151c;">
                     On July 1, ${annual_bill:,.2f} will be billed to shortcode <strong>{shortcode}</strong>
                     when ITS runs its billing process.  This charge will be for a
@@ -51,7 +71,7 @@ def build_annual_bill_upcoming_notice(site_name, plan_name, annual_bill, shortco
                 </ul>
                 <p>On July 1, you will be billed for the plan the site was on as of June 30.</p>
                 """,
-        "text": f"""
+        text=f"""
 =======================================================================
 On July 1, ${annual_bill:,.2f} will be billed to shortcode {shortcode}
 when ITS runs its billing process.  This charge will be for a full
@@ -83,7 +103,7 @@ shortcode?
 On July 1, you will be billed for the plan the site was on as of
 June 30.
 """,
-    }
+    )
 
 
 def _billing_inputs(site_context) -> tuple[dict, dict, float]:
@@ -98,6 +118,8 @@ def check_annual_bill_upcoming(site_context) -> None:
     if not sc.contract_year_end(site_context["end_date"]):
         return
     site, portal_site, annual_bill = _billing_inputs(site_context)
-    site_context["annual_bill_upcoming"] = build_annual_bill_upcoming_notice(
-        site["name"], site["plan_name"], annual_bill, portal_site["shortcode"], portal_site["id"]
+    site_context["annual_bill_upcoming"] = site_context.notice_to_dict(
+        build_annual_bill_upcoming_notice(
+            site["name"], site["plan_name"], annual_bill, portal_site["shortcode"], portal_site["id"]
+        )
     )

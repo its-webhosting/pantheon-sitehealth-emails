@@ -8,6 +8,14 @@ import sqlalchemy as db
 from rich.pretty import pprint
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).
+NOTICE_SITELENS_URL_PATHS = registry.register(
+    "sitelens-url-paths", description="too few URL paths configured for SiteLens scanning")
 
 GAUGE_PIXELS_WIDTH = 128
 GAUGE_PIXELS_HEIGHT = 128
@@ -103,16 +111,17 @@ def check_sitelens_urls(site_context) -> None:
         return
 
     sc.debug(f'[red]NOTE: {site_name} only has {num_paths_configured} SiteLens paths configured')
-    site_context.add_notice({
-        'type': 'info',
-        'csv': f'{site_name},sitelens-url-paths,{num_paths_configured}',
-        'short': 'add paths to SiteLens',
-        'message': f'''
+    site_context.add_notice(sc.Notice(
+        severity=sc.Severity.INFO,
+        code=NOTICE_SITELENS_URL_PATHS,
+        csv_extra=(str(num_paths_configured),),  # int -> str: csv_extra elements MUST already be strings (SPEC I14c §2.1)
+        short='add paths to SiteLens',
+        html=f'''
 <p>To ensure accurate SiteLens reports, please
 <a href="https://admin.webservices.umich.edu/sites/{portal_site_id}/scan-configurations/">configure at least two
 URL paths</a>, not counting '<code>/</code>', for SiteLens to analyze on <strong>{site_name}</strong>.</p>
 '''
-    })
+    ))
 
 
 def create_gauge_image(value: int, color: str, title: str) -> bytes:

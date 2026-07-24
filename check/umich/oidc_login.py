@@ -7,6 +7,19 @@ wordpress.org, so WordPress can no longer auto-update the plugin.
 
 import semver
 
+import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered.  `registry` comes from
+# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
+# and repoints every check/ module (CAMPAIGN.md section 3.5).  `sc` is imported here for the
+# first time at I14c: the Notice type reaches check/ modules through the facade
+# (sc.Notice/sc.Severity), the convention every converted sibling follows.
+NOTICE_UMICH_OIDC_LOGIN_REINSTALL = registry.register(
+    "umich-oidc-login-reinstall",
+    description="umich-oidc-login must be reinstalled by hand to keep updating")
+
 
 def check_oidc_login(site_context):
     if not site_context["framework"].startswith("wordpress"):
@@ -20,12 +33,11 @@ def check_oidc_login(site_context):
         if p["name"] == "umich-oidc-login" and p["status"] != "inactive":  # noqa: SIM102 -- nesting moved verbatim from B34 (Invariant 8); keeps the notice-dict indentation byte-stable
             if semver.compare(p["version"], "1.2.99") <= 0:
                 site_context.add_notice(
-                    {
-                        "type": "warning",
-                        "icon": "&#x26A0;",  # warning sign
-                        "csv": f"{site['name']},umich-oidc-login-reinstall",
-                        "short": "Reinstall the UMich OIDC Login plugin to get the latest version",
-                        "message": f"""
+                    sc.Notice(
+                        severity=sc.Severity.WARNING,
+                        code=NOTICE_UMICH_OIDC_LOGIN_REINSTALL,
+                        short="Reinstall the UMich OIDC Login plugin to get the latest version",
+                        html=f"""
 <p><strong>Please reinstall the UMich OIDC Login plugin to get the latest version.</strong></p>
 <p>Versions 1.3.0 and later of the UMich OIDC Login plugin are hosted
 <a href="https://github.com/its-webhosting/umich-oidc-login">on GitHub</a> rather than on wordpress.org.
@@ -56,7 +68,7 @@ WordPress roles Contributor, Author, and Editor not to use Cross-Site Scripting 
 and gain Administrator access for themselves.  If you don't want to turn this option on, an alternative is to use a
 child theme or a custom plugin to style the OIDC buttons/links.</p>
 """,
-                        "text": f"""
+                        text=f"""
 Please reinstall the UMich OIDC Login plugin
 to get the latest version.
 
@@ -101,5 +113,5 @@ for themselves.  If you don't want to turn this option on, an
 alternative is to use a child theme or a custom plugin to style
 the OIDC buttons/links.
 """,
-                    }
+                    )
                 )

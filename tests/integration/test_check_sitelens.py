@@ -99,6 +99,24 @@ def test_urls_notice_when_too_few_paths(sitelens, reset_sc):
     assert ctx["notices"][0]["short"] == "add paths to SiteLens"
 
 
+def test_urls_notice_csv_row(sitelens, reset_sc):
+    """The exact -notices.csv row of the sitelens-url-paths notice.
+
+    Added at campaign I14c Task 5 (SPEC §4): sitelens-url-paths was the ONE notice code in
+    the program with no csv assertion anywhere in the suite, so nothing held its csv row
+    byte-identical across the Notice/csv_extra conversion.  Written and run against the
+    UNCONVERTED dict-form module first, so the value below is the pre-conversion row.
+    """
+    sc = reset_sc
+    sc.config = {"UMich": {"portal": {"sites": {SITE: {"id": PORTAL_ID}}}}}
+    sitelens.sitelens_configured_scans_by_site = {PORTAL_ID: [1, 2]}  # 2 < 4 -> notice
+    ctx = reset_sc.SiteContext({"name": SITE})
+
+    sitelens.check_sitelens_urls(ctx)
+
+    assert ctx["notices"][0]["csv"] == f"{SITE},sitelens-url-paths,2"
+
+
 def test_no_urls_notice_when_enough_paths(sitelens, reset_sc):
     sc = reset_sc
     sc.config = {"UMich": {"portal": {"sites": {SITE: {"id": PORTAL_ID}}}}}
