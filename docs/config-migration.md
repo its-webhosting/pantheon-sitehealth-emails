@@ -129,68 +129,110 @@ behavior from every key it already has, and today's behavior from the two famili
 
 ## What an operator MAY now add
 
-Everything below is **optional**, and every default reproduces today's behavior. Add a section
-only to change a default; omitting it is not a downgrade. The snippets are shown **merged into
-their surrounding config context** — they are not fragments to paste over an existing file.
+This section is about the config an operator actually edits: their **production**
+`pantheon-sitehealth-emails.toml`. Everything here is **optional**, and every default reproduces
+today's behavior — add a section only to change a default; omitting it is not a downgrade.
 
-### Turning individual check packages off
+**Which config are you editing?** The answer decides whether "add" even applies:
 
-Each relocated check package is gated by an `enabled` flag under `[Check.<name>]`, **default
-`true`**. An absent `[Check]` section, an absent `[Check.<name>]` section, or an absent
-`enabled` key all leave the check registered — the gate is
-`sc.config.get('Check', {}).get('<name>', {}).get('enabled', True) is not False`
-(verified in each package's `__init__.py`), so only an explicit `enabled = false` disables one.
-Add these sections only if you want to turn a check *off*:
+- **A production config that lacks these sections** — as U-M's does; the [section inventory](#the-section-inventory-production-config-verified-2026-07-24)
+  above shows it carries no `[Check.*]` and no `[Email]`. Such a config MAY *add* them, appended
+  to the file it already has. The merged example below is that case.
+- **A config that already declares them** — as the shipped template
+  `sample-pantheon-sitehealth-emails.toml` does — must **NOT** add a second copy. TOML forbids
+  declaring a table twice: pasting a fresh `[Check.pantheon]` (or `[Email]`) into a file that
+  already has one makes `tomllib` raise `Cannot declare ('Check', 'pantheon') twice`. The sample
+  already ships these tables, active (not commented out) — verbatim from
+  `sample-pantheon-sitehealth-emails.toml`:
+
+  ```toml
+  [Check.pantheon]
+  # Generic Pantheon site-health checks: frozen site, uninitialized live environment on
+  # a paid plan, unapplied upstream updates, PHP end-of-life.  Enabled by default; set
+  # to false to disable all four.
+  enabled = true
+
+
+  [Check.wordpress]
+  enabled = true          # PAPC, native-PHP-sessions, OCP-config, favicon checks
+
+
+  [Check.drupal]
+  enabled = true          # PAPC-module, Drupal-7-EOL/tag1_d7es, multisite-probe checks
+
+
+  [Check.addon_updates]
+  enabled = true          # pending add-on (plugin/theme/package) updates table notice
+  ```
+
+  and, further down, a live `[Email]` header (its keys all commented out):
+
+  ```toml
+  [Email]
+  # Identity of the report emails.  All keys are optional; if omitted, the University of
+  # Michigan defaults are used (the tool's original hardcoded values), so existing U-M runs
+  # are unaffected.  Set these for a non-U-M deployment.
+  ```
+
+  For a config that already has these tables, the only thing "MAY" describes is flipping an
+  existing `enabled = true` to `false` (or uncommenting an `[Email]` key) — **not inserting a
+  new table.**
+
+### What each addition does
+
+- **Turning individual check packages off.** Each relocated check package is gated by an
+  `enabled` flag under `[Check.<name>]`, **default `true`**. An absent `[Check]` section, an
+  absent `[Check.<name>]` section, or an absent `enabled` key all leave the check registered —
+  the gate is `sc.config.get('Check', {}).get('<name>', {}).get('enabled', True) is not False`
+  (verified in each package's `__init__.py`), so only an explicit `enabled = false` disables one.
+  A production config (which has none of these sections) adds one only to turn a check *off*.
+- **Overriding the sender identity (`[Email]`).** Absent, `[Email]` falls back to the
+  University-of-Michigan literals the tool originally shipped with (see
+  `docs/email-configuration.md`). A non-U-M deployment adds it to send from its own addresses.
+  Note the mail *server* section `[SMTP]` already exists in the production config, so only
+  `[Email]` is new — do not re-add `[SMTP]`.
+
+### The merged addition, in a production-shaped file
+
+Shown appended to the tail of a production config — the file that has **no `[Check.*]` and no
+`[Email]` sections today**, so nothing below collides with a table it already declares. This
+whole snippet parses (verified with `tomllib`); the doc-authored comments below the marker are
+this document's own explanation, not quotes from the sample:
 
 ```toml
+# ... the production config's existing tail (it already has [SMTP], but no [Check.*]/[Email]) ...
 [AWS]
-enabled = false
-profile = "webhosting"
+enabled = true
 default_region = "us-east-1"
 
-# Optional.  Each check package is enabled by default; set false to turn one off.
-# Omitting the section entirely is identical to enabled = true.
+[UMich]
+enabled = true
+
+[News]
+folder = "./pantheon-sitehealth-emails-config/news"
+
+# --- appended below: optional opt-outs and sender identity, all defaulting to today's behavior ---
+
 [Check.pantheon]
-enabled = true          # frozen-site, live-env, upstream-updates, PHP-EOL checks
+enabled = false          # turn OFF the frozen-site / live-env / upstream-updates / PHP-EOL checks
 
 [Check.wordpress]
-enabled = true          # PAPC, native sessions, Object Cache Pro, favicon
+enabled = false          # turn OFF PAPC / native-PHP-sessions / OCP-config / favicon checks
 
 [Check.drupal]
-enabled = true          # multisite probe, PAPC module, D7 EOL
+enabled = false          # turn OFF PAPC-module / Drupal-7-EOL / multisite-probe checks
 
 [Check.addon_updates]
-enabled = true          # the pending plugin/theme/module updates table
+enabled = false          # turn OFF the pending add-on updates table notice
 
-[SMTP]
-enabled  = false
-host     = "smtp.mail.umich.edu"
-port     = 465
-```
-
-### Overriding the sender identity (`[Email]`)
-
-Absent, `[Email]` falls back to the University-of-Michigan literals the tool originally
-shipped with (see `docs/email-configuration.md`). A non-U-M deployment adds it to send from its
-own addresses. Merged next to the mail server section it belongs with:
-
-```toml
 [Email]
-# All keys optional; omitted keys fall back to the U-M literals, so existing U-M runs are
-# unaffected.  Set these for a non-U-M deployment.
+# Omitted keys fall back to the U-M literals, so a U-M run is unaffected; set these for a non-U-M deployment.
 from         = "Example Web Team <webteam@example.edu>"   # the From: header
 reply_to     = "webteam@example.edu"                       # the Reply-to: header
 msgid_domain = "reports.example.edu"                       # domain for inline-image Content-IDs
 bcc          = "ops@example.edu"                           # Bcc:, only with --for-real
 dry_run_to   = "ops@example.edu"                           # extra dry-run recipient
 dry_run_username_domain = "example.edu"                    # {smtp-username}@<this> added to To:
-
-[SMTP]
-enabled  = true
-host     = "smtp.example.edu"
-port     = 465
-username = "<{env USER}"
-password = "<{secret env SMTP_PASSWORD}"
 ```
 
 ## Production-config instruction: no edits required
@@ -226,3 +268,13 @@ git diff <campaign-base> -- tests/e2e/__snapshots__/   # empty
 
 The e2e tier is green and the snapshot diff is empty across the campaign; the run performed at
 the close of this increment is pasted in the I14d task report.
+
+**Scope of what the goldens prove here.** Both fixture configs carry **no `[Check.*]` section**,
+so the goldens exercise only the absent-section → default-`true` path — not the explicit
+`enabled = true` / `enabled = false` toggling the sample and the snippets above show. The
+goldens therefore support the narrower claim they actually cover — *no config shape or
+config-driven behavior regressed* — and nothing wider. The default-`true` gate under explicit
+toggling is proved instead by the per-package init tests, one each for the four `[Check.*]`
+packages: `tests/integration/test_check_pantheon_init.py`,
+`tests/integration/test_check_wordpress_init.py`, `tests/integration/test_check_drupal_init.py`,
+and `tests/integration/test_check_addon_updates_init.py`.
