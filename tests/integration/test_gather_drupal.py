@@ -21,9 +21,9 @@ fix, captured GREEN)."""
 import json
 
 import pytest
+from helpers.dnsfake import recording_console
 
 import psh.gather
-from helpers.dnsfake import recording_console
 from psh.gather import gather_drupal
 
 pytestmark = pytest.mark.integration
@@ -48,7 +48,7 @@ def _ctx(reset_sc):
     return reset_sc.SiteContext({"name": "its-wws-test1"})
 
 
-def _install_fake(monkeypatch, gateway, *, core_status, pmlist=PMLIST_OK,
+def _install_fake(monkeypatch, gateway, *, core_status, pmlist=PMLIST_OK,  # noqa: PLR0913 -- fake installer; keyword-only params are the distinct command-shape responses it dispatches
                    updatestatus=None, dryrun=DRYRUN_NO_MATCH, audit=AUDIT_EMPTY):
     """Dispatch run_terminus results by command shape: drush()/terminus() wrappers append
     --format=json, the composer dry-run call goes through bare run_terminus()."""

@@ -2,7 +2,6 @@
 byte-identity guard for the verbatim move (campaign I9; move-time evidence is the
 extracted-block diff in the task report, the I2 precedent)."""
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 

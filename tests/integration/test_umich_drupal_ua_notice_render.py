@@ -4,7 +4,6 @@ extracted-block diff in the task report, the I2 precedent)."""
 import json
 
 import pytest
-
 from helpers.checkload import load_check_module
 
 pytestmark = pytest.mark.integration
@@ -21,7 +20,7 @@ def _ctx(reset_sc):
     return ctx
 
 
-def test_drupal_ua_notice_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):
+def test_drupal_ua_notice_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):  # noqa: PLR0913 -- snapshot test; all args are pytest fixtures
     monkeypatch.setattr(
         gateway,
         "run_terminus",

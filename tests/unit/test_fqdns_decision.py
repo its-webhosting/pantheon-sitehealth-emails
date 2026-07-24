@@ -10,7 +10,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
 
@@ -30,14 +31,14 @@ def fqdns(psh, monkeypatch):
 
 
 def _decide(fqdns, **overrides):
-    args = dict(
-        exists=True,
-        age_seconds=0,
-        multi_site=False,
-        force=False,
-        suppress=False,
-        traffic_only=False,
-    )
+    args = {
+        "exists": True,
+        "age_seconds": 0,
+        "multi_site": False,
+        "force": False,
+        "suppress": False,
+        "traffic_only": False,
+    }
     args.update(overrides)
     return fqdns.decide_fqdns_update(**args)
 
@@ -84,7 +85,7 @@ def test_fresh_multi_skips(fqdns):
     suppress=st.booleans(),
     traffic_only=st.booleans(),
 )
-def test_decision_invariants(fqdns, exists, age_seconds, multi_site, force, suppress, traffic_only):
+def test_decision_invariants(fqdns, exists, age_seconds, multi_site, force, suppress, traffic_only):  # noqa: PLR0913 -- Hypothesis property test; args map 1:1 to decide_fqdns_update's params
     should, reason = fqdns.decide_fqdns_update(
         exists=exists,
         age_seconds=age_seconds,

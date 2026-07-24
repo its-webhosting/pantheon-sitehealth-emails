@@ -7,7 +7,8 @@ well-formed, internally consistent result.
 import datetime
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +51,7 @@ def _months(n):
 @given(visits=st.lists(st.integers(min_value=0, max_value=5_000_000), min_size=5, max_size=13))
 def test_plan_costs_wellformed_and_consistent(psh, visits):
     keys = _months(len(visits))
-    visits_by_month = dict(zip(keys, visits))
+    visits_by_month = dict(zip(keys, visits, strict=False))
     cost_same, costs_median, costs_best, median_visitors = psh.plan_costs(
         PLAN_INFO,
         PLAN_NAMES,

@@ -5,7 +5,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
 
@@ -45,7 +46,7 @@ def _sample(pages, asset_pages=None):
     return {"pages": pages, "asset_pages": pages if asset_pages is None else asset_pages}
 
 
-def _build(notices, items_by_fqdn, *, umich=True, framework="wordpress", extra_pages=3,
+def _build(notices, items_by_fqdn, *, umich=True, framework="wordpress", extra_pages=3,  # noqa: PLR0913 -- wraps build_cache_notices; each keyword-only param is a distinct notice input
            asset_pages=None):
     return notices.build_cache_notices(
         SITE, items_by_fqdn, umich=umich, doc_url=DOC, framework=framework,
@@ -241,10 +242,10 @@ def test_plaintext_indents_the_header_under_its_finding(psh, reset_sc, notices):
     ctx = reset_sc.SiteContext({"name": SITE})
     ctx.add_notice(dict(_build(notices, {"a.example.edu": [
         _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0]))
-    lines = [l for l in ctx["notices"][0]["text"].splitlines() if l.strip()]
-    finding = next(l for l in lines if "does not send" in l)
-    header = next(l for l in lines if "URLs with this issue" in l)
-    url = next(l for l in lines if "a.example.edu/>" in l)
+    lines = [line for line in ctx["notices"][0]["text"].splitlines() if line.strip()]
+    finding = next(line for line in lines if "does not send" in line)
+    header = next(line for line in lines if "URLs with this issue" in line)
+    url = next(line for line in lines if "a.example.edu/>" in line)
 
     def indent(line):
         return len(line) - len(line.lstrip())
@@ -303,7 +304,7 @@ def test_uncacheable_directives_lead_with_the_origin_hit_consequence(notices):
     readings, and is what the owner actually pays for, is that every request reaches the
     origin.
     """
-    def message(item_id, umich=True):
+    def message(item_id, *, umich=True):
         return _build(notices, {"a.example.edu": [
             _item(item_id, "https://a.example.edu/p")]}, umich=umich)[0]["message"]
 
@@ -327,7 +328,7 @@ def test_uncacheable_directives_lead_with_the_origin_hit_consequence(notices):
 
 
 def test_must_revalidate_states_the_stale_risk_and_says_remove_it(notices):
-    def message(count, kind="page", directive="must-revalidate", umich=True):
+    def message(count, kind="page", directive="must-revalidate", *, umich=True):
         items = [_item("cc-must-revalidate", f"https://a.example.edu/p{i}", kind=kind,
                        directive=directive)
                  for i in range(count)]

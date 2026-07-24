@@ -8,7 +8,6 @@ exit + message rather than an in-process SystemExit.
 import datetime
 
 import pytest
-
 from conftest import MINIMAL_CONFIG
 
 pytestmark = pytest.mark.unit

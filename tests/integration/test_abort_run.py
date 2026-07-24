@@ -8,9 +8,9 @@ import re
 import signal
 
 import pytest
+from helpers.dnsfake import recording_console
 
 import script_context as sc
-from helpers.dnsfake import recording_console
 
 SITE_NAMES = ["its-wws-test1", "its-wws-test2", "its-wws-test3"]
 
@@ -28,7 +28,7 @@ class FakeEngine:
         pass
 
 
-def abort(
+def abort(  # noqa: PLR0913 -- drives the abort_run seam; arity mirrors the run-scoped inputs abort classifies (fixtures + scenario)
     psh, monkeypatch, reset_sc, argv, reason, error, *,
     emailed=False, site_results=None, site_savings=None, site_name="its-wws-test2",
     expect=SystemExit, width=200,

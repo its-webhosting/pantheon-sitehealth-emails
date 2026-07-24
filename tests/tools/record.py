@@ -67,9 +67,9 @@ def scrub(fixtures_dir, site):
     team = json.loads(d["stdout"])
     scrubbed = {}
     for i, (mid, m) in enumerate(list(team.items())[:2]):
-        m = dict(m)
-        m["email"] = f"test-owner{i + 1}@umich.edu"
-        scrubbed[mid] = m
+        md = dict(m)
+        md["email"] = f"test-owner{i + 1}@umich.edu"
+        scrubbed[mid] = md
     d["stdout"] = json.dumps(scrubbed)
     d["_scrubbed"] = "real team emails replaced with test-owner{1,2}@umich.edu"
     _rewrite(fn, d)
@@ -89,7 +89,7 @@ def record(site, site_id, fixtures_dir):
         # traffic yet (an empty-traffic site otherwise IndexErrors before all fixtures are
         # captured).  Only the terminus responses are recorded; replay re-seeds its own data.
         conftest.seed_traffic(work / "test.db", site_id=site_id)
-        print(f"record: running LIVE against {site} (read-only) to capture fixtures ...")
+        print(f"record: running LIVE against {site} (read-only) to capture fixtures ...")  # noqa: T201 -- fixture-recording CLI tool: print IS its user-facing output
         proc = conftest.run_program(
             [site, "--date", DATE, "--config", MINIMAL_CONFIG],
             cwd=work, mode="record", fixtures_dir=fixtures_dir,
@@ -99,7 +99,7 @@ def record(site, site_id, fixtures_dir):
             raise SystemExit(f"record: live run failed (exit {proc.returncode})")
     scrub(fixtures_dir, site)
     n = len(list(fixtures_dir.glob("*.json")))
-    print(f"record: captured and scrubbed {n} terminus fixtures in {fixtures_dir}")
+    print(f"record: captured and scrubbed {n} terminus fixtures in {fixtures_dir}")  # noqa: T201 -- fixture-recording CLI tool: print IS its user-facing output
 
 
 def main():

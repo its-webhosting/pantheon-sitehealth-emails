@@ -22,7 +22,7 @@ _zone_path = os.environ.get("DNS_SHIM_ZONE")
 if _zone_path:
     import dns.resolver
 
-    with open(_zone_path, encoding="utf-8") as _f:
+    with open(_zone_path, encoding="utf-8") as _f:  # noqa: PTH123 -- sitecustomize-loaded startup shim deliberately uses builtin open to stay minimal
         _ZONE = json.load(_f)
 
     class _Rdata:

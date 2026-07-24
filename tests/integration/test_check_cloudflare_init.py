@@ -79,7 +79,7 @@ def test_enabled_registers_both_hooks(psh, reset_sc, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "cachecheck, missing",
+    ("cachecheck", "missing"),
     [
         ({"enabled": True}, "account_id, list_name"),
         ({"enabled": True, "account_id": "a"}, "list_name"),

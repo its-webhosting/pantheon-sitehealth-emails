@@ -6,7 +6,6 @@ main()'s inline B34 region into check/umich/, now behind the [UMich].enabled gat
 real SiteContext -- the check/pantheon test pattern.
 """
 import pytest
-
 from helpers.checkload import load_check_module, load_check_package
 from helpers.dnsfake import recording_console
 

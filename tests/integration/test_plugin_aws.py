@@ -19,7 +19,7 @@ class FakeClient:
         self._response = response
         self._calls = calls
 
-    def get_secret_value(self, SecretId):
+    def get_secret_value(self, SecretId):  # noqa: N803 -- fake mirrors boto3 SecretsManager.get_secret_value; `SecretId` is boto3's kwarg name (seam-matching)
         self._calls.append(SecretId)
         return self._response
 
@@ -51,7 +51,7 @@ def load_get_secret(psh, monkeypatch):
 
 
 def test_secret_string_json_and_key_lookup(load_get_secret):
-    module, calls = load_get_secret({"SecretString": json.dumps({"user": "u", "pass": "p"})})
+    module, _calls = load_get_secret({"SecretString": json.dumps({"user": "u", "pass": "p"})})
     assert module.get_secret("app/creds", "user") == "u"
     assert module.get_secret("app/creds", "pass") == "p"
 

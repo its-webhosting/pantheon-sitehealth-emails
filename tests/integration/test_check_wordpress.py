@@ -4,7 +4,6 @@ real SiteContext + the gateway fixture -- the check/pantheon test pattern.
 sc.wp_eval/sc.wp_error resolve run_terminus in psh.gateway's namespace, so the gateway
 fixture (monkeypatch of psh.gateway.run_terminus) is the seam for the OCP/favicon probes."""
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 

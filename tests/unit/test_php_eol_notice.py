@@ -23,7 +23,7 @@ def test_deprecated_versions_warn(version):
     assert version in n["message"] and version in n["text"]
 
 
-@pytest.mark.parametrize("version,fallback", [("8.0", "8.1"), ("7.0", "7.4")])
+@pytest.mark.parametrize(("version", "fallback"), [("8.0", "8.1"), ("7.0", "7.4")])
 def test_older_versions_alert_with_fallback(version, fallback):
     n = build_php_eol_notice("s", version)
     assert n["type"] == "alert"

@@ -3,7 +3,6 @@ for the verbatim B39 move (campaign I10; move-time evidence is the extracted-blo
 the task report, the I2 precedent).  Covers a plugin/theme pair AND an audit-shaped
 (D7/D8+ composer-audit) row, per SPEC section 7."""
 import pytest
-
 from helpers.checkload import load_check_module
 
 pytestmark = pytest.mark.integration

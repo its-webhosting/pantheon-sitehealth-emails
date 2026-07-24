@@ -75,7 +75,7 @@ def test_smtp_login_missing_password_exits(psh, reset_sc, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "config,expected",
+    ("config", "expected"),
     [
         ({}, False),
         ({"UMich": {}}, False),

@@ -6,7 +6,8 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
 
@@ -174,7 +175,7 @@ def test_extract_assets_per_class(pages):
 def test_non_website_assets_excluded(pages):
     # Assets under /cdn-cgi/ (Rocket Loader, email-decode, RUM beacon) and /.well-known/
     # are not the website's, so they are never selected as assets to test.
-    html = f"""
+    html = """
     <html><head>
       <script src="/cdn-cgi/scripts/abc/rocket-loader.min.js"></script>
       <script src="/js/app.js"></script>

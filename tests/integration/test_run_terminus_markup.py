@@ -13,7 +13,6 @@ code, not just the terminus()/wp()/drush() wrappers (which monkeypatch run_termi
 so never touch this code path).
 """
 import pytest
-
 from helpers.dnsfake import recording_console
 
 pytestmark = pytest.mark.integration
@@ -24,7 +23,7 @@ def _fake_popen(stdout: bytes, stderr: bytes, returncode: int):
         def __init__(self, *args, **kwargs):
             self.returncode = returncode
 
-        def communicate(self, input=None, timeout=None):
+        def communicate(self, input=None, timeout=None):  # noqa: A002 -- fake mirrors subprocess.Popen.communicate; `input` is stdlib's parameter name (seam-matching)
             return stdout, stderr
 
         def kill(self):
@@ -38,7 +37,7 @@ def test_run_terminus_prints_bracketed_stderr_fragments_uncorrupted(psh, monkeyp
     stderr = b"[warning] plugin update available\n[parameters: (1, 2)]"
     monkeypatch.setattr(psh.subprocess, "Popen", _fake_popen(b"ok", stderr, 0))
 
-    output, errors, fatal = psh.run_terminus(["site:info", "its-wws-test1"])
+    _output, _errors, fatal = psh.run_terminus(["site:info", "its-wws-test1"])
 
     assert fatal is False
     printed = console.export_text()
@@ -54,7 +53,7 @@ def test_run_terminus_survives_an_unmatched_closing_tag_in_stderr(psh, monkeypat
     monkeypatch.setattr(psh.subprocess, "Popen", _fake_popen(b"", stderr, 1))
 
     # Must not raise rich.errors.MarkupError.
-    output, errors, fatal = psh.run_terminus(["site:info", "its-wws-test1"])
+    _output, _errors, fatal = psh.run_terminus(["site:info", "its-wws-test1"])
 
     assert fatal is True
     assert "[/parameters]" in console.export_text()
@@ -72,7 +71,7 @@ def test_run_terminus_timeout_path_escapes_stdout_and_stderr(psh, monkeypatch, r
             self.returncode = -9
             self._calls = 0
 
-        def communicate(self, input=None, timeout=None):
+        def communicate(self, input=None, timeout=None):  # noqa: A002 -- fake mirrors subprocess.Popen.communicate; `input` is stdlib's parameter name (seam-matching)
             self._calls += 1
             if self._calls == 1:
                 raise real_subprocess.TimeoutExpired(cmd="terminus", timeout=300)
@@ -83,7 +82,7 @@ def test_run_terminus_timeout_path_escapes_stdout_and_stderr(psh, monkeypatch, r
 
     monkeypatch.setattr(psh.subprocess, "Popen", _TimeoutThenDone)
 
-    output, errors, fatal = psh.run_terminus(["site:info", "its-wws-test1"])  # must not raise
+    _output, _errors, fatal = psh.run_terminus(["site:info", "its-wws-test1"])  # must not raise
 
     assert fatal is True
     printed = console.export_text()

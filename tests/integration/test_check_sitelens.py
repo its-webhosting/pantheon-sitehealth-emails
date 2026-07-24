@@ -16,7 +16,7 @@ pytestmark = pytest.mark.integration
 
 SITE = "its-wws-test1"
 PORTAL_ID = 101
-TS = datetime.datetime(2026, 3, 20, 10, 30)
+TS = datetime.datetime(2026, 3, 20, 10, 30)  # noqa: DTZ001 -- naive datetime mirrors the program's own SiteLens timestamp semantics (I5 DTZ precedent)
 
 
 @pytest.fixture

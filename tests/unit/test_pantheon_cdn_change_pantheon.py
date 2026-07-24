@@ -1,5 +1,4 @@
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 
@@ -42,7 +41,7 @@ def chain(psh, reset_sc, request):
         psh, "pantheon_cdn_change", "chain", "pcc_pantheon_chain_probe", request)
 
 
-def _fake_terminus(reset_sc, monkeypatch, result, errors="", fatal=False, calls=None):
+def _fake_terminus(reset_sc, monkeypatch, result, errors="", fatal=False, calls=None):  # noqa: PLR0913, FBT002 -- fake terminus installer; mirrors the (result, errors, fatal) shape (seam-matching)
     def _terminus(*args):
         if calls is not None:
             calls.append(args)
@@ -104,7 +103,7 @@ def test_order_is_pantheons_order_not_ours(pantheon, reset_sc, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "result,fatal",
+    ("result", "fatal"),
     [(None, True), (None, False), ("not a list", False), ([{"junk": 1}], False)],
     ids=["fatal", "undecodable", "wrong-type", "malformed-rows"])
 def test_failure_yields_empty_map_and_never_raises(
@@ -192,5 +191,5 @@ def test_empty_carries_the_same_field_types_as_a_real_answer(pantheon):
     # as "unavailable".  Its fields MUST be lists like every other Required: the renderer and the
     # tests both compare `finding.a == []`, and a tuple here would make that false for exactly the
     # case that needs the special rendering.  (EMPTY is shared, so it is read-only by contract.)
-    assert pantheon.EMPTY == pantheon.Required([], [], [])
+    assert pantheon.Required([], [], []) == pantheon.EMPTY
     assert all(isinstance(field, list) for field in pantheon.EMPTY)

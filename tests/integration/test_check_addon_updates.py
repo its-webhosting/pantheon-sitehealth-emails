@@ -3,7 +3,6 @@ add-on updates table notice as a site_post_gather hook.  Reads site_context["add
 -- the SAME list object the I9 stuffer publishes (test_contract_registry.py pins the
 stuffer side; here we pin that the hook reads live, not a snapshot)."""
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 

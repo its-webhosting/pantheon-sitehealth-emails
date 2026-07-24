@@ -41,7 +41,7 @@ def recorders(reset_sc, monkeypatch):
     return calls
 
 
-def _ctx(reset_sc, *, framework, fqdns, plugins=None, mods=None, drupal_version=None):
+def _ctx(reset_sc, *, framework, fqdns, plugins=None, mods=None, drupal_version=None):  # noqa: PLR0913 -- shared SiteContext builder; each param is a contract key the cms hooks read
     ctx = reset_sc.SiteContext({"name": SITE, "framework": framework})
     ctx["framework"] = framework
     ctx["fqdns_behind_cloudflare"] = fqdns

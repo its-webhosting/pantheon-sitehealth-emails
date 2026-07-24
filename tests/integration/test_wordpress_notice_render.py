@@ -2,9 +2,9 @@
 the verbatim move (campaign I9; move-time evidence is the extracted-block diff in the task
 report, the I2 precedent)."""
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
+
 from psh.gather import check_wordpress_plugin
 
 pytestmark = pytest.mark.integration
@@ -28,7 +28,7 @@ def _fake_run_terminus(result):
     return fake
 
 
-def test_ocp_alert_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):
+def test_ocp_alert_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):  # noqa: PLR0913 -- snapshot test; all args are pytest fixtures
     recording_console(monkeypatch, reset_sc)
     mod = load_check_module(psh, "wordpress", "ocp", "wp_ocp_snap", request)
     monkeypatch.setattr(gateway, "run_terminus", _fake_run_terminus(("true", "", False)))
@@ -41,7 +41,7 @@ def test_ocp_alert_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapsh
     assert n["short"] == snapshot
 
 
-def test_no_favicon_warning_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):
+def test_no_favicon_warning_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):  # noqa: PLR0913 -- snapshot test; all args are pytest fixtures
     recording_console(monkeypatch, reset_sc)
     mod = load_check_module(psh, "wordpress", "favicon", "wp_favicon_snap", request)
     monkeypatch.setattr(gateway, "run_terminus", _fake_run_terminus(("false", "", False)))

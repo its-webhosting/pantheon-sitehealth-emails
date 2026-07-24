@@ -54,7 +54,7 @@ class FakeFetch:
     def add(self, url, *results, verify=True):
         self.responses.setdefault((url, verify), []).extend(results)
 
-    def __call__(self, url, *, fqdn, timeout, user_agent, verify=True, pool=None):
+    def __call__(self, url, *, fqdn, timeout, user_agent, verify=True, pool=None):  # noqa: PLR0913 -- fake mirrors httpseam.fetch's arity (seam-matching)
         self.calls.append((url, verify))
         queue = self.responses.get((url, verify))
         assert queue, f"unexpected fetch: {url} (verify={verify})"
@@ -79,7 +79,7 @@ def _ctx(env, fqdns=(FQDN,), framework="wordpress"):
     return ctx
 
 
-def _resp(env, url, *, status=200, html="", error=None, insecure=False, final=None,
+def _resp(env, url, *, status=200, html="", error=None, insecure=False, final=None,  # noqa: PLR0913 -- FetchResult builder; each keyword-only param is a distinct response field
           detail="", **headers):
     base = {"cf-cache-status": "HIT", "cache-control": YEAR}
     base.update(headers)
@@ -196,7 +196,7 @@ def test_request_failed_reason_travels_to_notice(env):
 def test_linked_pages_and_assets_are_tested(env):
     page_url = f"https://{FQDN}/about"
     asset_url = f"https://{FQDN}/js/app.js"
-    main_html = f'<a href="/about">a</a><script src="/js/app.js"></script>'
+    main_html = '<a href="/about">a</a><script src="/js/app.js"></script>'
     env.fetch.add(MAIN, _resp(env, MAIN, html=main_html))
     env.fetch.add(page_url, _resp(env, page_url, **{"cache-control": "max-age=60"}))
     env.fetch.add(asset_url, _resp(env, asset_url))
@@ -316,7 +316,6 @@ def test_primary_domain_only_tests_primary_fqdn(env):
     # A primary custom domain is set: only it is cache-checked; the other proxied FQDN
     # is skipped entirely (no fetch, no notice for it).
     fqdn2 = "www2.example.edu"
-    main2 = f"https://{fqdn2}/"
     env.fetch.add(MAIN, _resp(env, MAIN, **{"cache-control": None}))
     ctx = _ctx(env, fqdns=(FQDN, fqdn2))
     ctx["primary_domain"] = [FQDN]

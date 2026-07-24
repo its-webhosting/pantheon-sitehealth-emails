@@ -1,7 +1,8 @@
 """check/pantheon hook seams (campaign I8): each module loaded standalone, driven with a
 real SiteContext -- the check/pantheon_cdn_change test pattern."""
-import pytest
+import datetime
 
+import pytest
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 
@@ -57,9 +58,6 @@ def test_initialized_live_env_gets_nothing(live_env_mod, reset_sc):
     assert ctx["notices"] == []
 
 
-import datetime
-
-
 def _update(days_ago, now):
     dt = now - datetime.timedelta(days=days_ago)
     return {"datetime": dt.isoformat(), "message": "Update WordPress to 6.6",
@@ -93,12 +91,12 @@ def test_fetches_the_live_environment_of_the_site_id(updates_mod, reset_sc, monk
     assert calls == [("upstream:updates:list", f"{SITE_ID}.live")]
 
 
-@pytest.mark.parametrize("days_ago,code,severity", [
+@pytest.mark.parametrize(("days_ago", "code", "severity"), [
     (4, "updates-info", "info"),
     (20, "updates-warning", "warning"),
     (45, "updates-alert", "alert"),
 ])
-def test_age_tiers(updates_mod, reset_sc, monkeypatch, days_ago, code, severity):
+def test_age_tiers(updates_mod, reset_sc, monkeypatch, days_ago, code, severity):  # noqa: PLR0913 -- parametrized test; args are fixtures + parametrize values injected by name
     recording_console(monkeypatch, reset_sc)
     now = datetime.datetime.now(datetime.UTC)
     data = [_update(days_ago, now), _update(2, now)]   # the OLDEST update sets the tier

@@ -6,7 +6,6 @@ check_drupal_module lives in psh/gather.py (exposed via sc.check_drupal_module) 
 pinned here via the psh fixture so the snapshot is the body production
 actually renders regardless of which module currently owns the def."""
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 
@@ -55,14 +54,14 @@ def test_drupal7_eol_snapshot(psh, reset_sc, request, snapshot):
     ctx["drupal_version"] = "7.1"
     ctx["drupal_modules"] = {}
     mod.check_d7_eol(ctx)
-    n = [n for n in ctx["notices"] if n["csv"] == f"{SITE},drupal7-eol"][0]
+    n = next(n for n in ctx["notices"] if n["csv"] == f"{SITE},drupal7-eol")
     assert n["message"] == snapshot
     assert n["text"] == snapshot
     assert n["short"] == snapshot
 
 
 # ── multisite-check (check/drupal/multisite.py, fatal-probe path) ───────────────────
-def test_multisite_check_fatal_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):
+def test_multisite_check_fatal_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):  # noqa: PLR0913 -- snapshot test; all args are pytest fixtures
     mod = load_check_module(psh, "drupal", "multisite", "drupal_multisite_snap", request)
     monkeypatch.setattr(
         gateway, "run_terminus", lambda command, input_data=None: ("", "boom", True)

@@ -10,9 +10,8 @@ This file pins the U-M copy variants; the 4th e2e golden pins the GENERIC one (i
 from pathlib import Path
 
 import pytest
-from jinja2 import Template
-
 from helpers.checkload import load_check_module
+from jinja2 import Template
 
 pytestmark = pytest.mark.integration
 
@@ -27,26 +26,26 @@ def notices(psh, reset_sc, request):
 
 @pytest.fixture
 def findings(notices):
-    F = notices.Finding
+    finding = notices.Finding
     return [
-        F("occb.bus.umich.edu", "dns", "live-bus-occb.pantheonsite.io",
+        finding("occb.bus.umich.edu", "dns", "live-bus-occb.pantheonsite.io",
           ["23.185.0.4"], ["2620:12a:8000::4", "2620:12a:8001::4"], []),
-        F("backstage.its.umich.edu", "cloudflare", "live-its-backstage.pantheonsite.io",
+        finding("backstage.its.umich.edu", "cloudflare", "live-its-backstage.pantheonsite.io",
           ["23.185.0.2"], ["2620:12a:8000::2", "2620:12a:8001::2"], []),
-        F("both.example.org", "both", "live-x.pantheonsite.io", ["23.185.0.9"], [], []),
+        finding("both.example.org", "both", "live-x.pantheonsite.io", ["23.185.0.9"], [], []),
         # F14: an already-migrated site -- Pantheon requires a CNAME, not addresses.
-        F("migrated.example.org", "dns", "live-m.pantheonsite.io", [], [],
+        finding("migrated.example.org", "dns", "live-m.pantheonsite.io", [], [],
           ["fe.cfp2c.edge.pantheon.io"]),
         # F4: domain:dns had no row at all for this one -> "unavailable", still reported.
-        F("unresolvable.example.org", "dns", "live-y.pantheonsite.io", [], [], []),
+        finding("unresolvable.example.org", "dns", "live-y.pantheonsite.io", [], [], []),
     ]
 
 
 @pytest.mark.parametrize(
-    "umich,before_cutoff",
+    ("umich", "before_cutoff"),
     [(True, True), (True, False), (False, False)],
     ids=["umich-before-cutoff", "umich-after-cutoff", "generic"])
-def test_notice_message_and_text_snapshot(
+def test_notice_message_and_text_snapshot(  # noqa: PLR0913 -- parametrized snapshot test; fixtures + parametrize values
         notices, findings, reset_sc, snapshot, umich, before_cutoff):
     built = notices.cdn_change_notice(SITE, findings, umich=umich, before_cutoff=before_cutoff)
     ctx = reset_sc.SiteContext({"name": SITE})
@@ -71,10 +70,10 @@ def test_notice_renders_through_the_real_template(psh, notices, findings, reset_
 
 
 def test_injected_markup_cannot_escape_the_table_cell(notices, reset_sc):
-    F = notices.Finding
+    finding = notices.Finding
     evil = 'a.example.org"><script>alert(1)</script>'
     built = notices.cdn_change_notice(
-        SITE, [F(evil, "dns", "live-x.pantheonsite.io", ["1.2.3.4"], [], [])],
+        SITE, [finding(evil, "dns", "live-x.pantheonsite.io", ["1.2.3.4"], [], [])],
         umich=False, before_cutoff=False)
     assert "<script>" not in built["message"]
     assert "&lt;script&gt;" in built["message"]

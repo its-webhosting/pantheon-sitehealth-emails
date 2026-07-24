@@ -9,7 +9,6 @@ with a `base` argument so it can load plugin/ packages too, not just check/ ones
 checkload.load_check_package.
 """
 import pytest
-
 from helpers.checkload import load_check_package
 
 pytestmark = pytest.mark.integration

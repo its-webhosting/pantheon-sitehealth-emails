@@ -15,7 +15,7 @@ pytestmark = pytest.mark.unit
 # Literal expected values (block=10000) — pins the exact rounding, incl. the .5 cases where
 # Python's banker's rounding matters (2.5 -> 2, 3.5 -> 4).
 @pytest.mark.parametrize(
-    "overage,expected",
+    ("overage", "expected"),
     [
         (0, 0),          # 0.5 -> 0 (banker's)
         (5000, 1),       # 1.0 -> 1
@@ -42,7 +42,7 @@ def test_overage_blocks_zero_and_monotonic(psh):
 
 # ── contract_year_end: True only for June 16-29 ──────────────────────────────────────
 @pytest.mark.parametrize(
-    "date,expected",
+    ("date", "expected"),
     [
         (datetime.date(2026, 6, 16), True),
         (datetime.date(2026, 6, 29), True),

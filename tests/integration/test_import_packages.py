@@ -8,7 +8,7 @@ from tests.helpers.dnsfake import recording_console  # existing helper, width-de
 
 @pytest.mark.integration
 def test_import_packages_returns_discovery_ordered_modules(psh, monkeypatch, reset_sc):
-    console = recording_console(monkeypatch, reset_sc)
+    recording_console(monkeypatch, reset_sc)
     loaded = import_packages("plugin")
     assert list(loaded) == find_modules("plugin")          # discovery order preserved
     assert all(m.__name__ == name for name, m in loaded.items())

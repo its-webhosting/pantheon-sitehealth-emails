@@ -7,7 +7,6 @@ D-i6-1 return-value pattern.
 import json
 
 import pytest
-
 from helpers.dnsfake import recording_console
 
 pytestmark = pytest.mark.integration

@@ -13,8 +13,8 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _item(message="Hello", type="info"):
-    return {"type": type, "message": message}
+def _item(message="Hello", kind="info"):
+    return {"type": kind, "message": message}
 
 
 def test_config_inline_items_are_added(psh, reset_sc, tmp_path):

@@ -13,7 +13,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def _run(output, errors="", fatal=False):
+def _run(output, errors="", fatal=False):  # noqa: FBT002 -- fake mirrors run_terminus's (output, errors, fatal) result shape; positional bool matches the seam
     return lambda *a, **k: (output, errors, fatal)
 
 
@@ -22,7 +22,7 @@ def _fake_popen(stdout: bytes, stderr: bytes, returncode: int):
         def __init__(self, *args, **kwargs):
             self.returncode = returncode
 
-        def communicate(self, input=None, timeout=None):
+        def communicate(self, input=None, timeout=None):  # noqa: A002 -- fake mirrors subprocess.Popen.communicate; `input` is stdlib's parameter name (seam-matching)
             return stdout, stderr
 
         def kill(self):
@@ -72,7 +72,7 @@ def test_decode_failure_returns_none_and_keeps_errors(psh, gateway, monkeypatch)
 
 def test_fatal_flag_propagates(psh, gateway, monkeypatch):
     monkeypatch.setattr(gateway, "run_terminus", _run('{"ok": 1}', fatal=True))
-    result, errors, fatal = psh.terminus("env:metrics", "x")
+    _result, _errors, fatal = psh.terminus("env:metrics", "x")
     assert fatal is True
 
 
@@ -117,7 +117,7 @@ def test_session_expiry_retries_once_then_returns(psh, gateway, monkeypatch):
 
     monkeypatch.setattr(gateway, "run_terminus", flaky)
     monkeypatch.setattr(psh.time, "sleep", lambda *_a, **_k: None)
-    result, errors, fatal = psh.terminus("org:site:list", "org")
+    result, _errors, _fatal = psh.terminus("org:site:list", "org")
     assert result == {"ok": 1}
     assert calls["n"] == 2
 

@@ -9,7 +9,6 @@ OperationalError.  Composable with the DNS shim: same directory, separate env va
 interlock bans --all (CLAUDE.md).
 """
 import pytest
-
 from conftest import (
     E2E_DATE,
     E2E_SITE,

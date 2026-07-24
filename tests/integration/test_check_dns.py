@@ -22,9 +22,9 @@ def _load_init(psh, monkeypatch, probe_name="dns_check_probe"):
 
 def _facts(reset_sc, **overrides):
     ctx = reset_sc.SiteContext({"name": "s"})
-    base = dict(domains={}, custom_domains=[], primary_domain=[], main_fqdn="",
-                not_in_dns=[], fqdns_behind_cloudflare=[], fqdns_not_behind_cloudflare=[],
-                behind_cloudflare_not_proxied=[], proxied_in_multiple_zones=[], dns_transient=[])
+    base = {"domains": {}, "custom_domains": [], "primary_domain": [], "main_fqdn": "",
+            "not_in_dns": [], "fqdns_behind_cloudflare": [], "fqdns_not_behind_cloudflare": [],
+            "behind_cloudflare_not_proxied": [], "proxied_in_multiple_zones": [], "dns_transient": []}
     base.update(overrides)
     ctx.update(base)
     return ctx

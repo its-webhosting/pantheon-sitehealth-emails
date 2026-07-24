@@ -1,5 +1,4 @@
 import pytest
-
 from helpers.checkload import load_check_module
 
 pytestmark = pytest.mark.unit
@@ -13,11 +12,11 @@ def notices(psh, reset_sc, request):
 
 @pytest.fixture
 def findings(notices):
-    F = notices.Finding
+    finding = notices.Finding
     return [
-        F("occb.bus.umich.edu", "dns", "live-bus-occb.pantheonsite.io",
+        finding("occb.bus.umich.edu", "dns", "live-bus-occb.pantheonsite.io",
           ["23.185.0.4"], ["2620:12a:8000::4", "2620:12a:8001::4"], []),
-        F("backstage.its.umich.edu", "cloudflare", "live-its-backstage.pantheonsite.io",
+        finding("backstage.its.umich.edu", "cloudflare", "live-its-backstage.pantheonsite.io",
           ["23.185.0.2"], ["2620:12a:8000::2", "2620:12a:8001::2"], []),
     ]
 
@@ -69,10 +68,10 @@ def test_intro_names_the_cname_target(notices, findings):
 def test_intro_lists_every_distinct_target(notices):
     # Should never happen (detect.py warns when it does), but if two domains point at different
     # legacy names the sentence must name BOTH -- naming only one would be a lie about the other.
-    F = notices.Finding
-    f = [F("a.example.org", "dns", "live-aaa.pantheonsite.io", ["1.2.3.4"], [], []),
-         F("b.example.org", "dns", "live-bbb.pantheonsite.io", ["1.2.3.4"], [], []),
-         F("c.example.org", "dns", "live-aaa.pantheonsite.io", ["1.2.3.4"], [], [])]
+    finding = notices.Finding
+    f = [finding("a.example.org", "dns", "live-aaa.pantheonsite.io", ["1.2.3.4"], [], []),
+         finding("b.example.org", "dns", "live-bbb.pantheonsite.io", ["1.2.3.4"], [], []),
+         finding("c.example.org", "dns", "live-aaa.pantheonsite.io", ["1.2.3.4"], [], [])]
     n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
     # The plaintext puts the target list on its own line (the paragraph wraps at ~75 columns).
     assert "pointing at\nlive-aaa.pantheonsite.io and live-bbb.pantheonsite.io:" in n["text"]
@@ -81,8 +80,8 @@ def test_intro_lists_every_distinct_target(notices):
 
 
 def test_target_is_html_escaped_in_the_intro(notices):
-    F = notices.Finding
-    f = [F("a.example.org", "dns", "live-<script>.pantheonsite.io", ["1.2.3.4"], [], [])]
+    finding = notices.Finding
+    f = [finding("a.example.org", "dns", "live-<script>.pantheonsite.io", ["1.2.3.4"], [], [])]
     n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
     assert "<script>" not in n["message"]
     assert "&lt;script&gt;" in n["message"]
@@ -90,8 +89,8 @@ def test_target_is_html_escaped_in_the_intro(notices):
 
 def test_intro_stays_grammatical_with_no_target(notices):
     # Defensive: a finding always carries a target, but "pointing at :" must never be rendered.
-    F = notices.Finding
-    f = [F("a.example.org", "dns", "", ["1.2.3.4"], [], [])]
+    finding = notices.Finding
+    f = [finding("a.example.org", "dns", "", ["1.2.3.4"], [], [])]
     n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
     assert "pointing at\nthe legacy Pantheon GCDN:" in n["text"]
     assert "pointing at the legacy Pantheon GCDN:" in n["message"]
@@ -109,7 +108,7 @@ def test_where_label_matrix(notices):
 
 def test_where_label_rejects_an_unknown_value(notices):
     # A silent fall-through would print a WRONG instruction ("DNS and ...") to a site owner.
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011 -- asserts the named ValueError is raised; a match= would over-constrain the message the test deliberately does not pin
         notices.where_label("elsewhere", umich=True)
 
 
@@ -154,8 +153,8 @@ def test_notice_does_not_explain_the_transition(notices, findings):
 
 def test_missing_records_render_as_unavailable(notices):
     # F4: domain:dns failed or had no row for this FQDN.
-    F = notices.Finding
-    f = [F("x.example.org", "dns", "live-x.pantheonsite.io", [], [], [])]
+    finding = notices.Finding
+    f = [finding("x.example.org", "dns", "live-x.pantheonsite.io", [], [], [])]
     umich = notices.cdn_change_notice("s", f, umich=True, before_cutoff=True)
     generic = notices.cdn_change_notice("s", f, umich=False, before_cutoff=True)
     assert "unavailable" in umich["message"] and "please contact us" in umich["message"]
@@ -171,8 +170,8 @@ def test_missing_records_render_as_unavailable(notices):
 def test_cname_only_records_render_as_a_cname_not_unavailable(notices):
     # F14: an already-migrated site.  Pantheon HAS an answer -- show it.  Rendering "unavailable"
     # here would tell the owner we failed when we did not.
-    F = notices.Finding
-    f = [F("x.example.org", "dns", "live-x.pantheonsite.io", [], [],
+    finding = notices.Finding
+    f = [finding("x.example.org", "dns", "live-x.pantheonsite.io", [], [],
            ["fe.cfp2c.edge.pantheon.io"])]
     for umich in (True, False):
         n = notices.cdn_change_notice("s", f, umich=umich, before_cutoff=True)
@@ -183,8 +182,8 @@ def test_cname_only_records_render_as_a_cname_not_unavailable(notices):
 
 
 def test_fqdn_html_escaped(notices):
-    F = notices.Finding
-    f = [F("a<b>.example.org", "dns", "live-x.pantheonsite.io", ["1.2.3.4"], [], [])]
+    finding = notices.Finding
+    f = [finding("a<b>.example.org", "dns", "live-x.pantheonsite.io", ["1.2.3.4"], [], [])]
     n = notices.cdn_change_notice("s", f, umich=False, before_cutoff=False)
     assert "&lt;b&gt;" in n["message"]
     assert "<b>" not in n["message"]

@@ -1,6 +1,5 @@
 import dns.resolver
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import patch_resolve
 
@@ -73,7 +72,7 @@ def test_transient_is_unknown_not_a_hit(chain, monkeypatch, exc):
 
 def test_malformed_name_is_no_hit_and_does_not_raise(chain, monkeypatch):
     # F10: the named exception from the dns_classify seam (Task 2) must not escape the check.
-    import psh.dns_classify as dns_classify
+    from psh import dns_classify
     patch_resolve(monkeypatch,
                   {("a..b", "CNAME"): dns_classify.MalformedNameError("a..b: EmptyLabel")})
     assert chain.walk("a..b") == chain.ChainResult("", False)

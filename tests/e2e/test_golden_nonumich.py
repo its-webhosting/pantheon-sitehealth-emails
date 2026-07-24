@@ -13,7 +13,6 @@ import email
 import email.policy
 
 import pytest
-
 from conftest import (
     E2E_DATE,
     E2E_SITE,

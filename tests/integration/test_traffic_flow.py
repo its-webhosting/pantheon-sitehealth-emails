@@ -10,9 +10,9 @@ import datetime
 import json
 
 import pytest
+from helpers.dnsfake import recording_console
 
 import script_context as sc
-from helpers.dnsfake import recording_console
 from psh.traffic import (
     import_older_site_metrics,
     load_site_traffic,

@@ -6,7 +6,6 @@ This is the fail-closed guard that makes the hard constraints impossible to viol
 a mistaken test.  Uses fixtures so the raised class matches exactly.
 """
 import pytest
-
 from conftest import MINIMAL_CONFIG
 
 pytestmark = pytest.mark.unit

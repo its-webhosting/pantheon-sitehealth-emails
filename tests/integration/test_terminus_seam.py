@@ -5,7 +5,6 @@ Exercises the single Pantheon seam and the shared-state plumbing without any net
 import datetime
 
 import pytest
-
 from conftest import E2E_SITE_ID
 
 pytestmark = pytest.mark.integration

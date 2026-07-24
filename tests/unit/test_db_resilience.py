@@ -55,7 +55,7 @@ def test_db_engine_args_unsupported_type_exits(psh):
 class FakeSession:
     """Minimal stand-in: records rollbacks so the retry contract can be asserted."""
 
-    def __init__(self, rollback_raises=False, rollback_error=None):
+    def __init__(self, *, rollback_raises=False, rollback_error=None):
         self.rollbacks = 0
         self.rollback_raises = rollback_raises
         self.rollback_error = rollback_error

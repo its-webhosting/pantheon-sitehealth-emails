@@ -12,7 +12,6 @@ import subprocess
 import sys
 
 import pytest
-
 from conftest import PYSHIM_DIR, SHIM_DIR
 
 pytestmark = pytest.mark.integration
@@ -28,7 +27,8 @@ def _probe(tmp_path, env_extra, code):
     env.pop("DB_SHIM_FAIL", None)
     env.update(env_extra)
     return subprocess.run(
-        [sys.executable, "-c", code], env=env, cwd=str(tmp_path), capture_output=True, text=True
+        [sys.executable, "-c", code], env=env, cwd=str(tmp_path), capture_output=True, text=True,
+        check=False,
     )
 
 
@@ -36,7 +36,7 @@ def test_exactly_one_sitecustomize_lives_under_tests_shims():
     # Two would mean one of them never runs -- see this module's docstring.  A new subprocess shim
     # goes in pyshim/ as its own module, imported by pyshim/sitecustomize.py.
     found = sorted(p.relative_to(SHIM_DIR) for p in SHIM_DIR.rglob("sitecustomize.py"))
-    assert [str(p) for p in found] == [os.path.join("pyshim", "sitecustomize.py")]
+    assert [str(p) for p in found] == [os.path.join("pyshim", "sitecustomize.py")]  # noqa: PTH118 -- expected value built with os.path.join to match the os-native separator the rglob walk emits
 
 
 def test_both_shims_are_active_in_one_interpreter(tmp_path):

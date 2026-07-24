@@ -3,7 +3,6 @@
 The builders relocated to check/umich/annual_billing.py at campaign I12; load them
 standalone (the I8 php_eol precedent -- no psh re-import exists for check/ modules)."""
 import pytest
-
 from helpers.checkload import load_check_module
 
 pytestmark = pytest.mark.unit

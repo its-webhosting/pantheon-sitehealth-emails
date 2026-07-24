@@ -8,7 +8,8 @@ only be exercised in-process, through the two pure helpers it was extracted into
 import json
 
 import pytest
-from hypothesis import given, strategies as st
+from hypothesis import given
+from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
 

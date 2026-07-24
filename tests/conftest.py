@@ -20,7 +20,6 @@ import os
 import re
 import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -81,7 +80,7 @@ _main_module = None
 
 
 def _load_main_module():
-    global _main_module
+    global _main_module  # noqa: PLW0603 -- module-level cache of the imported program; the global is the documented single-import pattern
     if _main_module is None:
         # Normal import: run-tests execs `python -m pytest` with cwd = repo root,
         # which puts the repo root on sys.path -- the same mechanism that resolves
@@ -222,7 +221,7 @@ def normalize_report_html(text):
     return _CID_RE.sub("cid:NORMALIZED", text)
 
 
-def seed_traffic(db_path, *, site_id=E2E_SITE_ID, year=2026, month=3,
+def seed_traffic(db_path, *, site_id=E2E_SITE_ID, year=2026, month=3,  # noqa: PLR0913 -- test data-seeding helper; each keyword-only param is a distinct traffic dimension a caller sets
                  plan="Performance Small", visits_scale=1):
     """Seed a deterministic month of PantheonTraffic rows into a sqlite DB.
 
@@ -369,9 +368,7 @@ def _resolve_config_arg(args, cwd):
             value = args[i + 1] if i + 1 < len(args) else None
             i += 2
             continue
-        if arg.startswith("--config="):
-            value = arg.split("=", 1)[1]
-        elif arg.startswith("-c="):
+        if arg.startswith(("--config=", "-c=")):
             value = arg.split("=", 1)[1]
         i += 1
     if value is None:
@@ -423,7 +420,7 @@ def _assert_offline_data_flags(args, mode, cwd):
         )
 
 
-def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300, fixtures_dir=None):
+def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300, fixtures_dir=None):  # noqa: PLR0913 -- the safety-interlock subprocess entry point; params mirror the run's controls
     """Run ./pantheon-sitehealth-emails as a subprocess through the terminus shim.
 
     Raises ForbiddenFlagError (before exec) if args contain --all/-a/--for-real, or
@@ -464,6 +461,7 @@ def run_program(args, *, cwd, mode="replay", extra_env=None, timeout=300, fixtur
         capture_output=True,
         text=True,
         timeout=timeout,
+        check=False,
     )
 
 

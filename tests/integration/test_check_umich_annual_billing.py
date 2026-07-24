@@ -9,7 +9,6 @@ runtime cover LEDGER I1 required for the previously-untested umich-only call sit
 import datetime
 
 import pytest
-
 from helpers.checkload import load_check_module, load_check_package
 from helpers.dnsfake import recording_console
 
@@ -69,8 +68,8 @@ def test_umich_disabled_registers_no_billing_hooks(psh, reset_sc, request, monke
 
 # --- upcoming (B50 window) ---------------------------------------------------------
 
-@pytest.mark.parametrize("day,expected", [(15, False), (16, True), (29, True), (30, False)])
-def test_upcoming_produced_only_inside_contract_year_end_window(
+@pytest.mark.parametrize(("day", "expected"), [(15, False), (16, True), (29, True), (30, False)])
+def test_upcoming_produced_only_inside_contract_year_end_window(  # noqa: PLR0913 -- parametrized test; args are fixtures + parametrize values injected by name
         psh, reset_sc, billing, monkeypatch, day, expected):
     reset_sc.config = CONFIG
     _wire_facade(psh, monkeypatch, reset_sc)

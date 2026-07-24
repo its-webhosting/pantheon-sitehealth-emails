@@ -6,9 +6,8 @@ Covers the upsert/merge semantics main() relies on and the unique key that prote
 import datetime
 
 import pytest
-from sqlalchemy.exc import IntegrityError
-
 from conftest import E2E_SITE_ID
+from sqlalchemy.exc import IntegrityError
 
 pytestmark = pytest.mark.integration
 

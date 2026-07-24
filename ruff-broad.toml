@@ -11,7 +11,6 @@
 # masks the 3.12-only f-string syntax detection).
 extend-exclude = [
     # Grandfathered until their increment moves/cleans them:
-    "tests/",               # cleaned per-increment alongside their code
     "development/",         # historical archive, never linted
 ]
 
@@ -34,5 +33,23 @@ ignore = [
 ]
 
 [lint.per-file-ignores]
-# (none yet -- tests/ is excluded wholesale above; when an increment
-# un-grandfathers a test file, add S101 etc. HERE with justification)
+"tests/**" = [
+    "S101",     # pytest asserts ARE the mechanism (1,715 sites)
+    "S105", "S106",  # fake fixture credentials (carried over from the narrow config's
+                     # existing "tests/*" entry -- verified 2026-07-16, re-verified I14b)
+    "INP001",   # pytest collects without __init__.py; adding them changes import
+                # semantics for zero gain (120 sites)
+    "PLR2004",  # expected literals in assertions are the point (74)
+    "ARG001", "ARG002", "ARG005",  # fixture params + seam-matching fake signatures
+                # (monkeypatch fakes must accept the real seam's arity) (211)
+    "FBT003",   # positional booleans at pinned call sites under test (68)
+    "PLC0415",  # in-test imports are the suite's documented loading pattern
+                # (checkload/SourceFileLoader style; I8 review adjudicated) (57)
+    "PT018",    # composite asserts: splitting 70 sites churns load-bearing tests for
+                # zero signal gain (user decision: no assertion churn)
+    "SLF001",   # tests reach private seams by design (7)
+    "S311",     # non-crypto RNG in test data (5)
+    "S603",     # subprocess in sanctioned test harnesses: run_program, the shim
+                # probe, and the real-php inliner call in test_css_inliner_encoding (3)
+    "DTZ002",   # naive datetimes mirror the program's own date semantics (6)
+]

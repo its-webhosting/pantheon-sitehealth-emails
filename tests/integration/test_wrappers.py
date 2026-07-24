@@ -9,7 +9,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-def _fake(output, errors="", fatal=False, record=None):
+def _fake(output, errors="", fatal=False, record=None):  # noqa: FBT002 -- fake mirrors run_terminus's (output, errors, fatal) result shape; positional bool matches the seam
     def run_terminus(command, input_data=None):
         if record is not None:
             record["command"] = command
@@ -29,7 +29,7 @@ def test_wp_parses_json_three_tuple(psh, gateway, monkeypatch):
 
 def test_wp_bad_json_returns_none_and_keeps_errors(psh, gateway, monkeypatch):
     monkeypatch.setattr(gateway, "run_terminus", _fake("this is not json"))
-    result, errors, fatal = psh.wp("its-wws-test1.live", "plugin", "list")
+    result, errors, _fatal = psh.wp("its-wws-test1.live", "plugin", "list")
     assert result is None
     assert "this is not json" in errors
 
@@ -44,7 +44,7 @@ def test_wp_eval_strips_and_three_tuple(psh, gateway, monkeypatch):
 
 def test_drush_parses_json_three_tuple(psh, gateway, monkeypatch):
     monkeypatch.setattr(gateway, "run_terminus", _fake('{"drupal": 10}'))
-    result, errors, fatal = psh.drush("its-wws-test2.live", "core:status")
+    result, _errors, fatal = psh.drush("its-wws-test2.live", "core:status")
     assert result == {"drupal": 10}
     assert fatal is False
 
@@ -52,7 +52,7 @@ def test_drush_parses_json_three_tuple(psh, gateway, monkeypatch):
 def test_drush_moves_leading_noise_to_errors(psh, gateway, monkeypatch):
     # Drush sometimes prints warnings before the JSON body; fix_drush_output relocates them.
     monkeypatch.setattr(gateway, "run_terminus", _fake('[warning] deprecated\n{"drupal": 10}'))
-    result, errors, fatal = psh.drush("its-wws-test2.live", "core:status")
+    result, errors, _fatal = psh.drush("its-wws-test2.live", "core:status")
     assert result == {"drupal": 10}
     assert "[warning] deprecated" in errors
 
@@ -86,7 +86,7 @@ def test_wp_error_shape(psh):
     assert isinstance(notices, list) and len(notices) == 1
     n = notices[0]
     assert n["type"] == "alert"
-    assert set(("type", "icon", "csv", "short", "message", "text")) <= set(n)
+    assert {"type", "icon", "csv", "short", "message", "text"} <= set(n)
     assert "<strong>its-wws-test1</strong>" in n["message"]
     assert n["csv"].startswith("its-wws-test1,wp-error,PLUGIN_FAIL,")
     assert "boom" in n["text"]

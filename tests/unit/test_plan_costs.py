@@ -30,7 +30,7 @@ def months(start_year_month, n):
 
 
 def vbm(start, n, visits):
-    return {mo: visits for mo in months(start, n)}
+    return dict.fromkeys(months(start, n), visits)
 
 
 def op_none(_month):
@@ -41,7 +41,7 @@ def op_used(used):
     return lambda _month: types.SimpleNamespace(used_this_month=used)
 
 
-def call(psh, plan_info, visits_by_month, *, estimate=-1, op_lookup=op_none, v=None):
+def call(psh, plan_info, visits_by_month, *, estimate=-1, op_lookup=op_none, v=None):  # noqa: PLR0913 -- wraps plan_costs; fixtures + the cost-model inputs under test
     plan_names = list(plan_info)
     keys = list(visits_by_month)
     if v is None:
@@ -79,7 +79,7 @@ def test_no_overage_costs_are_base(psh):
 # ── Overage with an OP record present but unused -> full overage billed ───────────────
 def test_overage_no_waiver(psh):
     plan_info = {"P": {"cost": 100, "traffic_limit": 0}}
-    cost_same, costs_median, costs_best, median_visitors = call(
+    cost_same, costs_median, costs_best, _median_visitors = call(
         psh, plan_info, vbm("2025-01", 12, 10000), op_lookup=op_used(False)
     )
     # 10000 overage -> round((10000+5000)/10000)=2 blocks -> $80/mo * 12 + $100 base.

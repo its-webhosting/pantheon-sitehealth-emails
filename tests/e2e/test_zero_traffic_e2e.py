@@ -9,7 +9,6 @@ This test runs the WordPress fixtures but, unlike build_rendered_report, does NO
 traffic, so plan_on_day starts empty.
 """
 import pytest
-
 from conftest import (
     E2E_DATE,
     E2E_SITE,

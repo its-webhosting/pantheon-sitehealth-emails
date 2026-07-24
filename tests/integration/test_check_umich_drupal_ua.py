@@ -10,7 +10,6 @@ psh.gateway's namespace (CLAUDE.md "Two mock seams").
 import json
 
 import pytest
-
 from helpers.checkload import load_check_module, load_check_package
 from helpers.dnsfake import recording_console
 
@@ -29,7 +28,7 @@ def _ctx(reset_sc, *, framework="drupal10", drupal_version="10.1"):
     return ctx
 
 
-def _fake_run_terminus(output, errors="", fatal=False, record=None):
+def _fake_run_terminus(output, errors="", fatal=False, record=None):  # noqa: FBT002 -- fake mirrors run_terminus's (output, errors, fatal) result shape; positional bool matches the seam
     def run_terminus(command, input_data=None):
         if record is not None:
             record["command"] = command

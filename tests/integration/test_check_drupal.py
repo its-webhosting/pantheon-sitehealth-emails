@@ -10,7 +10,6 @@ module dicts rather than a further mock.
 import json
 
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
 
@@ -21,7 +20,7 @@ SITE_NAME = "its-wws-test1"
 LIVE = f"{SITE_ID}.live"
 
 
-def _ctx(reset_sc, *, framework="drupal9", custom_domains=None, primary_domain="",
+def _ctx(reset_sc, *, framework="drupal9", custom_domains=None, primary_domain="",  # noqa: PLR0913 -- shared SiteContext builder; each param is a contract key the drupal hooks read
          drupal_modules=None, drupal_version="9.5"):
     # "framework" lives in TWO places: site_context["site"]["framework"] is the raw
     # Pantheon site record, available from SiteContext construction -- what the
@@ -38,7 +37,7 @@ def _ctx(reset_sc, *, framework="drupal9", custom_domains=None, primary_domain="
     return ctx
 
 
-def _fake_run_terminus(output, errors="", fatal=False, record=None):
+def _fake_run_terminus(output, errors="", fatal=False, record=None):  # noqa: FBT002 -- fake mirrors run_terminus's (output, errors, fatal) result shape; positional bool matches the seam
     def run_terminus(command, input_data=None):
         if record is not None:
             record["command"] = command

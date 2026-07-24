@@ -5,16 +5,16 @@ function prints or writes.  See SPEC section 5.
 
 import datetime
 import json
-import os
+from pathlib import Path
 
 import pytest
+from helpers.dnsfake import recording_console
 
 import script_context as sc
-from helpers.dnsfake import recording_console
 
 
 class FakeSession:
-    def __init__(self, close_raises=False):
+    def __init__(self, *, close_raises=False):
         self.close_raises = close_raises
 
     def close(self):
@@ -30,7 +30,7 @@ class FakeEngine:
         self.disposed = True
 
 
-def run(psh, monkeypatch, reset_sc, argv, engine=None, session=None, run_state=None, **kwargs):
+def run(psh, monkeypatch, reset_sc, argv, engine=None, session=None, run_state=None, **kwargs):  # noqa: PLR0913 -- drives the finish_run seam; fixtures + run-scoped scenario params
     console = recording_console(monkeypatch, reset_sc)
     reset_sc.options = psh.parse_args(argv)
     rs = run_state or psh.RunState(
@@ -55,7 +55,7 @@ def test_run_finish_phase_fires_before_artifacts_are_written(psh, tmp_path, monk
     reset_sc.add_hook("run_finish", {
         "name": "probe", "consumes": [], "produces": [],
         # CAMPAIGN.md section 4: run_finish hooks receive the RunState (since I13).
-        "func": lambda run_state: (seen.append(os.path.exists(f"{ymd}-notices.csv")),
+        "func": lambda run_state: (seen.append(Path(f"{ymd}-notices.csv").exists()),
                                    received.append(run_state)),
     })
 
@@ -70,8 +70,8 @@ def test_finish_run_all_writes_the_artifacts(psh, tmp_path, monkeypatch, reset_s
     monkeypatch.chdir(tmp_path)
     run(psh, monkeypatch, reset_sc, ["--date", "2026-03-31", "--all"])
 
-    assert "its-wws-test1,some-notice,detail" in list(tmp_path.glob("*-notices.csv"))[0].read_text()
-    results = json.loads(list(tmp_path.glob("*-results.json"))[0].read_text())
+    assert "its-wws-test1,some-notice,detail" in next(iter(tmp_path.glob("*-notices.csv"))).read_text()
+    results = json.loads(next(iter(tmp_path.glob("*-results.json"))).read_text())
     # results.json is SITE-KEYED AND NOTHING ELSE.  monthly-report.txt reads it with
     # `jq to_entries`, which enumerates every key as a site: the run metadata used to live here
     # under "_run" and became a bogus `_run,,,` row in the operator's monthly stats, throwing off
@@ -81,7 +81,7 @@ def test_finish_run_all_writes_the_artifacts(psh, tmp_path, monkeypatch, reset_s
     # The run's outcome must still outlive the terminal scrollback (SPEC 3.6) -- in its own file.
     # Names say "this run" because the artifacts describe both runs on a resume while these
     # numbers describe only this one.
-    run_meta = json.loads(list(tmp_path.glob("*-run.json"))[0].read_text())
+    run_meta = json.loads(next(iter(tmp_path.glob("*-run.json"))).read_text())
     assert run_meta == {
         "aborted_at": None,
         "reason": None,
@@ -126,9 +126,9 @@ def test_finish_run_aborted_does_not_claim_success(psh, tmp_path, monkeypatch, r
     # Healed vs. failed, spelled out: a bare "Database reconnects: 4" cannot tell the operator
     # whether the connection came back or the run died of it -- and this run died of it.
     assert "Database reconnects: 3 healed, 1 failed" in output
-    results = json.loads(list(tmp_path.glob("*-results.json"))[0].read_text())
+    results = json.loads(next(iter(tmp_path.glob("*-results.json"))).read_text())
     assert list(results) == ["its-wws-test1"]   # no metadata key leaks into the site-keyed file
-    run_meta = json.loads(list(tmp_path.glob("*-run.json"))[0].read_text())
+    run_meta = json.loads(next(iter(tmp_path.glob("*-run.json"))).read_text())
     assert run_meta["aborted_at"] == "its-wws-test2"
     assert run_meta["reason"] == "database"
     assert run_meta["db_reconnects_healed_this_run"] == 3
@@ -154,7 +154,7 @@ def test_finish_run_aborted_before_any_site_does_not_claim_success(
     output = console.export_text()
     assert "Email sent for 2 of 2 sites" not in output   # the green success line
     assert "None" not in output   # aborted_at=None must not leak into the printed totals
-    run_meta = json.loads(list(tmp_path.glob("*-run.json"))[0].read_text())
+    run_meta = json.loads(next(iter(tmp_path.glob("*-run.json"))).read_text())
     assert run_meta["aborted_at"] is None
     assert run_meta["reason"] == "interrupted"
 

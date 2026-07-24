@@ -3,8 +3,10 @@ import ipaddress
 
 import dns.resolver
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
-import psh.dns_classify as dns_classify
+from psh import dns_classify
 
 pytestmark = pytest.mark.unit
 
@@ -38,7 +40,7 @@ def test_cloudflare_ip_counted(reset_sc, monkeypatch):
     def fake(hostname, rrtype):
         if rrtype == "A":
             return [_RData("104.16.0.1")]
-        raise dns.resolver.NoAnswer()
+        raise dns.resolver.NoAnswer
     monkeypatch.setattr(dns_classify, "resolve", fake)
     cf, elsewhere, transient = dns_classify.classify_hostname_dns(
         "example.org", True, [ipaddress.ip_network("104.16.0.0/12")], [])
@@ -49,9 +51,9 @@ def test_non_cloudflare_ip_is_elsewhere(reset_sc, monkeypatch):
     def fake(hostname, rrtype):
         if rrtype == "A":
             return [_RData("203.0.113.5")]
-        raise dns.resolver.NoAnswer()
+        raise dns.resolver.NoAnswer
     monkeypatch.setattr(dns_classify, "resolve", fake)
-    cf, elsewhere, transient = dns_classify.classify_hostname_dns(
+    cf, elsewhere, _transient = dns_classify.classify_hostname_dns(
         "example.org", True, [ipaddress.ip_network("104.16.0.0/12")], [])
     assert cf == 0 and elsewhere == 1
 
@@ -66,14 +68,14 @@ def _resolver(mapping):
     def fake(hostname, rrtype):
         kind = mapping.get(hostname, "missing")
         if rrtype != "A":
-            raise dns.resolver.NoAnswer()
+            raise dns.resolver.NoAnswer
         if kind == "cf":
             return [_RData("104.16.0.1")]
         if kind == "elsewhere":
             return [_RData("203.0.113.5")]
         if kind == "transient":
-            raise dns.resolver.Timeout()
-        raise dns.resolver.NXDOMAIN()
+            raise dns.resolver.Timeout
+        raise dns.resolver.NXDOMAIN
     return fake
 
 
@@ -136,7 +138,7 @@ def test_cf_record_runs_cloudflare_checks_despite_transient_sibling(psh, reset_s
     def fake(hostname, rrtype):
         if rrtype == "A":
             return [_RData("104.16.0.1")]         # Cloudflare
-        raise dns.resolver.Timeout()              # AAAA transient
+        raise dns.resolver.Timeout              # AAAA transient
     monkeypatch.setattr(dns_classify, "resolve", fake)
     domains = _domains({"w.example.org": ("custom", True)})
     facts = dns_classify.classify_domains(
@@ -151,7 +153,7 @@ def test_elsewhere_record_classified_despite_transient_sibling(psh, reset_sc, mo
     def fake(hostname, rrtype):
         if rrtype == "A":
             return [_RData("203.0.113.5")]        # non-Cloudflare
-        raise dns.resolver.Timeout()              # AAAA transient
+        raise dns.resolver.Timeout              # AAAA transient
     monkeypatch.setattr(dns_classify, "resolve", fake)
     domains = _domains({"e.example.org": ("custom", True)})
     facts = dns_classify.classify_domains(
@@ -203,9 +205,6 @@ def test_stuff_dns_contract_maps_each_field(reset_sc):
     assert ctx["dns_transient"] == ["dt"]
 
 
-from hypothesis import HealthCheck, given, settings, strategies as st
-
-
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(hosts=st.dictionaries(
     st.from_regex(r"[a-z]{1,6}\.example\.org", fullmatch=True),
@@ -213,7 +212,7 @@ from hypothesis import HealthCheck, given, settings, strategies as st
     max_size=6))
 def test_property_transient_never_in_not_in_dns(psh, reset_sc, monkeypatch, hosts):
     monkeypatch.setattr(dns_classify, "resolve", _resolver(hosts))
-    domains = _domains({h: ("custom", False) for h in hosts})
+    domains = _domains(dict.fromkeys(hosts, ("custom", False)))
     facts = dns_classify.classify_domains(
         domains, True, CF_V4, [], proxied_fqdns={}, fqdn_zone_conflicts={}, fqdn_re=psh.fqdn_re)
     assert set(facts.dns_transient).isdisjoint(facts.not_in_dns)
@@ -242,7 +241,7 @@ def test_cf_host_absent_from_proxied_lands_in_behind_cloudflare_not_proxied(psh,
 def test_resolve_converts_a_malformed_name_into_a_named_exception(psh, reset_sc):
     # F10: dns.name.EmptyLabel derives from dns.exception.SyntaxError, which no dns.resolver.*
     # except clause catches -- unconverted, it aborts the whole run from inside the per-site loop.
-    import psh.dns_classify as dns_classify
+    from psh import dns_classify
     with pytest.raises(dns_classify.MalformedNameError):
         dns_classify.resolve("a..b", "CNAME")
     with pytest.raises(dns_classify.MalformedNameError):
@@ -256,7 +255,7 @@ def test_resolve_converts_a_struct_error_from_an_out_of_range_byte_escape(psh, r
     # was NOT covered by the (SyntaxError, NameTooLong) except clause.  This is reachable through
     # an ordinary hostname string -- no monkeypatching -- e.g. via a Cloudflare `origins` value,
     # which is arbitrary remote content not gated by fqdn_re.
-    import psh.dns_classify as dns_classify
+    from psh import dns_classify
     with pytest.raises(dns_classify.MalformedNameError):
         dns_classify.resolve("\\300.com", "CNAME")
 
@@ -272,7 +271,8 @@ def test_resolve_converts_a_real_idna_exception(psh, reset_sc, monkeypatch):
     # instance, to prove resolve()'s except clause converts it -- the fix guards a real dnspython
     # exception class, even though nothing in this codebase's call pattern can trigger it today.
     import dns.name
-    import psh.dns_classify as dns_classify
+
+    from psh import dns_classify
 
     real_exc = None
     try:
@@ -300,7 +300,7 @@ def test_wire_level_struct_error_is_transient_not_a_malformed_name(psh, reset_sc
 
     import dns.resolver
 
-    import psh.dns_classify as dns_classify
+    from psh import dns_classify
 
     def garbled_wire(hostname, rrtype):
         raise struct.error("unpack requires a buffer of 2 bytes")
@@ -319,7 +319,7 @@ def test_classify_hostname_dns_survives_a_malformed_name(psh, reset_sc, monkeypa
     # the run.  A name that cannot exist in DNS is definitively unresolvable -> (0, 0, False),
     # which the caller aggregates into the existing not_in_dns alert (whose remedy -- "remove
     # these domains from the Pantheon live environment, or add them to DNS" -- is correct here).
-    import psh.dns_classify as dns_classify
+    from psh import dns_classify
 
     def boom(name, rrtype):
         raise dns_classify.MalformedNameError(f"{name}: EmptyLabel")
@@ -333,7 +333,7 @@ def test_malformed_domain_id_does_not_abort_classify_domains(psh, reset_sc, monk
     # classify_domains (which runs inside the per-site loop, which has no try/except).
     import re
 
-    import psh.dns_classify as dns_classify
+    from psh import dns_classify
 
     def boom(name, rrtype):
         raise dns_classify.MalformedNameError(f"{name}: EmptyLabel")
@@ -341,6 +341,6 @@ def test_malformed_domain_id_does_not_abort_classify_domains(psh, reset_sc, monk
     monkeypatch.setattr(dns_classify, "resolve", boom)
     domains = {"a..b": {"id": "a..b", "type": "custom", "primary": True}}
     facts = dns_classify.classify_domains(
-        domains, False, [], [], {}, {}, re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.I))
+        domains, False, [], [], {}, {}, re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.IGNORECASE))
     assert facts.not_in_dns == ["a..b"]      # definitive: it cannot be in DNS
     assert facts.dns_transient == []

@@ -4,7 +4,6 @@ D-i10-5).
 Default is ENABLED: relocating code must not silently disable a notice that rendered
 unconditionally before (CAMPAIGN.md section 5) -- the D-i8-6/D-i9-5/D-i10-5 shape."""
 import pytest
-
 from helpers.checkload import load_check_package
 from helpers.dnsfake import recording_console
 

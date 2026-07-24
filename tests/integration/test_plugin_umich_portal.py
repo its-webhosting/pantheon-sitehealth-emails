@@ -80,7 +80,7 @@ def test_setup_portal_db_overrides_config_and_populates(portal_module, reset_sc,
     # consumes/produces declarations every hook needs (campaign I4; a dotted event must
     # declare both empty -- see psh/modules.py's add_hook).
     fired = []
-    sc.add_hook("setup.umich.portal", {"name": "probe", "func": lambda conn: fired.append(conn),
+    sc.add_hook("setup.umich.portal", {"name": "probe", "func": fired.append,
                                        "consumes": [], "produces": []})
 
     portal_module.setup_portal_db()

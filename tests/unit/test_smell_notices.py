@@ -30,7 +30,7 @@ def test_composer_smell_alone_is_reported(psh):
 def test_composer_html_interpolates_composer_not_drush(psh):
     # RED pre-fix: the composer html body interpolated {drush_smell}.
     notices = psh.build_smell_notices("s", "", "drush text", "composer text")
-    composer = [n for n in notices if n["csv"].startswith("s,composer-smell,")][0]
+    composer = next(n for n in notices if n["csv"].startswith("s,composer-smell,"))
     assert "composer text" in composer["message"]
     assert "drush text" not in composer["message"]
 
@@ -46,7 +46,7 @@ def test_composer_literals_are_column_zero_like_siblings(psh):
     # accidental leading indentation on every interior line -- the wp/drush siblings are
     # column-0.  RED on the pre-move builder (psh/_legacy.py) before the D-i10-8 de-indent.
     notices = psh.build_smell_notices("s", "", "d", "c")
-    drush, composer = notices
+    _drush, composer = notices
     assert not composer["message"].startswith("\n        ")
     assert composer["message"].splitlines()[1].startswith("<p>The <code>composer</code>")
     assert composer["text"].splitlines()[1].startswith('The "composer" command')

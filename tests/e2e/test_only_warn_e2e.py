@@ -14,7 +14,6 @@ missing OP-write-before-read once made --only-warn use the simulation branch (sa
 2755.00), diverging from the full report; do not revert the pin to that value.
 """
 import pytest
-
 from conftest import (
     E2E_DATE,
     E2E_SITE,
@@ -47,8 +46,8 @@ def test_only_warn_includes_plan_recommendation(tmp_path):
     proc = _only_warn(work)
 
     assert proc.returncode == 0, proc.stderr
-    row = next(l for l in proc.stdout.splitlines()
-               if f"{E2E_SITE},its-recommends-plan," in l)
+    row = next(line for line in proc.stdout.splitlines()
+               if f"{E2E_SITE},its-recommends-plan," in line)
     # D-i7-5: fixed 5-column row, comma-free savings (4,995.00 would split the field).
     assert row.strip() == (
         f"{E2E_SITE},its-recommends-plan,Performance Small,Performance Large,4995.00"

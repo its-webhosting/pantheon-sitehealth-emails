@@ -42,7 +42,7 @@ def test_invoke_hooks_unknown_bare_name_is_fatal(reset_sc):
 def test_dotted_event_registers_and_invokes(reset_sc):
     sc = reset_sc
     fired = []
-    sc.add_hook("setup.custom.event", {"name": "probe", "func": lambda x: fired.append(x),
+    sc.add_hook("setup.custom.event", {"name": "probe", "func": fired.append,
                                        "consumes": [], "produces": []})
     sc.invoke_hooks("setup.custom.event", 42)
     assert fired == [42]

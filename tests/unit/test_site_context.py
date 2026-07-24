@@ -9,8 +9,8 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _n(message="<p>Hi</p>", type="info", **extra):
-    return {"type": type, "message": message, **extra}
+def _n(message="<p>Hi</p>", kind="info", **extra):
+    return {"type": kind, "message": message, **extra}
 
 
 _LINKED = ('<p>Some pages on <a href="https://a.example.edu/">a.example.edu</a> are not '

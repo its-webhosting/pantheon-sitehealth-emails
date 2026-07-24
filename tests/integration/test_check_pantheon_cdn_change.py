@@ -2,7 +2,6 @@ import datetime
 import re
 
 import pytest
-
 from helpers.checkload import load_check_package
 from helpers.dnsfake import patch_resolve, recording_console
 

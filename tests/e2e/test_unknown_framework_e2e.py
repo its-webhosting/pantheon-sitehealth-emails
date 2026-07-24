@@ -5,7 +5,6 @@ non---all path of finish_run() pprints the same site_results dict to stdout -- t
 the observable this test pins.
 """
 import pytest
-
 from conftest import (
     E2E_DATE,
     E2E_SITE,

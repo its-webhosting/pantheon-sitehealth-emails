@@ -47,7 +47,7 @@ def shaped_locals(spike=None):
     if spike is not None:
         visits_by_month[MONTHS[5]] = spike
     dates = [datetime.date.fromisoformat(m + "-15") for m in MONTHS]
-    plan_on_day = {d: "Basic" for d in dates}
+    plan_on_day = dict.fromkeys(dates, "Basic")
     return {
         "site": {"name": "charts-test"},
         "site_url": "https://charts.example.edu",

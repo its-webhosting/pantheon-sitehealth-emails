@@ -12,7 +12,6 @@ bug).  This module adds:
 import re
 
 import pytest
-
 from conftest import (
     E2E_DATE,
     E2E_SITE,
@@ -72,7 +71,7 @@ def test_recommendation_path_exercises_plan_costs(tmp_path):
     # of the seeded monthly visit sums; the guardrails hold the recommendation at the current
     # "Performance Small" floor rather than dropping to Basic.)
     assert "35,960 per month" in html  # median_visitors returned by plan_costs
-    rec_line = next(l for l in txt.splitlines() if l.strip().startswith("Recommended plan:"))
+    rec_line = next(line for line in txt.splitlines() if line.strip().startswith("Recommended plan:"))
     assert "Performance Small" in rec_line
 
 

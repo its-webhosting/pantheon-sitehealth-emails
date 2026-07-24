@@ -7,9 +7,9 @@ import datetime
 import json
 
 import pytest
+from helpers.dnsfake import recording_console
 
 import script_context as sc
-from helpers.dnsfake import recording_console
 from psh.plans import PlanCatalog, recommend_plan, resolve_plan_name
 
 pytestmark = pytest.mark.integration
@@ -42,7 +42,7 @@ def test_elite_transient_failure_returns_none(psh, gateway, monkeypatch, reset_s
 def test_elite_missing_sku_is_fatal(psh, gateway, monkeypatch, reset_sc):
     monkeypatch.setattr(gateway, "run_terminus",
                         lambda *a, **k: (json.dumps({}), "", False))
-    with pytest.raises(SystemExit, match="Bailing out."):
+    with pytest.raises(SystemExit, match="Bailing out."):  # noqa: RUF043 -- match is a substring regex; the literal SystemExit message is "Bailing out." and escaping would change the assertion's pattern semantics
         resolve_plan_name({"name": "t1", "plan_name": "Elite"})
 
 
@@ -50,7 +50,7 @@ def test_elite_unknown_sku_is_fatal(psh, gateway, monkeypatch, reset_sc):
     sc.config = {"Pantheon": {"plan_sku_to_name": {}}}
     monkeypatch.setattr(gateway, "run_terminus",
                         lambda *a, **k: (json.dumps({"sku": "plan-weird"}), "", False))
-    with pytest.raises(SystemExit, match="Bailing out."):
+    with pytest.raises(SystemExit, match="Bailing out."):  # noqa: RUF043 -- match is a substring regex; the literal SystemExit message is "Bailing out." and escaping would change the assertion's pattern semantics
         resolve_plan_name({"name": "t1", "plan_name": "Elite"})
 
 

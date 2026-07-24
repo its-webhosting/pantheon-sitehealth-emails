@@ -2,7 +2,6 @@ import re
 
 import dns.resolver
 import pytest
-
 from helpers.checkload import load_check_module
 from helpers.dnsfake import patch_resolve, recording_console
 

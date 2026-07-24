@@ -53,7 +53,7 @@ def _assert_no_mojibake(out: str, label: str) -> None:
 def _inline(tmp_path, html: str) -> str:
     infile, outfile = tmp_path / "in.html", tmp_path / "out.html"
     infile.write_text(html, encoding="utf-8")
-    subprocess.run(["php", str(REPO_ROOT / "inline-styles.php"), str(infile), str(outfile)],
+    subprocess.run(["php", str(REPO_ROOT / "inline-styles.php"), str(infile), str(outfile)],  # noqa: S607 -- test invokes php via PATH exactly as the program does; an absolute path would break portability
                    check=True, cwd=REPO_ROOT)
     return outfile.read_text(encoding="utf-8")
 
@@ -92,7 +92,7 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("markup, expected", CASES)
+@pytest.mark.parametrize(("markup", "expected"), CASES)
 def test_inliner_preserves_characters_with_a_charset(tmp_path, markup, expected):
     html = ('<!DOCTYPE html><html lang="en"><head>'
             '<META http-equiv="Content-Type" content="text/html; charset=utf-8">'
@@ -102,7 +102,7 @@ def test_inliner_preserves_characters_with_a_charset(tmp_path, markup, expected)
     assert expected in html_module.unescape(out)
 
 
-@pytest.mark.parametrize("markup, expected", CASES)
+@pytest.mark.parametrize(("markup", "expected"), CASES)
 def test_inliner_preserves_characters_without_a_charset(tmp_path, markup, expected):
     # inline-styles.php normalizes non-ASCII to numeric entities before handing the
     # document to Emogrifier, so a caller that forgets the charset meta -- the original

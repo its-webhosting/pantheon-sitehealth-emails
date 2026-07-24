@@ -22,7 +22,6 @@ import email.policy
 import json
 
 import pytest
-
 from conftest import (
     E2E_SITE,
     REPO_ROOT,
