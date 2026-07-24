@@ -110,9 +110,9 @@ def classify_hostname_dns(
                     sc.console.print(
                         f"{hostname} has IP address [red]{rdata.address}[/red]")
         except dns.resolver.NoAnswer:
-            # per-name transient-vs-malformed design (each rrtype's resolve() outcome is
-            # classified independently); pulling it out of the loop would lose that per-name
-            # granularity, not just satisfy the linter (campaign I14a Task 2, SPEC section 5).
+            # The try/except inside the loop IS the per-name transient-vs-malformed design
+            # (each rrtype's resolve() outcome is classified independently); pulling it out
+            # of the loop would lose that per-name granularity.
             sc.console.print(f"No {rrtype} record for {hostname}", style="red")
         except dns.resolver.NXDOMAIN:
             sc.console.print(f"NXDOMAIN for {hostname} ({rrtype})", style="red")

@@ -1906,3 +1906,110 @@ empty). Fast-tier count 1021/1/2 = I13's 1026/1/2 − the 5 sanctioned B51 test 
   redesign) — take it or re-ledger it; the I14b baseline measurements in the Amendments
   entry above (2,540 findings in `tests/`, 1,727 of them S101 → the reserved
   per-file-ignores block; ~120 in the non-test trees).
+
+## I14b — the global ratchet flip (2026-07-23, commits 82f0511/03e7ac2/13a0577/e70c1e3/7ed4e92 + closing docs commit)
+
+Spec/plan: `development/2026-07-23-mod-I14b-ratchet/` (`SPEC.md` §8 carries the pasted
+acceptance; spec committed before implementation at `8154823`, plan at `e334a0a`; task
+reports under `.superpowers/sdd/`). Adversarial spec review (fable): APPROVE-WITH-FIXES
+round 1, all ten findings folded pre-implementation (incl. extending the red-demo
+protocol to all four PD rules and the FBT002 disposition). Per-task commits, each green;
+whole-branch review (fable): **STANDARDS PASS-WITH-FIXES + SPEC PASS** (all fixes
+applied at close — this commit). Full suite at close **including the live tier**
+(`ls ~/.terminus/cache/tokens/` → token present) = **1023 passed / 1 skipped**, 107
+snapshots, **TWO gates** (the merged single ruff pass + pyright), EXIT=0; four goldens
+AND all 107 `.ambr` snapshots byte-identical across the increment
+(`git diff 1fa1fa7 -- tests/e2e/__snapshots__/` and `-- '*.ambr'` both empty). Collected
+count unchanged (1024; fast tier 1021/1/2). ZERO behavior change on every §8 surface —
+the increment's prime rule, held.
+
+- **Delivered (SPEC §1 A–E, verified per-task + whole-branch):**
+  - **Task 1 (`82f0511`+`03e7ac2`):** `check/dns/`, `check/pantheon_cdn_change/`,
+    `check/umich/sitelens.py`+`cloudflare_cms.py` un-grandfathered (32 findings
+    dispositioned).
+  - **Task 2 (`13a0577`):** `check/cloudflare/` + `plugin/` un-grandfathered (80
+    findings: 58 noqa'd + 22 fixed). One REAL regression caught red-first and reverted:
+    ruff's I001 autofix reordered `check/cloudflare/__init__.py`'s load-bearing
+    `try/except ImportError` import order (two tests pin which sibling's ImportError
+    surfaces) — noqa'd with reason. **Lesson ledgered: SPEC §2.1 rule 4's blanket "I001
+    mechanical" sanction has a gap for imports inside try/except blocks; treat every
+    import reorder as guilty until the file's tests prove it innocent.** Named security
+    dispositions landed (cache.py S311 seeded-RNG; egress.py S104 egress-source
+    constant). Rule-6 whole-file noqa reading for the seam files adjudicated CORRECT by
+    the task reviewer.
+  - **Task 3 (`e70c1e3`):** `tests/` un-grandfathered — the idiom block (15 rules, each
+    with a justification comment) absorbs 2,341 of 2,536 findings; the 195-finding
+    remainder fixed (154) or seam-noqa'd (41; the 22 PLR0913 + FBT002 fakes mirror
+    pinned seam arities). NO assertion semantics, fixture value, expected result, or
+    seam name changed (reviewer-audited hunk-by-hunk incl. the conftest SIM114
+    interlock-branch merge — proven equivalent, fail-closed, 18 interlock + 21 shim
+    tests green; Invariant 7 intact).
+  - **Task 4 (`7ed4e92`):** THE MERGE — one `[tool.ruff.lint]` in `pyproject.toml`
+    (ignore list + idiom block carried char-for-char, whole-branch-verified);
+    `ruff-broad.toml` DELETED; `run-tests` + `.claude/hooks/ruff-check.sh` collapse to
+    ONE ruff pass (the gates are now TWO: ruff + pyright); **pyright pinned 1.1.411**
+    (test extra `pyright==1.1.411` + `uvx pyright@1.1.411` fallback — closing the
+    I14a ruff-drift class for the other tool); `extend-exclude = ["development/2*"]`
+    (D-i14b-2: dated archive folders hold verbatim measurement artifacts, permanently
+    un-linted — while `development/finalize-session.py` was cleaned (24 findings) and
+    stays FULLY gated); the §4 red demonstrations ALL ran (four PD rules each shown red
+    under the merged config; nested-tests suppression + plugin/ firing; the
+    archive-boundary checks; hook parity — transcripts in the task report,
+    whole-branch-review reproduced one per family).
+
+- **The increment's load-bearing discovery (PD#14): the old two-config design linted
+  `select=ALL` at ruff's default py310 target for the entire campaign.**
+  `ruff-broad.toml`, being a separate config file, had no `requires-python` to infer
+  `target-version` from — so the broad pass ran two minor versions below the real
+  py3.12, masking UP017 ×3, FURB162, RUF100, and two `import tomllib` I001s (tomllib is
+  third-party at py310, stdlib at 3.11+). The merge into pyproject restores correct
+  inference; the 7 masked findings were fixed behavior-identically in 6 files (goldens/
+  snapshots byte-identical); **no genuine finding is lost at py312** (FA102 requires
+  py<3.10 — its absence is also the proof the old target was py310, not py39; PERF203
+  is disabled ≥3.11). The pyproject "NO target-version" comment was always right where
+  it lived — the defect was that the OTHER config file could never benefit from it.
+
+- **D-i14a-2 reconciliation (`03e7ac2`):** Task 1's PLR0402 fix
+  (`import psh.dns_classify as dns_classify` → `from psh import dns_classify` in
+  `check/pantheon_cdn_change/chain.py`) initially shipped undisclosed against I14a's
+  D-i14a-2, which mandated the alias syntax — caught by the task reviewer (spec FAIL on
+  disclosure), adjudicated option (b): the decision's INVARIANT is the single shared
+  module object + qualified call sites, not the syntax (proof: `a is b` → True; 21 seam
+  tests green); both I14a SPEC spots corrected in place with blockquotes. Gated files
+  use the PLR0402-mandated form; the seam is unaffected.
+
+- **Deviations from CAMPAIGN.md:** none of architecture. SPEC-level corrections applied
+  in place at close (the I12/I13 precedent): the §2.2 named/tail split was a drafting
+  miscount (correct: **172 named / 23 tail**; the binding 195 gate matched exactly —
+  Task 3 reviewer + whole-branch both confirmed).
+
+- **Contract/config/sc additions:** no new contract keys, no `sc` names. Config-FILE
+  changes (not report-visible keys): the merged `[tool.ruff]`/`[tool.ruff.lint]`
+  (§13's final form), `pyright==1.1.411` in the test extra, the ignore-governance
+  clause restored into pyproject (whole-branch finding 4), the `D`-convention README
+  TODO finally written (promised at I0, delivered at I14b close — PD#9), the E501/D
+  ignore-comment pointers de-staled.
+
+- **Discovered tasks (dispositions):** the py310 target defect → **fixed here** (the
+  merge itself is the fix; 7 findings). The orphaned `psh/dns_classify.py` comment
+  fragment (RUF100 autofix ate the noqa sentence head) → **fixed at close**. Report-text
+  corrections (task-2 tally 58/22; task-4 §6 py39→py310 + tomllib-I001 mechanism +
+  §9.1 residual) → **fixed in the scratch reports** (audit record accuracy; PD#14
+  applies to the explanation of a lying instrument too). `README.md:275`'s present-tense
+  `ruff-broad.toml` prose + CLAUDE.md's architecture-body references to the two-pass
+  design → **I14d's wholesale refresh** (named here so its inventory is complete).
+  `tests/tools/record.py` + `tests/shims/pyshim/dnsshim.py` edits are not
+  suite-executed — assessed by reading in both reviews (trivial-mechanical; shim
+  indirectly covered by `test_shim_composability.py`).
+
+- **Open questions for I14c:** proceed per CAMPAIGN.md §11 row I14c (`Notice` dict form
+  retired: the reserved §6 csv-field amendment + every producer converted; artifacts
+  byte-identical). Inherited context: every notice with extra csv fields
+  (`not-installed,{name}`, `turned-off,{name}`, `updates-addons,{num}`,
+  `drupal-ua,{ua}`, the smell csvs, `its-recommends-plan`'s savings field,
+  `annual-bill,{amount},{shortcode}`) needs the §6 field-set amendment BEFORE
+  conversion (the I3→I7→I10→I12→I14 deferral chain ends here); `add_notice`'s
+  `_notice_to_dict` normalization is the byte-identity mechanism; the whole tree is now
+  gated, so new/edited files carry no grandfather escape. The three post-campaign README
+  TODOs (ruff upgrade + PLR0917; typed sc stubs + pyright widening; test repoint) are
+  NOT I14c/I14d scope.

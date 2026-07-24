@@ -136,7 +136,13 @@ exhaustive; anything not listed here gets FIXED, not ignored):
 
 **Fixed, not ignored** (the remainder: **195** = 2,536 − the 2,341 the idiom block
 absorbs; the named rules below sum to 163, leaving a 32-finding tail each
-dispositioned in the report): `I001` (53), `RUF059` (17), `PT006` (13), `PLR0402`
+dispositioned in the report):
+
+> **Correction (I14b close).** The named rules below sum to **172**, leaving a
+> **23**-finding tail (53+17+13+10+9+8+7+6+5+4+3+2+2+2+22+9 = 172; the drafting
+> miscount excluded FBT002's 9 from the named sum). The binding 195 gate was
+> unaffected — Task 3's structural RED matched it exactly. Confirmed independently
+> by the Task 3 reviewer and the whole-branch review; ledgered. `I001` (53), `RUF059` (17), `PT006` (13), `PLR0402`
 (10), `N806` (9), `RUF015` (8), `RSE102` (7), `E741` (6 — local renames only, never a
 fixture key or seam name), `A002` (5), `E402` (4 — mid-file imports NOT of the
 documented in-test style; if a file's mid-file import IS load-bearing order, noqa +
@@ -328,3 +334,29 @@ grep -n "PLR0917\|sc façade stubs\|re-export surface" README.md   # the three T
 ```
 
 Results pasted here at close (an unrun acceptance suite is PD#14).
+
+**ACCEPTANCE — run and pasted at close (2026-07-23, HEAD = 7ed4e92 + the close fixes):**
+
+```
+$ ./run-tests --llm            (full suite; live tier ran — terminus token present)
+EXIT=0
+LLM_SUMMARY passed=1023 failed=0 error=0 skipped=1 xfailed=0 xpassed=0
+107 snapshots passed.
+(TWO gates post-merge: the single merged ruff pass, then pyright — both ran, exit 0)
+# 1023 = fast 1021 + 2 live; the skip is test_db_credentials.py's
+# importorskip("MySQLdb"). Count unchanged across the whole increment.
+
+$ git diff 1fa1fa7 -- tests/e2e/__snapshots__/
+(empty)
+$ git diff 1fa1fa7 -- '*.ambr'
+(empty)
+$ test ! -e ruff-broad.toml && echo merged
+merged
+$ uvx ruff@0.15.22 check .
+All checks passed!
+$ grep -c "ruff@0.15.22\|pyright@1.1.411" run-tests .claude/hooks/ruff-check.sh
+run-tests:4
+.claude/hooks/ruff-check.sh:1
+$ grep -c "PLR0917" README.md ; grep -c "typed sc façade" README.md ; grep -c "re-export surface" README.md
+2 / 1 / 2   (all three deferred-work TODOs present)
+```
