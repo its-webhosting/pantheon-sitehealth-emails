@@ -1,7 +1,12 @@
 """The single owner-facing notice for the Pantheon CDN-change check (SPEC §8).
 
-PURE: Findings in, one notice dict out.  Imports ONLY html + .model -- never detect/chain/
-pantheon, so this module pulls in neither dnspython nor terminus.  Four copy variants from two
+PURE: Findings in, one sc.Notice out.  Imports ONLY html + .model + the psh.notice VALUES
+(Notice/Severity/registry -- psh/notice.py itself imports nothing but dataclasses + enum) --
+never detect/chain/pantheon, so this module pulls in neither dnspython nor terminus.  It reaches
+Notice/Severity directly rather than through the sc facade (the I14c Task-3 pattern) precisely
+to keep that purity: `import script_context as sc` would put a module object in this module's
+namespace, which tests/unit/test_pantheon_cdn_change_notices.py::test_notices_module_is_pure
+asserts against.  Four copy variants from two
 independent booleans -- umich (terminology) x before_cutoff (who does the work).  The notice
 states ONLY what the owner must change; it deliberately does not explain Pantheon's migration,
 Orange-to-Orange, or Pantheon-versus-our-Cloudflare.
@@ -20,9 +25,17 @@ correct for the DNS record and the Cloudflare record alike (SPEC §4.1).
 """
 import html
 
+from psh.notice import Notice, Severity, registry
+
 from .model import (
     Finding,  # noqa: F401  -- re-exported for callers/tests; model is pure
 )
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a module-level
+# constant cannot drift from what was registered, and a second register() of the same code raises
+# DuplicateNoticeCodeError.
+NOTICE_PANTHEON_CDN_CHANGE = registry.register(
+    "pantheon-cdn-change", description="custom domain still CNAME'd to the legacy Pantheon GCDN")
 
 DOCS_URL = "https://docs.pantheon.io/guides/global-cdn/global-cdn-beta#setup"
 
@@ -160,8 +173,14 @@ def _cell(header: str, value: str) -> str:
             f'<div class="rt-data rt-plan">{value}</div></td>')
 
 
-def cdn_change_notice(site_name: str, findings: list, *, umich: bool, before_cutoff: bool) -> dict:
-    """ONE info notice covering every affected custom domain for the site."""
+def cdn_change_notice(
+        site_name: str, findings: list, *, umich: bool, before_cutoff: bool) -> Notice:
+    """ONE info notice covering every affected custom domain for the site.
+
+    csv_extra is the affected FQDNs as separate csv fields; the ONE caller returns early on an
+    empty finding list (check/pantheon_cdn_change/hook.py:50), and the empty case yields no
+    trailing field -- unlike the pre-I14c string concatenation (SPEC I14c §2.1, D-i14c-11).
+    """
     site = html.escape(site_name)
     rows = "\n".join(
         "<tr>"
@@ -194,10 +213,11 @@ def cdn_change_notice(site_name: str, findings: list, *, umich: bool, before_cut
         f"{blocks}\n\n"
         f"{closing_text}\n")
 
-    return {
-        "type": "info",
-        "csv": f"{site_name},pantheon-cdn-change," + ",".join(f.fqdn for f in findings),
-        "short": "Pantheon CDN change: replace CNAME records",
-        "message": message,
-        "text": text,
-    }
+    return Notice(
+        severity=Severity.INFO,
+        code=NOTICE_PANTHEON_CDN_CHANGE,
+        csv_extra=tuple(f.fqdn for f in findings),
+        short="Pantheon CDN change: replace CNAME records",
+        html=message,
+        text=text,
+    )

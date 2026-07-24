@@ -60,10 +60,11 @@ def test_identical_signatures_consolidate_into_one_notice(notices):
     })
     assert len(out) == 1
     n = out[0]
-    assert n["type"] == "info"
-    assert n["csv"] == f"{SITE},cloudflare-cache,a.example.edu+b.example.edu,no-cache-control"
-    assert "https://a.example.edu/" in n["message"]
-    assert "https://b.example.edu/" in n["message"]
+    assert n.severity == "info"
+    assert n.code == "cloudflare-cache"
+    assert n.csv_extra == ("a.example.edu+b.example.edu", "no-cache-control")
+    assert "https://a.example.edu/" in n.html
+    assert "https://b.example.edu/" in n.html
 
 
 def test_different_signatures_get_separate_notices(notices):
@@ -72,8 +73,8 @@ def test_different_signatures_get_separate_notices(notices):
         "b.example.edu": [_item("set-cookie", "https://b.example.edu/")],
     })
     assert len(out) == 2
-    assert out[0]["csv"].startswith(f"{SITE},cloudflare-cache,a.example.edu,")
-    assert out[1]["csv"].startswith(f"{SITE},cloudflare-cache,b.example.edu,")
+    assert (out[0].code, out[0].csv_extra[0]) == ("cloudflare-cache", "a.example.edu")
+    assert (out[1].code, out[1].csv_extra[0]) == ("cloudflare-cache", "b.example.edu")
 
 
 def test_params_are_part_of_identity(notices):
@@ -100,8 +101,8 @@ def test_fqdns_without_items_get_no_notice(notices):
 
 def test_umich_variant_links_doc_anchor_generic_never(notices):
     items = {"a.example.edu": [_item("set-cookie", "https://a.example.edu/")]}
-    um = _build(notices, items, umich=True)[0]["message"]
-    generic = _build(notices, items, umich=False)[0]["message"]
+    um = _build(notices, items, umich=True)[0].html
+    generic = _build(notices, items, umich=False)[0].html
     assert f"{DOC}#set-cookie" in um
     assert DOC not in generic
     assert "developer.mozilla.org" in generic  # public docs instead
@@ -109,14 +110,14 @@ def test_umich_variant_links_doc_anchor_generic_never(notices):
 
 def test_d15_cms_link_selection(notices):
     items = {"a.example.edu": [_item("no-cache-control", "https://a.example.edu/")]}
-    wp = _build(notices, items, umich=True, framework="wordpress")[0]["message"]
-    drupal = _build(notices, items, umich=True, framework="drupal10")[0]["message"]
-    other = _build(notices, items, umich=True, framework="unknown")[0]["message"]
+    wp = _build(notices, items, umich=True, framework="wordpress")[0].html
+    drupal = _build(notices, items, umich=True, framework="drupal10")[0].html
+    other = _build(notices, items, umich=True, framework="unknown")[0].html
     assert "node/5114" in wp and "node/4242" not in wp
     assert "node/4242" in drupal and "node/5114" not in drupal
     assert "node/5114" not in other and "node/4242" not in other
     # Generic variants never get the U-M CMS links regardless of framework:
-    generic = _build(notices, items, umich=False, framework="wordpress")[0]["message"]
+    generic = _build(notices, items, umich=False, framework="wordpress")[0].html
     assert "node/5114" not in generic
 
 
@@ -132,15 +133,15 @@ def test_duplicate_urls_listed_once_per_finding(notices):
     ]})
     assert len(out) == 1
     # each listed URL appears exactly twice (href + display text) per <li>:
-    assert out[0]["message"].count("style.css") == 2
-    assert out[0]["message"].count("other.css") == 2
+    assert out[0].html.count("style.css") == 2
+    assert out[0].html.count("other.css") == 2
 
 
 def test_url_list_header_counts_extra_pages_and_pluralizes(notices):
     def header(extra_pages):
         out = _build(notices, {"a.example.edu": [
             _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=extra_pages)
-        return out[0]["message"]
+        return out[0].html
 
     assert "URLs with this issue (checked main page plus 3 random pages linked from it)" \
         in header(3)
@@ -157,7 +158,7 @@ def _group_header(notices, sample_by_fqdn, urls_by_fqdn=None):
     out = notices.build_cache_notices(SITE, items, umich=False, doc_url=DOC, framework="",
                                       sample_by_fqdn=sample_by_fqdn)
     assert len(out) == 1  # identical signatures -> one notice
-    return out[0]["message"]
+    return out[0].html
 
 
 def test_url_list_header_says_up_to_when_a_group_disagrees(notices):
@@ -197,14 +198,14 @@ def test_url_list_header_describes_the_items_own_kind(notices):
         _item("no-cache-control", "https://a.example.edu/"),
         _item("no-cache-control", "https://a.example.edu/app.js", kind="asset"),
     ]}, extra_pages=2)
-    message = out[0]["message"]
+    message = out[0].html
     assert "(checked main page plus 2 random pages linked from it)" in message
     assert ("(checked static assets on the main page plus 2 random pages linked from it)"
             in message)
 
     only_main = _build(notices, {"a.example.edu": [
         _item("cc-private", "https://a.example.edu/app.js", kind="asset")]},
-        extra_pages=0)[0]["message"]
+        extra_pages=0)[0].html
     assert "(checked static assets on the main page only)" in only_main
 
 
@@ -216,7 +217,7 @@ def test_asset_header_uses_the_asset_page_count_not_the_page_count(notices):
         _item("no-cache-control", "https://a.example.edu/"),
         _item("no-cache-control", "https://a.example.edu/app.js", kind="asset"),
     ]}, extra_pages=1, asset_pages=0)
-    message = out[0]["message"]
+    message = out[0].html
     assert "(checked main page plus 1 random page linked from it)" in message
     assert "(checked static assets on the main page only)" in message
 
@@ -226,7 +227,7 @@ def test_url_list_is_a_child_of_its_header(notices):
     # that breaks the line in Outlook, keeps the plaintext indented under the finding, and
     # associates the list with its caption for a screen reader.
     message = _build(notices, {"a.example.edu": [
-        _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0]["message"]
+        _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0].html
     assert "<br>" not in message
     assert "display: block" not in message
     header = "URLs with this issue (checked main page only)"
@@ -240,8 +241,8 @@ def test_plaintext_indents_the_header_under_its_finding(psh, reset_sc, notices):
     # Regression for the <br> version, whose header rendered flush at column 0 -- to the
     # LEFT of both its parent bullet and the URLs it introduced.
     ctx = reset_sc.SiteContext({"name": SITE})
-    ctx.add_notice(dict(_build(notices, {"a.example.edu": [
-        _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0]))
+    ctx.add_notice(_build(notices, {"a.example.edu": [
+        _item("no-cache-control", "https://a.example.edu/")]}, extra_pages=0)[0])
     lines = [line for line in ctx["notices"][0]["text"].splitlines() if line.strip()]
     finding = next(line for line in lines if "does not send" in line)
     header = next(line for line in lines if "URLs with this issue" in line)
@@ -255,20 +256,20 @@ def test_plaintext_indents_the_header_under_its_finding(psh, reset_sc, notices):
 
 def test_item_language_agrees_with_the_number_of_urls_listed(notices):
     one = _build(notices, {"a.example.edu": [
-        _item("no-cache-control", "https://a.example.edu/")]})[0]["message"]
+        _item("no-cache-control", "https://a.example.edu/")]})[0].html
     assert "This page does not send" in one
     assert "caching it for" in one
 
     two = _build(notices, {"a.example.edu": [
         _item("no-cache-control", "https://a.example.edu/"),
-        _item("no-cache-control", "https://a.example.edu/about")]})[0]["message"]
+        _item("no-cache-control", "https://a.example.edu/about")]})[0].html
     assert "These pages do not send" in two
     assert "caching them for" in two
     assert "This page" not in two
 
     assets = _build(notices, {"a.example.edu": [
         _item("cc-private", "https://a.example.edu/a.js", kind="asset"),
-        _item("cc-private", "https://a.example.edu/b.js", kind="asset")]})[0]["message"]
+        _item("cc-private", "https://a.example.edu/b.js", kind="asset")]})[0].html
     assert "These static assets' <code>Cache-Control</code> headers contain" in assets
 
 
@@ -281,7 +282,7 @@ def test_site_config_items_direct_the_owner_site_wide(notices):
                     "cc-no-cache", "cc-no-store", "cc-must-revalidate", "expires-short"):
         one = _build(notices, {"a.example.edu": [
             _item(item_id, "https://a.example.edu/", **params_by_id.get(item_id, {}))
-        ]})[0]["message"]
+        ]})[0].html
         assert ("Apply this to all pages site-wide &mdash; the one listed below is only "
                 "what we sampled." in one), item_id
 
@@ -290,7 +291,7 @@ def test_site_config_items_direct_the_owner_site_wide(notices):
                   **params_by_id.get(item_id, {})),
             _item(item_id, "https://a.example.edu/y.js", kind="asset",
                   **params_by_id.get(item_id, {})),
-        ]})[0]["message"]
+        ]})[0].html
         assert ("Apply this to all static assets site-wide &mdash; the ones listed below "
                 "are only what we sampled." in two), item_id
 
@@ -306,7 +307,7 @@ def test_uncacheable_directives_lead_with_the_origin_hit_consequence(notices):
     """
     def message(item_id, *, umich=True):
         return _build(notices, {"a.example.edu": [
-            _item(item_id, "https://a.example.edu/p")]}, umich=umich)[0]["message"]
+            _item(item_id, "https://a.example.edu/p")]}, umich=umich)[0].html
 
     for item_id in ("cc-private", "cc-no-cache", "cc-no-store"):
         msg = message(item_id)
@@ -332,7 +333,7 @@ def test_must_revalidate_states_the_stale_risk_and_says_remove_it(notices):
         items = [_item("cc-must-revalidate", f"https://a.example.edu/p{i}", kind=kind,
                        directive=directive)
                  for i in range(count)]
-        return _build(notices, {"a.example.edu": items}, umich=umich)[0]["message"]
+        return _build(notices, {"a.example.edu": items}, umich=umich)[0].html
 
     one = message(1)
     assert "<code>must-revalidate</code>" in one
@@ -367,7 +368,7 @@ def test_revalidate_directives_do_not_consolidate_into_each_other(notices):
     # apart even though they share an item id.
     items = [_item("cc-must-revalidate", "https://a.example.edu/a", directive="must-revalidate"),
              _item("cc-must-revalidate", "https://a.example.edu/b", directive="proxy-revalidate")]
-    message = _build(notices, {"a.example.edu": items})[0]["message"]
+    message = _build(notices, {"a.example.edu": items})[0].html
     assert "<code>must-revalidate</code>" in message
     assert "<code>proxy-revalidate</code>" in message
 
@@ -378,7 +379,7 @@ def test_location_specific_items_are_not_given_the_site_wide_direction(notices):
     for item_id, params in (("http-error", {"status": 404}),
                             ("timeout", {"timeout": 5}), ("invalid-cert", {})):
         message = _build(notices, {"a.example.edu": [
-            _item(item_id, "https://a.example.edu/p", **params)]})[0]["message"]
+            _item(item_id, "https://a.example.edu/p", **params)]})[0].html
         assert "site-wide" not in message, item_id
 
 
@@ -386,36 +387,36 @@ def test_no_parenthesized_s_pluralization_in_owner_facing_text(notices):
     for seconds, expected in ((3600, "1 hour"), (7200, "2 hours"), (60, "1 minute"),
                               (120, "2 minutes"), (1, "1 second"), (30, "30 seconds")):
         message = _build(notices, {"a.example.edu": [
-            _item("short-cache-time", "https://a.example.edu/", seconds=seconds)]})[0]["message"]
+            _item("short-cache-time", "https://a.example.edu/", seconds=seconds)]})[0].html
         assert f"only cached for {expected}." in message
         assert "(s)" not in message
 
 
 def test_cookie_phrase_agrees_with_the_number_of_cookies(notices):
     one = _build(notices, {"a.example.edu": [
-        _item("set-cookie", "https://a.example.edu/", cookies="sessionid")]})[0]["message"]
+        _item("set-cookie", "https://a.example.edu/", cookies="sessionid")]})[0].html
     assert "sets a cookie (<code>sessionid</code>)" in one
     many = _build(notices, {"a.example.edu": [
-        _item("set-cookie", "https://a.example.edu/", cookies="a, b")]})[0]["message"]
+        _item("set-cookie", "https://a.example.edu/", cookies="a, b")]})[0].html
     assert "sets cookies (<code>a, b</code>)" in many
 
     # The count comes from cookie_count, never from re-splitting the display string: a
     # malformed Set-Cookie can yield ONE cookie whose name contains a comma.
     comma = _build(notices, {"a.example.edu": [
         _item("set-cookie", "https://a.example.edu/", cookies="theme_a,theme_b",
-              cookie_count=1)]})[0]["message"]
+              cookie_count=1)]})[0].html
     assert "sets a cookie (<code>theme_a,theme_b</code>)" in comma
 
 
 def test_timeout_and_redirect_counts_pluralize(notices):
     one = _build(notices, {"a.example.edu": [
-        _item("timeout", "https://a.example.edu/", timeout=1)]})[0]["message"]
+        _item("timeout", "https://a.example.edu/", timeout=1)]})[0].html
     assert "did not respond within 1 second;" in one
     many = _build(notices, {"a.example.edu": [
-        _item("timeout", "https://a.example.edu/", timeout=5)]})[0]["message"]
+        _item("timeout", "https://a.example.edu/", timeout=5)]})[0].html
     assert "did not respond within 5 seconds;" in many
     redirects = _build(notices, {"a.example.edu": [
-        _item("too-many-redirects", "https://a.example.edu/", max_redirects=1)]})[0]["message"]
+        _item("too-many-redirects", "https://a.example.edu/", max_redirects=1)]})[0].html
     assert "more than 1 time &mdash;" in redirects
 
 
@@ -439,7 +440,7 @@ def test_notice_html_has_no_raw_non_ascii_characters(notices):
     # Owner-facing HTML uses named entities so it survives regardless.
     for umich in (True, False):
         for item_id, _item_dict, notice in _all_item_messages(notices, umich=umich):
-            raw = [c for c in notice["message"] if ord(c) > 127]
+            raw = [c for c in notice.html if ord(c) > 127]
             assert not raw, f"{item_id} (umich={umich}): raw non-ASCII {raw}"
 
 
@@ -457,14 +458,14 @@ def test_plaintext_conversion_decodes_entities_for_screen_readers(psh, reset_sc,
     # characters, never the raw "&mdash;"/"&middot;" source entities.
     for _item_id, _item_dict, notice in _all_item_messages(notices, umich=True):
         ctx = reset_sc.SiteContext({"name": SITE})
-        ctx.add_notice(dict(notice))
+        ctx.add_notice(notice)
         text = ctx["notices"][0]["text"]
         assert "&mdash;" not in text and "&middot;" not in text
         assert "&amp;" not in text and "&lt;" not in text
     # and the characters the entities stand for do arrive intact:
     ctx = reset_sc.SiteContext({"name": SITE})
-    ctx.add_notice(dict(_build(notices, {"a.example.edu": [
-        _item("too-many-redirects", "https://a.example.edu/p", max_redirects=5)]})[0]))
+    ctx.add_notice(_build(notices, {"a.example.edu": [
+        _item("too-many-redirects", "https://a.example.edu/p", max_redirects=5)]})[0])
     assert "—" in ctx["notices"][0]["text"]  # em dash, decoded
 
 
@@ -473,7 +474,7 @@ def test_remote_strings_are_escaped(notices):
     evil_reason = '<img src=x onerror=alert(1)>'
     out = _build(notices, {"a.example.edu": [
         _item("request-failed", evil_url, reason=evil_reason)]})
-    message = out[0]["message"]
+    message = out[0].html
     assert "<script>" not in message
     assert "&lt;img src=x onerror=alert(1)&gt;" in message
 
@@ -511,9 +512,9 @@ def test_every_item_id_has_console_and_html_language(notices):
         assert notices.console_line(item)
         for umich in (True, False):
             out = _build(notices, {"a.example.edu": [item]}, umich=umich)
-            assert len(out) == 1 and out[0]["message"]
+            assert len(out) == 1 and out[0].html
             # the hard rule: never suggest disabling/bypassing caching
-            assert "disable" not in out[0]["message"].lower()
+            assert "disable" not in out[0].html.lower()
 
 
 @given(st.dictionaries(
@@ -533,5 +534,5 @@ def test_groups_partition_the_populated_fqdns(psh, assignment):
     populated = {f for f, items in items_by_fqdn.items() if items}
     covered = []
     for n in out:
-        covered.extend(n["csv"].split(",")[2].split("+"))
+        covered.extend(n.csv_extra[0].split("+"))
     assert sorted(covered) == sorted(populated)  # partition: exactly once each

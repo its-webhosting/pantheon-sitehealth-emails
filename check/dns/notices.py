@@ -1,14 +1,38 @@
 """PURE DNS notice builders (HTML + plaintext), U-M and generic variants.
 
-Each builder returns a notice dict with type/csv/short/message/text; add_notice fills `icon`
-from `type`.  Every remotely-derived hostname is html.escape'd for display and sc.escape_url'd
-for hrefs.  U-M variants link its.umich.edu / documentation.its.umich.edu; generic variants
-use no U-M links.  csv codes: dns-lookup-failed, not-in-dns, not-behind-cloudflare,
-behind-cloudflare-not-proxied, proxied-in-multiple-cloudflare-zones.
+Each builder returns a sc.Notice; SiteContext.notice_to_dict projects it onto the render dict
+and fills `icon` from `severity`.  Every remotely-derived hostname is html.escape'd for display
+and sc.escape_url'd for hrefs.  U-M variants link its.umich.edu / documentation.its.umich.edu;
+generic variants use no U-M links.  csv codes: dns-lookup-failed, not-in-dns,
+not-behind-cloudflare, behind-cloudflare-not-proxied, proxied-in-multiple-cloudflare-zones.
+
+EMPTY-INPUT PRECONDITION (SPEC I14c §2.1, D-i14c-11), stated once here and referenced by each
+builder: every builder takes a hostname list that its ONE caller guards against being empty
+(check/dns/hook.py:26,30,33,36,40).  Pre-I14c the csv was f"{site},{code}," + ",".join(hostnames),
+which left a trailing comma on an empty list; csv_extra=tuple(hostnames) leaves no trailing field.
+The divergence is unreachable today and pinned by tests/unit/test_dns_notices.py.
 """
 import html
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
+# module-level constant cannot drift from what was registered, and a second register() of the
+# same code raises DuplicateNoticeCodeError.  `registry` comes from psh.notice rather than sc
+# because sc.registry does not exist yet -- I14c Task 6 adds it and repoints every check/
+# module (CAMPAIGN.md section 3.5).
+NOTICE_DNS_LOOKUP_FAILED = registry.register(
+    "dns-lookup-failed", description="DNS lookup failed with a transient resolver error")
+NOTICE_NOT_IN_DNS = registry.register(
+    "not-in-dns", description="custom domain has no DNS record")
+NOTICE_NOT_BEHIND_CLOUDFLARE = registry.register(
+    "not-behind-cloudflare", description="custom domain does not resolve to Cloudflare")
+NOTICE_BEHIND_CLOUDFLARE_NOT_PROXIED = registry.register(
+    "behind-cloudflare-not-proxied", description="Cloudflare proxying is off for the domain")
+NOTICE_PROXIED_IN_MULTIPLE_ZONES = registry.register(
+    "proxied-in-multiple-cloudflare-zones",
+    description="domain is proxied in more than one Cloudflare zone")
 
 
 def _html_list(hostnames):
@@ -21,41 +45,49 @@ def _text_list(hostnames):
     return "\n".join(f"  * {n}" for n in hostnames)
 
 
-def transient_notice(site_name, hostnames):
-    return {
-        "type": "warning",
-        "csv": f"{site_name},dns-lookup-failed," + ",".join(hostnames),
-        "short": "DNS lookup failed (transient)",
-        "message": (
+def transient_notice(site_name, hostnames):  # noqa: ARG001 -- site_name is unused since I14c (the csv row's site field now comes from the SiteContext at projection time, SPEC I14c §2.2), but the five builders keep ONE uniform signature: check/dns/hook.py calls them all as f(site, hostnames)
+    """Hostnames whose lookup failed transiently.  See the module docstring's empty-input
+    precondition: csv_extra is the hostname list as separate csv fields."""
+    return sc.Notice(
+        severity=sc.Severity.WARNING,
+        code=NOTICE_DNS_LOOKUP_FAILED,
+        csv_extra=tuple(hostnames),
+        short="DNS lookup failed (transient)",
+        html=(
             "<p>The DNS lookup for the following domains failed with a transient resolver "
             "error, so their DNS status could not be checked. This does not necessarily mean "
             "they are misconfigured &mdash; re-run the report to retry.</p>\n"
             f'<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>'),
-        "text": (
+        text=(
             "The DNS lookup for the following domains failed with a transient resolver error,\n"
             "so their DNS status could not be checked. Re-run the report to retry.\n\n"
             f"{_text_list(hostnames)}\n"),
-    }
+    )
 
 
 def not_in_dns_notice(site_name, hostnames):
-    return {
-        "type": "alert",
-        "csv": f"{site_name},not-in-dns," + ",".join(hostnames),
-        "short": "add domains to DNS",
-        "message": (
+    """Hostnames with no DNS record.  See the module docstring's empty-input precondition:
+    csv_extra is the hostname list as separate csv fields."""
+    return sc.Notice(
+        severity=sc.Severity.ALERT,
+        code=NOTICE_NOT_IN_DNS,
+        csv_extra=tuple(hostnames),
+        short="add domains to DNS",
+        html=(
             f"<p><strong>{html.escape(site_name)}</strong> has domains that are not in DNS.  "
             f"Please either remove these domains from the Pantheon live environment for "
             f"<strong>{html.escape(site_name)}</strong>, or add them to DNS.</p>\n"
             f'<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>'),
-        "text": (
+        text=(
             f"{site_name} has domains that are not in DNS.  Please either\n"
             f"remove these domains from the Pantheon live environment for\n"
             f"{site_name}, or add them to DNS.\n\n{_text_list(hostnames)}\n"),
-    }
+    )
 
 
-def not_behind_cloudflare_notice(site_name, hostnames, *, umich):
+def not_behind_cloudflare_notice(site_name, hostnames, *, umich):  # noqa: ARG001 -- see transient_notice
+    """Hostnames that do not resolve to Cloudflare.  See the module docstring's empty-input
+    precondition: csv_extra is the hostname list as separate csv fields."""
     if umich:
         intro_html = (
             "<p>ITS strongly recommends you put the following domains behind Cloudflare to "
@@ -74,16 +106,19 @@ def not_behind_cloudflare_notice(site_name, hostnames, *, umich):
         intro_text = (
             "We strongly recommend you put the following domains behind Cloudflare\n"
             "to reduce origin traffic and improve security.")
-    return {
-        "type": "warning",
-        "csv": f"{site_name},not-behind-cloudflare," + ",".join(hostnames),
-        "short": "put domains behind Cloudflare",
-        "message": f'{intro_html}\n<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>',
-        "text": f"{intro_text}\n\n{_text_list(hostnames)}\n",
-    }
+    return sc.Notice(
+        severity=sc.Severity.WARNING,
+        code=NOTICE_NOT_BEHIND_CLOUDFLARE,
+        csv_extra=tuple(hostnames),
+        short="put domains behind Cloudflare",
+        html=f'{intro_html}\n<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>',
+        text=f"{intro_text}\n\n{_text_list(hostnames)}\n",
+    )
 
 
-def behind_cloudflare_not_proxied_notice(site_name, hostnames, *, umich):
+def behind_cloudflare_not_proxied_notice(site_name, hostnames, *, umich):  # noqa: ARG001 -- see transient_notice
+    """Hostnames behind Cloudflare with proxying turned off.  See the module docstring's
+    empty-input precondition: csv_extra is the hostname list as separate csv fields."""
     if umich:
         intro_html = (
             "<p>The following domains point to Cloudflare but are not benefitting from "
@@ -110,29 +145,33 @@ def behind_cloudflare_not_proxied_notice(site_name, hostnames, *, umich):
             "Cloudflare's caching and security features because proxying (the orange\n"
             "cloud) is turned off for these DNS records.  Turn on proxying for these\n"
             "records in your Cloudflare dashboard.")
-    return {
-        "type": "warning",
-        "csv": f"{site_name},behind-cloudflare-not-proxied," + ",".join(hostnames),
-        "short": "turn on Cloudflare proxying for domains",
-        "message": f'{intro_html}\n<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>',
-        "text": f"{intro_text}\n\n{_text_list(hostnames)}\n",   # bug #2 fix: lists THESE hosts
-    }
+    return sc.Notice(
+        severity=sc.Severity.WARNING,
+        code=NOTICE_BEHIND_CLOUDFLARE_NOT_PROXIED,
+        csv_extra=tuple(hostnames),
+        short="turn on Cloudflare proxying for domains",
+        html=f'{intro_html}\n<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>',
+        text=f"{intro_text}\n\n{_text_list(hostnames)}\n",   # bug #2 fix: lists THESE hosts
+    )
 
 
-def proxied_in_multiple_zones_notice(site_name, hostnames):
-    return {
-        "type": "warning",
-        "csv": f"{site_name},proxied-in-multiple-cloudflare-zones," + ",".join(hostnames),
-        "short": "domain in multiple Cloudflare zones",
-        "message": (
+def proxied_in_multiple_zones_notice(site_name, hostnames):  # noqa: ARG001 -- see transient_notice
+    """Hostnames proxied in more than one Cloudflare zone.  See the module docstring's
+    empty-input precondition: csv_extra is the hostname list as separate csv fields."""
+    return sc.Notice(
+        severity=sc.Severity.WARNING,
+        code=NOTICE_PROXIED_IN_MULTIPLE_ZONES,
+        csv_extra=tuple(hostnames),
+        short="domain in multiple Cloudflare zones",
+        html=(
             "<p>The following domains are configured (proxied) in more than one Cloudflare "
             "zone.  Serving a domain from multiple zones can cause inconsistent caching, TLS, "
             "and security settings.  Please consolidate each domain into a single Cloudflare "
             "zone.</p>\n"
             f'<ul style="list-style-type: none;">\n{_html_list(hostnames)}\n</ul>'),
-        "text": (
+        text=(
             "The following domains are configured (proxied) in more than one\n"
             "Cloudflare zone.  Serving a domain from multiple zones can cause\n"
             "inconsistent caching, TLS, and security settings.  Please consolidate\n"
             f"each domain into a single Cloudflare zone.\n\n{_text_list(hostnames)}\n"),
-    }
+    )

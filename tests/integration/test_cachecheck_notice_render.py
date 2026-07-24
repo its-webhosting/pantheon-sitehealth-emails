@@ -67,7 +67,7 @@ def test_notice_message_and_text_snapshot(psh, reset_sc, snapshot, umich):
     out = _build(psh, umich=umich)
     assert len(out) == 1  # both FQDNs consolidated
     ctx = reset_sc.SiteContext({"name": SITE})
-    ctx.add_notice(dict(out[0]))
+    ctx.add_notice(out[0])
     notice = ctx["notices"][0]
     assert notice["type"] == "info"
     assert notice["icon"] == "&#x1F50E;"  # magnifying glass, from the info type default
@@ -78,7 +78,7 @@ def test_notice_message_and_text_snapshot(psh, reset_sc, snapshot, umich):
 def test_notice_renders_through_the_real_template(psh, reset_sc):
     out = _build(psh, umich=True)
     ctx = reset_sc.SiteContext({"name": SITE})
-    ctx.add_notice(dict(out[0]))
+    ctx.add_notice(out[0])
     from jinja2 import Template
     template = Template((Path(psh.__file__).resolve().parents[1] / "email_template.html").read_text())
     html_body = template.render(site_name=SITE, notices=ctx["notices"], sections=[],
@@ -96,6 +96,6 @@ def test_injection_via_remote_strings_is_escaped_everywhere(psh, reset_sc):
                                        reason="<script>alert(2)</script>")]},
         umich=False, doc_url=DOC, framework="",
         sample_by_fqdn={"a.example.edu": {"pages": 3, "asset_pages": 3}})
-    message = out[0]["message"]
+    message = out[0].html
     assert "<script>" not in message
     assert "alert(2)" not in message or "&lt;script&gt;" in message

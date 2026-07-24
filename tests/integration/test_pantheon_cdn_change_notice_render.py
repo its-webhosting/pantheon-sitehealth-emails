@@ -49,7 +49,7 @@ def test_notice_message_and_text_snapshot(  # noqa: PLR0913 -- parametrized snap
         notices, findings, reset_sc, snapshot, umich, before_cutoff):
     built = notices.cdn_change_notice(SITE, findings, umich=umich, before_cutoff=before_cutoff)
     ctx = reset_sc.SiteContext({"name": SITE})
-    ctx.add_notice(dict(built))
+    ctx.add_notice(built)
     notice = ctx["notices"][0]
     assert notice["icon"] == "&#x1F50E;"      # magnifying glass, from the info type default
     assert notice["message"] == snapshot
@@ -59,7 +59,7 @@ def test_notice_message_and_text_snapshot(  # noqa: PLR0913 -- parametrized snap
 def test_notice_renders_through_the_real_template(psh, notices, findings, reset_sc):
     built = notices.cdn_change_notice(SITE, findings, umich=True, before_cutoff=True)
     ctx = reset_sc.SiteContext({"name": SITE})
-    ctx.add_notice(dict(built))
+    ctx.add_notice(built)
     template = Template((Path(psh.__file__).resolve().parents[1] / "email_template.html").read_text())
     html_body = template.render(site_name=SITE, notices=ctx["notices"], sections=[], news=[])
     assert 'class="responsive-table site-updates"' in html_body     # the table survived
@@ -75,5 +75,5 @@ def test_injected_markup_cannot_escape_the_table_cell(notices, reset_sc):
     built = notices.cdn_change_notice(
         SITE, [finding(evil, "dns", "live-x.pantheonsite.io", ["1.2.3.4"], [], [])],
         umich=False, before_cutoff=False)
-    assert "<script>" not in built["message"]
-    assert "&lt;script&gt;" in built["message"]
+    assert "<script>" not in built.html
+    assert "&lt;script&gt;" in built.html

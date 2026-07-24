@@ -4,7 +4,7 @@ cross-FQDN consolidation, and notice assembly for the Cloudflare cache check.
 Consolidation (SPEC §9): an item's identity is (id, kind, params) -- the URL is excluded --
 and a FQDN's signature is the frozenset of its item identities.  FQDNs with identical
 signatures share ONE notice listing all of them (PROMPT step 3); FQDNs with no items get
-no notice.  All notices carry the csv key `cloudflare-cache`.
+no notice.  All notices carry the notice code `cloudflare-cache` (the csv row's second field).
 
 Language rules (SPEC §12): console lines are one-line/technical/no doc links; report HTML
 is short, plain-language, actionable, one primary doc link.  U-M variants link
@@ -25,6 +25,15 @@ html.escape for display and sc.escape_url for hrefs -- notices are HTML shown to
 import html
 
 import script_context as sc
+from psh.notice import registry
+
+# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a module-level
+# constant cannot drift from what was registered, and a second register() of the same code raises
+# DuplicateNoticeCodeError.  `registry` comes from psh.notice rather than sc because sc.registry
+# does not exist yet -- I14c Task 6 adds it and repoints every check/ module (CAMPAIGN.md
+# section 3.5).
+NOTICE_CLOUDFLARE_CACHE = registry.register(
+    "cloudflare-cache", description="pages or files not cached by Cloudflare as effectively as they could be")
 
 # ── Documentation links ─────────────────────────────────────────────────────────────
 # U-M pages (never fetched by the program; fragments per the verified anchor inventory --
@@ -326,10 +335,10 @@ def build_cache_notices(  # noqa: C901, PLR0913 -- consolidation + assembly (SPE
         # input per PROMPT-step-3 ingredient, private to this module, single call site
         # (check/cloudflare/cache.py's check_cloudflare_cache); restructuring would relocate
         # the same six names, not remove them (I14b SPEC §2.1 rules 2 and 5)
-        site_name: str, items_by_fqdn: dict, *, umich: bool,
+        site_name: str, items_by_fqdn: dict, *, umich: bool,  # noqa: ARG001 -- site_name went unused at I14c (the csv row's site field now comes from the SiteContext at projection time, SPEC I14c §2.2); dropping it would churn the one call site and every test call for no gain
         doc_url: str, framework: str, sample_by_fqdn: dict) -> list:
-    """One notice (type 'info', magnifying-glass icon) per group of FQDNs whose items are
-    identical except for the URLs tested (PROMPT step 3).  Returns notice dicts ready for
+    """One sc.Notice (severity 'info', magnifying-glass icon) per group of FQDNs whose items are
+    identical except for the URLs tested (PROMPT step 3).  Returns Notices ready for
     site_context.add_notice.
 
     `sample_by_fqdn` maps FQDN -> {"pages": n, "asset_pages": n} (see cache._check_fqdn):
@@ -394,16 +403,21 @@ def build_cache_notices(  # noqa: C901, PLR0913 -- consolidation + assembly (SPE
 
         fqdn_links = ", ".join(_a(f"https://{f}/", f) for f in fqdns)
         ids = sorted({i["id"] for i in distinct})
-        notices.append({
-            "type": "info",  # info -> magnifying-glass icon (see script_context.icon)
-            "csv": f"{site_name},cloudflare-cache,{'+'.join(fqdns)},{'+'.join(ids)}",
-            "short": "improve Cloudflare caching",
-            "message": (
+        notices.append(sc.Notice(
+            # info -> magnifying-glass icon, filled from the severity by the projection
+            # (SiteContext.notice_to_dict; see script_context.icon)
+            severity=sc.Severity.INFO,
+            code=NOTICE_CLOUDFLARE_CACHE,
+            # TWO csv fields, not one per FQDN: the consolidated group's FQDNs and the item ids
+            # are each a single '+'-joined field, exactly as the pre-I14c f-string wrote them.
+            csv_extra=("+".join(fqdns), "+".join(ids)),
+            short="improve Cloudflare caching",
+            html=(
                 f"<p><strong>Cloudflare caching:</strong> some pages or files on "
                 f"{fqdn_links} are not being cached by Cloudflare as effectively as they "
                 f"could be. Full caching protects your site from traffic spikes, lowers "
                 f"visitor counts that determine hosting costs, and makes pages load "
                 f"faster.</p>\n<ul>\n" + "\n".join(blocks) + "\n</ul>"
             ),
-        })
+        ))
     return notices
