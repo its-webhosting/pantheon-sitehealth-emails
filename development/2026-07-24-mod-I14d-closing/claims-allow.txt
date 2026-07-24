@@ -1,0 +1,5 @@
+# Claims a document deliberately makes ABOUT something that no longer exists.
+# Each entry MUST carry its reason; an entry without one is a suppressed defect.
+sc.text_maker    # CLAUDE.md states the shared HTML2Text instance is GONE; naming it is the point
+sc.add_notice    # CLAUDE.md states the module-level free functions were REMOVED (I14c)
+psh.SMTP_SSL     # CLAUDE.md warns that a stale patch at this old binding now fails loudly
