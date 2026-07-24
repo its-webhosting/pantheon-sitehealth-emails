@@ -44,3 +44,20 @@ def test_registry_registers_distinct_codes():
 def test_global_registry_has_the_poc_code(psh):
     # Importing the program (psh fixture -> psh.cli) registered the PoC code at import.
     assert "no-domains" in registry.codes()
+
+
+def test_csv_extra_defaults_to_empty_and_is_a_tuple():
+    n = Notice(severity=Severity.ALERT, code="frozen", html="<p>x</p>")
+    assert n.csv_extra == ()
+
+
+def test_registry_snapshot_and_restore_round_trip():
+    r = NoticeRegistry()
+    r.register("a")
+    saved = r.snapshot()
+    r.register("b")
+    assert r.codes() == frozenset({"a", "b"})
+    r.restore(saved)
+    assert r.codes() == frozenset({"a"})
+    r.register("b")          # restore must make a re-registration legal again
+    assert r.codes() == frozenset({"a", "b"})

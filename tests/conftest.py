@@ -129,10 +129,19 @@ def reset_sc(psh):
 
     `sc.hooks` is a dict-of-lists and add_hook/add_news_item (and SiteContext.add_notice)
     mutate the nested lists in place, so a shallow snapshot would leak between tests.
+
+    Also restores psh.notice.registry: producing modules register their notice codes at import,
+    and the suite loads check/ modules standalone once per test, so without this the second load
+    of a module raises DuplicateNoticeCodeError.  This only works because no producing module is
+    executed outside a function-scoped fixture or test body (SPEC I14c §2.3) -- a module-level
+    load in a test file, or a module/session-scoped loader fixture, registers BEFORE this
+    snapshot and cannot be undone.
     """
     import script_context as sc
+    from psh.notice import registry as notice_registry
 
     saved = {name: copy.deepcopy(getattr(sc, name)) for name in _SC_ATTRS}
+    saved_codes = notice_registry.snapshot()
     # Start each test from a clean slate.  sc.options must expose .verbose (many helpers
     # call sc.debug() -> sc.options.verbose), so use a real parsed default namespace.
     sc.options = psh.parse_args([])
@@ -149,6 +158,7 @@ def reset_sc(psh):
     finally:
         for name, value in saved.items():
             setattr(sc, name, value)
+        notice_registry.restore(saved_codes)
 
 
 # ── In-process DB (temp sqlite) ─────────────────────────────────────────────────────

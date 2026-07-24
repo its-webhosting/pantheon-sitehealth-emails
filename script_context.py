@@ -114,43 +114,46 @@ class SiteContext(dict):
     def __init__(self, site: dict):
         super().__init__(site=site, notices=[], sections=[], attachments=[])
 
-    def add_notice(self, notice) -> None:      # notice: Notice | dict
-        """Add a notice (Notice or legacy dict), filling icon (from 'type'), plaintext 'text' (via
-        html2text), and honoring order ('prepend'/'first' -> front).  A Notice is projected to the
-        legacy dict first (dict form retired in I14, CAMPAIGN.md §6)."""
+    def add_notice(self, notice) -> None:      # notice: Notice | dict (dict retired at I14c Task 6)
+        """Add a notice, honoring order ('prepend'/'first' -> front).  A Notice is projected to
+        the render dict by notice_to_dict; a legacy dict still gets the historical icon/text
+        fill (that path is deleted in I14c Task 6, CAMPAIGN.md §6)."""
         if isinstance(notice, Notice):
-            notice = self._notice_to_dict(notice)
-        if 'message' not in notice:
-            console.print(f'[bold red]ERROR: Notice is missing the "message" key: {notice}')
-            sys.exit(1)
-        if 'icon' not in notice:
-            notice['icon'] = icon[notice['type']]
-        if 'text' not in notice:
-            notice['text'] = html_to_text(notice['message'])
-        order = notice.get('order', 'append')
-        if order in ('prepend', 'first'):
-            self['notices'].insert(0, notice)
+            d = self.notice_to_dict(notice)
+            order = notice.order
         else:
-            self['notices'].append(notice)
+            d = notice
+            if 'message' not in d:
+                console.print(f'[bold red]ERROR: Notice is missing the "message" key: {d}')
+                sys.exit(1)
+            if 'icon' not in d:
+                d['icon'] = icon[d['type']]
+            if 'text' not in d:
+                d['text'] = html_to_text(d['message'])
+            order = d.get('order', 'append')
+        if order in ('prepend', 'first'):
+            self['notices'].insert(0, d)
+        else:
+            self['notices'].append(d)
 
-    def _notice_to_dict(self, notice: Notice) -> dict:
-        """Project a Notice onto the legacy notice dict.  csv is built from the site name + code (the
-        two-field form; extra-csv-field notices stay dicts until their adopting increment).  icon /
-        text / non-default order are set only when present so the stored dict is byte-identical to the
-        legacy one and add_notice's fill logic supplies icon/text identically."""
-        d = {
+    def notice_to_dict(self, notice: Notice) -> dict:
+        """Project a Notice onto the render dict the report consumes.
+
+        The render dict -- {type, icon, csv, short, message, text} -- is what
+        email_template.{html,txt} (notice.type|icon|message|text), sort_notices_and_subject
+        (['type'], ['short']) and RunState.record_site_notices (['csv']) read, so it stays the
+        storage form (SPEC I14c D-i14c-2).  The csv row is site + code + csv_extra: the site
+        name comes from THIS context, never from the producer, so it cannot be mismatched.
+        `order` is not stored -- add_notice is its only reader.
+        """
+        return {
             "type": str(notice.severity),
-            "csv": f"{self['site']['name']},{notice.code}",
+            "icon": notice.icon or icon[notice.severity],
+            "csv": ",".join([self['site']['name'], notice.code, *notice.csv_extra]),
             "short": notice.short,
             "message": notice.html,
+            "text": notice.text or html_to_text(notice.html),
         }
-        if notice.icon:
-            d["icon"] = notice.icon
-        if notice.text:
-            d["text"] = notice.text
-        if notice.order != "append":
-            d["order"] = notice.order
-        return d
 
     def add_notices(self, notices: list) -> None:
         """Add each notice dict returned by a builder (wp_error/drush_error/check_*module)."""

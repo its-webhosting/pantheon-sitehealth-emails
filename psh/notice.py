@@ -2,7 +2,8 @@
 
 A typed, frozen replacement for the ad-hoc notice dicts.  Pure: imports nothing from script_context,
 so the sc facade and every psh/ module can import it without a cycle; checks/plugins reach
-Notice/Severity via sc.  Adoption is per-increment (CAMPAIGN.md §6); the dict form is retired in I14.
+Notice/Severity via sc.  Adoption is per-increment (CAMPAIGN.md §6); the dict form is retired at
+I14c (this module's `csv_extra` field is that increment's CAMPAIGN.md §6 amendment).
 """
 import dataclasses
 from enum import StrEnum
@@ -19,7 +20,10 @@ class Notice:
     """One report notice.  `code` is the stable unique slug (registry-enforced) that maps to the
     notices-CSV code field; `html` is the report-body HTML, `text` its plaintext (empty -> derived by
     SiteContext.add_notice via html2text, as the dict form does); `short` is the one-line summary;
-    `icon` empty -> filled from `severity`; `order` places the notice ('prepend'/'first' -> front)."""
+    `icon` empty -> filled from `severity`; `order` places the notice ('prepend'/'first' -> front).
+    `csv_extra` holds the notices-CSV fields that follow `site,code` (CAMPAIGN.md §6 as amended at
+    I14c); elements MUST already be strings -- the projection does not coerce, so a format spec like
+    f"{savings:.2f}" stays visible at the producer."""
 
     severity: Severity
     code: str
@@ -28,6 +32,7 @@ class Notice:
     text: str = ""
     icon: str = ""
     order: str = "append"
+    csv_extra: tuple[str, ...] = ()
 
 
 class DuplicateNoticeCodeError(RuntimeError):
@@ -55,6 +60,17 @@ class NoticeRegistry:
 
     def codes(self) -> frozenset[str]:
         return frozenset(self._codes)
+
+    def snapshot(self) -> dict[str, str]:
+        """Copy the registered codes.  TEST SEAM: tests/conftest.py's autouse reset_sc fixture
+        snapshots before each test and restores after, because the suite loads check/ modules
+        standalone once per test and a module body re-executing would otherwise re-register its
+        codes and raise DuplicateNoticeCodeError.  Production imports each module once."""
+        return dict(self._codes)
+
+    def restore(self, snapshot: dict[str, str]) -> None:
+        """Restore a snapshot() result.  See snapshot() for why this exists."""
+        self._codes = dict(snapshot)
 
 
 registry = NoticeRegistry()
