@@ -222,7 +222,8 @@ to "carried". Enumerated via:
 $ grep -n "Discovered tasks\|Open questions" development/2026-07-17-modularization-campaign/LEDGER.md
 ```
 
-which returns the 30 headings walked below. "Open questions for I<N+1>" rows that read
+which returns 39 matching lines (35 bolded `**Discovered tasks**`/`**Open questions**`
+headings, plus 4 in-prose mentions), whose items are walked below. "Open questions for I<N+1>" rows that read
 "proceed per CAMPAIGN.md §11 row I<N+1>" are terminally **done** because every increment
 I0…I14d completed; only their *named inherited obligations* are itemised.
 
