@@ -151,6 +151,24 @@ tool can go red: it runs each decision kind against a deliberately false claim a
 failure verdict, after a control run on the true form (the `literal_equality.py --self-test`
 precedent). A `--gate` mode exits non-zero on any `FAIL`.
 
+**Two refinements added at plan time, after the tool was written and run against the real
+documents** (recorded here rather than left as a plan-only divergence — PLAN.md carries the
+verified implementation and the measured figures):
+
+1. **Undecidable is `PROSE`, never `FAIL`.** A first cut reported 193 failures against the
+   real documents, nearly all bogus — two-part dotted names (`psh.db`), package directories
+   (`check.dns`), slash-command names (`/tdd`), external URL fragments, artifact templates
+   (`{ymd}-results.json`). A gate that cries wolf trains its reader to ignore it, which is
+   PD#14 pointed the other way. The tool now decides `FAIL` only where the shape is
+   unambiguous — a path with both a directory component and a source extension, a dotted name
+   whose module resolves, a façade name, a test node — and marks everything else `PROSE` for
+   the reviewer. Residue over all documents in scope: **21**, every one genuine.
+2. **`--allow FILE`.** A document may deliberately name something that no longer exists —
+   CLAUDE.md's "the module-level `sc.text_maker` it replaced is gone" is a *true* statement
+   containing a dead name. Three such claims exist. Rather than contort the prose to satisfy
+   the tool, accepted claims are listed in `claims-allow.txt`, each with its reason; an entry
+   without a reason is a suppressed defect.
+
 Output: `CLAIMS.md` in this increment's folder, one row per claim — `claim | kind | verdict |
 disposition`, where disposition ∈ {`keep-verified`, `fix`, `drop-with-reason`}. The `PROSE`
 rows are dispositioned by a fresh-context `psh-reviewer` reading the code, whose findings are
@@ -416,6 +434,7 @@ git diff $BASE -- tests/e2e/__snapshots__/     # MUST be empty
 git diff $BASE -- '*.ambr'                     # MUST be empty
 python development/2026-07-24-mod-I14d-closing/tools/claim_check.py --self-test
 python development/2026-07-24-mod-I14d-closing/tools/claim_check.py --gate \
+    --allow development/2026-07-24-mod-I14d-closing/claims-allow.txt \
     CLAUDE.md README.md CONTEXT.md tests/README.md docs/*.md \
     ~/.claude/projects/-workspace/memory/*.md
 git status --porcelain            # MUST be clean at close
