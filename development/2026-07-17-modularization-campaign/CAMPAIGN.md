@@ -263,7 +263,7 @@ Reused as-is: `TrafficRow`, `OverageProtectionRow`, `DnsFacts`, `FetchResult`,
 | Type | Increment | Shape |
 |---|---|---|
 | `GatewayResult` | I2 | NamedTuple `(result, errors, fatal)` replacing the anonymous 3-tuples |
-| `Notice` | I3 (class) → adopted per increment | frozen dataclass: `severity` (StrEnum alert/warning/info), `code` (unique — registry test), `html`, `text`, `short`, `icon`, `order`; `SiteContext.add_notice` accepts `Notice` or legacy dict; dict form retired in I14 |
+| `Notice` | I3 (class) → adopted per increment | frozen dataclass: `severity` (StrEnum alert/warning/info), `code` (unique — registry test), `html`, `text`, `short`, `icon`, `order`, and — added at I14c, the field-set amendment this row reserved — `csv_extra` (a `tuple[str, ...]`, joined after `site,code` to build the notices-csv row; see LEDGER I14c amendment). `SiteContext.add_notice` accepts `Notice` or legacy dict; the dict form is retired at I14c, after which `add_notice` takes a `Notice` only |
 | `PlanInfo` / `PlanCatalog` | I7 | typed view over `[Pantheon.plan_info]` |
 | `RunState` | I13 | dataclass holding `all_warnings`, `site_results`, `site_savings`, `emails_sent`, reconnect counters |
 

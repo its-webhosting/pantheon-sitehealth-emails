@@ -2013,3 +2013,34 @@ the increment's prime rule, held.
   gated, so new/edited files carry no grandfather escape. The three post-campaign README
   TODOs (ruff upgrade + PLR0917; typed sc stubs + pyright widening; test repoint) are
   NOT I14c/I14d scope.
+
+## Amendment — §6 `Notice` csv field set (2026-07-24, applied to CAMPAIGN.md at I14c spec time)
+
+One CAMPAIGN.md amendment, appended at I14c **spec** time — before implementation, so the
+spec's "§6 as amended" citations resolve for the whole increment (the I14a precedent).
+The full I14c increment entry follows separately at its close.
+
+**§6 types table, `Notice` row:** the field set gains **`csv_extra: tuple[str, ...] = ()`**,
+joined after `site,code` to build the notices-csv row. This is the amendment the row itself
+reserved at I3 ("a notice whose csv needs extra fields stays a dict until the first
+increment that converts one, which MUST amend CAMPAIGN.md §6") and that I7, I10 and I12 each
+deferred; I14c is that increment, because §11 row I14c requires **every** producer converted
+and 22 of the 37 carry extra csv fields (`turned-off,{name}`, `updates-info,{n},{days}`,
+`wp-error,{operation},{json}`, the dns `",".join(hostnames)` forms, `annual-bill,{amount},
+{shortcode}`, `its-recommends-plan,{cur},{rec},{savings:.2f}`, `cloudflare-cache,{fqdns},
+{ids}`, and `no-primary-domain,` — whose trailing **empty** field is real and is expressed as
+`csv_extra=("",)`).
+
+Shape chosen (user decision round, 2026-07-24) over two alternatives: a `csv_suffix: str`
+(keeps comma-joining scattered across 22 producers, models nothing) and a full `csv: str`
+override (re-admits the free-form string the type exists to retire, and hands the site name
+back to producers). A tuple — not a list — because `Notice` is `frozen=True`.
+
+The same row's "dict form retired in I14" now reads **I14c** explicitly. Related decisions
+locked in the same round, both recorded in `development/2026-07-24-mod-I14c-notice/SPEC.md`
+(§2.3, §2.7): every notice code is **registered at import** (making `NoticeRegistry`'s
+duplicate-code guard load-bearing rather than dead façade surface — §17 Q4), with a
+`snapshot()`/`restore()` test seam driven by the autouse `reset_sc` fixture, because the
+suite loads `check/` modules standalone once per test and a second `register()` of the same
+code would otherwise raise; and I14c stays **one increment** of six tasks under §11's
+split-never-compress backstop.
