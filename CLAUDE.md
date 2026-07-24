@@ -238,11 +238,15 @@ Modules register by:
   dotted names (e.g. `setup.umich.portal`) are plugin-defined events, allowed and invoked by
   whoever owns them — but they **MUST declare `consumes`/`produces` empty** (contract keys are
   phase-anchored; a dotted event has no phase position). After the import loops, `main()` runs
-  `psh.modules.validate_hooks()`, which is **fatal** (named `HookDagError` subclasses) on the
-  five conditions: a consumed key nothing produces; two producers of one key (hooks or the core
-  `CONTRACT` registry — one owner per key, so a silent overwrite of a contract key can never
-  ship, PD#1); a consumes/produces cycle among same-phase hooks; consuming a key first produced
-  in a *later* phase (earlier is fine); and a bare/dotted-name declaration violation. Within a
+  `psh.modules.validate_hooks()`, which is **fatal** (named `HookDagError` subclasses) on
+  **four** conditions: a consumed key nothing produces; two producers of one key (hooks or the
+  core `CONTRACT` registry — one owner per key, so a silent overwrite of a contract key can
+  never ship, PD#1); a consumes/produces cycle among same-phase hooks; and consuming a key
+  first produced in a *later* phase (earlier is fine). The **fifth** CAMPAIGN.md §4 condition —
+  a missing/malformed `consumes`/`produces` declaration — is enforced earlier, **at `add_hook`
+  time**, as a loud exit, not a `HookDagError`: nothing undeclared ever enters `sc.hooks`. The
+  bare/dotted-name check above is likewise an `add_hook`/`invoke_hooks`-time loud error, not one
+  of `validate_hooks()`'s `HookDagError` conditions. Within a
   phase `invoke_hooks` runs producers before consumers (registration order breaks ties). The
   permanent `tests/integration/test_hook_dag.py` loads every real check/plugin package (via its
   `ALL_PACKAGES` list) and proves the DAG validates — **keep `ALL_PACKAGES` in sync when adding a
@@ -379,7 +383,7 @@ Ctrl-C-during-`quit()` duplicate-email window. `main()` keeps calling `smtp_logi
   `check_drupal_module`) / `.add_section(...)` / `.add_attachment(...)` — this is the
   **canonical** path; the old module-level `sc.add_notice`/`add_notices` free functions were
   removed. `add_notice` takes a **`Notice`** and **nothing else** — a frozen dataclass
-  (`severity`/`code`/`html`/`text`/`short`/`icon`/`order`/`csv_extra`) from `psh/notice.py`,
+  (`severity`/`code`/`html`/`short`/`text`/`icon`/`order`/`csv_extra`) from `psh/notice.py`,
   re-exported as `sc.Notice`/`sc.Severity`; anything else raises a named `TypeError`. **`Notice`
   validates both `severity` and `csv_extra` at construction** (`__post_init__` raises a named
   `TypeError` on a non-`Severity` severity — a string like `"warn"` would otherwise surface as an
@@ -423,7 +427,7 @@ Ctrl-C-during-`quit()` duplicate-email window. `main()` keeps calling `smtp_logi
   (config-inline `[News.<x>]` sub-tables + `*.toml` files in `[News].folder` are both loaded by
   `load_news_items()`). Site-phase hooks receive the `SiteContext` and call these methods
   directly (see `check/umich/sitelens.py`); tests build one with `sc.SiteContext({"name": ...})`.
-- **Terminus/WP/Drush wrappers**: these eleven defs live in **`psh/gateway.py`**. `run_terminus()`
+- **Terminus/WP/Drush wrappers**: these ten defs live in **`psh/gateway.py`**. `run_terminus()`
   is the low-level subprocess call (5-min timeout, returns `(stdout, stderr, fatal)`).
   `terminus()` wraps it for JSON with a session-expiry retry and **returns `(result, errors,
   fatal)`** (`result` is `None` on a JSON decode failure). Call sites that index into the result
