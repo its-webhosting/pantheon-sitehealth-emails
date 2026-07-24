@@ -257,11 +257,39 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* **Modularization campaign in progress** — see
-  [`development/2026-07-17-modularization-campaign/CAMPAIGN.md`](development/2026-07-17-modularization-campaign/CAMPAIGN.md)
-  (frozen architecture) and its `LEDGER.md` (cross-increment state). Items tagged **(campaign)**
-  below are being absorbed by it as it runs; items tagged **(post-campaign)** wait until it
-  finishes, because each one moves the rendered-email goldens the campaign holds byte-identical.
+* **Modularization campaign — complete.** The 15-increment (I0–I14) refactor of the monolithic
+  main script into a `psh/` core package plus self-registering `check/`/`plugin/` packages is
+  finished. The frozen architecture and decision record live in
+  [`development/2026-07-17-modularization-campaign/CAMPAIGN.md`](development/2026-07-17-modularization-campaign/CAMPAIGN.md),
+  the append-only cross-increment history in its `LEDGER.md`, the nine closing-audit answers in
+  [`CLOSING-AUDIT.md`](development/2026-07-17-modularization-campaign/CLOSING-AUDIT.md), and the
+  goal-versus-outcome writeup in
+  [`RETROSPECTIVE.md`](development/2026-07-17-modularization-campaign/RETROSPECTIVE.md). The
+  follow-ups the campaign recorded at close are the **(post-campaign)** items below.
+
+* **Extract further from `main()` toward CAMPAIGN.md §3.3's 250–400-line target**
+  **(post-campaign)** — `main()` closed the campaign at **622 raw / 445 logic lines**, above the
+  target. This is a *recorded deviation*, not an oversight: everything remaining matches §3.3's
+  exhaustive stay-list (loop control, the `continue`-crossing seams, phase ordering), so it was
+  answered at close as CLOSING-AUDIT Q1 rather than forced under the line by extracting during the
+  increment specced as closing (golden risk). Candidate extractions for a later, dedicated change:
+  the config/arg bootstrap sequence, the per-site skip/banner preamble, and the phase-firing +
+  contract-stuffing spine.
+
+* **Fix or drop the `uvx pyright@1.1.411` fallback** **(post-campaign)** — `./run-tests` prefers
+  the venv's pinned pyright and falls back to `uvx pyright@1.1.411`, but that fallback runs in an
+  isolated environment with **none of the project's dependencies**, so it reports **34 false
+  `reportMissingImports`**. It is loud, not silent, so it is not a gate defect — but it is useless
+  in practice. Either give the fallback the project's dependencies so it can resolve imports, or
+  drop it and require the venv binary outright.
+
+* **Docs path-guard test — considered and declined** **(post-campaign; not to be re-litigated)** —
+  a test asserting every path named in a document exists was proposed and rejected (SPEC D-i14d-7).
+  It catches only *deleted* paths, whereas every stale claim this campaign actually shipped was
+  prose about a file that still **existed** (the two-config ruff description, a wrong `sc.registry`
+  sentence, the false "`ALL_PACKAGES` loads every package" claim). It would also need an allowlist
+  for illustrative paths (`build/{site}.eml`, `check/<name>/`, a doc written later in the same
+  change), the kind of list that rots. Recorded here so the decision is not re-argued.
 
 * Add a `mutates` hook declaration to the DAG **(post-campaign)** — a third per-hook edge kind
   (beside `consumes`/`produces`) that orders a `site_post_gather` smell-notice consumer *after* the
@@ -272,13 +300,13 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   (LEDGER I10 amendment 1).
 
 * ~~Add ruff for linting~~ — **done, narrowly** (2026-07-16). `[tool.ruff.lint]` in `pyproject.toml` selects only `E722`, `BLE001`, `S105`, `S106` — each one mechanizes a directive that already existed in prose (`prompts/directives.md` PD#2, PD#6), so nothing there is new policy. It runs in `./run-tests` (a gate) and in `.claude/hooks/ruff-check.sh` (advisory, at edit time). Both read `pyproject.toml`; neither passes `--select`. Two follow-ups, deliberately deferred:
-  * **Broaden the rule set** **(campaign)** — now being executed by the modularization campaign's lint/type ratchet rather than deferred. `ruff check .` on the default set reports **45 findings** (measured 2026-07-17: 26 F541, 8 E741, 4 E713, 3 F841, 2 F401, 1 E402, 1 E712); the campaign goes further, gating every un-grandfathered file under `ruff-broad.toml` (`select = ALL` minus a shrinking exclude list) plus `[tool.pyright]`, per CAMPAIGN.md §13. Each increment deletes its files from the grandfather list and cleans them as they move, so the finding surface shrinks with the remnant.
+  * ~~**Broaden the rule set**~~ — **done** (modularization campaign, merged at I14b). The campaign's two ruff configs were collapsed into **one merged pass**: `[tool.ruff.lint]` in `pyproject.toml` now runs `select = ALL` minus a justified `ignore` list over the whole tree, with the `tests/**` idiom block in `[tool.ruff.lint.per-file-ignores]` and `extend-exclude = ["development/2*"]` scoping out the dated archive folders. The separate broad config (`ruff-broad.toml`) is **deleted** — there is now ONE ruff pass, run both by `./run-tests` (a gate) and by `.claude/hooks/ruff-check.sh` (advisory, at edit time); neither passes `--select`. The four PD rules (`E722`, `BLE001`, `S105`, `S106`) are members of `ALL` and still run everywhere not excluded.
   * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.
   * **Decide a docstring convention** **(post-campaign)** — ruff's `D` family is ignored in
     `[tool.ruff.lint]` because no convention (google/numpy/pep257) has been chosen; deciding one
     and un-ignoring `D` is its own reviewed change. (This TODO was promised at campaign I0 —
     LEDGER I0's ruff-ignore table — and first actually written at I14b's close; PD#9.)
-* ~~Add pyright to `./run-tests`~~ **(campaign)** — **done**: `./run-tests` now runs pyright as a gate (standard mode, scope `psh/` minus `_legacy.py`, per `[tool.pyright]`; CAMPAIGN.md §13). The old "39 errors over `check/` + `plugin/`" figure was an unverified planning claim and is **superseded**: the whole-tree pyright baseline is **220 errors, 0 warnings, 0 informations** across 118 first-party files in standard mode (`check/` + `plugin/` account for exactly 39 of them — where the old number came from; the rest are `tests/` 139, `psh/_legacy.py` 36, `script_context.py` 5, `dns_classify.py` 1), measured 2026-07-17, ledger I0. The disagreements that figure described (the `-> (str, str, bool)` house style, the runtime-exposed `sc.*` callables, `sc.options` as a dict) are cleaned per-module as the campaign moves code, not annotated in place on the remnant. The **LSP half already worked and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens; the program body now lives in `psh/_legacy.py`, a normal `.py` file that pyright/ruff/CodeGraph index natively, and the committed `pantheon-sitehealth-emails.py` symlink now only exposes the thin extension-less shim.
+* ~~Add pyright to `./run-tests`~~ **(campaign)** — **done**: `./run-tests` now runs pyright as a gate (standard mode, **scope all of `psh/`**, per `[tool.pyright]`; CAMPAIGN.md §13). The old "39 errors over `check/` + `plugin/`" figure was an unverified planning claim and is **superseded**: the whole-tree pyright baseline measured at campaign start (2026-07-17, ledger I0) was **220 errors, 0 warnings, 0 informations** across 118 first-party files in standard mode (`check/` + `plugin/` accounted for exactly 39 of them — where the old number came from; the rest were `tests/`, `script_context.py`, and the since-deleted monolith remnant). The disagreements that figure described (the `-> (str, str, bool)` house style, the runtime-exposed `sc.*` callables, `sc.options` as a dict) were cleaned per-module as the campaign moved code. The **LSP half already worked and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens; the program body now lives in `psh/cli.py`, a normal `.py` file that pyright/ruff/CodeGraph index natively, and the committed `pantheon-sitehealth-emails.py` symlink now only exposes the thin extension-less shim.
 * **Upgrade ruff past 0.15.22 and disposition the `PLR0917` findings** **(post-campaign)** — the
   campaign pins `uvx ruff@0.15.22` (`run-tests` + `.claude/hooks/ruff-check.sh`; CAMPAIGN.md §13 /
   decision D2) so the lint bar cannot drift mid-campaign. ruff 0.16.0 graduated `PLR0917`
