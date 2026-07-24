@@ -69,3 +69,12 @@ def test_csv_extra_rejects_a_non_str_element_by_name():
     # script_context's ",".join (PD#2 -- every error has a name).
     with pytest.raises(TypeError, match=r"Notice\('updates-addons'\)\.csv_extra"):
         Notice(severity=Severity.WARNING, code="updates-addons", html="<p>x</p>", csv_extra=(3,))
+
+
+def test_severity_must_be_a_severity_member():
+    # A bare string reaches the projection's icon map and surfaces as an anonymous
+    # KeyError: 'warn' -- naming neither the notice nor the module (PD#2).  Most producers
+    # live in check/, outside pyright's scope, so the type system cannot catch it either.
+    # VALIDATION, not coercion: the csv_extra posture (D-i14c-1) applied to severity.
+    with pytest.raises(TypeError, match=r"Notice\('frozen'\)\.severity"):
+        Notice(severity="warning", code="frozen", html="<p>x</p>")

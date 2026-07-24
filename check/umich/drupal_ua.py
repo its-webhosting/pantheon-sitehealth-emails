@@ -16,11 +16,7 @@ gating fix.
 
 import script_context as sc
 
-# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` is reached
-# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
-# only sc), added at I14c Task 6.  The drush-error notices this
-# check also emits are built by sc.drush_error, which registers its code in psh/gateway.py.
+# Notice code registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_DRUPAL_UA = sc.registry.register(
     "drupal-ua", description="Drupal outgoing HTTP user agent is not configured for U-M")
 

@@ -22,7 +22,7 @@ from rich.markup import escape
 import script_context as sc
 from psh.notice import Notice, Severity, registry
 
-# Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6).
+# Notice codes registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_WP_ERROR = registry.register("wp-error", description="wp-cli command failed")
 NOTICE_DRUSH_ERROR = registry.register("drush-error", description="drush command failed")
 

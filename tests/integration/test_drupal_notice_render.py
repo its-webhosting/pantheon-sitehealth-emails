@@ -60,7 +60,7 @@ def test_drupal7_eol_snapshot(psh, reset_sc, request, snapshot):
     assert n["short"] == snapshot
 
 
-# ── multisite-check (check/drupal/multisite.py, fatal-probe path) ───────────────────
+# ── drush-error (check/drupal/multisite.py, fatal-probe path -- operation "multisite-check") ───────────────────
 def test_multisite_check_fatal_snapshot(psh, reset_sc, request, gateway, monkeypatch, snapshot):  # noqa: PLR0913 -- snapshot test; all args are pytest fixtures
     mod = load_check_module(psh, "drupal", "multisite", "drupal_multisite_snap", request)
     monkeypatch.setattr(

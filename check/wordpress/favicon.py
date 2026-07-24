@@ -9,10 +9,7 @@ Still hardcoded U-M: the notice body's its.umich.edu link moved verbatim from B3
 
 import script_context as sc
 
-# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` is reached
-# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
-# only sc), added at I14c Task 6.
+# Notice code registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_NO_FAVICON = sc.registry.register(
     "no-favicon", description="no /favicon.ico file in the live environment")
 

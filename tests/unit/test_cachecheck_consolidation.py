@@ -5,7 +5,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
-from hypothesis import given
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
@@ -13,18 +13,19 @@ pytestmark = pytest.mark.unit
 SITE = "its-wws-test1"
 DOC = "https://documentation.its.umich.edu/cloudflare-cache-report"
 
-_CACHED = {}
-
-
 def _load(psh):
-    if "m" not in _CACHED:
-        path = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare" / "notices.py"
-        loader = SourceFileLoader("cachecheck_notices_probe", str(path))
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        module = importlib.util.module_from_spec(spec)
-        loader.exec_module(module)
-        _CACHED["m"] = module
-    return _CACHED["m"]
+    """Load check/cloudflare/notices.py standalone, freshly on every call.
+
+    Never cache this across tests: the module registers its notice code at import, and
+    reset_sc snapshots/restores the registry per test -- a session-cached module would hold a
+    code the registry no longer has (CLAUDE.md § Notices vs. news; LEDGER I14c → I14d).
+    """
+    path = Path(psh.__file__).resolve().parents[1] / "check" / "cloudflare" / "notices.py"
+    loader = SourceFileLoader("cachecheck_notices_probe", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 @pytest.fixture
@@ -517,13 +518,17 @@ def test_every_item_id_has_console_and_html_language(notices):
             assert "disable" not in out[0].html.lower()
 
 
+# The notices fixture loads the module ONCE per test (its registration then survives every
+# generated example); reusing it read-only across examples is safe, so suppress hypothesis's
+# function-scoped-fixture health check rather than reload per example -- reloading would
+# re-register the notice code and raise DuplicateNoticeCodeError on the second example.
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(st.dictionaries(
     st.sampled_from([f"f{i}.example.edu" for i in range(6)]),
     st.lists(st.sampled_from(["no-cache-control", "set-cookie", "cf-status-missing"]),
              max_size=3),
     max_size=6))
-def test_groups_partition_the_populated_fqdns(psh, assignment):
-    notices = _load(psh)
+def test_groups_partition_the_populated_fqdns(notices, assignment):
     items_by_fqdn = {
         fqdn: [_item(i, f"https://{fqdn}/") for i in item_ids]
         for fqdn, item_ids in assignment.items()

@@ -302,3 +302,17 @@ def test_smell_is_last_wins_core_status_then_pmlist(gateway, reset_sc, monkeypat
     )
     result = gather_drupal(SITE_D8, LIVE, _ctx(reset_sc))
     assert result.drush_smell == "pm warning"
+
+
+# ── check_drupal_module: an unknown level fails AT the producer ──────────────────────
+def test_check_drupal_module_rejects_an_unknown_level(reset_sc, monkeypatch):
+    """campaign I14c replaced a hand-rolled level->icon map (which silently shipped a warning
+    triangle on an alert) with Severity(level).  That conversion is the guard; without it an
+    unknown level flows into the notice and only surfaces, if ever, as wrong output."""
+    recording_console(monkeypatch, reset_sc)
+    with pytest.raises(ValueError, match="bogus"):
+        reset_sc.check_drupal_module(
+            "its-wws-test1", {}, "pantheon_advanced_page_cache", "Pantheon Advanced Page Cache",
+            "https://www.drupal.org/project/pantheon_advanced_page_cache", "Necessary.",
+            level="bogus",
+        )

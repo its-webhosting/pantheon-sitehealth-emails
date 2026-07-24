@@ -137,6 +137,7 @@ from psh.traffic import (
 fqdn_re = re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.IGNORECASE)
 
 
+# Notice codes registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_NO_DOMAINS = registry.register(
     "no-domains", description="paid plan with no custom domains connected")
 NOTICE_NO_PRIMARY_DOMAIN = registry.register(

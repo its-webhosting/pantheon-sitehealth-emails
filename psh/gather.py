@@ -47,10 +47,7 @@ from psh.gateway import (
 from psh.notice import Notice, Severity, registry
 from psh.render import escape_url
 
-# Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered, and a second register() of
-# the same code raises DuplicateNoticeCodeError.  not-installed / turned-off are registered
-# ONCE even though check_wordpress_plugin and check_drupal_module both emit them.
+# Notice codes registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_NOT_INSTALLED = registry.register(
     "not-installed", description="recommended plugin/module not installed")
 NOTICE_MULTIPLE_INSTALLED = registry.register(

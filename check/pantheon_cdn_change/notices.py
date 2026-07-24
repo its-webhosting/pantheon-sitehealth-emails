@@ -39,10 +39,7 @@ from .model import (
     Finding,  # noqa: F401  -- re-exported for callers/tests; model is pure
 )
 
-# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a module-level
-# constant cannot drift from what was registered, and a second register() of the same code raises
-# DuplicateNoticeCodeError.  `registry` is psh.notice's, NOT sc.registry: this module is the one
-# sanctioned CAMPAIGN.md section 3.5 exception, for the purity reason in the module docstring.
+# Notice code registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_PANTHEON_CDN_CHANGE = registry.register(
     "pantheon-cdn-change", description="custom domain still CNAME'd to the legacy Pantheon GCDN")
 

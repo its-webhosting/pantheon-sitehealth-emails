@@ -38,13 +38,21 @@ class Notice:
     csv_extra: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        """Reject a non-str csv_extra element AT THE PRODUCER, by name.
+        """Reject a non-Severity severity and a non-str csv_extra element AT THE PRODUCER, by name.
 
         VALIDATION, not coercion (SPEC I14c D-i14c-1 keeps the format spec at the producer).  Most
         producers live in check/, which pyright does not gate (pyproject [tool.pyright] includes
         only psh/), so a forgotten str() around an int csv field would otherwise surface much later
         as an anonymous `TypeError: sequence item 2: expected str instance, int found` from
-        script_context's ",".join -- naming neither the notice nor the module (PD#2)."""
+        script_context's ",".join -- naming neither the notice nor the module (PD#2).  A bare
+        severity string ("warn") fails the same way, as a KeyError from the projection's icon map,
+        and drives sort_notices_and_subject -- so a silent demotion would reorder a real report and
+        change its subject prefix (campaign I14d, LEDGER I14c whole-branch finding 1)."""
+        if not isinstance(self.severity, Severity):
+            raise TypeError(
+                f"Notice({self.code!r}).severity must be a Severity member; "
+                f"got {self.severity!r}"
+            )
         bad = [x for x in self.csv_extra if not isinstance(x, str)]
         if bad:
             raise TypeError(

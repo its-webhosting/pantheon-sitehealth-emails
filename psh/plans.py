@@ -17,7 +17,7 @@ from psh.db import db_retry, load_overage_protection_window
 from psh.gateway import terminus
 from psh.notice import Notice, Severity, registry
 
-# Notice code this module emits, registered once at import (SPEC I14c D-i14c-6).
+# Notice code registered at import; see CLAUDE.md § Notices vs. news.
 NOTICE_ITS_RECOMMENDS_PLAN = registry.register(
     "its-recommends-plan", description="a cheaper plan fits this site's traffic")
 

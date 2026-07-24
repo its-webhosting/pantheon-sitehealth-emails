@@ -54,7 +54,7 @@ def test_hook_adds_exactly_one_notice(check, reset_sc, monkeypatch):
     notice = ctx["notices"][0]
     assert notice["type"] == "info"
     assert notice["csv"] == "bus-occb,pantheon-cdn-change,occb.bus.umich.edu"
-    assert notice["icon"] == reset_sc.icon["info"]      # add_notice fills the magnifying glass
+    assert notice["icon"] == reset_sc.icon["info"]      # notice_to_dict fills the magnifying glass
     assert "23.185.0.4" in notice["message"]           # Pantheon's answer reached the notice
     assert "ITS will make these changes for you" in notice["message"]   # U-M, before the cutoff
 
