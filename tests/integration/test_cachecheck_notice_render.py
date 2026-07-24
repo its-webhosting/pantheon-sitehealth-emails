@@ -54,7 +54,6 @@ def _representative_items(fqdn):
 def _build(psh, *, umich):
     notices = _notices_module(psh)
     return notices.build_cache_notices(
-        SITE,
         {"www.example.edu": _representative_items("www.example.edu"),
          "www2.example.edu": _representative_items("www2.example.edu")},
         umich=umich, doc_url=DOC, framework="wordpress",
@@ -92,8 +91,8 @@ def test_injection_via_remote_strings_is_escaped_everywhere(psh, reset_sc):
     notices = _notices_module(psh)
     evil = 'https://a.example.edu/"><script>alert(1)</script>'
     out = notices.build_cache_notices(
-        SITE, {"a.example.edu": [_item("request-failed", evil,
-                                       reason="<script>alert(2)</script>")]},
+        {"a.example.edu": [_item("request-failed", evil,
+                                 reason="<script>alert(2)</script>")]},
         umich=False, doc_url=DOC, framework="",
         sample_by_fqdn={"a.example.edu": {"pages": 3, "asset_pages": 3}})
     message = out[0].html

@@ -2,7 +2,8 @@
 
 Moved verbatim from main()'s post-site_post_gather region (psh/_legacy.py, pre-move
 :1708-1783): the verbose pprint preamble, the table-row / bullet-list f-string builders,
-and the `updates-addons` notice dict.  Renames only (SPEC section 8 acceptance item 3):
+and the `updates-addons` notice (a hand-built dict until I14c).  Renames only (SPEC
+section 8 acceptance item 3):
 `escape_url(` -> `sc.escape_url(` (the checks-import-only-sc convention, Invariant 9);
 `site["name"]`/`site["id"]` now read through the local `site = site_context["site"]`
 introduced here; `add_on_updates` is read straight off `site_context["add_on_updates"]`
@@ -19,13 +20,12 @@ import html
 from rich.pretty import pprint
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` comes from
-# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
-# and repoints every check/ module (CAMPAIGN.md section 3.5).
-NOTICE_UPDATES_ADDONS = registry.register(
+# module-level constant cannot drift from what was registered.  `registry` is reached
+# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
+# only sc), added at I14c Task 6.
+NOTICE_UPDATES_ADDONS = sc.registry.register(
     "updates-addons", description="pending plugin/theme/module updates")
 
 

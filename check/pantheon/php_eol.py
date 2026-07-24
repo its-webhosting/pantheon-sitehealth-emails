@@ -6,16 +6,15 @@ and the KeyError when envs["live"] has no php_version key (the hook now .get()s 
 builder returns None for None/unparseable input)."""
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
 # module-level constant cannot drift from what was registered, and a second register() of
-# the same code raises DuplicateNoticeCodeError.  `registry` is imported from psh.notice
-# rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it and repoints
-# every check/ module, restoring CAMPAIGN.md section 3.5 (checks import only sc).
-NOTICE_PHP_EOL_WARNING = registry.register(
+# the same code raises DuplicateNoticeCodeError.  `registry` is reached through the facade
+# as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import only sc), added at
+# I14c Task 6.
+NOTICE_PHP_EOL_WARNING = sc.registry.register(
     "php-eol-warning", description="site PHP version is deprecated by Pantheon")
-NOTICE_PHP_EOL_ALERT = registry.register(
+NOTICE_PHP_EOL_ALERT = sc.registry.register(
     "php-eol-alert", description="site PHP version is below Pantheon's supported floor")
 
 

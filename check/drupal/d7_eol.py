@@ -1,14 +1,13 @@
 """The Drupal 7 end-of-life alert + tag1_d7es module check (campaign I10, from B35)."""
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` comes from
-# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
-# and repoints every check/ module (CAMPAIGN.md section 3.5).  The tag1_d7es module notice
+# module-level constant cannot drift from what was registered.  `registry` is reached
+# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
+# only sc), added at I14c Task 6.  The tag1_d7es module notice
 # below is built by sc.check_drupal_module, which registers its own codes in psh/gather.py.
-NOTICE_DRUPAL7_EOL = registry.register(
+NOTICE_DRUPAL7_EOL = sc.registry.register(
     "drupal7-eol", description="Drupal 7 extended support ends December 2026")
 
 

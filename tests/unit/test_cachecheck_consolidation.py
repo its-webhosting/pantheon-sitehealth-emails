@@ -49,7 +49,7 @@ def _sample(pages, asset_pages=None):
 def _build(notices, items_by_fqdn, *, umich=True, framework="wordpress", extra_pages=3,  # noqa: PLR0913 -- wraps build_cache_notices; each keyword-only param is a distinct notice input
            asset_pages=None):
     return notices.build_cache_notices(
-        SITE, items_by_fqdn, umich=umich, doc_url=DOC, framework=framework,
+        items_by_fqdn, umich=umich, doc_url=DOC, framework=framework,
         sample_by_fqdn={fqdn: _sample(extra_pages, asset_pages) for fqdn in items_by_fqdn})
 
 
@@ -155,7 +155,7 @@ def _group_header(notices, sample_by_fqdn, urls_by_fqdn=None):
     urls_by_fqdn = urls_by_fqdn or {f: ["/"] for f in sample_by_fqdn}
     items = {fqdn: [_item("no-cache-control", f"https://{fqdn}{path}") for path in paths]
              for fqdn, paths in urls_by_fqdn.items()}
-    out = notices.build_cache_notices(SITE, items, umich=False, doc_url=DOC, framework="",
+    out = notices.build_cache_notices(items, umich=False, doc_url=DOC, framework="",
                                       sample_by_fqdn=sample_by_fqdn)
     assert len(out) == 1  # identical signatures -> one notice
     return out[0].html
@@ -528,7 +528,7 @@ def test_groups_partition_the_populated_fqdns(psh, assignment):
         fqdn: [_item(i, f"https://{fqdn}/") for i in item_ids]
         for fqdn, item_ids in assignment.items()
     }
-    out = notices.build_cache_notices(SITE, items_by_fqdn, umich=False, doc_url=DOC,
+    out = notices.build_cache_notices(items_by_fqdn, umich=False, doc_url=DOC,
                                       framework="",
                                       sample_by_fqdn={f: _sample(3) for f in items_by_fqdn})
     populated = {f for f, items in items_by_fqdn.items() if items}

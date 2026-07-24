@@ -8,16 +8,15 @@ Cache.  Alert if it is active, advise deletion if it is merely installed.
 import html
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
 # module-level constant cannot drift from what was registered, and a second register() of
-# the same code raises DuplicateNoticeCodeError.  `registry` comes from psh.notice rather
-# than sc because sc.registry does not exist yet -- I14c Task 6 adds it and repoints every
-# check/ module (CAMPAIGN.md section 3.5).
-NOTICE_UNSUPPORTED_TURNED_OFF = registry.register(
+# the same code raises DuplicateNoticeCodeError.  `registry` is reached through the facade
+# as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import only sc), added at
+# I14c Task 6.
+NOTICE_UNSUPPORTED_TURNED_OFF = sc.registry.register(
     "unsupported-turned-off", description="unsupported plugin installed but inactive")
-NOTICE_UNSUPPORTED = registry.register(
+NOTICE_UNSUPPORTED = sc.registry.register(
     "unsupported", description="unsupported plugin is active and must be replaced")
 
 

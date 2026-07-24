@@ -161,7 +161,7 @@ def test_only_the_gateway_spawns_a_subprocess():
 # standalone)."  sc.db_engine_args is exposed in the same block (CLAUDE.md § Database).
 SC_FACADE_NAMES = ("escape_url", "check_wordpress_plugin", "check_drupal_module",
                    "umich_enabled", "cloudflare_enabled", "terminus", "fqdn_re",
-                   "db_engine_args", "Notice", "Severity", "wp_eval", "wp_error",
+                   "db_engine_args", "Notice", "Severity", "registry", "wp_eval", "wp_error",
                    "drush_php_script", "drush_error", "contract_year_end")
 
 
@@ -185,6 +185,11 @@ def test_documented_sc_facade_names_exist(reset_sc):
     (Notice/Severity reach sc via that module-level import, not a `sc.Notice = ...`
     assignment); the test failed with `AssertionError: sc is missing documented facade names
     ['Severity']`.  Verified, then reverted.
+
+    (campaign-I14c) A fourth RED demonstration for "registry": temporarily removed `registry`
+    from the same `from psh.notice import ...` line in script_context.py; the test failed with
+    `AssertionError: sc is missing documented facade names ['registry']`.  Verified, then
+    reverted.
 
     (campaign-I12) A third RED demonstration for "contract_year_end": temporarily commented
     out `sc.contract_year_end = contract_year_end` in psh/cli.py; the test failed with

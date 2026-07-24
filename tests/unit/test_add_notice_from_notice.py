@@ -6,19 +6,27 @@ from psh.notice import Notice, Severity
 pytestmark = pytest.mark.unit
 
 
-def test_notice_projects_to_legacy_dict():
-    html = "<p>hi</p>"
-    from_notice = sc.SiteContext({"name": "s1"})
-    from_notice.add_notice(
+def test_notice_projects_to_the_render_dict():
+    """The whole projection, end to end, against a FROZEN expected dict (instrument I5).
+
+    Until campaign I14c this compared a Notice-fed add_notice against a dict-fed one -- an arm
+    that is impossible now that add_notice takes only a Notice (SPEC §2.6).  Writing the six
+    render keys out by hand is what makes this a pin rather than a tautology: every value here
+    is what email_template.{html,txt}, sort_notices_and_subject and record_site_notices read.
+    """
+    ctx = sc.SiteContext({"name": "s1"})
+    ctx.add_notice(
         Notice(severity=Severity.ALERT, code="no-domains",
-               short="no domains connected", html=html, text="hi")
+               short="no domains connected", html="<p>hi</p>", text="hi")
     )
-    from_dict = sc.SiteContext({"name": "s1"})
-    from_dict.add_notice(
-        {"type": "alert", "csv": "s1,no-domains",
-         "short": "no domains connected", "message": html, "text": "hi"}
-    )
-    assert from_notice["notices"] == from_dict["notices"]   # full dict equality (both lack 'order')
+    assert ctx["notices"][0] == {
+        "type": "alert",
+        "icon": "&#x1F6A8;",
+        "csv": "s1,no-domains",
+        "short": "no domains connected",
+        "message": "<p>hi</p>",
+        "text": "hi",
+    }
 
 
 def test_notice_text_defaults_via_html2text():

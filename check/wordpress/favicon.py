@@ -8,13 +8,12 @@ Still hardcoded U-M: the notice body's its.umich.edu link moved verbatim from B3
 (Invariant 8; de-U-M-ifying it is post-campaign work, CLAUDE.md still-hardcoded-U-M list)."""
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` comes from
-# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
-# and repoints every check/ module (CAMPAIGN.md section 3.5).
-NOTICE_NO_FAVICON = registry.register(
+# module-level constant cannot drift from what was registered.  `registry` is reached
+# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
+# only sc), added at I14c Task 6.
+NOTICE_NO_FAVICON = sc.registry.register(
     "no-favicon", description="no /favicon.ico file in the live environment")
 
 

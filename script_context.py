@@ -12,9 +12,10 @@ from psh.modules import (  # noqa: F401 -- add_hook/invoke_hooks re-exported as 
     add_hook,
     invoke_hooks,
 )
-from psh.notice import (  # noqa: F401 -- Severity re-exported as sc.Severity for check/plugin packages
+from psh.notice import (  # noqa: F401 -- Severity/registry re-exported as sc.Severity/sc.registry for check/plugin packages
     Notice,
     Severity,
+    registry,
 )
 
 options: argparse.Namespace = argparse.Namespace()  # parsed CLI options; set by parse_args() caller
@@ -114,24 +115,20 @@ class SiteContext(dict):
     def __init__(self, site: dict):
         super().__init__(site=site, notices=[], sections=[], attachments=[])
 
-    def add_notice(self, notice) -> None:      # notice: Notice | dict (dict retired at I14c Task 6)
-        """Add a notice, honoring order ('prepend'/'first' -> front).  A Notice is projected to
-        the render dict by notice_to_dict; a legacy dict still gets the historical icon/text
-        fill (that path is deleted in I14c Task 6, CAMPAIGN.md §6)."""
-        if isinstance(notice, Notice):
-            d = self.notice_to_dict(notice)
-            order = notice.order
-        else:
-            d = notice
-            if 'message' not in d:
-                console.print(f'[bold red]ERROR: Notice is missing the "message" key: {d}')
-                sys.exit(1)
-            if 'icon' not in d:
-                d['icon'] = icon[d['type']]
-            if 'text' not in d:
-                d['text'] = html_to_text(d['message'])
-            order = d.get('order', 'append')
-        if order in ('prepend', 'first'):
+    def add_notice(self, notice: Notice) -> None:
+        """Add a Notice, honoring order ('prepend'/'first' -> front).
+
+        Notice-only since campaign I14c (CAMPAIGN.md §6): the legacy hand-built dict is gone
+        from every producer in psh/, check/ and plugin/, so a dict here is a programming error,
+        not a supported form.  It gets a named TypeError rather than silently becoming a notice
+        with the wrong keys, no csv row, or an un-registered code (PD#1, PD#2).
+        """
+        if not isinstance(notice, Notice):
+            raise TypeError(
+                f"add_notice() takes a psh.notice.Notice, not {type(notice).__name__}: {notice!r}"
+            )
+        d = self.notice_to_dict(notice)
+        if notice.order in ('prepend', 'first'):
             self['notices'].insert(0, d)
         else:
             self['notices'].append(d)
@@ -155,11 +152,8 @@ class SiteContext(dict):
             "text": notice.text or html_to_text(notice.html),
         }
 
-    def add_notices(self, notices: list) -> None:
-        """Add each notice returned by a builder (wp_error/drush_error/check_*module).
-
-        Those builders return Notice objects since campaign I14c; the legacy dict arm of
-        add_notice survives only until this increment's last task retires it."""
+    def add_notices(self, notices: list[Notice]) -> None:
+        """Add each Notice returned by a builder (wp_error/drush_error/check_*module)."""
         for notice in notices:
             self.add_notice(notice)
 

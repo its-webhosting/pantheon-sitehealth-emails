@@ -3,13 +3,12 @@ whose live environment was never initialized is wasted money.  The env:list fetc
 its fatal guards stay in main() (SPEC D-i8-2)."""
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` comes from
-# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
-# and repoints every check/ module (CAMPAIGN.md section 3.5).
-NOTICE_NO_LIVE_ENV = registry.register(
+# module-level constant cannot drift from what was registered.  `registry` is reached
+# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
+# only sc), added at I14c Task 6.
+NOTICE_NO_LIVE_ENV = sc.registry.register(
     "no-live-env-but-paid-plan", description="paid plan with an uninitialized live environment")
 
 

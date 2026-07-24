@@ -4,13 +4,20 @@ SiteContext is a dict subclass — subscript access (site_context['notices'|'sec
 'attachments'|'site']) is unchanged — that also owns the mutators for its collections.  These
 replaced the old module-level sc.add_notice/add_notices free functions.
 """
+import re
+
 import pytest
+
+from psh.notice import Notice, Severity
 
 pytestmark = pytest.mark.unit
 
 
-def _n(message="<p>Hi</p>", kind="info", **extra):
-    return {"type": kind, "message": message, **extra}
+def _n(html="<p>Hi</p>", severity=Severity.INFO, **extra):
+    """A minimal Notice.  Was a hand-built render dict until campaign I14c retired that form
+    from add_notice; the values these tests assert on are unchanged, only the field names are
+    (`message` -> `html`, `type` -> `severity`)."""
+    return Notice(severity=severity, code="x", html=html, **extra)
 
 
 _LINKED = ('<p>Some pages on <a href="https://a.example.edu/">a.example.edu</a> are not '
@@ -74,7 +81,7 @@ def test_add_notice_fills_icon_and_text(reset_sc):
     ctx = reset_sc.SiteContext({"name": "x"})
     ctx.add_notice(_n())
     n = ctx["notices"][0]
-    assert n["icon"]           # filled from 'type'
+    assert n["icon"]           # filled from the severity
     assert n["text"].strip()   # filled via html2text
 
 
@@ -86,22 +93,29 @@ def test_add_notice_preserves_existing_icon_and_text(reset_sc):
     assert n["text"] == "TEXT"
 
 
-def test_add_notice_missing_message_exits(reset_sc):
+def test_add_notice_rejects_a_dict(reset_sc):
+    """The hand-built notice dict is not a supported producer form since campaign I14c.
+
+    Replaces test_add_notice_missing_message_exits: the missing-"message" console-exit guard it
+    pinned is deleted, because Notice.html is a required constructor argument, so a notice
+    without a body can no longer be built (SPEC I14c §2.6, D-i14c-9).  A dict here is a
+    programming error and gets a NAMED error saying so (PD#2), not a silent append.
+    """
     ctx = reset_sc.SiteContext({"name": "x"})
-    with pytest.raises(SystemExit):
-        ctx.add_notice({"type": "info"})  # no 'message'
+    with pytest.raises(TypeError, match=re.escape("psh.notice.Notice")):
+        ctx.add_notice({"type": "info", "message": "<p>x</p>"})
 
 
 def test_add_notice_order_first_prepends(reset_sc):
     ctx = reset_sc.SiteContext({"name": "x"})
-    ctx.add_notice(_n(message="a", icon="i", text="a"))
-    ctx.add_notice(_n(message="b", icon="i", text="b", order="first"))
+    ctx.add_notice(_n(html="a", icon="i", text="a"))
+    ctx.add_notice(_n(html="b", icon="i", text="b", order="first"))
     assert [n["message"] for n in ctx["notices"]] == ["b", "a"]
 
 
 def test_add_notices_bulk_in_order(reset_sc):
     ctx = reset_sc.SiteContext({"name": "x"})
-    ctx.add_notices([_n(message="a", icon="i", text="a"), _n(message="b", icon="i", text="b")])
+    ctx.add_notices([_n(html="a", icon="i", text="a"), _n(html="b", icon="i", text="b")])
     assert [n["message"] for n in ctx["notices"]] == ["a", "b"]
 
 

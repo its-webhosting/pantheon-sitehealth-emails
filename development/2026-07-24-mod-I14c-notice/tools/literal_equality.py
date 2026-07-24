@@ -74,8 +74,18 @@ def baseline_source(rev: str, path: str) -> str:
 
 def compare(rev: str, paths: list[str]) -> int:
     failures = 0
+    blind = 0  # files with zero notice literals on BOTH sides -- see below
     for path in paths:
         before, after = dumps(baseline_source(rev, path)), dumps(open(path).read())  # noqa: PTH123, SIM115
+        if not before and not after:
+            # NOT a pass: the instrument found nothing to compare, which is exactly the
+            # shape of the blind-instrument failure Task 3 hit (is_notice_call matched only
+            # ast.Name, so every converted check/ producer's literals were invisible while
+            # the tool still printed a verdict).  Reporting it as "identical (0 literals)"
+            # and tallying it into N/N made a broken instrument look green -- PD#14.
+            blind += 1
+            print(f"NO LITERALS  {path}  -- nothing for this instrument to compare")
+            continue
         only_before, only_after = before - after, after - before
         if only_before or only_after:
             failures += 1
@@ -86,7 +96,9 @@ def compare(rev: str, paths: list[str]) -> int:
                 print(f"    only in working tree: {dump[:160]}...")
         else:
             print(f"identical  {path}  ({sum(before.values())} notice literals)")
-    print(f"\n{len(paths) - failures}/{len(paths)} files with byte-identical notice literals")
+    compared = len(paths) - blind
+    excluded = f"  ({blind} file(s) with no notice literals, excluded)" if blind else ""
+    print(f"\n{compared - failures}/{compared} files with byte-identical notice literals{excluded}")
     return 1 if failures else 0
 
 

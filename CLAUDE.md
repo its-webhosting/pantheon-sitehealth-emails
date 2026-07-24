@@ -427,9 +427,10 @@ relocated multisite/UA checks, and since I12 `sc.contract_year_end` — needed b
 relocated annual-billing hooks) — extend that block for new ones (tests
 monkeypatch these when loading check modules standalone). A few façade names are exposed
 **elsewhere**, not in that block: `sc.db_engine_args` (assigned in `_legacy.py`, see § Database)
-and `sc.Notice`/`sc.Severity` (which reach `sc` via a top-of-`script_context.py`
-`from psh.notice import Notice, Severity` import — see § Notices vs. news); all are pinned by
-the `test_documented_sc_facade_names_exist` house-rule. `check/cloudflare/httpseam.py`
+and `sc.Notice`/`sc.Severity`/`sc.registry` (which reach `sc` via a top-of-`script_context.py`
+`from psh.notice import Notice, Severity, registry` import — `sc.registry` added at I14c, when
+every check package's `registry.register(...)` moved onto the façade; see § Notices vs. news);
+all are pinned by the `test_documented_sc_facade_names_exist` house-rule. `check/cloudflare/httpseam.py`
 holds the ONE monkeypatchable HTTP seam (`fetch`/`sleep`) and `egress.py` its own `probe`
 seam — route any new outbound HTTP in that package through them to stay offline-testable.
 
@@ -456,7 +457,7 @@ against it, so drift on either side goes red:
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `psh.dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (I10, NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str) — the campaign's first hook-declared produced keys. They are DAG-declared (in the hook's `produces`), present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the legacy `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. **I9 keys:** `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy — the B39 table became a `site_post_gather` hook at I10, `main()` no longer reads it), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` (I10) — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (B48's smell emission today) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry. Smell precedence is provably unchanged by I10 — no pair of writers swapped relative order, so no notice-csv value diverges, D-i10-4) |
-| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (I12, NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a legacy notice dict) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase — the I10 `drupal_multisite` precedent (B51's companion `annual_bill_in_progress` key was deleted at I14a) |
+| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the I7 plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (I12, NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a render dict, built by `site_context.notice_to_dict`) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase — the I10 `drupal_multisite` precedent (B51's companion `annual_bill_in_progress` key was deleted at I14a) |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext`; since I13 it receives the run's `RunState` — `finish_run`'s first statement is `invoke_hooks("run_finish", run_state)`, fired on completed and aborted runs, the seam for future run-level artifact hooks. `CONTRACT["run_finish"]` stays `()`: the `RunState` is the hook argument, not a contract key) |
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
@@ -465,26 +466,37 @@ against it, so drift on either side goes red:
   Sandbox skips). Add to it via its methods — `site_context.add_notice(notice)` /
   `.add_notices(list)` (builders: `wp_error`/`drush_error`/`check_wordpress_plugin`/`check_drupal_module`) / `.add_section(...)` /
   `.add_attachment(...)` — this is the **canonical** path (the old module-level
-  `sc.add_notice`/`add_notices` free functions were removed). `add_notice` accepts either a
-  **`Notice`** (a frozen dataclass — `severity`/`code`/`html`/`text`/`short`/`icon`/`order`,
-  from `psh/notice.py`, re-exported as `sc.Notice`/`sc.Severity`) or the legacy notice dict; a
-  `Notice` is normalized to the exact legacy dict (`_notice_to_dict`) before the existing
-  fill logic runs unchanged, so both forms end up byte-identical for a notice whose csv is
-  the plain two-field form (`{site},{code}`) — a notice with *extra* csv fields (e.g.
-  `turned-off,{name}`) stays a dict until the increment that adopts it amends the field set
-  (`psh/notice.py`'s `Notice` carries no `csv`/`csv_extra` field yet). `code` is enforced
-  unique at import time by `psh.notice.registry` (`NoticeRegistry.register`, raising
-  `DuplicateNoticeCodeError` on a repeat — the bug class that once let two independent
-  notices share the `php-eol`/`annual-bill` codes, I1). The dict form is retired at I14;
-  I3 converts `no-domains` as the first (and, so far, only) `Notice`-based producer,
-  end-to-end through the three goldens that render it. `add_notice` fills in
-  `icon` (from `type`), plaintext `text` (via `html2text`), and honors `order`
-  (`prepend`/`first` → front). `add_news_item()` (still an `sc` function) adds an org-wide item to
-  `sc.news` (config-inline `[News.<x>]` sub-tables + `*.toml` files in `[News].folder` are both
-  loaded by `load_news_items()`). Notice dicts carry their own bespoke `text`, so `add_notice`'s
-  defaults are no-ops for them; every notice needs a `csv` key (`site,code,...`) — several report
-  paths read `n["csv"]`. Site-phase hooks receive the `SiteContext` and call these methods directly
-  (see `check/umich/sitelens.py`); tests build one with `sc.SiteContext({"name": ...})`.
+  `sc.add_notice`/`add_notices` free functions were removed). Since I14c `add_notice` takes a
+  **`Notice`** and **nothing else** — a frozen dataclass
+  (`severity`/`code`/`html`/`text`/`short`/`icon`/`order`/`csv_extra`) from `psh/notice.py`,
+  re-exported as `sc.Notice`/`sc.Severity`; anything else raises a named `TypeError`. The
+  six-key **render dict** (`type`/`icon`/`csv`/`short`/`message`/`text`) is still the *storage*
+  form in `site_context["notices"]` — it is what `email_template.{html,txt}`,
+  `sort_notices_and_subject` and `RunState.record_site_notices` read — but producers no longer
+  build one: **`SiteContext.notice_to_dict(notice)`** (public since I14c) is the one projection
+  that makes it, filling `icon` from `severity`, `text` via `html2text`, and the `csv` row as
+  `site,code,*csv_extra`. **The site name comes from the `SiteContext`, never from the
+  producer**, so it cannot be mismatched; `csv_extra` is the tuple of csv fields that follow
+  `site,code` (e.g. `turned-off,{name}` → `csv_extra=(name,)`), and its elements MUST already
+  be strings (`Notice.__post_init__` raises a naming `TypeError` otherwise — the projection does
+  not coerce, so `f"{savings:.2f}"`/`str(n)` stays visible at the producer). `order`
+  (`prepend`/`first` → front) is honored by `add_notice` and is *not* stored in the render dict.
+  `code` is enforced unique at import time by `psh.notice.registry` (`NoticeRegistry.register`,
+  raising `DuplicateNoticeCodeError` on a repeat — the bug class that once let two independent
+  notices share the `php-eol`/`annual-bill` codes, I1); every producing module registers its
+  codes at import through a module-level `NOTICE_* = sc.registry.register(...)` constant, so the
+  code constructed cannot drift from the code registered, and the 36-code roster is pinned by
+  **`tests/integration/test_notice_roster.py`**. `registry` reaches check/plugin packages as
+  `sc.registry`; `check/pantheon_cdn_change/notices.py` is the ONE sanctioned exception and
+  imports `psh.notice` directly, to keep the purity its `test_notices_module_is_pure` asserts.
+  Registration is import-time-once, so `tests/conftest.py`'s autouse `reset_sc` snapshots and
+  restores the registry around every test — which works only because no producing module is
+  executed outside a function-scoped fixture or test body. `add_news_item()` (still an `sc`
+  function, still dict-based — news items are operator-authored config data, not code-built
+  notices) adds an org-wide item to `sc.news` (config-inline `[News.<x>]` sub-tables + `*.toml`
+  files in `[News].folder` are both loaded by `load_news_items()`). Site-phase hooks receive the
+  `SiteContext` and call these methods directly (see `check/umich/sitelens.py`); tests build one
+  with `sc.SiteContext({"name": ...})`.
 - **Terminus/WP/Drush wrappers**: these eleven defs live in **`psh/gateway.py`** (moved there in
   I2; `psh/_legacy.py` re-imports them, so call sites and the `sc` exposure block resolve
   unchanged). `run_terminus()` is the low-level subprocess call (5-min

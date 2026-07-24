@@ -1,12 +1,20 @@
 """The single owner-facing notice for the Pantheon CDN-change check (SPEC §8).
 
-PURE: Findings in, one sc.Notice out.  Imports ONLY html + .model + the psh.notice VALUES
+PURE: Findings in, one Notice out.  Imports ONLY html + .model + the psh.notice VALUES
 (Notice/Severity/registry -- psh/notice.py itself imports nothing but dataclasses + enum) --
-never detect/chain/pantheon, so this module pulls in neither dnspython nor terminus.  It reaches
-Notice/Severity directly rather than through the sc facade (the I14c Task-3 pattern) precisely
-to keep that purity: `import script_context as sc` would put a module object in this module's
-namespace, which tests/unit/test_pantheon_cdn_change_notices.py::test_notices_module_is_pure
-asserts against.  Four copy variants from two
+never detect/chain/pantheon, so this module pulls in neither dnspython nor terminus.
+
+**THE ONE SANCTIONED EXCEPTION to CAMPAIGN.md section 3.5** ("checks and plugins import only
+sc"): every other check/ module reaches the type and the registry through the facade
+(sc.Notice / sc.Severity / sc.registry, I14c Task 6), and this one deliberately does not.
+`import script_context as sc` would put a module object in this module's namespace, which
+tests/unit/test_pantheon_cdn_change_notices.py::test_notices_module_is_pure asserts against
+(it pins the imported module set to exactly {"html"}) -- and it costs 276 transitively
+imported modules (sqlalchemy, rich, html2text, the whole psh package) against 18 stdlib
+modules for psh.notice.  Adjudicated at the I14c Task-5 review: keep the direct import.
+Do NOT "fix" this to sc.* -- the purity test will go red and tell you so.
+
+Four copy variants from two
 independent booleans -- umich (terminology) x before_cutoff (who does the work).  The notice
 states ONLY what the owner must change; it deliberately does not explain Pantheon's migration,
 Orange-to-Orange, or Pantheon-versus-our-Cloudflare.
@@ -25,7 +33,7 @@ correct for the DNS record and the Cloudflare record alike (SPEC §4.1).
 """
 import html
 
-from psh.notice import Notice, Severity, registry
+from psh.notice import Notice, Severity, registry  # NOT sc.*: the purity exception
 
 from .model import (
     Finding,  # noqa: F401  -- re-exported for callers/tests; model is pure
@@ -33,7 +41,8 @@ from .model import (
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a module-level
 # constant cannot drift from what was registered, and a second register() of the same code raises
-# DuplicateNoticeCodeError.
+# DuplicateNoticeCodeError.  `registry` is psh.notice's, NOT sc.registry: this module is the one
+# sanctioned CAMPAIGN.md section 3.5 exception, for the purity reason in the module docstring.
 NOTICE_PANTHEON_CDN_CHANGE = registry.register(
     "pantheon-cdn-change", description="custom domain still CNAME'd to the legacy Pantheon GCDN")
 

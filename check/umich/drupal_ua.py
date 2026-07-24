@@ -15,14 +15,13 @@ gating fix.
 """
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a
-# module-level constant cannot drift from what was registered.  `registry` comes from
-# psh.notice rather than sc because sc.registry does not exist yet -- I14c Task 6 adds it
-# and repoints every check/ module (CAMPAIGN.md section 3.5).  The drush-error notices this
+# module-level constant cannot drift from what was registered.  `registry` is reached
+# through the facade as sc.registry (CAMPAIGN.md section 3.5: checks and plugins import
+# only sc), added at I14c Task 6.  The drush-error notices this
 # check also emits are built by sc.drush_error, which registers its code in psh/gateway.py.
-NOTICE_DRUPAL_UA = registry.register(
+NOTICE_DRUPAL_UA = sc.registry.register(
     "drupal-ua", description="Drupal outgoing HTTP user agent is not configured for U-M")
 
 

@@ -25,14 +25,12 @@ html.escape for display and sc.escape_url for hrefs -- notices are HTML shown to
 import html
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice code this module emits, registered once at import (SPEC I14c D-i14c-6): a module-level
 # constant cannot drift from what was registered, and a second register() of the same code raises
-# DuplicateNoticeCodeError.  `registry` comes from psh.notice rather than sc because sc.registry
-# does not exist yet -- I14c Task 6 adds it and repoints every check/ module (CAMPAIGN.md
-# section 3.5).
-NOTICE_CLOUDFLARE_CACHE = registry.register(
+# DuplicateNoticeCodeError.  `registry` is reached through the facade as sc.registry (CAMPAIGN.md
+# section 3.5: checks and plugins import only sc), added at I14c Task 6.
+NOTICE_CLOUDFLARE_CACHE = sc.registry.register(
     "cloudflare-cache", description="pages or files not cached by Cloudflare as effectively as they could be")
 
 # ── Documentation links ─────────────────────────────────────────────────────────────
@@ -331,15 +329,16 @@ def item_key(item: dict) -> tuple:
     return (item["id"], item["kind"], tuple(sorted(item["params"].items())))
 
 
-def build_cache_notices(  # noqa: C901, PLR0913 -- consolidation + assembly (SPEC §9); one
-        # input per PROMPT-step-3 ingredient, private to this module, single call site
-        # (check/cloudflare/cache.py's check_cloudflare_cache); restructuring would relocate
-        # the same six names, not remove them (I14b SPEC §2.1 rules 2 and 5)
-        site_name: str, items_by_fqdn: dict, *, umich: bool,  # noqa: ARG001 -- site_name went unused at I14c (the csv row's site field now comes from the SiteContext at projection time, SPEC I14c §2.2); dropping it would churn the one call site and every test call for no gain
+def build_cache_notices(  # noqa: C901 -- consolidation + assembly (SPEC §9)
+        items_by_fqdn: dict, *, umich: bool,
         doc_url: str, framework: str, sample_by_fqdn: dict) -> list:
     """One sc.Notice (severity 'info', magnifying-glass icon) per group of FQDNs whose items are
     identical except for the URLs tested (PROMPT step 3).  Returns Notices ready for
     site_context.add_notice.
+
+    The site name is NOT an input: the csv row's site field comes from the SiteContext at
+    projection time (SiteContext.notice_to_dict, SPEC I14c §2.2), so the parameter this
+    builder carried until I14c is gone.
 
     `sample_by_fqdn` maps FQDN -> {"pages": n, "asset_pages": n} (see cache._check_fqdn):
     how many pages beyond the main page were checked there, and how many of those were

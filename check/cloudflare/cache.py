@@ -273,7 +273,7 @@ def check_cloudflare_cache(site_context) -> None:
         run(None)
 
     for notice in build_cache_notices(
-            site_context["site"]["name"], items_by_fqdn,
+            items_by_fqdn,
             umich=sc.umich_enabled(),
             doc_url=cfg["report_doc_url"],
             framework=site_context["site"].get("framework", ""),

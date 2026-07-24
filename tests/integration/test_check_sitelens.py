@@ -97,6 +97,10 @@ def test_urls_notice_when_too_few_paths(sitelens, reset_sc):
 
     assert len(ctx["notices"]) == 1
     assert ctx["notices"][0]["short"] == "add paths to SiteLens"
+    # Severity pinned at campaign I14c Task 6: sitelens-url-paths was the only notice code
+    # with no type/severity/icon assertion anywhere in the suite, and Task 5 rewrote exactly
+    # that field ("type": "info" -> severity=sc.Severity.INFO).  PD#14.
+    assert ctx["notices"][0]["type"] == "info"
 
 
 def test_urls_notice_csv_row(sitelens, reset_sc):

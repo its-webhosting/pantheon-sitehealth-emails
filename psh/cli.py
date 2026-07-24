@@ -137,7 +137,8 @@ from psh.traffic import (
 fqdn_re = re.compile(r"^_?[a-z0-9-]+\.[a-z0-9.-]+$", re.IGNORECASE)
 
 
-registry.register("no-domains", description="paid plan with no custom domains connected")
+NOTICE_NO_DOMAINS = registry.register(
+    "no-domains", description="paid plan with no custom domains connected")
 NOTICE_NO_PRIMARY_DOMAIN = registry.register(
     "no-primary-domain", description="multiple custom domains, none primary")
 
@@ -667,7 +668,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
                     site_context.add_notice(
                         Notice(
                             severity=Severity.ALERT,
-                            code="no-domains",
+                            code=NOTICE_NO_DOMAINS,
                             short="no domains connected",
                             html=f"""
                 <p>{site["name"]} is on a paid plan but does not have any custom domains connected.  Either connect

@@ -15,22 +15,21 @@ The divergence is unreachable today and pinned by tests/unit/test_dns_notices.py
 import html
 
 import script_context as sc
-from psh.notice import registry
 
 # Notice codes this module emits, registered once at import (SPEC I14c D-i14c-6): a
 # module-level constant cannot drift from what was registered, and a second register() of the
-# same code raises DuplicateNoticeCodeError.  `registry` comes from psh.notice rather than sc
-# because sc.registry does not exist yet -- I14c Task 6 adds it and repoints every check/
-# module (CAMPAIGN.md section 3.5).
-NOTICE_DNS_LOOKUP_FAILED = registry.register(
+# same code raises DuplicateNoticeCodeError.  `registry` is reached through the facade as
+# sc.registry (CAMPAIGN.md section 3.5: checks and plugins import only sc), added at I14c
+# Task 6.
+NOTICE_DNS_LOOKUP_FAILED = sc.registry.register(
     "dns-lookup-failed", description="DNS lookup failed with a transient resolver error")
-NOTICE_NOT_IN_DNS = registry.register(
+NOTICE_NOT_IN_DNS = sc.registry.register(
     "not-in-dns", description="custom domain has no DNS record")
-NOTICE_NOT_BEHIND_CLOUDFLARE = registry.register(
+NOTICE_NOT_BEHIND_CLOUDFLARE = sc.registry.register(
     "not-behind-cloudflare", description="custom domain does not resolve to Cloudflare")
-NOTICE_BEHIND_CLOUDFLARE_NOT_PROXIED = registry.register(
+NOTICE_BEHIND_CLOUDFLARE_NOT_PROXIED = sc.registry.register(
     "behind-cloudflare-not-proxied", description="Cloudflare proxying is off for the domain")
-NOTICE_PROXIED_IN_MULTIPLE_ZONES = registry.register(
+NOTICE_PROXIED_IN_MULTIPLE_ZONES = sc.registry.register(
     "proxied-in-multiple-cloudflare-zones",
     description="domain is proxied in more than one Cloudflare zone")
 

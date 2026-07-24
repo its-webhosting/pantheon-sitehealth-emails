@@ -2,8 +2,10 @@
 
 A typed, frozen replacement for the ad-hoc notice dicts.  Pure: imports nothing from script_context,
 so the sc facade and every psh/ module can import it without a cycle; checks/plugins reach
-Notice/Severity via sc.  Adoption is per-increment (CAMPAIGN.md §6); the dict form is retired at
-I14c (this module's `csv_extra` field is that increment's CAMPAIGN.md §6 amendment).
+Notice/Severity via sc.  Adoption was per-increment (CAMPAIGN.md §6) and completed at I14c: every
+producer in psh/, check/ and plugin/ builds a Notice, SiteContext.add_notice accepts nothing else,
+and this module's `csv_extra` field is that increment's CAMPAIGN.md §6 amendment.  The roster of
+codes registered below is pinned by tests/integration/test_notice_roster.py.
 """
 import dataclasses
 from enum import StrEnum

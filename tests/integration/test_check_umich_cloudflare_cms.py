@@ -102,9 +102,12 @@ def test_unknown_framework_is_a_noop(cms, reset_sc, recorders):
 
 def test_notices_from_helpers_reach_the_site_context(cms, reset_sc, monkeypatch):
     sc = reset_sc
-    notice = {"type": "warning", "message": "<p>x</p>", "csv": f"{SITE},not-installed,umich-cloudflare"}
+    # The fake stands in for sc.check_wordpress_plugin, which returns Notices since campaign
+    # I14c; same values as the dict it replaced, read through the Notice field names.
+    notice = sc.Notice(severity=sc.Severity.WARNING, code="not-installed",
+                       csv_extra=("umich-cloudflare",), html="<p>x</p>")
     monkeypatch.setattr(sc, "check_wordpress_plugin",
-                        lambda *a, **k: [dict(notice)], raising=False)
+                        lambda *a, **k: [notice], raising=False)
     ctx = _ctx(sc, framework="wordpress", fqdns=["www.example.edu"], plugins=[])
     cms.check_cloudflare_cms_integrations(ctx)
     assert len(ctx["notices"]) == 1
