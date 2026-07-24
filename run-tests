@@ -25,12 +25,12 @@ def ruff_argv():
     `ruff` is not necessarily on PATH (this repo installs deps with uv), so fall back to
     `uvx ruff@0.15.22` -- PINNED, not `uvx ruff`.  Mirrors .claude/hooks/ruff-check.sh -- the
     two must agree on the binary AND version just as they agree on the rule set (both read
-    pyproject.toml; neither passes --select).
+    the single merged config in pyproject.toml; neither passes --select).
 
     WHY PINNED (CAMPAIGN.md section 13, decision D2): the campaign's lint bar is fixed at
     increment I0 and never shifts mid-campaign.  ruff 0.16.0 graduated the preview rule
-    PLR0917 to stable, and the broad gate (ruff-broad.toml, select=ALL) newly fails against
-    it -- 9 findings in six files that were clean under 0.15.22.  An unpinned `uvx ruff`
+    PLR0917 to stable, and the merged select=ALL gate (pyproject.toml [tool.ruff.lint])
+    newly fails against it -- 9 findings in six files that were clean under 0.15.22.  An unpinned `uvx ruff`
     would silently move the bar on the next `uvx` cache refresh, turning a clean tree red
     with no code change (PD#14: an instrument -- the lint gate -- that changes verdict for
     reasons outside the diff is exactly the kind of lying instrument that directive names).
@@ -49,31 +49,37 @@ def ruff_argv():
 
 
 def pyright_argv():
-    """How to invoke pyright here, or None.  Same fallback pattern as ruff_argv()."""
+    """How to invoke pyright here, or None.  Same fallback pattern -- and same version-pin
+    reasoning -- as ruff_argv(): the `uvx` fallback is PINNED to pyright@1.1.411 (CAMPAIGN.md
+    section 13 / decision D2), so the type gate's verdict cannot drift on a `uvx` cache
+    refresh with no code change (PD#14 -- the I14a ruff-drift class, closed here for the
+    other tool).  A `pyright` already on PATH is trusted as-is with NO version check -- a
+    residual, accepted exposure (it's how a real dev install runs faster than `uvx`); whoever
+    installs it must match the pin above (1.1.411) or this gate can silently drift from the
+    uvx fallback's guarantee.
+    """
     if shutil.which("pyright"):
         return ["pyright"]
     if shutil.which("uvx"):
-        return ["uvx", "pyright"]
+        return ["uvx", "pyright@1.1.411"]
     return None
 
 
 def run_gates():
     """The lint + type gates.  Returns an exit code; 0 means every gate is clean.
 
-    Three gates run in order, each aborting the step on the first nonzero result -- exactly
-    like the single lint call this generalized -- so a later gate's green never hides an
-    earlier gate's red:
-      1. ruff, the NARROW PD rule set from pyproject.toml (E722/BLE001/S105/S106) -- each
-         mechanizes a directive in prompts/directives.md; runs EVERYWHERE, including the
-         files ruff-broad.toml grandfathers.
-      2. ruff, the BROAD campaign ratchet from ruff-broad.toml (select=ALL minus a
-         grandfathered exclude list; CAMPAIGN.md section 13).
-      3. pyright, standard mode over psh/ (pyproject [tool.pyright]).
+    Two gates run in order, each aborting the step on the first nonzero result -- so a later
+    gate's green never hides an earlier gate's red:
+      1. ruff, select = ALL minus the justified ignores in pyproject.toml [tool.ruff.lint] --
+         ONE pass (the campaign's two configs merged at I14b).  Includes the four PD rules
+         (E722/BLE001/S105/S106) that each mechanize a directive in prompts/directives.md and
+         run everywhere not excluded, plus the broad best-practice ratchet (CAMPAIGN.md 13).
+      2. pyright, standard mode over psh/ (pyproject [tool.pyright]).
 
     Each gate prints a one-line label first, so a failure names its own gate (PD#1:
-    failures surfaced actionably to the operator).  No --select on either ruff pass: the
-    config files are the single source of truth, matching .claude/hooks/ruff-check.sh.
-    Output is `concise`, so a ruff finding names the file, line, and rule.
+    failures surfaced actionably to the operator).  No --select on the ruff pass: the merged
+    config is the single source of truth, matching .claude/hooks/ruff-check.sh.  Output is
+    `concise`, so a ruff finding names the file, line, and rule.
     """
     argv = ruff_argv()
     if argv is None:
@@ -88,7 +94,7 @@ def run_gates():
         )
         return 1
 
-    print("Linting (ruff, narrow PD set) ...")
+    print("Linting (ruff, campaign ratchet) ...")
     completed = subprocess.call(
         [*argv, "check", "--output-format", "concise", "."], cwd=str(ROOT)
     )
@@ -96,21 +102,8 @@ def run_gates():
         print(
             "\nLint gate FAILED -- fix the findings above, or add a noqa WITH AN INLINE\n"
             "REASON if the code is deliberate (a bare noqa is a silent failure).\n"
-            "These rules mechanize prompts/directives.md PD#2 and PD#6; they are not style.",
-            file=sys.stderr,
-        )
-        return completed
-
-    print("Linting (ruff-broad.toml, campaign ratchet) ...")
-    completed = subprocess.call(
-        [*argv, "check", "--config", "ruff-broad.toml", "--output-format", "concise", "."],
-        cwd=str(ROOT),
-    )
-    if completed != 0:
-        print(
-            "\nBroad lint gate FAILED (ruff-broad.toml, campaign ratchet) -- fix the findings\n"
-            "above, or add a justified ignore/noqa.  An increment un-grandfathers a file by\n"
-            "deleting it from ruff-broad.toml's exclude list, so a clean tree is the entry fee.",
+            "This is the merged campaign ratchet (select = ALL, CAMPAIGN.md section 13); it\n"
+            "carries the PD#2/PD#6 rules (E722/BLE001/S105/S106) plus the broad best-practice set.",
             file=sys.stderr,
         )
         return completed

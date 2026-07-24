@@ -275,6 +275,28 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   * **Broaden the rule set** **(campaign)** — now being executed by the modularization campaign's lint/type ratchet rather than deferred. `ruff check .` on the default set reports **45 findings** (measured 2026-07-17: 26 F541, 8 E741, 4 E713, 3 F841, 2 F401, 1 E402, 1 E712); the campaign goes further, gating every un-grandfathered file under `ruff-broad.toml` (`select = ALL` minus a shrinking exclude list) plus `[tool.pyright]`, per CAMPAIGN.md §13. Each increment deletes its files from the grandfather list and cleans them as they move, so the finding surface shrinks with the remnant.
   * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.
 * ~~Add pyright to `./run-tests`~~ **(campaign)** — **done**: `./run-tests` now runs pyright as a gate (standard mode, scope `psh/` minus `_legacy.py`, per `[tool.pyright]`; CAMPAIGN.md §13). The old "39 errors over `check/` + `plugin/`" figure was an unverified planning claim and is **superseded**: the whole-tree pyright baseline is **220 errors, 0 warnings, 0 informations** across 118 first-party files in standard mode (`check/` + `plugin/` account for exactly 39 of them — where the old number came from; the rest are `tests/` 139, `psh/_legacy.py` 36, `script_context.py` 5, `dns_classify.py` 1), measured 2026-07-17, ledger I0. The disagreements that figure described (the `-> (str, str, bool)` house style, the runtime-exposed `sc.*` callables, `sc.options` as a dict) are cleaned per-module as the campaign moves code, not annotated in place on the remnant. The **LSP half already worked and costs nothing**: the `pyright-lsp` plugin is registered via the marketplace manifest at 0 always-on tokens; the program body now lives in `psh/_legacy.py`, a normal `.py` file that pyright/ruff/CodeGraph index natively, and the committed `pantheon-sitehealth-emails.py` symlink now only exposes the thin extension-less shim.
+* **Upgrade ruff past 0.15.22 and disposition the `PLR0917` findings** **(post-campaign)** — the
+  campaign pins `uvx ruff@0.15.22` (`run-tests` + `.claude/hooks/ruff-check.sh`; CAMPAIGN.md §13 /
+  decision D2) so the lint bar cannot drift mid-campaign. ruff 0.16.0 graduated `PLR0917`
+  (too-many-positional-args) from preview to stable, which newly flags **9 findings in six files**
+  that are clean under 0.15.22. Upgrading means bumping the pin in both files and dispositioning
+  those 9 (behavior-identical fix vs. justified noqa) as a deliberate, reviewed change — not a
+  silent `uvx` cache refresh (an unpinned upgrade is exactly the lying-instrument class PD#14 names).
+
+* **Widen the pyright gate beyond `psh/`** **(post-campaign)** — the gate is standard mode over
+  `psh/` only (`[tool.pyright]`). Widening it to `check/` / `plugin/` / `tests/` first needs writing
+  typed sc façade stubs for the runtime-exposed callables (`sc.escape_url`,
+  `sc.check_wordpress_plugin`, `sc.terminus`, `sc.wp_eval`, …): those are assigned at runtime, so
+  pyright cannot see their types today (the D-i8-7 lineage). Write the stubs, then extend
+  `[tool.pyright].include`.
+
+* **Repoint tests off the `psh.<name>` re-export surface** **(post-campaign)** — the harness reaches
+  every carved-out name through `psh.cli`'s re-export block (`psh.overage_blocks`, `psh.plan_costs`,
+  `psh.build_chart`, …) rather than its real module home (`psh.plans.overage_blocks`,
+  `psh.charts.build_chart`, …). The re-export surface is stable, so this is deferred, but repointing
+  the tests onto the real module homes — plus the deeper `conftest` / `TempDB` redesign it enables —
+  is the follow-up (D-i14a-3 / D-i14a-8, disposed: deferred at I14b).
+
 * update dependencies
 * * git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
 * add SendGrid API support as an alternative to SMTP

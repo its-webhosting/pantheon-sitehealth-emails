@@ -26,7 +26,7 @@ MISS-retry protocol (D9), only when should_retry_miss says the object ought to c
 """
 
 import random
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from rich.markup import escape as rich_escape
 
@@ -160,7 +160,7 @@ def _test_url(  # noqa: PLR0913 -- private, three call sites in this file, all k
         return result
 
     found = evaluate_headers(result.headers, kind=kind,
-                             now=datetime.now(timezone.utc),
+                             now=datetime.now(UTC),
                              status_code=result.status_code)
     for item in found:
         item["url"] = url

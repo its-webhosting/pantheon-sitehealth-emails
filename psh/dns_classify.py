@@ -109,7 +109,7 @@ def classify_hostname_dns(
                     points_elsewhere += 1
                     sc.console.print(
                         f"{hostname} has IP address [red]{rdata.address}[/red]")
-        except dns.resolver.NoAnswer:  # noqa: PERF203 -- the try/except-in-loop IS the
+        except dns.resolver.NoAnswer:
             # per-name transient-vs-malformed design (each rrtype's resolve() outcome is
             # classified independently); pulling it out of the loop would lose that per-name
             # granularity, not just satisfy the linter (campaign I14a Task 2, SPEC section 5).

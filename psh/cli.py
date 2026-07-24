@@ -19,10 +19,10 @@ import signal  # noqa: F401 -- retained as the psh.signal.signal monkeypatch sea
 import subprocess  # noqa: F401 -- retained as the psh.subprocess.Popen monkeypatch seam (CLAUDE.md § Two mock seams): run_terminus lives in psh/gateway.py but tests patch the shared module object via psh.subprocess (the conftest psh fixture is this module, psh.cli); render's subprocess.run moved to psh/render.py at I12
 import sys
 import time  # noqa: F401 -- retained as the psh.time.sleep monkeypatch seam (CLAUDE.md § Two mock seams): the real time.sleep(5) lives in psh/gateway.py, but 13 tests patch the shared module object via psh.time (the conftest psh fixture is this module, psh.cli)
+import tomllib
 from email.utils import make_msgid
 
 import sqlalchemy as db  # noqa: F401 -- retained as the psh.db.* test seam (tests/conftest.py TempDB uses psh.db.create_engine / psh.db.orm.sessionmaker, which resolve to THIS alias on the psh.cli module, not the psh/db.py package): B10's last in-file use (db.create_engine/db.orm.sessionmaker) moved to psh.db.open_database at I13
-import tomllib
 from rich.markup import escape
 from rich.padding import Padding
 from rich.pretty import pprint

@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 
 pytestmark = pytest.mark.unit
 
-NOW = datetime.datetime(2026, 3, 31, 12, 0, 0, tzinfo=datetime.timezone.utc)
+NOW = datetime.datetime(2026, 3, 31, 12, 0, 0, tzinfo=datetime.UTC)
 YEAR = "max-age=31536000"
 
 

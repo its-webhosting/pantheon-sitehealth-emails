@@ -26,7 +26,7 @@ Battery decision flow (see SPEC §8.6):
 """
 
 import email.utils
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 ACCEPTABLE_CACHE_STATUSES = {"HIT", "MISS", "EXPIRED", "STALE", "REVALIDATED", "UPDATING"}
 
@@ -130,7 +130,7 @@ def parse_expires(value):  # -> datetime | None
     if parsed is None:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 

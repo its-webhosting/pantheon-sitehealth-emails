@@ -738,33 +738,31 @@ tool stays reusable by other institutions.
 
 ## Testing
 
-**`./run-tests` lints and type-checks before it tests, and gates on all of it.** It runs **three
+**`./run-tests` lints and type-checks before it tests, and gates on all of it.** It runs **two
 gates** in order, each aborting on the first failure so a later gate's green never hides an
 earlier gate's red (PD#1):
 
-1. **ruff, narrow PD set** (`pyproject.toml`: `E722`, `BLE001`, `S105`, `S106`) — each mechanizes
-   a directive in `prompts/directives.md` (PD#2, PD#6) rather than adding new policy; runs over the
-   **whole tree**, including the files the campaign grandfathers.
-2. **ruff, broad campaign ratchet** (`ruff-broad.toml`: `select = ALL` minus a grandfathered
-   exclude list — the still-grandfathered check
-   packages enumerated individually (`check/cloudflare/`, `check/dns/`,
-   `check/pantheon_cdn_change/` — the wholesale `check/` was replaced by this
-   enumeration at I8 so `check/pantheon/` is born gated; at I9 the `check/umich/` entry
-   was narrowed one level deeper, to `check/umich/sitelens.py` +
-   `check/umich/cloudflare_cms.py`, so the package `__init__.py` and the two new I9
-   modules are gated while the two legacy siblings stay grandfathered), `plugin/`,
-   `tests/`, `development/`;
-   CAMPAIGN.md §13). Each increment un-grandfathers its files by deleting them from that list
-   (`script_context.py` was un-grandfathered in I4).
-3. **pyright, standard mode** over `psh/` minus `_legacy.py` (`[tool.pyright]`); a missing pyright
-   binary is a **hard failure**, never a silent skip (PD#1/PD#14).
+1. **ruff, the merged campaign ratchet** (`pyproject.toml` `[tool.ruff.lint]`: `select = ALL` minus
+   a justified `ignore` list, one ruff pass) — the campaign's two configs merged into one at I14b
+   (the old narrow `pyproject.toml` PD set + the deleted `ruff-broad.toml`). The four PD rules
+   (`E722`, `BLE001`, `S105`, `S106`) that each mechanize a directive in `prompts/directives.md`
+   (PD#2, PD#6) are members of `ALL` and run **everywhere not excluded** — so the merge did not
+   weaken the old narrow gate. `[tool.ruff].extend-exclude = ["development/2*"]` excludes only the
+   dated archive folders (verbatim measurement artifacts, D-i14b-2); `development/finalize-session.py`
+   sits above them and stays fully gated. `[tool.ruff.lint.per-file-ignores]` carries the `tests/**`
+   idiom block (rules that flag legitimate test idioms — `S101`, `S105`/`S106`, `INP001`, …) plus
+   `development/finalize-session.py = ["T201"]` (a CLI tool: print IS its output).
+2. **pyright, standard mode** over `psh/` (`[tool.pyright]`); a missing pyright binary is a **hard
+   failure**, never a silent skip (PD#1/PD#14).
 
-Both `[tool.ruff]` and `ruff-broad.toml` deliberately pin **no `target-version`**: ruff infers it
-from `requires-python`, and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program
-actually uses. `.claude/hooks/ruff-check.sh` runs **both** ruff passes at edit time (advisory, via
-`PostToolUse`, with `--force-exclude` and a repo-root `cd` so an edited grandfathered file honors
-the exclude list) but **not** pyright (edit-time latency; `./run-tests` carries the type gate). No
-pass passes `--select` — the config files are the single source of truth.
+`[tool.ruff]` deliberately pins **no `target-version`**: ruff infers it from `requires-python`
+(`>=3.12`), and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program actually uses.
+Both tool invocations in `./run-tests` are **version-pinned** (`uvx ruff@0.15.22`, `uvx
+pyright@1.1.411`; CAMPAIGN.md §13 / decision D2) so a `uvx` cache refresh cannot silently move the
+bar. `.claude/hooks/ruff-check.sh` runs **the same single merged ruff pass** at edit time (advisory,
+via `PostToolUse`, with `--force-exclude` and a repo-root `cd` so an edited excluded file honors the
+`extend-exclude`) but **not** pyright (edit-time latency; `./run-tests` carries the type gate). No
+invocation passes `--select` — the merged config is the single source of truth.
 
 There is a pytest harness under `tests/` (built 2026-07; design in
 `development/2026-07-04-test-harness/SPEC.md`). Run it with `./run-tests` (wrapper over

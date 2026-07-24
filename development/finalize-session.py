@@ -26,11 +26,11 @@ multi-session features; omit it for a single-session feature.
 """
 
 import argparse
-import glob
+import contextlib
 import json
-import os
 import re
 from datetime import datetime
+from pathlib import Path
 
 # Dollar cost is NOT computed here.  The session JSONL records no cost field, and
 # there's no programmatic price source (the Models API returns capabilities, not
@@ -51,7 +51,7 @@ _SECRET_PATTERNS = [
      r"CLOUDFLARE_API_KEY|CLOUDFLARE_EMAIL|ANTHROPIC_API_KEY)(\s*[=:]\s*)(\S+)",
      lambda m: m.group(1) + m.group(2) + _REDACT.format(m.group(1))),
     # AWS access key IDs
-    (r"\bAKIA[0-9A-Z]{16}\b", lambda m: _REDACT.format("aws-key-id")),
+    (r"\bAKIA[0-9A-Z]{16}\b", lambda _m: _REDACT.format("aws-key-id")),
     # Pantheon machine/session tokens in JSON
     (r'(?i)("?(?:machine_token|session)"?\s*[=:]\s*")([^"]{12,})(")',
      lambda m: m.group(1) + _REDACT.format("token") + m.group(3)),
@@ -60,7 +60,7 @@ _SECRET_PATTERNS = [
      lambda m: m.group(1) + _REDACT.format("bearer")),
     # PEM private key blocks
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-     lambda m: _REDACT.format("private-key")),
+     lambda _m: _REDACT.format("private-key")),
 ]
 
 
@@ -72,23 +72,21 @@ def scrub(text):
 
 # --- JSONL loading ----------------------------------------------------------
 def newest_jsonl():
-    d = os.path.expanduser("~/.claude/projects/-workspace")
-    files = glob.glob(os.path.join(d, "*.jsonl"))
+    d = Path("~/.claude/projects/-workspace").expanduser()
+    files = list(d.glob("*.jsonl"))
     if not files:
         raise SystemExit(f"no session JSONL found under {d}; pass --jsonl")
-    return max(files, key=os.path.getmtime)
+    return max(files, key=lambda p: p.stat().st_mtime)
 
 
 def load(path):
     rows = []
-    with open(path, encoding="utf-8") as fh:
+    with Path(path).open(encoding="utf-8") as fh:
         for line in fh:
-            line = line.strip()
-            if line:
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
+            stripped = line.strip()
+            if stripped:
+                with contextlib.suppress(json.JSONDecodeError):
+                    rows.append(json.loads(stripped))
     return rows
 
 
@@ -145,7 +143,7 @@ def _ts(row):
     if not t:
         return None
     try:
-        return datetime.fromisoformat(t.replace("Z", "+00:00"))
+        return datetime.fromisoformat(t)
     except ValueError:
         return None
 
@@ -187,7 +185,7 @@ def collect_stats(rows):
     max_ctx = 0
     for model, u in req_usage.values():
         creation = u.get("cache_creation") or {}
-        acc = per_model.setdefault(model, dict(inp=0, out=0, read=0, w5=0, w1=0))
+        acc = per_model.setdefault(model, {"inp": 0, "out": 0, "read": 0, "w5": 0, "w1": 0})
         acc["inp"] += u.get("input_tokens", 0)
         acc["out"] += u.get("output_tokens", 0)
         acc["read"] += u.get("cache_read_input_tokens", 0)
@@ -198,66 +196,66 @@ def collect_stats(rows):
                   + u.get("cache_creation_input_tokens", 0))
         max_ctx = max(max_ctx, prompt)
 
-    return dict(per_model=per_model, tools=tools, turns=len(req_usage),
-                max_ctx=max_ctx, first=first, last=last)
+    return {"per_model": per_model, "tools": tools, "turns": len(req_usage),
+            "max_ctx": max_ctx, "first": first, "last": last}
 
 
 def render_stats(s, usage_text):
-    L = ["# Session statistics\n"]
+    lines = ["# Session statistics\n"]
 
     # Session metadata
-    L.append("## Session metadata\n")
+    lines.append("## Session metadata\n")
     if s["first"] and s["last"]:
         dur = s["last"] - s["first"]
         mins = int(dur.total_seconds() // 60)
-        L.append(f"- **Started:** {s['first'].isoformat()}")
-        L.append(f"- **Ended:** {s['last'].isoformat()}")
-        L.append(f"- **Duration:** {mins} min")
-    L.append(f"- **Model(s):** {', '.join(sorted(s['per_model'])) or 'unknown'}")
-    L.append(f"- **Assistant turns:** {s['turns']}")
+        lines.append(f"- **Started:** {s['first'].isoformat()}")
+        lines.append(f"- **Ended:** {s['last'].isoformat()}")
+        lines.append(f"- **Duration:** {mins} min")
+    lines.append(f"- **Model(s):** {', '.join(sorted(s['per_model'])) or 'unknown'}")
+    lines.append(f"- **Assistant turns:** {s['turns']}")
     if s["tools"]:
-        counts = ", ".join(f"{k} × {v}" for k, v in
+        counts = ", ".join(f"{k} × {v}" for k, v in  # noqa: RUF001 -- deliberate MULTIPLICATION SIGN glyph in the tool-count summary, not an ASCII x
                            sorted(s["tools"].items(), key=lambda kv: -kv[1]))
-        L.append(f"- **Tool calls:** {counts}")
-    L.append("")
+        lines.append(f"- **Tool calls:** {counts}")
+    lines.append("")
 
     # Token usage (from the JSONL)
-    L.append("## Token usage\n")
-    L.append("_Per-model totals from the session JSONL, deduped per request. "
+    lines.append("## Token usage\n")
+    lines.append("_Per-model totals from the session JSONL, deduped per request. "
              "**Approximate** — the JSONL is Claude Code's internal format; the "
              "embedded `/usage` below is authoritative for tokens and cost._\n")
-    L.append("| Model | Input | Output | Cache read | Cache write |")
-    L.append("|---|--:|--:|--:|--:|")
+    lines.append("| Model | Input | Output | Cache read | Cache write |")
+    lines.append("|---|--:|--:|--:|--:|")
     for model, a in sorted(s["per_model"].items()):
-        L.append(f"| {model} | {a['inp']:,} | {a['out']:,} | {a['read']:,} "
+        lines.append(f"| {model} | {a['inp']:,} | {a['out']:,} | {a['read']:,} "
                  f"| {a['w5'] + a['w1']:,} |")
-    L.append("")
+    lines.append("")
 
     # Cost — pasted verbatim from Claude Code's /usage (no local price table)
-    L.append("## Cost — Claude Code `/usage`\n")
+    lines.append("## Cost — Claude Code `/usage`\n")
     if usage_text and usage_text.strip():
-        L.append("_Captured from Claude Code's `/usage` at archive time; Claude Code "
+        lines.append("_Captured from Claude Code's `/usage` at archive time; Claude Code "
                  "estimates cost locally from token counts._\n")
-        L.append("```\n" + usage_text.rstrip() + "\n```\n")
+        lines.append("```\n" + usage_text.rstrip() + "\n```\n")
     else:
-        L.append("_Run `/usage` in-session for the estimated cost — not captured "
+        lines.append("_Run `/usage` in-session for the estimated cost — not captured "
                  "for this session._\n")
 
     # Context window (like /context) — approximation
-    L.append("## Context window (approximate)\n")
-    L.append(f"- **Largest prompt sent:** ~{s['max_ctx']:,} tokens "
+    lines.append("## Context window (approximate)\n")
+    lines.append(f"- **Largest prompt sent:** ~{s['max_ctx']:,} tokens "
              "(input + cache read + cache write on the biggest single turn)")
-    L.append("\n_Approximate: reconstructed from the JSONL after the fact. The "
+    lines.append("\n_Approximate: reconstructed from the JSONL after the fact. The "
              "exact live `/context` breakdown by component can't be reproduced "
              "post-hoc._\n")
 
-    return "\n".join(L) + "\n"
+    return "\n".join(lines) + "\n"
 
 
 # --- main -------------------------------------------------------------------
 def _read(path):
-    if path and os.path.exists(path):
-        with open(path, encoding="utf-8") as fh:
+    if path and Path(path).exists():
+        with Path(path).open(encoding="utf-8") as fh:
             return fh.read()
     return None
 
@@ -275,7 +273,8 @@ def main():
                     help="suffix for multi-session features, e.g. 01")
     args = ap.parse_args()
 
-    os.makedirs(args.dir, exist_ok=True)
+    out_dir = Path(args.dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     sfx = f"-{args.label}" if args.label else ""
 
     jsonl = args.jsonl or newest_jsonl()
@@ -284,18 +283,18 @@ def main():
     # Job A: transcript
     override = _read(args.transcript_input)
     raw = override if override is not None else render_transcript(rows)
-    raw_path = os.path.join(args.dir, f"transcript{sfx}.raw.md")
-    with open(raw_path, "w", encoding="utf-8") as fh:
+    raw_path = out_dir / f"transcript{sfx}.raw.md"
+    with raw_path.open("w", encoding="utf-8") as fh:
         fh.write(raw)
-    scrubbed_path = os.path.join(args.dir, f"transcript{sfx}.md")
-    with open(scrubbed_path, "w", encoding="utf-8") as fh:
+    scrubbed_path = out_dir / f"transcript{sfx}.md"
+    with scrubbed_path.open("w", encoding="utf-8") as fh:
         fh.write(scrub(raw))
 
     # Job B: statistics
     stats = collect_stats(rows)
     stats_md = render_stats(stats, _read(args.usage_capture))
-    stats_path = os.path.join(args.dir, f"statistics{sfx}.md")
-    with open(stats_path, "w", encoding="utf-8") as fh:
+    stats_path = out_dir / f"statistics{sfx}.md"
+    with stats_path.open("w", encoding="utf-8") as fh:
         fh.write(scrub(stats_md))
 
     print(f"source JSONL: {jsonl}")

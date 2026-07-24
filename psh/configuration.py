@@ -4,10 +4,10 @@ remnant re-imports these names so its call sites resolve unchanged (CAMPAIGN.md 
 import re
 import shlex
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
-import tomllib
 from rich.markup import escape
 from rich.pretty import pprint
 

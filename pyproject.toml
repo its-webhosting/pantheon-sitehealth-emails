@@ -42,7 +42,11 @@ test = [
     "httpx",
     "beautifulsoup4",
     # Campaign ratchet, type half (CAMPAIGN.md section 13): ./run-tests gates on pyright.
-    "pyright",
+    # PINNED (D2, mirroring the ruff@0.15.22 pin in run-tests/ruff-check.sh): the campaign's
+    # type bar is fixed at increment I0 and never shifts mid-campaign, so a pyright upgrade
+    # cannot silently change the gate's verdict for reasons outside the diff (PD#14).
+    # Upgrading is a deliberate post-campaign decision (README TODO), not a cache refresh.
+    "pyright==1.1.411",
 ]
 
 [build-system]
@@ -63,25 +67,63 @@ packages = []
 # the 10 invalid-syntax errors simply vanish -- so a future session reverting
 # requires-python to ">=3.11" would get SILENCE instead of a failure.  The instrument
 # must stay red-capable.  See prompts/directives.md PD#14.
+#
+# development/2* -- the dated archive folders (development/2026-*, ...) hold verbatim
+# measurement artifacts: .py files that are historical records, not maintained code
+# (e.g. charts-scratch-measured.py, I11).  Re-linting a record is meaningless and a
+# "fix" would falsify it, so the dated folders are excluded by design (I14b SPEC section
+# 2.3, D-i14b-2).  development/finalize-session.py -- the active session-archive tool, at
+# development/'s root, ABOVE the dated folders -- is NOT matched by this glob and stays
+# FULLY gated (a `*` does not cross a `/`, so `2*` matches only the dated subdirectories).
+extend-exclude = ["development/2*"]
 
 [tool.ruff.lint]
-# NARROW BY DESIGN.  Every rule here mechanizes a standard that already exists in prose;
-# nothing here is new policy.  This narrow set runs EVERYWHERE, including files the
-# campaign ratchet grandfathers.  The broad best-practice set lives in ruff-broad.toml
-# (campaign ratchet, CAMPAIGN.md section 13); both passes run in ./run-tests and the
-# edit-time hook.  The two files merge at campaign increment I14.
-select = [
-    "E722",    # bare except        <- prompts/directives.md PD#2 "every error has a name"
-    "BLE001",  # blind except       <- prompts/directives.md PD#2
-    "S105",    # hardcoded password <- prompts/directives.md PD#6 "security is not optional"
-    "S106",    # hardcoded password <- prompts/directives.md PD#6
+# The campaign ratchet's FINAL form (CAMPAIGN.md section 13, merged at I14b): ONE ruff pass,
+# select = ALL minus the justified ignores below.  This SUPERSEDES the old two-config design
+# -- the narrow PD-rule `select` that used to live here (E722/BLE001/S105/S106) and the broad
+# ruff-broad.toml (now deleted) fold into this one block.  Those four PD rules are members of
+# ALL and STILL run everywhere not excluded above, so the merge does NOT weaken the old narrow
+# gate (red-demonstrated, I14b SPEC section 4).  No --select anywhere: this config is the
+# single source of truth, read identically by ./run-tests and .claude/hooks/ruff-check.sh.
+select = ["ALL"]
+ignore = [
+    # -- Formatter territory (no autoformatter is adopted; these fight hand style):
+    "COM812",  # trailing-comma
+    "ISC001",  # implicit str concat (conflicts with COM812 tooling advice)
+    "E501",    # line length -- house style has long notice literals; revisit at I14
+    "Q000", "Q001", "Q002", "Q003",  # quote style
+    # -- Owned by pyright, not ruff:
+    "ANN",     # type annotations -- pyright gates typing (pyproject [tool.pyright])
+    # -- Deliberate house practice:
+    "TD002", "TD003", "FIX002",  # TODOs are tracked in README/ledger, not as issues
+    "EM101", "EM102",  # message-in-raise is accepted; PD#2 covers the real risk
+    "TRY003",  # long exception messages in-line -- same rationale as EM
+    "D",       # docstring convention undecided -- README TODO (see Task 4)
+    "CPY001",  # no per-file copyright headers in this repo
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Test fixtures deliberately carry fake credentials (e.g. "hunter2" in a config
-# substitution test).  All 5 current S105 hits are fixtures; none is a real secret.
-# Verified 2026-07-16.
-"tests/*" = ["S105", "S106"]
+"tests/**" = [
+    "S101",     # pytest asserts ARE the mechanism (1,715 sites)
+    "S105", "S106",  # fake fixture credentials (carried over from the narrow config's
+                     # existing "tests/*" entry -- verified 2026-07-16, re-verified I14b)
+    "INP001",   # pytest collects without __init__.py; adding them changes import
+                # semantics for zero gain (120 sites)
+    "PLR2004",  # expected literals in assertions are the point (74)
+    "ARG001", "ARG002", "ARG005",  # fixture params + seam-matching fake signatures
+                # (monkeypatch fakes must accept the real seam's arity) (211)
+    "FBT003",   # positional booleans at pinned call sites under test (68)
+    "PLC0415",  # in-test imports are the suite's documented loading pattern
+                # (checkload/SourceFileLoader style; I8 review adjudicated) (57)
+    "PT018",    # composite asserts: splitting 70 sites churns load-bearing tests for
+                # zero signal gain (user decision: no assertion churn)
+    "SLF001",   # tests reach private seams by design (7)
+    "S311",     # non-crypto RNG in test data (5)
+    "S603",     # subprocess in sanctioned test harnesses: run_program, the shim
+                # probe, and the real-php inliner call in test_css_inliner_encoding (3)
+    "DTZ002",   # naive datetimes mirror the program's own date semantics (6)
+]
+"development/finalize-session.py" = ["T201"]  # a CLI tool: print IS its output
 
 [tool.pyright]
 # Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode; the whole psh/
