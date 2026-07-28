@@ -32,9 +32,23 @@ spec wins; stop and report the discrepancy.
 - **No `rich`.** All operator output is `print(…, file=sys.stderr)` (SPEC §8).
 - **stdout is CSV only.** Never print anything else there (SPEC §5).
 - **`csv.writer(…, lineterminator="\n")`** — the default is `\r\n`.
-- **Every failure has a name** (PD#2): `PantheonApiError`, `MachineTokenError`,
-  `MalformedNameError`, `SiteListingError`. No bare `except`, no `except Exception`
-  (ruff `E722`/`BLE001` enforce this and the gate is `select = ALL`).
+- **Every failure has a name** (PD#2): `PantheonApiError`, `PantheonApiShapeError`,
+  `SessionExpiredError`, `MachineTokenError`, `MalformedNameError`, `SiteListingError`,
+  `StartupError` — seven. No bare
+  `except`, no `except Exception` (ruff `E722`/`BLE001` enforce this and the gate is
+  `select = ALL`). The single deliberate exception is `main()`'s last-line-of-defence handler,
+  which carries an inline `noqa: BLE001` **with its reason** — see Task 5.
+- **Exit 1 is reserved.** The only `return 1` in the program is "completed with ≥1
+  indeterminate" (SPEC §7). Python exits 1 on any uncaught traceback, so every other outcome
+  must be routed to 0, 2, or 130.
+- **The ruff findings this code really produces**, all confirmed by materializing the plan and
+  running `uvx ruff@0.15.22`: `PLR0911` on `walk` (7 returns), `PLR2004` on each of the four
+  HTTP-status literals, `C901`/`PLR0911` if `get()` or `main()` grows (which is why `_renew`
+  and `prepare_sweep` are split out), and `SIM105` on a `try/except/pass`; in the test file,
+  `E402` if any task appends an import mid-file, `FBT002` on a boolean positional default,
+  `RUF059` on an unused unpacked variable, and `F841` on an unused local. Each is handled where
+  it arises below. The `tests/**` per-file-ignores block **does** cover `PLR2004` but does
+  **not** cover `E402`, `FBT002`, `RUF059` or `F841` — read the block rather than assuming.
 - **Exit codes:** `0` clean sweep, `1` completed with ≥1 indeterminate, `2` could not complete.
 - **Never name a variable `*token*` and assign it a string literal** — ruff `S105` flags it.
   Inline `os.environ.get("PANTHEON_MACHINE_TOKEN")` rather than hoisting the name to a constant.
@@ -51,7 +65,7 @@ spec wins; stop and report the discrepancy.
 
 | Path | Responsibility |
 |---|---|
-| `find-platform-domains-dns` | The entire program: DNS walk, API session, enumeration, sweep, CLI. ~350 lines. Created in Task 1, grown by Tasks 2–5. |
+| `find-platform-domains-dns` | The entire program: DNS walk, API session, enumeration, sweep, CLI. **~700 lines** — measured by materializing this plan's own code blocks, not estimated. Created in Task 1, grown by Tasks 2–5. |
 | `find-platform-domains-dns.py` | Committed symlink → the above. Exists solely so ruff, pyright, and CodeGraph see the file (they key off the extension). Created in Task 1. |
 | `tests/unit/test_find_platform_domains_dns.py` | The one test file, `pytest.mark.unit`, fully offline. Created in Task 1, grown by Tasks 2–5. |
 | `pyproject.toml` | Two additions in Task 1: a `[tool.ruff.lint.per-file-ignores]` entry for `T201`, and the script in `[tool.pyright].include`. |
@@ -108,6 +122,7 @@ machine token, from $PANTHEON_MACHINE_TOKEN or ~/.terminus/cache/tokens/.
 """
 import struct
 import sys
+import time
 from typing import NamedTuple
 
 import dns.exception
@@ -116,6 +131,7 @@ import dns.resolver
 
 PLATFORM_SUFFIX = ".pantheonsite.io"
 MAX_CNAME_DEPTH = 8
+DNS_RETRY_SLEEP = 1.0     # before retrying a NoNameservers only -- see resolve_cname_retrying
 
 
 class MalformedNameError(Exception):
@@ -152,9 +168,20 @@ def resolve(hostname, rrtype):
         raise dns.resolver.NoNameservers from e
 
 
-def attention(message):
-    """Every operator-visible finding goes through here: stderr, unbuffered, never stdout."""
-    print(f"ATTENTION: {message}", file=sys.stderr, flush=True)
+def skipped(message):
+    """A finding that produced NO row and was counted as indeterminate (SPEC section 8)."""
+    print(f"SKIPPED: {message}", file=sys.stderr, flush=True)
+
+
+def warning(message):
+    """A finding that still produced its row -- G12, G13, G13a (SPEC section 8).
+
+    Two prefixes rather than one: with a single ATTENTION: prefix an operator reading
+    `indeterminate=17` at the end of a sweep cannot grep out those 17, because the
+    row-producing warnings are interleaved and look identical.  The count and the log have to
+    be reconcilable (PD#5).
+    """
+    print(f"WARNING: {message}", file=sys.stderr, flush=True)
 
 
 def normalize(name):
@@ -174,18 +201,25 @@ class WalkResult(NamedTuple):
 
 
 def resolve_cname_retrying(name):
-    """resolve(name, "CNAME") with ONE immediate retry on a transient resolver failure.
+    """resolve(name, "CNAME") with ONE retry on a transient resolver failure.
 
-    No sleep between attempts: dnspython has already spent its own ~5s lifetime on the query,
-    so an added delay buys nothing.
+    The delay depends on which failure it was, and the difference is measured, not assumed
+    (SPEC section 6.2): a Timeout has already consumed dnspython's own ~5s lifetime, so
+    retrying immediately is right; NoNameservers (SERVFAIL/REFUSED) comes back in ~0.3s, and
+    the likeliest cause of a burst of those during a ~1,600-lookup sweep is the recursive
+    resolver rate-limiting us -- so an immediate retry just re-fires into the same condition
+    and turns every affected domain into an indeterminate for nothing.
     """
     try:
         return resolve(name, "CNAME")
-    except (dns.resolver.NoNameservers, dns.resolver.Timeout):
+    except dns.resolver.Timeout:
+        return resolve(name, "CNAME")
+    except dns.resolver.NoNameservers:
+        time.sleep(DNS_RETRY_SLEEP)
         return resolve(name, "CNAME")
 
 
-def walk(custom_domain):
+def walk(custom_domain):  # noqa: PLR0911 -- 7 returns, one per documented outcome in the diagram below; collapsing them into a result variable would hide which branch produced which outcome
     """Follow the CNAME chain from `custom_domain`, looking for a platform domain.
 
     Adapted from check/pantheon_cdn_change/chain.py.  THE ADAPTATION MATTERS: chain.py tests the
@@ -298,15 +332,23 @@ loaded FRESH PER TEST so no module-level state leaks between tests.
 Seams (SPEC section 9): `resolve` is monkeypatched on the loaded module; the API getter is
 INJECTED as a parameter, never patched; httpx.MockTransport backs the ApiSession tests.
 """
+import csv
 import importlib.util
+import io
+import struct
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import dns.resolver
+import httpx
 import pytest
 from helpers.dnsfake import make_resolver
 
 pytestmark = pytest.mark.unit
+
+# EVERY import for EVERY task in this file belongs in this block.  Later tasks append tests, not
+# imports: ruff's E402 (module-level import not at top of file) is not in the tests/** ignore
+# list, so an `import httpx` half way down the file fails the gate.
 
 SCRIPT = Path(__file__).resolve().parent.parent.parent / "find-platform-domains-dns"
 
@@ -330,8 +372,12 @@ def patch_dns(monkeypatch, fpd, zone, calls=None):
 def test_normalize_and_is_platform_domain(fpd):
     assert fpd.normalize("  LIVE-X.PantheonSite.io. ") == "live-x.pantheonsite.io"
     assert fpd.is_platform_domain("LIVE-X.PantheonSite.io.") is True
-    # A name that merely CONTAINS the suffix text is not a platform domain.
+    # A name that merely CONTAINS the suffix is not a platform domain.  BOTH forms matter:
+    # the first has no leading dot, so it defeats only a naive endswith("pantheonsite.io");
+    # the second embeds ".pantheonsite.io" exactly, so it is the one that catches a suffix
+    # check wrongly written as a substring check.  This pair is the Task 1 red-proof target.
     assert fpd.is_platform_domain("pantheonsite.io.evil.example") is False
+    assert fpd.is_platform_domain("x.pantheonsite.io.evil.example") is False
     assert fpd.is_platform_domain("fe.cfp2c.edge.pantheon.io") is False
 
 
@@ -394,7 +440,10 @@ def test_cname_loop_is_indeterminate(fpd, monkeypatch):
 
 
 def test_chain_longer_than_the_hop_limit_is_indeterminate(fpd, monkeypatch):
+    # patch_dns is NOT optional here: without it this test queries real DNS for h0.umich.edu,
+    # returns a clean no-hit, and fails for a reason that has nothing to do with the hop limit.
     zone = {(f"h{i}.umich.edu", "CNAME"): [f"h{i + 1}.umich.edu."] for i in range(20)}
+    patch_dns(monkeypatch, fpd, zone)
     assert "exceeds 8 hops" in fpd.walk("h0.umich.edu").problem
 
 
@@ -404,6 +453,31 @@ def test_custom_domain_that_is_itself_a_platform_domain_is_indeterminate(fpd, mo
     result = fpd.walk("live-x.pantheonsite.io")
     assert "itself a platform domain" in result.problem
     assert calls == []          # decided without a single DNS query
+
+
+# -- The copied resolve() itself (SPEC section 10 item 9).  Every test above monkeypatches the
+# -- seam, so without these two the copied code is never executed -- and copied code with its
+# -- safety net removed is exactly where a transcription slip ships green (PD#14).  Ported from
+# -- tests/unit/test_dns_classify.py, which covers the original.
+
+def test_resolve_converts_a_malformed_name_into_the_named_exception(fpd):
+    # An out-of-range byte escape: dns.name.from_text raises the stdlib struct.error, which is
+    # not a DNSException at all, so nothing downstream would catch it.
+    with pytest.raises(fpd.MalformedNameError):
+        fpd.resolve("\\300.com", "CNAME")
+
+
+def test_wire_level_struct_error_is_transient_not_a_malformed_name(fpd, monkeypatch):
+    # THE distinction SPEC section 6.3 calls load-bearing: dnspython also raises struct.error
+    # from its TCP length-prefix unpack -- i.e. from garbled wire data on a perfectly valid
+    # name.  Reporting that as "not a valid DNS name" would make the walk call it a definitive
+    # answer, when it is a transient one.
+    def boom(*_args, **_kwargs):
+        raise struct.error("unpack requires a buffer of 2 bytes")
+
+    monkeypatch.setattr(fpd.dns.resolver, "resolve", boom)
+    with pytest.raises(dns.resolver.NoNameservers):
+        fpd.resolve("valid.umich.edu", "CNAME")
 ```
 
 - [ ] **Step 4: Run the tests and watch them fail for the right reason**
@@ -413,9 +487,20 @@ def test_custom_domain_that_is_itself_a_platform_domain_is_indeterminate(fpd, mo
 ```
 
 Expected before Step 1's code exists: collection errors / `AttributeError`. After Step 1 they
-should pass. **Verify at least one test can go red for its own reason** (PD#14): temporarily
-change `MAX_CNAME_DEPTH` to 20 and confirm
-`test_chain_longer_than_the_hop_limit_is_indeterminate` fails, then restore it.
+should pass.
+
+**Verify a test can go red for its own reason** (PD#14): temporarily change
+`is_platform_domain`'s body to `return PLATFORM_SUFFIX in normalize(name)` and confirm
+`test_normalize_and_is_platform_domain` fails on the **`x.pantheonsite.io.evil.example`**
+assertion, then restore it. That name is the one that discriminates: it embeds
+`.pantheonsite.io` exactly, so a substring check wrongly accepts it, while
+`pantheonsite.io.evil.example` (no leading dot) does **not** discriminate — verified, the
+mutation leaves that assertion green. Proving the wrong assertion is how a red-proof becomes
+theatre.
+
+Do **not** use the hop-limit test for this proof. An earlier draft of this plan did, and that
+test was itself broken (it never installed its DNS fake), so the "proof" would have observed a
+red test that was red for an unrelated reason — a lying instrument proving another instrument.
 
 - [ ] **Step 5: Run the whole fast suite**
 
@@ -453,8 +538,9 @@ git commit -m "feat(find-platform-domains-dns): the CNAME chain walk + tooling s
 
 **Interfaces:**
 - Consumes: `attention` from Task 1.
-- Produces: `PantheonApiError`; `MachineTokenError`; `machine_token() -> str`;
-  `ApiSession(client, machine_token)` with `.get(path) -> Any` and `.token`;
+- Produces: `PantheonApiError`; `PantheonApiShapeError`; `SessionExpiredError`;
+  `MachineTokenError`; `machine_token() -> str`;
+  `ApiSession(client, machine_token, notify=None)` with `.get(path) -> Any` and `.token`;
   constants `API_BASE = "https://api.pantheon.io/v0"`, `RETRY_SLEEP = 2.0`,
   `HTTP_TIMEOUT = 30.0`, `USER_AGENT = "find-platform-domains-dns"`.
 
@@ -463,13 +549,13 @@ git commit -m "feat(find-platform-domains-dns): the CNAME chain walk + tooling s
 Append to the test file:
 
 ```python
-import httpx
+def make_session(fpd, handler, notify=None):
+    """An ApiSession whose transport is a MockTransport running `handler`.
 
-
-def make_session(fpd, handler):
-    """An ApiSession whose transport is a MockTransport running `handler`."""
+    No `import httpx` here -- it is in the import block at the top of the file (Task 1).
+    """
     client = httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0)
-    return fpd.ApiSession(client, "fake-machine-token")
+    return fpd.ApiSession(client, "fake-machine-token", notify=notify)
 
 
 def test_session_authenticates_once_at_construction(fpd):
@@ -511,14 +597,49 @@ def test_401_reauthenticates_once_then_succeeds(fpd):
     assert session.token == "sess-2"
 
 
-def test_401_twice_raises_named_error(fpd):
+def test_401_twice_raises_session_expired_not_a_plain_api_error(fpd):
+    # SPEC G7a.  It must NOT be a PantheonApiError: the sweep catches those per site, so a
+    # revoked token would otherwise turn into ~400 indeterminates instead of an abort.
     def handler(request):
         if request.url.path.endswith("/authorize/machine-token"):
             return httpx.Response(200, json={"session": "sess"})
         return httpx.Response(401, json={"error": "nope"})
 
-    with pytest.raises(fpd.PantheonApiError, match="401"):
+    with pytest.raises(fpd.SessionExpiredError, match="expired or revoked"):
         make_session(fpd, handler).get("/sites/abc")
+    assert not issubclass(fpd.SessionExpiredError, fpd.PantheonApiError)
+
+
+def test_failure_to_reauthenticate_is_also_session_expired(fpd):
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            calls.append(1)
+            # The first (constructor) authentication succeeds; the mid-sweep one fails.
+            return httpx.Response(200, json={"session": "sess"}) if len(calls) == 1 \
+                else httpx.Response(403, text="revoked")
+        return httpx.Response(401, json={"error": "expired"})
+
+    with pytest.raises(fpd.SessionExpiredError, match="could not re-authenticate"):
+        make_session(fpd, handler).get("/sites/abc")
+
+
+def test_reauthentication_notifies_the_caller(fpd):
+    # SPEC section 8: the G7 note is the operator's only sign that the session expired.
+    notes = []
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": f"sess-{calls.count('/v0/authorize/machine-token')}"})
+        if calls.count("/v0/sites/abc") == 1:
+            return httpx.Response(401, json={"error": "expired"})
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler, notify=notes.append).get("/sites/abc") == {"ok": True}
+    assert notes == ["session expired; re-authenticated"]
 
 
 def test_500_is_retried_once_then_succeeds(fpd, monkeypatch):
@@ -618,6 +739,26 @@ def test_machine_token_missing_cache_directory_is_named(fpd, monkeypatch, tmp_pa
     monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
     with pytest.raises(fpd.MachineTokenError):
         fpd.machine_token()
+
+
+def test_machine_token_undecodable_cache_file_is_named(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "someone@umich.edu").write_text("this is not json")
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match="could not read"):
+        fpd.machine_token()
+
+
+def test_machine_token_cache_file_without_a_token_key_is_named(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "someone@umich.edu").write_text('{"email": "someone@umich.edu"}')
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match="no 'token' key"):
+        fpd.machine_token()
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
@@ -643,6 +784,27 @@ USER_AGENT = "find-platform-domains-dns"
 
 class PantheonApiError(Exception):
     """A Pantheon API call failed after its one retry, or returned an undecodable body."""
+
+
+class PantheonApiShapeError(PantheonApiError):
+    """A Pantheon API response decoded as JSON but did not have the documented shape.
+
+    A subclass of PantheonApiError on purpose: the sweep already treats an API failure for one
+    site or environment as G5/G6 (report, count one indeterminate, carry on), and an
+    unexpected shape deserves exactly that treatment rather than a traceback at exit 1
+    (SPEC G17).
+    """
+
+
+class SessionExpiredError(Exception):
+    """Re-authentication failed, or the retried request 401'd again (SPEC G7a).
+
+    Deliberately NOT a subclass of PantheonApiError: the sweep catches PantheonApiError per
+    site and per environment, so if this were one, a revoked machine token 5 minutes into a
+    38-minute sweep would degrade into one indeterminate per remaining site -- ~400 ATTENTION
+    lines, exit 1, and 33 more minutes of pointless work -- instead of stopping. It must
+    propagate to main() and abort with exit 2.
+    """
 
 
 class MachineTokenError(Exception):
@@ -686,9 +848,13 @@ class ApiSession:
     session that expires 15 minutes into a 20-minute sweep must not also spend the retry budget.
     """
 
-    def __init__(self, client, token_value):
+    def __init__(self, client, token_value, notify=None):
         self._client = client
         self._machine_token = token_value
+        # notify(message) is called when the session is re-authenticated mid-sweep (G7).  main()
+        # passes a function that prints under -v; without it a session expiry is invisible at
+        # every verbosity, which SPEC section 8 explicitly promises it is not.
+        self._notify = notify or (lambda _message: None)
         self.token = self._authenticate()
 
     def _authenticate(self):
@@ -698,13 +864,32 @@ class ApiSession:
                 json={"machine_token": self._machine_token, "client": USER_AGENT})
         except httpx.HTTPError as e:
             raise PantheonApiError(f"could not authenticate to Pantheon: {e}") from e
-        if response.status_code != 200:
+        if response.status_code != 200:  # noqa: PLR2004 -- HTTP status literal
             raise PantheonApiError(
                 f"could not authenticate to Pantheon: HTTP {response.status_code}")
         try:
             return response.json()["session"]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise PantheonApiError(f"authentication response had no session token: {e}") from e
+
+    def _renew(self, path, *, reauthed):
+        """Re-authenticate after a 401, or raise SessionExpiredError (SPEC G7a).
+
+        Split out of get() to keep that method under ruff's C901 complexity limit -- and it
+        reads better anyway: get() dispatches on status, this owns the session lifecycle.
+        """
+        if reauthed:
+            # A second 401 on a session we just minted means the machine token itself is
+            # revoked or expired.  Retrying forever, or counting it as one site's
+            # indeterminate, both waste the rest of a 38-minute sweep.
+            raise SessionExpiredError(
+                f"{path}: HTTP 401 again after re-authenticating -- the machine token is "
+                "expired or revoked")
+        try:
+            self.token = self._authenticate()
+        except PantheonApiError as e:
+            raise SessionExpiredError(f"could not re-authenticate mid-sweep: {e}") from e
+        self._notify("session expired; re-authenticated")
 
     def get(self, path):
         """GET {API_BASE}{path} and return the decoded JSON, or raise PantheonApiError."""
@@ -722,9 +907,9 @@ class ApiSession:
                     raise PantheonApiError(f"{path}: {e}") from e
                 time.sleep(RETRY_SLEEP)
                 continue
-            if response.status_code == 401 and not reauthed:
+            if response.status_code == 401:  # noqa: PLR2004 -- HTTP status literal
+                self._renew(path, reauthed=reauthed)
                 reauthed = True
-                self.token = self._authenticate()
                 continue
             if response.status_code == 429 or response.status_code >= 500:  # noqa: PLR2004 -- HTTP status literals
                 transport_attempts += 1
@@ -765,8 +950,9 @@ git commit -m "feat(find-platform-domains-dns): Pantheon API session with retry 
 
 **Interfaces:**
 - Consumes: `PantheonApiError`, `RETRY_SLEEP`, `attention` from Tasks 1–2.
-- Produces: `SiteListingError`; `org_sites(get, org_id) -> list[dict]` (each `{"id", "name"}`);
-  `named_sites(get, names) -> list[dict]`; `site_environments(get, site_id) -> dict`;
+- Produces: `SiteListingError`; `_require(payload, key, where)`;
+  `org_sites(get, org_id) -> list[dict]` (each `{"id", "name"}`);
+  `named_sites(get, names) -> list[dict]` (name from the API response, path percent-encoded); `site_environments(get, site_id) -> dict`;
   `partition_domains(entries) -> tuple[list[str], set[str]]` (custom domains, platform domains);
   constants `PAGE_LIMIT = 100`, `MAX_PAGES = 100`, `CURSOR_ATTEMPTS = 3`.
 
@@ -776,7 +962,11 @@ Append to the test file:
 
 ```python
 def fake_site(n):
-    return {"id": f"id-{n:04d}", "site": {"id": f"id-{n:04d}", "name": f"site-{n:04d}"}}
+    # The membership id deliberately DIFFERS from the site id.  In production they are equal for
+    # all 408 sites, but SPEC section 4.1 says that equality "is an observation, not a contract"
+    # and requires the cursor to be site.id -- so the fixture must be able to tell them apart,
+    # or the one decision that section argues for has no red-capable test (PD#14).
+    return {"id": f"mem-{n:04d}", "site": {"id": f"id-{n:04d}", "name": f"site-{n:04d}"}}
 
 
 def paged_get(pages):
@@ -786,6 +976,7 @@ def paged_get(pages):
     def get(path):
         cursor = path.split("start=")[1] if "start=" in path else None
         seen_cursors.append(cursor)
+        assert pages, "the code requested more pages than this test provided"
         return pages.pop(0)
 
     get.cursors = seen_cursors
@@ -801,7 +992,8 @@ def test_org_sites_walks_every_page(fpd):
     assert len(sites) == 208
     assert sites[0] == {"id": "id-0000", "name": "site-0000"}
     assert sites[-1]["name"] == "site-0207"
-    # The cursor is the LAST id of the previous FULL page (SPEC section 4.1).
+    # The cursor is the LAST *site* id of the previous FULL page -- "id-0099", never the
+    # membership id "mem-0099" (SPEC section 4.1).
     assert get.cursors == [None, "id-0099", "id-0199"]
 
 
@@ -830,7 +1022,7 @@ def test_org_sites_handles_a_site_count_that_is_an_exact_multiple_of_the_page_si
     assert get.cursors == [None, "id-0099", "id-0199"]
 
 
-def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch):
+def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch, capsys):
     # SPEC section 4.1: the API sometimes ignores `start` and returns page 1 again.  The loop must
     # notice (zero new ids) and retry the SAME cursor -- not spin, not truncate.
     monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
@@ -840,12 +1032,21 @@ def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch):
     sites = fpd.org_sites(get, "org-1")
     assert len(sites) == 105
     assert get.cursors == [None, "id-0099", "id-0099"]     # same cursor, retried
+    # The ATTENTION line is the ONLY thing that distinguishes a detector-driven retry from a
+    # loop that blunders into repeating the same cursor by accident -- both produce the cursor
+    # sequence above, so without this assertion the test passes with the detector deleted.
+    assert "cursor id-0099 was ignored" in capsys.readouterr().err
 
 
 def test_org_sites_gives_up_loudly_when_the_cursor_stays_ignored(fpd, monkeypatch):
     monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
     page1 = [fake_site(n) for n in range(100)]
-    get = paged_get([page1, list(page1), list(page1), list(page1)])
+    # A fifth, short page is provided deliberately.  With the detector the loop never reaches
+    # it (it raises after the third ignored page).  WITHOUT the detector the loop consumes it
+    # and returns normally -- so the failure is a clean "DID NOT RAISE" rather than an
+    # IndexError from a test fixture running out of canned pages.
+    get = paged_get([page1, list(page1), list(page1), list(page1),
+                     [fake_site(n) for n in range(100, 105)]])
     with pytest.raises(fpd.SiteListingError, match="cursor"):
         fpd.org_sites(get, "org-1")
     assert len(get.cursors) == 4      # first page + CURSOR_ATTEMPTS retries, then it stops
@@ -864,15 +1065,53 @@ def test_org_sites_caps_the_page_loop(fpd, monkeypatch):
         fpd.org_sites(get, "org-1")
 
 
-def test_named_sites_resolves_each_name(fpd):
+def test_named_sites_resolves_each_name_and_prefers_the_canonical_name(fpd):
     def get(path):
         assert path.startswith("/site-names/")
-        return {"id": "uuid-" + path.rsplit("/", 1)[1]}
+        slug = path.rsplit("/", 1)[1]
+        # The real endpoint returns the canonical name alongside the id (verified live).
+        return {"id": "uuid-" + slug, "name": slug.lower()}
 
-    assert fpd.named_sites(get, ["alpha", "beta"]) == [
-        {"id": "uuid-alpha", "name": "alpha"},
+    assert fpd.named_sites(get, ["Alpha", "beta"]) == [
+        {"id": "uuid-Alpha", "name": "alpha"},   # canonical name wins over the argv casing
         {"id": "uuid-beta", "name": "beta"},
     ]
+
+
+def test_named_sites_percent_encodes_the_site_name(fpd):
+    seen = []
+
+    def get(path):
+        seen.append(path)
+        return {"id": "uuid", "name": "x"}
+
+    fpd.named_sites(get, ["we#ird/name?x"])
+    # Unencoded, '#' would truncate the path and '?' would start a query string, silently
+    # requesting a different resource instead of failing.
+    assert seen == ["/site-names/we%23ird%2Fname%3Fx"]
+
+
+def test_unexpected_response_shapes_raise_the_named_error(fpd):
+    # SPEC G17: a bare KeyError here would be an uncaught traceback exiting 1, which section 7
+    # reserves for "completed with indeterminates".
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: {"not": "a list"}, "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: [{"no_site_key": 1}], "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.site_environments(lambda _path: ["dev", "live"], "abc")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.partition_domains({"not": "a list"})
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.named_sites(lambda _path: {"no": "id"}, ["alpha"])
+    # The keys the SWEEP reads later, not just the ones the listing reads: a bare KeyError on
+    # site["name"] escapes main() entirely and exits 1 (SPEC section 10 item 16).
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: [{"site": {"id": "u1"}}], "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.named_sites(lambda _path: {"id": "uuid"}, ["alpha"])
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.partition_domains(["a-string-not-an-object"])
 
 
 def test_partition_domains_splits_custom_from_platform(fpd):
@@ -881,15 +1120,28 @@ def test_partition_domains_splits_custom_from_platform(fpd):
         {"id": "WWS-test1.cdn-dev.it.umich.edu", "type": "custom", "primary": True},
         {"id": "www.wws-test1.cdn-dev.it.umich.edu", "type": "custom", "primary": False},
     ]
-    custom, platform = fpd.partition_domains(entries)
+    custom, platform, unknown = fpd.partition_domains(entries)
     # Primary domains ARE included, and everything is normalized.
     assert custom == ["wws-test1.cdn-dev.it.umich.edu", "www.wws-test1.cdn-dev.it.umich.edu"]
     assert platform == {"live-its-wws-test1.pantheonsite.io"}
+    assert unknown == []
 
 
 def test_partition_domains_of_an_uninitialized_environment(fpd):
     entries = [{"id": "live-vpao-accopp.pantheonsite.io", "type": "platform"}]
-    assert fpd.partition_domains(entries) == ([], {"live-vpao-accopp.pantheonsite.io"})
+    assert fpd.partition_domains(entries) == ([], {"live-vpao-accopp.pantheonsite.io"}, [])
+
+
+def test_partition_domains_reports_an_unknown_type_instead_of_dropping_it(fpd):
+    # SPEC G6a.  `custom`/`platform` is an observation, not a documented enumeration, and a
+    # silently dropped domain is the one failure the CSV cannot reveal (SPEC section 1).
+    entries = [
+        {"id": "live-s.pantheonsite.io", "type": "platform"},
+        {"id": "something.umich.edu", "type": "brand-new-type"},
+    ]
+    custom, _platform, unknown = fpd.partition_domains(entries)
+    assert custom == []
+    assert unknown == [("something.umich.edu", "brand-new-type")]
 
 
 def test_site_environments_returns_every_environment(fpd):
@@ -910,6 +1162,8 @@ def test_site_environments_returns_every_environment(fpd):
 Expected: `AttributeError: module has no attribute 'org_sites'` (and friends).
 
 - [ ] **Step 3: Implement the enumeration layer**
+
+Add `from urllib.parse import quote` to the imports at the top of the script, then append:
 
 ```python
 PAGE_LIMIT = 100          # the API's documented maximum
@@ -947,6 +1201,13 @@ def org_sites(get, org_id):
         if cursor is not None:
             path += f"&start={cursor}"
         page = get(path)
+        if not isinstance(page, list):
+            raise PantheonApiShapeError(f"{path}: expected a JSON array of memberships")
+        for entry in page:
+            site = _require(entry, "site", path)
+            _require(site, "id", path)
+            _require(site, "name", path)      # read later by the sweep; a bare KeyError there
+                                              # escapes main() entirely and exits 1
         fresh = [entry for entry in page if entry["site"]["id"] not in collected]
         if page and not fresh:
             ignored += 1
@@ -954,8 +1215,10 @@ def org_sites(get, org_id):
                 raise SiteListingError(
                     f"the site-list cursor {cursor} was ignored {ignored} times "
                     f"(the API kept returning the first page); only {len(collected)} sites "
-                    "were listed, so the sweep would be silently incomplete")
-            attention(
+                    "were listed, so the sweep would be silently incomplete. "
+                    "Run 'terminus org:site:list --format=json | jq length' to check whether "
+                    f"{len(collected)} is the true site count (SPEC section 4.1)")
+            skipped(
                 f"site listing cursor {cursor} was ignored (page repeated); retrying "
                 f"({ignored}/{CURSOR_ATTEMPTS - 1})")
             time.sleep(RETRY_SLEEP)
@@ -972,13 +1235,45 @@ def org_sites(get, org_id):
 
 
 def named_sites(get, names):
-    """Resolve explicit SITE arguments to [{"id", "name"}] without paging the organization."""
-    return [{"id": get(f"/site-names/{name}")["id"], "name": name} for name in names]
+    """Resolve explicit SITE arguments to [{"id", "name"}] without paging the organization.
+
+    quote(..., safe="") is not decoration: an argument containing '#' truncates the path and an
+    argument containing '?' starts a query string, so an unencoded name would silently request a
+    DIFFERENT resource instead of failing.  The name in the returned dict comes from the API
+    response, not from argv, so a differently-cased argument cannot produce CSV rows whose
+    site_name the downstream script fails to match (SPEC section 3).
+    """
+    resolved = []
+    for name in names:
+        where = f"/site-names/{name}"
+        answer = get(f"/site-names/{quote(name, safe='')}")
+        # BOTH keys go through _require.  An `answer.get("name", name)` fallback would silently
+        # reinstate the argv spelling -- the exact mismatch SPEC section 3 requires be avoided.
+        resolved.append({"id": _require(answer, "id", where),
+                         "name": _require(answer, "name", where)})
+    return resolved
+
+
+def _require(payload, key, where):
+    """payload[key], or a named PantheonApiShapeError naming what was missing (SPEC G17).
+
+    Without this, an unexpected response shape is a bare KeyError -- an uncaught traceback whose
+    exit code is 1, which SPEC section 7 reserves for "completed with indeterminates".
+    """
+    if not isinstance(payload, dict) or key not in payload:
+        raise PantheonApiShapeError(f"{where}: response has no '{key}'")
+    return payload[key]
 
 
 def site_environments(get, site_id):
     """Every environment of a site, keyed by environment id -- multidevs included."""
-    return get(f"/sites/{site_id}/environments")
+    path = f"/sites/{site_id}/environments"
+    environments = get(path)
+    if not isinstance(environments, dict):
+        # sorted() over a list would silently iterate strings, and the domains calls built from
+        # them would 404 one by one -- a whole site quietly mis-swept (SPEC G17).
+        raise PantheonApiShapeError(f"{path}: expected a JSON object keyed by environment id")
+    return environments
 
 
 def partition_domains(entries):
@@ -987,9 +1282,27 @@ def partition_domains(entries):
     Primary domains are custom domains and are IN scope.  The platform set is returned because
     the cross-site check (SPEC G13) compares each hit against it -- at zero extra API cost.
     """
-    custom = [normalize(e["id"]) for e in entries if e.get("type") == "custom"]
-    platform = {normalize(e["id"]) for e in entries if e.get("type") == "platform"}
-    return custom, platform
+    if not isinstance(entries, list):
+        raise PantheonApiShapeError("domains: expected a JSON array")
+    custom, platform, unknown = [], set(), []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            # A JSON array of strings would otherwise reach entry.get() and raise a bare
+            # AttributeError, which escapes as an exit-1 traceback.
+            raise PantheonApiShapeError(f"domains: expected objects, got {type(entry).__name__}")
+        name = normalize(_require(entry, "id", "domains"))
+        kind = entry.get("type")
+        if kind == "custom":
+            custom.append(name)
+        elif kind == "platform":
+            platform.add(name)
+        else:
+            # G6a.  `type` is custom|platform in every entry observed, but that is an
+            # observation and not a documented enumeration -- so an unrecognized value is
+            # reported and counted, never silently dropped (SPEC section 1: the expensive
+            # failure is a missing row that the CSV cannot reveal).
+            unknown.append((name, kind))
+    return custom, platform, unknown
 ```
 
 - [ ] **Step 4: Prove the pagination tests can go red (PD#14)**
@@ -1036,23 +1349,25 @@ git commit -m "feat(find-platform-domains-dns): site/env/domain enumeration with
 **Interfaces:**
 - Consumes: everything from Tasks 1–3.
 - Produces: `Counters` (dataclass: `sites`, `envs`, `custom_domains`, `rows`, `indeterminate`);
-  `platform_domain_is_dead(name) -> bool`; `Sweeper(get, writer, *, verbose=False)` with
-  `.counters`, `.sweep(sites)`, `.sweep_site(site)`, `.sweep_env(site, env_id)`,
-  `.check_domain(site, env_id, custom_domain, platform_domains)`.
+  `platform_domain_is_dead(name) -> bool`; `Sweeper(get, writer, stream, *, verbose=False)`
+  with `.counters`, `.last_site`, `.remaining`, `.sweep(sites)`, `.sweep_site(site)`,
+  `.sweep_env(site, env_id)`, `.check_domain(site, env_id, custom_domain, platform_domains)`.
 
 - [ ] **Step 1: Write the failing tests**
 
 Append to the test file:
 
 ```python
-import csv
-import io
+def make_sweeper(fpd, get=None, *, verbose=False):
+    """A Sweeper writing into an in-memory stream.
 
-
-def make_sweeper(fpd, get=None, verbose=False):
+    `verbose` is keyword-only: ruff's FBT002 rejects a boolean positional default, and the
+    tests/** per-file-ignores block covers FBT003 (positional bools at call sites), not FBT002.
+    No `import csv`/`import io` here -- they are in the top-of-file import block (Task 1).
+    """
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
-    sweeper = fpd.Sweeper(get or (lambda path: {}), writer, verbose=verbose)
+    sweeper = fpd.Sweeper(get or (lambda path: {}), writer, out, verbose=verbose)
     return sweeper, out
 
 
@@ -1068,7 +1383,7 @@ def test_clean_hit_writes_exactly_the_five_fields(fpd, monkeypatch, capsys):
         "bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io\n")
     assert sweeper.counters.rows == 1
     assert sweeper.counters.indeterminate == 0
-    assert "ATTENTION" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""      # a clean hit says nothing at all
 
 
 def test_csv_uses_unix_line_endings(fpd, monkeypatch):
@@ -1089,7 +1404,9 @@ def test_indeterminate_domain_reports_and_counts_but_writes_no_row(fpd, monkeypa
     assert out.getvalue() == ""
     assert sweeper.counters.indeterminate == 1
     err = capsys.readouterr().err
-    assert "ATTENTION" in err and "s.live" in err and "a.umich.edu" in err
+    # SKIPPED:, not WARNING: -- this domain produced no row and WAS counted (SPEC section 8).
+    assert err.startswith("SKIPPED:")
+    assert "s.live" in err and "a.umich.edu" in err
 
 
 def test_dead_platform_domain_warns_but_still_writes_the_row(fpd, monkeypatch, capsys):
@@ -1110,7 +1427,7 @@ def test_transient_lookup_of_the_platform_domain_does_not_warn(fpd, monkeypatch,
         ("a.umich.edu", "CNAME"): ["live-x.pantheonsite.io."],
         ("live-x.pantheonsite.io", "A"): dns.resolver.Timeout(),
     })
-    sweeper, out = make_sweeper(fpd)
+    sweeper, _out = make_sweeper(fpd)
     sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
                          {"live-x.pantheonsite.io"})
     assert sweeper.counters.rows == 1
@@ -1122,13 +1439,113 @@ def test_cross_site_target_warns_but_still_writes_the_row(fpd, monkeypatch, caps
         ("a.umich.edu", "CNAME"): ["live-other.pantheonsite.io."],
         ("live-other.pantheonsite.io", "A"): ["23.185.0.4"],
     })
-    sweeper, out = make_sweeper(fpd)
+    sweeper, _out = make_sweeper(fpd)
     sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
                          {"live-s.pantheonsite.io"})
     assert sweeper.counters.rows == 1
     assert sweeper.counters.indeterminate == 0
     err = capsys.readouterr().err
     assert "different site" in err and "live-s.pantheonsite.io" in err
+
+
+def test_mid_chain_hit_warns_that_the_record_is_an_alias(fpd, monkeypatch, capsys):
+    # SPEC G13a.  Rewriting alias.umich.edu moves every other name pointing at it.
+    patch_dns(monkeypatch, fpd, {
+        ("www.example.umich.edu", "CNAME"): ["alias.umich.edu."],
+        ("alias.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "www.example.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert out.getvalue().split(",")[3] == "alias.umich.edu"
+    err = capsys.readouterr().err
+    assert "the record to change is alias.umich.edu" in err
+    assert sweeper.counters.rows == 1
+
+
+def test_direct_hit_does_not_warn_about_an_alias(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert "the record to change is" not in capsys.readouterr().err
+
+
+def test_each_row_is_flushed_as_it_is_written(fpd, monkeypatch):
+    # SPEC section 5: a 38-minute sweep must be watchable with tail -f.  Testable only because
+    # the stream is injected (SPEC section 9).
+    flushes = []
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, out = make_sweeper(fpd)
+    monkeypatch.setattr(out, "flush", lambda: flushes.append(len(out.getvalue())))
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert len(flushes) == 1
+    assert flushes[0] > 0        # flushed AFTER the row was written, not before
+
+
+def test_verbose_reports_per_site_counts(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {})
+    responses = {
+        "/sites/uuid/environments": {"dev": {}, "live": {}},
+        "/sites/uuid/environments/dev/domains": [
+            {"id": "dev-s.pantheonsite.io", "type": "platform"}],
+        "/sites/uuid/environments/live/domains": [
+            {"id": "live-s.pantheonsite.io", "type": "platform"},
+            {"id": "a.umich.edu", "type": "custom"}],
+    }
+    sweeper, _out = make_sweeper(fpd, get=lambda path: responses[path], verbose=True)
+    sweeper.sweep_site({"id": "uuid", "name": "s"})
+    assert "s: 2 environments, 1 custom domains" in capsys.readouterr().err
+
+
+def test_a_session_expiry_aborts_the_sweep_instead_of_counting_indeterminates(fpd, monkeypatch):
+    # SPEC G7a.  If SessionExpiredError were caught per site, a revoked token 5 minutes into a
+    # 38-minute sweep would emit ~400 ATTENTION lines and exit 1 instead of stopping.
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        raise fpd.SessionExpiredError("token revoked")
+
+    sweeper, _out = make_sweeper(fpd, get=get)
+    with pytest.raises(fpd.SessionExpiredError):
+        sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.counters.indeterminate == 0
+
+
+def test_a_malformed_domains_payload_is_one_environments_indeterminate(fpd, monkeypatch, capsys):
+    # SPEC G17 + section 10 item 17.  partition_domains sits INSIDE sweep_env's try; outside
+    # it, one malformed payload aborted every remaining site of a 38-minute sweep.
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        if path.endswith("/environments"):
+            return {"live": {}}
+        return {"not": "a list"} if "/u1/" in path else []
+
+    sweeper, _out = make_sweeper(fpd, get=get)
+    sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.counters.sites == 2          # it kept going
+    assert sweeper.counters.indeterminate == 1
+    assert "SKIPPED: s1.live: could not list domains" in capsys.readouterr().err
+
+
+def test_sweep_records_where_it_stopped(fpd, monkeypatch):
+    # SPEC section 7.3: without this an aborted 38-minute sweep gives the operator no way to
+    # resume except starting over.
+    patch_dns(monkeypatch, fpd, {})
+    sweeper, _out = make_sweeper(
+        fpd, get=lambda path: {} if path.endswith("environments") else [])
+    sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.last_site == "s2"
+    assert sweeper.remaining == []
 
 
 def test_sweep_site_counts_environments_and_domains(fpd, monkeypatch):
@@ -1229,41 +1646,68 @@ class Sweeper:
     them through five-parameter functions.
     """
 
-    def __init__(self, get, writer, *, verbose=False):
+    def __init__(self, get, writer, stream, *, verbose=False):
         self._get = get
         self._writer = writer
+        # The stream is INJECTED rather than reaching for sys.stdout, so that the "flush after
+        # every row" requirement (SPEC section 5) is testable: in a test the writer and
+        # sys.stdout are unrelated objects, so nothing would pin the flush (SPEC section 9).
+        self._stream = stream
         self._verbose = verbose
         self.counters = Counters()
+        # SPEC section 7.3's "where did it stop" line.  Initialized here, not only in sweep(),
+        # so report_stop() cannot raise AttributeError while reporting some other failure.
+        self.last_site = ""       # the last site that COMPLETED
+        self.current_site = ""     # the site in flight, for "Stopped during <site>"
+        self.remaining = []
 
     def _progress(self, message):
         if self._verbose:
             print(message, file=sys.stderr, flush=True)
 
     def sweep(self, sites):
+        self.remaining = list(sites)
         for number, site in enumerate(sites, start=1):
             self._progress(f"[{number}/{len(sites)}] {site['name']}")
+            self.current_site = site["name"]
             self.sweep_site(site)
+            self.last_site = site["name"]
+            self.remaining = list(sites[number:])
 
     def sweep_site(self, site):
         self.counters.sites += 1
+        before = (self.counters.envs, self.counters.custom_domains)
         try:
             environments = site_environments(self._get, site["id"])
         except PantheonApiError as e:
-            attention(f"{site['name']}: could not list environments: {e}")
+            # PantheonApiShapeError is a PantheonApiError, so an unexpected shape lands here too
+            # (SPEC G17).  SessionExpiredError deliberately is NOT one -- it must propagate.
+            skipped(f"{site['name']}: could not list environments: {e}")
             self.counters.indeterminate += 1
             return
         for env_id in sorted(environments):
             self.sweep_env(site, env_id)
+        self._progress(f"    {site['name']}: {self.counters.envs - before[0]} environments, "
+                       f"{self.counters.custom_domains - before[1]} custom domains")
 
     def sweep_env(self, site, env_id):
         self.counters.envs += 1
         try:
             entries = self._get(f"/sites/{site['id']}/environments/{env_id}/domains")
+            # INSIDE the try on purpose: partition_domains raises PantheonApiShapeError on a
+            # malformed payload, and SPEC G17 says a shape error is reported "exactly like
+            # G4/G5/G6 depending on which call produced it" -- i.e. one environment's
+            # indeterminate, not the end of a 38-minute sweep.  Outside the try, one bad
+            # payload aborted everything after it.
+            custom_domains, platform_domains, unknown = partition_domains(entries)
         except PantheonApiError as e:
-            attention(f"{site['name']}.{env_id}: could not list domains: {e}")
+            skipped(f"{site['name']}.{env_id}: could not list domains: {e}")
             self.counters.indeterminate += 1
             return
-        custom_domains, platform_domains = partition_domains(entries)
+        for name, kind in unknown:          # G6a
+            skipped(f"{site['name']}.{env_id} {name}: unknown domain type {kind!r}; "
+                    "not examined")
+            self.counters.indeterminate += 1
         for custom_domain in custom_domains:
             self.counters.custom_domains += 1
             self.check_domain(site, env_id, custom_domain, platform_domains)
@@ -1272,23 +1716,30 @@ class Sweeper:
         where = f"{site['name']}.{env_id} {custom_domain}"
         result = walk(custom_domain)
         if result.problem:
-            attention(f"{where}: {result.problem}")
+            skipped(f"{where}: {result.problem}")
             self.counters.indeterminate += 1
             return
         if not result.platform_domain:
             return
+        if result.dns_record != custom_domain:
+            # SPEC G13a.  The record the downstream rewriter must change is a mid-chain alias,
+            # not this site's own domain -- so rewriting it moves every other name pointing at
+            # it, possibly in a zone this team does not control.
+            warning(
+                f"{where}: the record to change is {result.dns_record}, not the custom domain; "
+                "verify who else points at it before rewriting")
         if result.platform_domain not in platform_domains:
-            attention(
+            warning(
                 f"{where}: points at {result.platform_domain}, which belongs to a different "
                 f"site/environment (expected one of: "
                 f"{', '.join(sorted(platform_domains)) or 'none listed'})")
         if platform_domain_is_dead(result.platform_domain):
-            attention(
+            warning(
                 f"{where}: platform domain {result.platform_domain} does not resolve; the "
                 "downstream rewrite has no addresses to use")
         self._writer.writerow([site["name"], env_id, custom_domain,
                                result.dns_record, result.platform_domain])
-        sys.stdout.flush()
+        self._stream.flush()      # so a 38-minute sweep can be watched with tail -f
         self.counters.rows += 1
 ```
 
@@ -1318,7 +1769,9 @@ git commit -m "feat(find-platform-domains-dns): the sweep, CSV output and integr
 **Interfaces:**
 - Consumes: everything from Tasks 1–4.
 - Produces: `build_arg_parser() -> argparse.ArgumentParser`; `org_id_from_config(path) -> str`;
-  `main(argv) -> int`.
+  `build_session(notify=None) -> ApiSession`; `StartupError`;
+  `prepare_sweep(options, note) -> tuple[ApiSession, list[dict]]`; `report_stop(sweeper, reason)`;
+  `main(argv) -> int` (0 / 1 / 2 / 130 per SPEC §7).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1331,7 +1784,10 @@ def test_org_id_is_read_from_the_config(fpd, tmp_path):
     assert fpd.org_id_from_config(config) == "org-uuid"
 
 
-def test_missing_org_id_is_a_named_error(fpd, tmp_path):
+def test_missing_org_id_raises_out_of_the_low_level_helper(fpd, tmp_path):
+    # org_id_from_config is deliberately thin; prepare_sweep is what converts this into a
+    # StartupError.  The exit-code contract is pinned by the main() tests below, which is where
+    # it matters -- a bare KeyError reaching an operator would be the defect (PD#2).
     config = tmp_path / "c.toml"
     config.write_text("[Database]\ntype = \"sqlite\"\n")
     with pytest.raises(KeyError):
@@ -1361,11 +1817,61 @@ def test_main_returns_2_when_the_config_is_missing(fpd, tmp_path, capsys):
     assert "nope.toml" in capsys.readouterr().err
 
 
+def test_main_returns_2_for_a_config_whose_pantheon_is_not_a_table(fpd, tmp_path, capsys):
+    # SPEC section 10 item 15.  ["Pantheon"]["org_id"] subscripts a str -> TypeError, which was
+    # uncaught and therefore exit 1 -- the code reserved for a COMPLETED sweep.
+    config = tmp_path / "c.toml"
+    config.write_text('Pantheon = "not-a-table"\n')
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "no usable [Pantheon].org_id" in capsys.readouterr().err
+
+
+def test_main_returns_2_for_a_config_that_is_not_utf8(fpd, tmp_path, capsys):
+    # UnicodeDecodeError is not an OSError, so it escaped the original handler.
+    config = tmp_path / "c.toml"
+    config.write_bytes(b'[Pantheon]\norg_id = "x"\n\xff\xfe garbage\n')
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_verbose_prints_the_reauthentication_note_and_quiet_does_not(fpd, monkeypatch, tmp_path,
+                                                                     capsys):
+    """SPEC section 10 item 11 -- driven through main(), where the verbosity gate lives."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        if calls.count(request.url.path) == 1 and request.url.path.endswith("/environments"):
+            return httpx.Response(401, json={"error": "expired"})
+        if request.url.path.endswith("/environments"):
+            return httpx.Response(200, json={"live": {}})
+        if "/memberships/sites" in request.url.path:
+            return httpx.Response(200, json=[{"id": "m1", "site": {"id": "u1", "name": "s1"}}])
+        return httpx.Response(200, json=[{"id": "live-s1.pantheonsite.io", "type": "platform"}])
+
+    def build(**kwargs):
+        return fpd.ApiSession(httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0),
+                              "mt", **kwargs)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", build)
+    fpd.main(["-c", str(config), "-v"])
+    assert "session expired; re-authenticated" in capsys.readouterr().err
+    calls.clear()
+    fpd.main(["-c", str(config)])
+    assert "session expired; re-authenticated" not in capsys.readouterr().err
+
+
 def test_main_returns_1_when_the_sweep_had_an_indeterminate(fpd, monkeypatch, tmp_path, capsys):
     config = tmp_path / "c.toml"
     config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
     monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
-    monkeypatch.setattr(fpd, "build_session", lambda: _StubSession(indeterminate=True))
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=True))
     assert fpd.main(["-c", str(config)]) == 1
     assert "indeterminate=1" in capsys.readouterr().err
 
@@ -1374,9 +1880,119 @@ def test_main_returns_0_on_a_clean_sweep(fpd, monkeypatch, tmp_path, capsys):
     config = tmp_path / "c.toml"
     config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
     monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
-    monkeypatch.setattr(fpd, "build_session", lambda: _StubSession(indeterminate=False))
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
     assert fpd.main(["-c", str(config)]) == 0
     assert "indeterminate=0" in capsys.readouterr().err
+
+
+def _main_with_sweep_raising(fpd, monkeypatch, tmp_path, error):
+    """Run main() against a stub whose sweep raises `error` on the first domains call."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise error
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+    return fpd.main(["-c", str(config)])
+
+
+def test_an_abort_names_the_completed_site_and_the_unreached_ones(fpd, monkeypatch, tmp_path,
+                                                                  capsys):
+    """SPEC section 7.3: the names, not just a count -- they are the resume instruction."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class TwoSites(_StubSession):
+        def get(self, path):
+            if "/memberships/sites" in path:
+                return [{"id": "m1", "site": {"id": "u1", "name": "s1"}},
+                        {"id": "m2", "site": {"id": "u2", "name": "s2"}}]
+            if path.endswith("/environments"):
+                if "/u2/" in path:
+                    raise KeyboardInterrupt
+                return {"live": {}}
+            return [{"id": "live-s1.pantheonsite.io", "type": "platform"}]
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_k: TwoSites(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config)]) == 130
+    err = capsys.readouterr().err
+    assert "Stopped after s1." in err
+    assert "find-platform-domains-dns s2" in err      # paste-able resume command
+
+
+def test_ctrl_c_returns_130_and_says_where_it_stopped(fpd, monkeypatch, tmp_path, capsys):
+    # SPEC G15 + section 7.3.  130 matches the main program's abort_reason convention; the
+    # default (an uncaught KeyboardInterrupt) would exit 1, which section 7 reserves for a
+    # COMPLETED sweep with indeterminates.
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, KeyboardInterrupt()) == 130
+    err = capsys.readouterr().err
+    assert "did not complete (interrupted)" in err
+    assert "sites=" in err                       # the summary is printed on an abort too
+
+
+def test_broken_pipe_returns_2_and_reports_like_every_other_abort(fpd, monkeypatch, tmp_path,
+                                                                  capsys):
+    # SPEC G16 + section 8: `| head` must not produce a traceback at exit 1, AND stderr is
+    # unaffected by a closed stdout, so the summary and position line are printed here too.
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, BrokenPipeError()) == 2
+    err = capsys.readouterr().err
+    assert "broken pipe" in err
+    assert "sites=" in err          # the summary, which this path used to omit
+    assert "Stopped" in err
+
+
+def test_session_expiry_returns_2_not_1(fpd, monkeypatch, tmp_path, capsys):
+    # SPEC G7a: the whole point is that this is distinguishable from a completed sweep.
+    error = fpd.SessionExpiredError("token revoked")
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, error) == 2
+    assert "session expired" in capsys.readouterr().err
+
+
+def test_an_unexpected_error_returns_2_never_1(fpd, monkeypatch, tmp_path, capsys):
+    # SPEC G18.  Exit 1 must mean ONLY "completed with indeterminates".
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, ValueError("surprise")) == 2
+    assert "unexpected ValueError" in capsys.readouterr().err
+
+
+def test_no_token_ever_reaches_stdout_or_stderr(fpd, monkeypatch, tmp_path, capsys):
+    """SPEC section 3, threat-model property (a) -- instrumented rather than asserted.
+
+    An unmeasured security claim is PD#14 in its design-time form: "Applies at design time too
+    -- to a new counter, artifact, or notice -- not only in tests."
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    secrets = ("MACHINE-TOKEN-e7f2a1", "SESSION-TOKEN-9b4c3d")
+
+    def handler(request):
+        # The two paths SPEC section 3 names: a per-site G5 (environments 500) and, after it,
+        # an authentication failure that survives re-authentication (G7a).  A test that only
+        # failed the site listing would traverse neither.
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": secrets[1]})
+        if "/memberships/sites" in request.url.path:
+            return httpx.Response(200, json=[{"id": "m1", "site": {"id": "u1", "name": "s1"}},
+                                             {"id": "m2", "site": {"id": "u2", "name": "s2"}}])
+        if "/u1/" in request.url.path:
+            return httpx.Response(500, text="boom")            # G5
+        return httpx.Response(401, json={"error": "expired"})  # -> G7a on retry
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: secrets[0])
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    monkeypatch.setattr(fpd, "build_session", lambda **kwargs: fpd.ApiSession(
+        httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0), secrets[0], **kwargs))
+    assert fpd.main(["-c", str(config), "-v"]) == 2     # G7a aborts; -v is the noisiest mode
+    captured = capsys.readouterr()
+    for secret in secrets:
+        assert secret not in captured.out
+        assert secret not in captured.err
 ```
 
 and, above them, the stub the last two use:
@@ -1385,28 +2001,25 @@ and, above them, the stub the last two use:
 class _StubSession:
     """Stands in for ApiSession: an organization of one site with one environment.
 
-    `indeterminate=True` makes the domains call fail, which is the shortest path to a counted
-    indeterminate without touching DNS.
+    Takes the loaded module so it can raise the module's OWN PantheonApiError -- the sweep
+    catches that class by identity, so a stand-in raising anything else would not exercise the
+    G6 path at all.  `indeterminate=True` makes the domains call fail, which is the shortest
+    path to a counted indeterminate without touching DNS.
     """
 
-    def __init__(self, *, indeterminate):
+    def __init__(self, fpd, *, indeterminate):
+        self._fpd = fpd
         self._indeterminate = indeterminate
 
     def get(self, path):
         if "/memberships/sites" in path:
-            return [{"id": "u1", "site": {"id": "u1", "name": "s1"}}]
+            return [{"id": "mem-1", "site": {"id": "u1", "name": "s1"}}]
         if path.endswith("/environments"):
             return {"live": {}}
         if self._indeterminate:
-            raise RuntimeError("unused")     # replaced below by the module's own error type
+            raise self._fpd.PantheonApiError("HTTP 500")
         return [{"id": "live-s1.pantheonsite.io", "type": "platform"}]
 ```
-
-> **Implementer note:** `_StubSession.get` must raise the module's `PantheonApiError`, which is
-> only reachable through the `fpd` fixture. Make `_StubSession` take the module as its first
-> argument (`_StubSession(fpd, indeterminate=True)`) and raise `fpd.PantheonApiError("HTTP 500")`.
-> Adjust the two `monkeypatch.setattr(..., lambda: _StubSession(...))` lines accordingly. Do not
-> leave a `RuntimeError` in the final test file.
 
 - [ ] **Step 2: Run them and confirm they fail**
 
@@ -1418,7 +2031,7 @@ Expected: `AttributeError: module has no attribute 'build_arg_parser'`.
 
 - [ ] **Step 3: Implement the CLI and `main()`**
 
-Add `import argparse` and `import tomllib` to the imports, then append:
+Add `import argparse`, `import contextlib`, `import io` and `import tomllib` to the imports, then append:
 
 ```python
 def build_arg_parser():
@@ -1445,42 +2058,132 @@ def org_id_from_config(path):
         return tomllib.load(handle)["Pantheon"]["org_id"]
 
 
-def build_session():
-    """The production ApiSession, over one reused connection.  Monkeypatched by the CLI tests."""
+def build_session(notify=None):
+    """The production ApiSession, over one reused connection.  Monkeypatched by the CLI tests.
+
+    follow_redirects is left at httpx's default of False ON PURPOSE (SPEC section 3, threat
+    model property (c)): the Authorization header must never be replayed to a redirect target.
+    """
     client = httpx.Client(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT})
-    return ApiSession(client, machine_token())
+    return ApiSession(client, machine_token(), notify=notify)
 
 
 def main(argv):
-    """Exit 0 = clean sweep, 1 = completed with indeterminates, 2 = could not complete."""
+    """Exit 0 = clean sweep, 1 = completed with indeterminates, 2 = could not complete,
+    130 = interrupted (SPEC section 7).
+
+    The exit-code discipline is the point of the structure below.  Python exits 1 on ANY
+    uncaught traceback, and section 7 reserves 1 for "completed with indeterminates" -- so a
+    Ctrl-C, a broken pipe, or an unexpected API shape leaking out of here would be
+    indistinguishable from a healthy sweep that had a few DNS timeouts.  Every other outcome is
+    routed away from 1, and the only `return 1` in the program is the indeterminate branch.
+    """
     options = build_arg_parser().parse_args(argv)
-    try:
-        org_id = org_id_from_config(options.config)
-    except (OSError, tomllib.TOMLDecodeError) as e:
-        print(f"ERROR: could not read {options.config}: {e}", file=sys.stderr)
-        return 2
-    except KeyError as e:
-        print(f"ERROR: {options.config} has no [Pantheon].org_id ({e})", file=sys.stderr)
-        return 2
+
+    def note(message):                       # the G7 re-authentication note, -v only
+        if options.verbose:
+            print(message, file=sys.stderr, flush=True)
 
     try:
-        session = build_session()
-    except (MachineTokenError, PantheonApiError) as e:
+        session, sites = prepare_sweep(options, note)
+    except StartupError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
+    sweeper = Sweeper(session.get, csv.writer(sys.stdout, lineterminator="\n"), sys.stdout,
+                      verbose=options.verbose)
+    try:
+        sweeper.sweep(sites)
+    except KeyboardInterrupt:
+        report_stop(sweeper, "interrupted")
+        return 130
+    except SessionExpiredError as e:
+        report_stop(sweeper, f"session expired: {e}")
+        return 2
+    except BrokenPipeError:
+        # `find-platform-domains-dns | head` is the natural first thing an operator types.
+        # stderr is unaffected by a closed stdout, so the abort report is printed here too --
+        # SPEC section 8 says the summary appears on EVERY path that entered the site loop.
+        report_stop(sweeper, "stdout closed (broken pipe)")
+        # The dup2 is REQUIRED, not tidiness (verified: without it this exits 120, not 2).
+        # CPython flushes sys.stdout again during interpreter shutdown; on a closed pipe that
+        # flush ALSO raises, and a failed final flush is converted into exit code 120 plus an
+        # "Exception ignored on flushing sys.stdout" message -- overriding the 2 returned here
+        # and reintroducing exactly the ambiguous exit code SPEC section 7 exists to prevent.
+        # This is the recipe from Python's own "Note on SIGPIPE" (library/signal docs).
+        # suppress(), not try/except/pass: ruff SIM105.  sys.stdout may not be backed by a
+        # real file descriptor -- pytest's capture object raises io.UnsupportedOperation from
+        # fileno() -- and in that case there is no shutdown-flush hazard to defend against.
+        # Named exceptions only (PD#2); suppressing broadly would hide a real dup2 failure.
+        with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.close(devnull)
+        return 2
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: an uncaught exception here would exit 1, which section 7 reserves for a COMPLETED sweep.  It is re-reported by name, never swallowed silently (PD#2)
+        report_stop(sweeper, f"unexpected {type(e).__name__}: {e}")
+        return 2
+    print(sweeper.counters.summary(), file=sys.stderr)
+    return 1 if sweeper.counters.indeterminate else 0
+
+
+class StartupError(Exception):
+    """The sweep could not be started: SPEC G1-G4b, or a listing-time G7a. Always exit 2."""
+
+
+def prepare_sweep(options, note):
+    """Config -> session -> site list, or StartupError with an operator-ready message.
+
+    Split out of main() so that main() is a readable dispatch of exit codes: with this inline,
+    main() carried 9 returns and a cyclomatic complexity of 12, over ruff's PLR0911/C901 limits.
+    Every failure here means the same thing to the caller -- the sweep never started, exit 2 --
+    so collapsing them into one named error loses nothing.
+    """
+    try:
+        org_id = org_id_from_config(options.config)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        # UnicodeDecodeError is NOT an OSError: a config that is not valid UTF-8 raised it
+        # uncaught, which exits 1 -- the code SPEC section 7 reserves for a COMPLETED sweep.
+        raise StartupError(f"could not read {options.config}: {e}") from e
+    except (KeyError, TypeError) as e:
+        # TypeError covers `Pantheon = "not-a-table"`, where ["Pantheon"]["org_id"] subscripts
+        # a string.  Verified: without it, exit 1 with a traceback.
+        raise StartupError(f"{options.config} has no usable [Pantheon].org_id ({e!r})") from e
+    try:
+        session = build_session(notify=note)
+    except (MachineTokenError, PantheonApiError) as e:
+        raise StartupError(str(e)) from e
     try:
         sites = (named_sites(session.get, options.site) if options.site
                  else org_sites(session.get, org_id))
-    except (PantheonApiError, SiteListingError) as e:
-        print(f"ERROR: could not list sites: {e}", file=sys.stderr)
-        return 2
+    except (PantheonApiError, SiteListingError, SessionExpiredError) as e:
+        raise StartupError(f"could not list sites: {e}") from e
+    return session, sites
 
-    sweeper = Sweeper(session.get, csv.writer(sys.stdout, lineterminator="\n"),
-                      verbose=options.verbose)
-    sweeper.sweep(sites)
+
+def report_stop(sweeper, reason):
+    """SPEC section 7.3: an aborted sweep MUST say where it stopped, or the operator has no way
+    to resume except starting the 38-minute sweep over.
+
+    Unconditional on purpose.  An earlier draft printed the position only `if sweeper.last_site`
+    -- i.e. never, when the very first site was the one interrupted, which is precisely when an
+    operator most needs to know where they are.  And it printed a COUNT of unreached sites
+    rather than their names, which is not a recovery instruction: the order is ascending by site
+    UUID and the operator has no copy of that list.  The names are already in hand.
+    """
+    print(f"ERROR: sweep did not complete ({reason})", file=sys.stderr)
     print(sweeper.counters.summary(), file=sys.stderr)
-    return 1 if sweeper.counters.indeterminate else 0
+    if sweeper.last_site:
+        print(f"Stopped after {sweeper.last_site}.", file=sys.stderr)
+    else:
+        print(f"Stopped during {sweeper.current_site or 'startup'}.", file=sys.stderr)
+    if sweeper.remaining:
+        names = " ".join(site["name"] for site in sweeper.remaining)
+        count = len(sweeper.remaining)
+        print(f"{count} site{'' if count == 1 else 's'} not reached. Resume with:\n"
+              f"  find-platform-domains-dns {names}", file=sys.stderr)
 
 
 if __name__ == "__main__":
@@ -1510,11 +2213,13 @@ reaches a Pantheon platform domain (`*.pantheonsite.io`) by CNAME, as CSV on std
 `site_name,site_env,custom_domain,dns_record,platform_domain`. `dns_record` is the FQDN owning
 the hitting CNAME record, which is what a downstream rewriter must change. Operator messages and
 a `sites=… indeterminate=…` summary go to stderr; exit 0 = clean sweep, 1 = completed with
-indeterminates, 2 = could not complete.
+indeterminates, 2 = could not complete, 130 = interrupted. An aborted sweep prints the last
+site it processed and how many remain, which is the whole resume story (there is no
+`--resume-from`).
 
 ```bash
 ./find-platform-domains-dns its-wws-test1     # one site
-./find-platform-domains-dns > domains.csv     # the whole org, ~21 minutes
+./find-platform-domains-dns > domains.csv     # the whole org, ~38 minutes
 ```
 
 It uses the Pantheon API (machine token from `$PANTHEON_MACHINE_TOKEN` or
@@ -1573,10 +2278,11 @@ the exit code. Summarized or predicted output is a PD#14 violation and fails rev
 
 - [ ] **Step 3: Answer the SPEC §15 closing-audit questions that a targeted run can answer**
 
-Questions 1–2 need a full-organization sweep, which is an operational run, not an acceptance
-step; note them as open. Question 3 (a custom domain on an uninitialized environment) and
-question 5 (a short non-final page) can be answered from a full sweep whenever one is run.
-Record the answers, or "open — needs a full sweep", in `ACCEPTANCE.md`.
+Every question in SPEC §15 needs a full-organization sweep, which is an operational run rather
+than an acceptance step. Record each as "open — needs a full sweep" in `ACCEPTANCE.md`, **by
+number, checked against SPEC §15 as you write them**: the list grew during review, so Q1 is
+the mid-chain/duplicate-`dns_record` question, Q4 is the uninitialized-environment one and Q6
+is the short-non-final-page one.
 
 - [ ] **Step 4: Commit**
 
@@ -1591,15 +2297,54 @@ git commit -m "docs(find-platform-domains-dns): acceptance evidence"
 
 - **Spec coverage.** §3 CLI → Task 5. §4 data sources → Tasks 2–3. §4.1 cursor → Task 3
   (implementation + the red-proof step). §5 output contract → Task 4. §6 algorithm → Task 1
-  (walk) + Task 4 (sweep). §7 taxonomy: G1/G2/G3 → Task 5 + Task 2; G4/G4a/G4b → Tasks 3, 5;
-  G5/G6 → Task 4; G7 → Task 2; G8–G11 → Task 1 + Task 4; G12/G13/G14 → Task 4. §8 observability
-  → `attention()` (Task 1), `_progress` and the summary (Tasks 4–5). §9 seams → honored
-  throughout. §10 test list → Tasks 1–5, one-to-one. §13 acceptance → Task 6. §14 deletion
-  checklist → recorded in CLAUDE.md (Task 5) and the SPEC.
+  (walk) + Task 4 (sweep); §6.2's measured retry delays → Task 1's `resolve_cname_retrying`.
+  §7 taxonomy, every gate: G1/G2/G3 → Task 5 (`prepare_sweep`) + Task 2; G4/G4a/G4b → Task 3;
+  G5/G6/G6a → Task 4; G7/G7a → Task 2 (`_renew`); G8–G11 → Task 1 + Task 4;
+  G12/G13/G13a/G14 → Task 4; **G15/G16/G17/G18 → Task 5** (`main`'s handler chain,
+  `report_stop`, and `PantheonApiShapeError` raised from Task 3). §7.3 → Task 5
+  (`report_stop`) + Task 4 (`last_site`/`current_site`/`remaining`). §8 observability →
+  `skipped()`/`warning()` (Task 1), `_progress` and the per-site counts (Task 4), the summary
+  and the `-v` re-auth note (Task 5). §9 seams → honored throughout, including the five
+  test-only seams §9 now declares. §10 test list, items 1–18 → Tasks 1–5. §13 acceptance →
+  Task 6. §14 deletion checklist → recorded in CLAUDE.md (Task 5) and the SPEC.
 - **Type consistency.** `WalkResult(dns_record, platform_domain, problem)` is constructed and
   destructured identically in Tasks 1 and 4. `Sweeper.check_domain(site, env_id, custom_domain,
   platform_domains)` matches its call in `sweep_env` and in every test. `org_sites`/`named_sites`
   both return `[{"id", "name"}]`, which is what `Sweeper.sweep_site` reads.
-- **Known rough edge, deliberately flagged rather than hidden:** the `_StubSession` sketch in
-  Task 5 Step 1 needs the module reference to raise `PantheonApiError`; the implementer note
-  under it says exactly what to change. Every other code block is complete as written.
+- **Corrections applied after round 1 of adversarial review** (`prompts/adversarial-review.md`
+  asks that the author's own corrected claims be recorded, not just the fixes). An earlier
+  draft of this plan asserted "every other code block is complete as written". That was false,
+  and the review proved it by materializing the plan and running the gates:
+  - `test_chain_longer_than_the_hop_limit_is_indeterminate` never called `patch_dns`, so it
+    failed **and** queried real DNS — while Task 1's PD#14 red-proof was built on that very
+    test, which would have "proved" a test could go red for a reason unrelated to what it
+    guards. Both fixed.
+  - The plan's code failed ruff in 10 places. The two contingencies the plan did prescribe
+    (`INP001`, a pyright ignore for `.target`) were the two that never fire.
+  - `_StubSession` shipped a `raise RuntimeError("unused")` with a prose note telling the
+    implementer to fix it. It is now written correctly.
+  - The `-v` contract in SPEC §8 (the G7 re-auth note, per-site counts) had no implementation
+    at all; a mid-sweep session expiry degraded into ~400 indeterminates.
+  The lesson worth carrying: a plan whose code blocks have never been executed is an
+  unverified instrument, exactly like an unrun test (PD#14). **Materialize and run the gates
+  before claiming a plan is complete.**
+- **Corrections applied after round 2 of adversarial review.** Round 1's fixes were themselves
+  incomplete, in a pattern worth naming: each fix patched the *instances* the reviewer cited
+  rather than the *class*.
+  - Exit 1 was still reachable. The round-1 fix guarded the sweep; `prepare_sweep` still let a
+    `TypeError` (`Pantheon = "not-a-table"`) and a `UnicodeDecodeError` (a non-UTF-8 config)
+    escape as tracebacks — both verified to exit 1.
+  - `_require` was introduced and then applied to three of the seven response-key reads.
+    `site["name"]`, the `/site-names/` `name`, and both keys inside `partition_domains` still
+    raised bare `KeyError`/`AttributeError`.
+  - `partition_domains` sat *outside* `sweep_env`'s `try`, so a malformed domains payload
+    aborted the whole sweep instead of costing one environment — the opposite of what SPEC G17
+    specifies.
+  - Three of the four abort paths gained `report_stop`; the broken-pipe path did not. And the
+    position line was conditional on `last_site`, so it never printed when the first site was
+    the one interrupted.
+  - The G4a message told the operator to run `terminus org:site:list --format=json`, which
+    fails: the organization is a required positional argument.
+  Two round-2 findings were **declined**, because they re-open decisions already put to the
+  user and answered: an automatic `terminus` site-count cross-check (D15) and promoting the
+  duplicate-`dns_record` audit question into a warning (D16).
