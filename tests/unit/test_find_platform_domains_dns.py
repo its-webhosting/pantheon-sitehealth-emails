@@ -584,6 +584,49 @@ def test_machine_token_empty_cache_directory_is_named(fpd, monkeypatch, tmp_path
         fpd.machine_token()
 
 
+def test_machine_token_unreadable_cache_directory_is_named(fpd, monkeypatch, tmp_path):
+    """Fix round 1, C1 (SPEC G2's "unreadable ... is an error" branch, applied to the directory
+    itself, not just a file inside it).  `cache.iterdir()` sat outside any try/except: an
+    unreadable ~/.terminus/cache/tokens (e.g. left root-owned by a `sudo terminus auth:login`)
+    raised an ordinary PermissionError -- an OSError -- straight out of machine_token(), which
+    prepare_sweep's `except (MachineTokenError, PantheonApiError)` guard does not catch, so it
+    escaped main() entirely as an unnamed exit-1 traceback (SPEC section 7 reserves 1 for
+    "completed with indeterminates").
+    """
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    cache.chmod(0o000)
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    try:
+        with pytest.raises(fpd.MachineTokenError, match="could not list"):
+            fpd.machine_token()
+    finally:
+        cache.chmod(0o755)     # so tmp_path's own cleanup can remove the directory afterward
+
+
+def test_main_returns_2_when_the_machine_token_cache_is_unreadable(fpd, monkeypatch, tmp_path,
+                                                                   capsys):
+    """Fix round 1, C1: the fix must actually reach main(), not just machine_token() in
+    isolation -- prepare_sweep's except tuple is the seam that would otherwise let a
+    PermissionError from this specific path escape uncaught.  Drives the REAL build_session() and
+    machine_token() (neither is monkeypatched here) so the real prepare_sweep guard is exercised.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    home = tmp_path / "home"
+    cache = home / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    cache.chmod(0o000)
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: home))
+    try:
+        assert fpd.main(["-c", str(config)]) == 2
+    finally:
+        cache.chmod(0o755)
+    assert "could not list" in capsys.readouterr().err
+
+
 def fake_site(n):
     # The membership id deliberately DIFFERS from the site id.  In production they are equal for
     # all 408 sites, but SPEC section 4.1 says that equality "is an observation, not a contract"
@@ -615,6 +658,18 @@ class PagedGet:
         self.cursors.append(cursor)
         assert self.pages, "the code requested more pages than this test provided"
         return self.pages.pop(0)
+
+
+def test_org_sites_quotes_the_org_id_in_the_url(fpd):
+    """Fix round 1, m3.  org_id is read straight from TOML and reaches this URL unquoted before
+    this fix: an org_id containing '#' or '?' (a config typo, not necessarily hostile) silently
+    requested a DIFFERENT resource (`/organizations/abc` for `org_id = "abc#frag"`) rather than
+    failing loudly.  quote(org_id, safe="") closes that -- SPEC section 3 already requires this
+    for the SITE argv; org_id gets the same treatment for the same reason.
+    """
+    get = PagedGet([[]])
+    fpd.org_sites(get, "abc#frag?x=1")
+    assert get.paths == ["/organizations/abc%23frag%3Fx%3D1/memberships/sites?limit=100"]
 
 
 def test_org_sites_walks_every_page(fpd):
@@ -674,6 +729,23 @@ def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch, cap
     # loop that blunders into repeating the same cursor by accident -- both produce the cursor
     # sequence above, so without this assertion the test passes with the detector deleted.
     assert "cursor id-0099 was ignored" in capsys.readouterr().err
+
+
+def test_ignored_cursor_retry_uses_the_retry_prefix_not_skipped(fpd, monkeypatch, capsys):
+    """SPEC section 8, fix round 1 (R1): SKIPPED: is defined as "produced no row and WAS counted
+    as indeterminate", but this retry line is never counted anywhere -- it fires entirely inside
+    org_sites()/prepare_sweep(), before any Counters object exists, and prints nothing further at
+    all if the retry goes on to succeed.  Reusing SKIPPED: broke the one property it exists to
+    guarantee: `grep -c SKIPPED` reconciling exactly against the final `indeterminate=N`.  A
+    dedicated RETRY: prefix keeps that reconciliation exact.
+    """
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    page1 = [fake_site(n) for n in range(100)]
+    pages = [page1, list(page1), [fake_site(n) for n in range(100, 105)]]
+    fpd.org_sites(PagedGet(pages), "org-1")
+    err = capsys.readouterr().err
+    assert "RETRY: site listing cursor id-0099 was ignored" in err
+    assert "SKIPPED:" not in err
 
 
 def test_org_sites_gives_up_loudly_when_the_cursor_stays_ignored(fpd, monkeypatch):
@@ -1309,6 +1381,49 @@ def test_broken_pipe_returns_2_and_reports_like_every_other_abort(fpd, monkeypat
     assert "Stopped" in err
 
 
+def test_broken_pipe_dup2_recipe_actually_runs(fpd, monkeypatch, tmp_path):
+    """Fix round 1, I1.  test_broken_pipe_returns_2_and_reports_like_every_other_abort (above)
+    runs under capsys, whose captured sys.stdout has no real file descriptor --
+    sys.stdout.fileno() raises io.UnsupportedOperation there, which the BrokenPipeError handler's
+    contextlib.suppress(...) swallows, so the ENTIRE dup2 recipe silently never executes under
+    that test.  Reviewer's mutation (replace the `with contextlib.suppress(...)` body with `pass`)
+    left all 96 tests green while a real `find-platform-domains-dns bus-occb | head -0` exits
+    120, not 2 -- the exact defect class this repo keeps getting burned by (an instrument that
+    cannot go red, PD#14).  This test gives sys.stdout a REAL file descriptor (a plain opened
+    file, not capsys's pseudo-stream) so the recipe actually runs, and records the os.dup2 call
+    rather than relying on process exit code alone (which pytest cannot observe in-process).
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise BrokenPipeError
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+
+    real_stdout = (tmp_path / "stdout").open("w")
+    expected_fd = real_stdout.fileno()          # captured before dup2 repoints this fd number
+    calls = []
+    real_dup2 = fpd.os.dup2
+
+    def recording_dup2(fd, target_fd):
+        calls.append((fd, target_fd))
+        return real_dup2(fd, target_fd)
+
+    monkeypatch.setattr(fpd.sys, "stdout", real_stdout)
+    monkeypatch.setattr(fpd.os, "dup2", recording_dup2)
+    try:
+        assert fpd.main(["-c", str(config)]) == 2
+    finally:
+        real_stdout.close()
+    assert len(calls) == 1
+    assert calls[0][1] == expected_fd            # dup2's target was the real stdout's own fd
+
+
 def test_session_expiry_returns_2_not_1(fpd, monkeypatch, tmp_path, capsys):
     # SPEC G7a: the whole point is that this is distinguishable from a completed sweep.
     error = fpd.SessionExpiredError("token revoked")
@@ -1320,6 +1435,19 @@ def test_an_unexpected_error_returns_2_never_1(fpd, monkeypatch, tmp_path, capsy
     # SPEC G18.  Exit 1 must mean ONLY "completed with indeterminates".
     assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, ValueError("surprise")) == 2
     assert "unexpected ValueError" in capsys.readouterr().err
+
+
+def test_system_exit_mid_sweep_propagates_unconverted(fpd, monkeypatch, tmp_path):
+    """Fix round 1, m1.  `except SystemExit: raise` sits between the named handlers and the
+    final `except BaseException as e:` catch-all.  Deleting it leaves all existing tests green
+    (nothing else in the suite raises SystemExit mid-sweep) and lets the catch-all convert a
+    SystemExit into `unexpected SystemExit: ...` / return 2 -- discarding whatever exit code the
+    SystemExit itself carried.  CLAUDE.md's abort_reason describes the same rule for the main
+    program: "There is no except SystemExit: clause and nothing is swallowed."
+    """
+    with pytest.raises(SystemExit) as excinfo:
+        _main_with_sweep_raising(fpd, monkeypatch, tmp_path, SystemExit(7))
+    assert excinfo.value.code == 7
 
 
 def test_no_token_ever_reaches_stdout_or_stderr(fpd, monkeypatch, tmp_path, capsys):
@@ -1530,3 +1658,44 @@ def test_hostile_org_id_does_not_produce_an_unnamed_traceback(fpd, monkeypatch, 
     monkeypatch.setattr(fpd, "build_session", build)
     assert fpd.main(["-c", str(config)]) == 2
     assert "could not list sites" in capsys.readouterr().err
+
+
+def test_ctrl_c_during_prepare_sweep_returns_130_cleanly(fpd, monkeypatch, tmp_path, capsys):
+    """Fix round 1, m6.  Site listing (org_sites(): up to 5 pages plus two 2-second cursor
+    retries, SPEC section 4.1) is a real Ctrl-C window during prepare_sweep(), which previously
+    had no KeyboardInterrupt handler of its own -- CPython does exit 130 on an uncaught
+    KeyboardInterrupt at the top level (the exit-code contract already held), but the operator
+    got a raw Python traceback instead of the program's own message shape, and there was no
+    handler AT ALL to route through, unlike every other abort path in main().
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    def boom(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", boom)
+    assert fpd.main(["-c", str(config)]) == 130
+    assert "interrupted" in capsys.readouterr().err.lower()
+
+
+def test_report_stop_ignores_a_second_sigint_while_printing(fpd, monkeypatch):
+    """Fix round 1, m5.  A second Ctrl-C landing while report_stop() is still printing could
+    truncate the resume line -- SPEC section 7.3 calls that line the whole recovery story.
+    CLAUDE.md's abort_run() (the main program's own equivalent) sets SIGINT to SIG_IGN for
+    exactly this reason: "so a second Ctrl-C cannot truncate the flush."
+
+    MUST monkeypatch signal.signal here rather than let the real one run: the real one would
+    leave SIG_IGN in effect for the REST of this pytest session, since signal handlers are
+    process-global and are not restored automatically -- the identical trap CLAUDE.md's Testing
+    section documents for abort_run() ("an in-process test that calls it MUST
+    monkeypatch.setattr(psh.signal, 'signal', ...), or the rest of the pytest session silently
+    ignores Ctrl-C").
+    """
+    calls = []
+    monkeypatch.setattr(fpd.signal, "signal", lambda sig, handler: calls.append((sig, handler)))
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.last_site = "s1"
+    fpd.report_stop(sweeper, "interrupted")
+    assert calls == [(fpd.signal.SIGINT, fpd.signal.SIG_IGN)]

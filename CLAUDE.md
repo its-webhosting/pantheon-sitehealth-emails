@@ -65,22 +65,28 @@ reaches a Pantheon platform domain (`*.pantheonsite.io`) by CNAME, as CSV on std
 `site_name,site_env,custom_domain,dns_record,platform_domain`. `dns_record` is the FQDN owning
 the hitting CNAME record, which is what a downstream rewriter must change. Operator messages and
 a `sites=… indeterminate=…` summary go to stderr; exit 0 = clean sweep, 1 = completed with
-indeterminates, 2 = could not complete, 130 = interrupted. An aborted sweep prints the last
-site it processed and how many remain, which is the whole resume story (there is no
-`--resume-from`).
+indeterminates, 2 = could not complete, 130 = interrupted. There is no `--resume-from`; instead,
+an aborted sweep prints the last site it completed (or, if the very first site was interrupted,
+which one it was mid-processing) and the **names** of every site not yet reached, as a
+paste-able `find-platform-domains-dns <names…>` re-run command — the names are the point, since
+"137 sites not reached" gives the operator no way to reconstruct which 137 they were.
 
 ```bash
 ./find-platform-domains-dns its-wws-test1     # one site
 ./find-platform-domains-dns > domains.csv     # the whole org, ~38 minutes
 ```
 
-It uses the Pantheon API (machine token from `$PANTHEON_MACHINE_TOKEN` or
-`~/.terminus/cache/tokens/`), and its DNS walk is a **copy** of
-`check/pantheon_cdn_change/chain.py` plus `psh/dns_classify.py`'s resolver seam — copied, not
-imported, so the whole feature is three files. Note the API's site-list cursor has a silent
-failure mode (it can return page 1 again instead of the next page); the script detects it and
-exits 2 rather than sweeping a truncated site list. **Delete this script after Pantheon's CDN
-migration** — checklist in `development/2026-07-28-platform-domain-util/SPEC.md` §14.
+`find-platform-domains-dns.py` is a committed symlink to the script above, same convention as
+`pantheon-sitehealth-emails.py`: ruff, pyright, and CodeGraph key off the `.py` extension and
+would otherwise be blind to the extension-less real file. It uses the Pantheon API (machine
+token from `$PANTHEON_MACHINE_TOKEN` or `~/.terminus/cache/tokens/`), and its DNS walk is a
+**copy** of `check/pantheon_cdn_change/chain.py` plus `psh/dns_classify.py`'s resolver seam —
+copied, not imported, so most of deleting this feature is `git rm` of those three files (the
+full checklist, including two `pyproject.toml` entries and a `ruff-check.sh` case arm, is
+`development/2026-07-28-platform-domain-util/SPEC.md` §14). Note the API's site-list cursor has
+a silent failure mode (it can return page 1 again instead of the next page); the script detects
+it and exits 2 rather than sweeping a truncated site list. **Delete this script after Pantheon's
+CDN migration** — checklist in `development/2026-07-28-platform-domain-util/SPEC.md` §14.
 
 ## Required runtime credentials / external tools
 

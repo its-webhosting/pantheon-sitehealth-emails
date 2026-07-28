@@ -23,6 +23,7 @@ import dataclasses
 import io
 import json
 import os
+import signal
 import struct
 import sys
 import time
@@ -89,6 +90,19 @@ def warning(message):
     be reconcilable (PD#5).
     """
     print(f"WARNING: {message}", file=sys.stderr, flush=True)
+
+
+def retry(message):
+    """A transient condition being retried automatically -- NOT counted as indeterminate.
+
+    Fix round 1, R1.  org_sites()'s ignored-cursor retry (SPEC section 4.1) used to reuse
+    skipped(), but SKIPPED: is defined as "produced no row and WAS counted as indeterminate"
+    (SPEC section 8) -- and a retry that goes on to succeed is never counted anywhere, since it
+    happens entirely inside prepare_sweep(), before any Counters object exists.  That broke the
+    one property SKIPPED: exists to guarantee: `grep -c SKIPPED` reconciling exactly against the
+    final `indeterminate=N`.  A third prefix keeps that reconciliation exact.
+    """
+    print(f"RETRY: {message}", file=sys.stderr, flush=True)
 
 
 def normalize(name):
@@ -225,7 +239,14 @@ def machine_token():
         raise MachineTokenError(
             f"no machine token: {cache} does not exist and $PANTHEON_MACHINE_TOKEN is unset. "
             "Authenticate terminus, or set the environment variable.")
-    files = sorted(p for p in cache.iterdir() if p.is_file())
+    try:
+        # Fix round 1, C1.  This scan sat outside any try/except: an unreadable cache directory
+        # (e.g. left root-owned by a `sudo terminus auth:login`) raised an uncaught
+        # PermissionError -- an ordinary OSError -- which escaped main() entirely (SPEC G2 says
+        # "unreadable ... is an error", never an uncaught traceback at exit 1).
+        files = sorted(p for p in cache.iterdir() if p.is_file())
+    except OSError as e:
+        raise MachineTokenError(f"could not list {cache}: {e}") from e
     if len(files) != 1:
         raise MachineTokenError(
             f"no machine token: expected exactly one file in {cache}, found {len(files)}"
@@ -304,24 +325,26 @@ class ApiSession:
         transport_attempts = 0
         reauthed = False
         # `path` is the one caller-supplied segment reaching this f-string.  SPEC section 3
-        # requires the SITE argv to be quote(name, safe="")-encoded before it gets here, but
-        # org_id (read straight from TOML) and the API's own site/env ids are NOT quoted --
-        # carry-forward from the task 5 dispatch (item 7).  httpx.InvalidURL and
-        # httpx.StreamError are NOT httpx.HTTPError subclasses (verified, httpx 0.28.1), so a
-        # hostile or malformed org_id -- e.g. a literal newline, valid inside a TOML basic
-        # string -- reached this call as an unnamed exit-1 traceback until the except clause
-        # below folded them into the existing transport-retry-then-fail path.  Both are
-        # deterministic for a fixed path, so the one wasted RETRY_SLEEP buys nothing, but
-        # reusing the existing branch is the smallest change that converts either into a named
-        # PantheonApiError (SPEC section 7's exit 1 is reserved for "completed with
-        # indeterminates", never for an uncaught exception).
+        # requires the SITE argv to be quote(name, safe="")-encoded before it gets here, and
+        # org_id (read straight from TOML, quoted in org_sites() per fix round 1, m3) is now
+        # quoted too -- but a caller could still hand this method something that produces an
+        # invalid URL by construction.  httpx.InvalidURL is NOT an httpx.HTTPError subclass
+        # (verified, httpx 0.28.1), so it bypassed this handler entirely until the except clause
+        # below folded it in (carry-forward from the task 5 dispatch, item 7): a hostile or
+        # malformed value -- e.g. a literal newline, valid inside a TOML basic string -- reached
+        # this call as an unnamed exit-1 traceback (SPEC section 7's exit 1 is reserved for
+        # "completed with indeterminates", never for an uncaught exception).  httpx.StreamError
+        # is deliberately NOT included here (fix round 1, m2): it is raised by response-streaming
+        # misuse, which this synchronous self._client.get(...) call never performs, so it would
+        # be an untested, unreachable-by-construction except arm -- exactly the kind of
+        # instrument that reads as load-bearing to a future maintainer but cannot go red.
         while True:
             try:
                 response = self._client.get(
                     f"{API_BASE}{path}",
                     headers={"Authorization": f"Bearer {self.token}",
                              "User-Agent": USER_AGENT})
-            except (httpx.HTTPError, httpx.InvalidURL, httpx.StreamError) as e:
+            except (httpx.HTTPError, httpx.InvalidURL) as e:
                 transport_attempts += 1
                 if transport_attempts > 1:
                     raise PantheonApiError(f"{path}: {e}") from e
@@ -399,12 +422,19 @@ def org_sites(get, org_id):
       * A non-empty page that contributes zero new ids means the cursor was ignored.  Retry the
         SAME cursor; if it keeps happening, raise -- a short list here is a silent truncation of
         the whole sweep, which the CSV cannot reveal.
+
+    Fix round 1, m3: org_id is quote(..., safe="")-encoded before it reaches the URL.  Without
+    it, an org_id containing '#'/'?' (a config typo, not necessarily hostile) silently requests
+    a DIFFERENT resource (`/organizations/abc` for `org_id = "abc#frag"`) rather than failing --
+    loud in practice today (a 404 -> exit 2), but silent-wrong-resource is the failure class
+    SPEC section 3 already requires quoting against for the SITE argv; org_id gets the same
+    treatment for the same reason.
     """
     collected = {}
     cursor = None
     ignored = 0
     for _page in range(MAX_PAGES):
-        path = f"/organizations/{org_id}/memberships/sites?limit={PAGE_LIMIT}"
+        path = f"/organizations/{quote(org_id, safe='')}/memberships/sites?limit={PAGE_LIMIT}"
         if cursor is not None:
             path += f"&start={cursor}"
         page = get(path)
@@ -425,7 +455,7 @@ def org_sites(get, org_id):
                     "were listed, so the sweep would be silently incomplete. "
                     f"Run 'terminus org:site:list {org_id} --format=json | jq length' to check "
                     f"whether {len(collected)} is the true site count (SPEC section 4.1)")
-            skipped(
+            retry(
                 f"site listing cursor {cursor} was ignored (page repeated); retrying "
                 f"({ignored}/{CURSOR_ATTEMPTS - 1})")
             time.sleep(RETRY_SLEEP)
@@ -693,9 +723,12 @@ def main(argv):
 
     try:
         session, sites = prepare_sweep(options, note)
-    except StartupError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+    except (KeyboardInterrupt, StartupError) as e:
+        # Both routed through one small helper (fix round 1, m6) rather than two more `return`
+        # statements inline: main() already sits at ruff's PLR0911 limit by design (the module
+        # docstring on prepare_sweep records why it was split out in the first place), and a bare
+        # `except KeyboardInterrupt: ... return 130` here would push it back over.
+        return report_startup_failure(e)
 
     sweeper = Sweeper(session.get, csv.writer(sys.stdout, lineterminator="\n"), sys.stdout,
                       verbose=options.verbose)
@@ -740,6 +773,28 @@ class StartupError(Exception):
     """The sweep could not be started: SPEC G1-G4b, or a listing-time G7a. Always exit 2."""
 
 
+def report_startup_failure(e):
+    """Print the right operator-facing message for a prepare_sweep()-time failure, and return
+    the matching exit code.
+
+    Fix round 1, m6.  KeyboardInterrupt during prepare_sweep() (site listing: up to 5 pages plus
+    two 2-second cursor retries, SPEC section 4.1 -- a real Ctrl-C window) previously had no
+    handler at all, so it propagated as a raw Python traceback; CPython exits 130 on an uncaught
+    KeyboardInterrupt at the top level, so the exit-code contract already held, but the operator
+    got a traceback instead of the program's own message shape.  There is no Sweeper yet at this
+    point -- the same "nothing to count" state SPEC section 8 already carves out for G1-G4b --
+    so this is the smallest message that is still visible (PD#1) without inventing counts that
+    don't exist. Split into its own function, rather than two more `return` statements inline in
+    main(), because main() already sits at ruff's PLR0911 limit by design (see prepare_sweep's
+    own docstring below for why it was split out in the first place).
+    """
+    if isinstance(e, KeyboardInterrupt):
+        print("ERROR: interrupted before the sweep began", file=sys.stderr)
+        return 130
+    print(f"ERROR: {e}", file=sys.stderr)
+    return 2
+
+
 def prepare_sweep(options, note):
     """Config -> session -> site list, or StartupError with an operator-ready message.
 
@@ -760,7 +815,12 @@ def prepare_sweep(options, note):
         raise StartupError(f"{options.config} has no usable [Pantheon].org_id ({e!r})") from e
     try:
         session = build_session(notify=note)
-    except (MachineTokenError, PantheonApiError) as e:
+    except (MachineTokenError, PantheonApiError, OSError) as e:
+        # OSError, belt-and-braces (fix round 1, C1): machine_token() now converts every OSError
+        # it can reach into a named MachineTokenError, but this guard means a future OSError from
+        # anywhere else in build_session() -- e.g. httpx.Client construction -- still routes to
+        # exit 2 rather than an uncaught traceback, instead of relying solely on machine_token()
+        # never missing a case.
         raise StartupError(str(e)) from e
     try:
         sites = (named_sites(session.get, options.site) if options.site
@@ -779,13 +839,28 @@ def report_stop(sweeper, reason):
     operator most needs to know where they are.  And it printed a COUNT of unreached sites
     rather than their names, which is not a recovery instruction: the order is ascending by site
     UUID and the operator has no copy of that list.  The names are already in hand.
+
+    Sets SIGINT to SIG_IGN before printing (fix round 1, m5): a second Ctrl-C landing mid-print
+    here could truncate the resume line, which is the whole recovery story per the paragraph
+    above.  Mirrors the main program's own abort_run() (CLAUDE.md section Database: "sets SIGINT
+    to SIG_IGN so a second Ctrl-C cannot truncate the flush").  A test driving this in-process
+    MUST monkeypatch signal.signal, or SIG_IGN persists for the REST of that pytest session --
+    signal handlers are process-global and are not restored automatically (the identical trap
+    CLAUDE.md's Testing section documents for abort_run()).
     """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     print(f"ERROR: sweep did not complete ({reason})", file=sys.stderr)
     print(sweeper.counters.summary(), file=sys.stderr)
     if sweeper.last_site:
         print(f"Stopped after {sweeper.last_site}.", file=sys.stderr)
     else:
-        print(f"Stopped during {sweeper.current_site or 'startup'}.", file=sys.stderr)
+        # Fix round 1, m7: the `or 'startup'` fallback this line used to carry was unreachable
+        # through any real call site -- sweep() sets current_site to the site's name before
+        # sweep_site() (where any failure occurs) is ever called, so current_site cannot be
+        # falsy by the time main()'s exception handlers call this function.  Removed rather than
+        # kept "just in case": an untested, unreachable-by-construction fallback is exactly the
+        # kind of instrument that reads as load-bearing to a future maintainer but cannot go red.
+        print(f"Stopped during {sweeper.current_site}.", file=sys.stderr)
     if sweeper.remaining:
         names = " ".join(site["name"] for site in sweeper.remaining)
         count = len(sweeper.remaining)

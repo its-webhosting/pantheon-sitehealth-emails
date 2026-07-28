@@ -360,7 +360,7 @@ produce output.
 | G2 | Machine token unresolvable (0 or >1 cache files, unreadable, no `token` key) | — | fatal message naming what was found | — | — | no, **exit 2** |
 | G3 | `POST /authorize/machine-token` fails | — | fatal message | — | — | no, **exit 2** |
 | G4 | Organization site listing fails, or a `SITE` arg's name lookup fails | 1 (per §7.1) | fatal message | — | — | no, **exit 2** |
-| G4a | A **non-empty** site-list page contributes zero new ids (the cursor was silently ignored, §4.1). An **empty** page is not this condition — it is a legitimate end of collection | 3 attempts of the same cursor, `RETRY_SLEEP` apart | `SKIPPED: site listing cursor was ignored …` on each attempt that is followed by another; then a fatal message that MUST name the cross-check: `run 'terminus org:site:list <org_id> --format=json \| jq length' to check whether <N> is the true site count` — with the real org id interpolated, because `terminus org:site:list` **requires** the organization as a positional argument (verified: without it, `Not enough arguments (missing: "organization")`), and a cross-check command that fails is worse than none (§4.1's accepted residual) | — | — | no, **exit 2** after the third |
+| G4a | A **non-empty** site-list page contributes zero new ids (the cursor was silently ignored, §4.1). An **empty** page is not this condition — it is a legitimate end of collection | 3 attempts of the same cursor, `RETRY_SLEEP` apart | `RETRY: site listing cursor was ignored …` on each attempt that is followed by another (amended, fix round 1: was `SKIPPED:`, which broke §8's `SKIPPED:`-vs-`indeterminate=N` reconciliation on a retry that goes on to succeed — see §8); then a fatal message that MUST name the cross-check: `run 'terminus org:site:list <org_id> --format=json \| jq length' to check whether <N> is the true site count` — with the real org id interpolated, because `terminus org:site:list` **requires** the organization as a positional argument (verified: without it, `Not enough arguments (missing: "organization")`), and a cross-check command that fails is worse than none (§4.1's accepted residual) | — | — | no, **exit 2** after the third |
 | G4b | The site-list loop exceeds 100 pages | — | fatal message | — | — | no, **exit 2** |
 | G5 | `environments` call fails for a site | 1 | `SKIPPED: <site>: could not list environments: <reason>` | no | **yes** (once for the site) | yes, next site |
 | G6 | `domains` call fails for an environment | 1 | `SKIPPED: <site>.<env>: could not list domains: <reason>` | no | **yes** (once for the env) | yes, next env |
@@ -376,7 +376,7 @@ produce output.
 | G13a | Hit whose `dns_record` is **not** the custom domain — the record to rewrite is a mid-chain alias | — | `WARNING: … the record to change is <dns_record>, not the custom domain; verify who else points at it before rewriting` | **yes** | no | yes |
 | G14 | Hit, clean | — | nothing | **yes** | no | yes |
 | G15 | `KeyboardInterrupt` (Ctrl-C) | — | the summary line for the work done so far, plus the last site processed and how many remain (§7.3) | rows already written stay written | — | no, **exit 130** |
-| G16 | `BrokenPipeError` on stdout (`… \| head`) | — | `ERROR: stdout closed (broken pipe); stopping`, **followed by the §7.3 abort report** — stderr is unaffected by a closed stdout, so there is no reason to withhold it. The handler MUST also `os.dup2` devnull onto stdout before returning: CPython re-flushes stdout at interpreter shutdown, that flush raises again on a closed pipe, and a failed final flush becomes **exit 120**, overriding the 2 (verified live 2026-07-28) | — | — | no, **exit 2** |
+| G16 | `BrokenPipeError` on stdout (`… \| head`) | — | `ERROR: sweep did not complete (stdout closed (broken pipe))`, **followed by the §7.3 abort report** — this reuses the same shared abort-reporting function every exit-2/130 path calls (`report_stop`), which is why all of them share this `ERROR: sweep did not complete (<reason>)` shape rather than G16 having bespoke wording; stderr is unaffected by a closed stdout, so there is no reason to withhold it. The handler MUST also `os.dup2` devnull onto stdout before returning: CPython re-flushes stdout at interpreter shutdown, that flush raises again on a closed pipe, and a failed final flush becomes **exit 120**, overriding the 2 (verified live 2026-07-28) | — | — | no, **exit 2** |
 | G17 | An API response has an unexpected shape (a missing/wrongly-typed key) | — | named `PantheonApiShapeError`, reported exactly like G4/G5/G6 depending on which call produced it | no | **yes** when per-site/per-env | as per G4/G5/G6 |
 | G18 | Anything else uncaught | — | the exception, then `ERROR: unexpected failure; the sweep is incomplete` | — | — | no, **exit 2** |
 
@@ -441,12 +441,21 @@ valid; the sweep never rewrites or retracts a row.
 - **stdout**: CSV rows only.
 - **stderr, always**: the per-finding lines named in §7, and a final summary line:
 
-  Two prefixes, because one was ambiguous. `SKIPPED:` marks a domain, environment or site that
-  produced **no row and was counted as indeterminate**; `WARNING:` marks a finding that
-  **still produced its row** (G12, G13, G13a). With a single `ATTENTION:` prefix, an operator
-  reading `indeterminate=17` at the end of a 38-minute sweep could not `grep` out those 17 —
-  the count and the log could not be reconciled, which is PD#5's "surfaced actionably" failing
-  in the one place it matters.
+  Three prefixes (amended, fix round 1 of task 5), because one was ambiguous and a second turned
+  out to be too broad. `SKIPPED:` marks a domain, environment or site that produced **no row and
+  was counted as indeterminate**; `WARNING:` marks a finding that **still produced its row**
+  (G12, G13, G13a); `RETRY:` marks a transient condition being retried automatically and is
+  **never counted** — currently only the G4a ignored-cursor retry, which happens entirely inside
+  `prepare_sweep()`, before any counters exist, and is not reported at all if the retry
+  eventually succeeds and the sweep proceeds normally. With a single `ATTENTION:` prefix, an
+  operator reading `indeterminate=17` at the end of a 38-minute sweep could not `grep` out those
+  17 — the count and the log could not be reconciled, which is PD#5's "surfaced actionably"
+  failing in the one place it matters. The original two-prefix design reused `SKIPPED:` for the
+  G4a retry line too, which broke the same reconciliation the scheme exists to provide: a G4a
+  retry that goes on to succeed is `SKIPPED:`-prefixed but never counted anywhere, so
+  `grep -c SKIPPED` could exceed the final `indeterminate=N` on such a run. `RETRY:` closes that
+  gap by removing the retry line from the `SKIPPED:` count entirely, rather than inventing a
+  place to count it.
 
   `sites=N envs=N custom_domains=N rows=N indeterminate=N`. The summary is printed on **every**
   path that entered the site loop, including G15 (Ctrl-C) and the exit-2 aborts — a partial
