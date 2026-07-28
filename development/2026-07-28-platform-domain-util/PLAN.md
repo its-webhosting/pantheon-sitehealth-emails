@@ -816,6 +816,20 @@ def test_org_sites_handles_an_empty_organization(fpd):
     assert fpd.org_sites(get, "org-1") == []
 
 
+def test_org_sites_handles_a_site_count_that_is_an_exact_multiple_of_the_page_size(fpd):
+    # SPEC section 4.1: the FINAL boundary cursor really does return [] (verified live, 7/7).
+    # An organization with exactly 200 sites therefore ends on an empty page, which must
+    # terminate the loop normally -- NOT trip the zero-new-ids reset detector, which would
+    # turn a perfectly good listing into a fatal error.
+    pages = [[fake_site(n) for n in range(100)],
+             [fake_site(n) for n in range(100, 200)],
+             []]
+    get = paged_get(pages)
+    sites = fpd.org_sites(get, "org-1")
+    assert len(sites) == 200
+    assert get.cursors == [None, "id-0099", "id-0199"]
+
+
 def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch):
     # SPEC section 4.1: the API sometimes ignores `start` and returns page 1 again.  The loop must
     # notice (zero new ids) and retry the SAME cursor -- not spin, not truncate.
@@ -910,15 +924,20 @@ class SiteListingError(Exception):
 def org_sites(get, org_id):
     """Every site in the organization, as [{"id", "name"}], in the API's ascending-id order.
 
-    The cursor has a SILENT failure mode (SPEC section 4.1): the API sometimes ignores `start`
-    and returns page 1 again instead of an error or an empty page.  Two rules follow, and both
-    are load-bearing:
+    The cursor has a SILENT failure mode, characterized in full in this directory's
+    pantheon-api-pagination-bug-report.txt (SPEC section 4.1): `start` is honored ONLY when the
+    id is the last element of a page the API has already computed.  Any other id returns the
+    FIRST page again, with HTTP 200 and no error.  Three rules follow, all load-bearing:
 
-      * NEVER stop on an empty page -- a cursor past the end returns page 1, so "loop until
-        empty" never terminates.  Stop on a SHORT page instead.
-      * A page that contributes zero new ids means the cursor was ignored.  Retry the SAME
-        cursor; if it keeps happening, raise -- a short list here is a silent truncation of the
-        whole sweep, which the CSV cannot reveal.
+      * Pass the last id of the page just received, and nothing else.  That is always a
+        boundary, which is why this pattern works where arbitrary cursors do not.
+      * Stop on a SHORT page, never on an empty one.  An empty page is legitimate (an
+        organization holding an exact multiple of PAGE_LIMIT sites ends on one, verified live),
+        but an UNRECOGNIZED cursor returns a full first page rather than [], so "loop until
+        empty" never terminates once the loop leaves the boundaries.
+      * A non-empty page that contributes zero new ids means the cursor was ignored.  Retry the
+        SAME cursor; if it keeps happening, raise -- a short list here is a silent truncation of
+        the whole sweep, which the CSV cannot reveal.
     """
     collected = {}
     cursor = None
@@ -1495,7 +1514,7 @@ indeterminates, 2 = could not complete.
 
 ```bash
 ./find-platform-domains-dns its-wws-test1     # one site
-./find-platform-domains-dns > domains.csv     # the whole org, ~20 minutes
+./find-platform-domains-dns > domains.csv     # the whole org, ~21 minutes
 ```
 
 It uses the Pantheon API (machine token from `$PANTHEON_MACHINE_TOKEN` or

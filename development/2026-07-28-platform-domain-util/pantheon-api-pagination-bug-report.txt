@@ -1,0 +1,382 @@
+================================================================================
+BUG REPORT
+Pantheon API: the organization site-list pagination cursor (`start`) is silently
+ignored for most site ids, and the first page is returned again
+================================================================================
+
+Date:           2026-07-28
+Reported by:    University of Michigan, ITS Web Hosting Services
+API base:       https://api.pantheon.io/v0
+Endpoint:       GET /v0/organizations/{org_id}/memberships/sites?limit=&start=
+Organization:   23c7208e-5f2a-4388-9fc4-5c3a038ef8b9  (408 sites at time of test)
+Client:         curl 8.x, direct HTTPS, no proxy
+Severity:       High.  The failure is silent: it produces a wrong-but-plausible
+                result with HTTP 200 and no error, so a caller cannot detect it
+                without independently knowing the correct answer.
+
+
+SUMMARY
+-------
+
+The swagger for this endpoint documents:
+
+    "Pagination is handled via query parameters (limit and start)."
+    start -- "Pagination cursor (site UUID to start after)"
+
+For most site UUIDs, `start` is not honored.  Instead of returning the sites
+after the cursor, the API returns the FIRST page of the collection again, with
+HTTP 200 and no error, warning, or header indicating that the cursor was
+disregarded.
+
+The cursor IS honored when the supplied id happens to be the last id of a page
+the API has already returned for that organization -- which is why the obvious
+"walk" pattern (pass the last id of each page you receive) works, and why the
+defect is easy to miss.  Any other id silently restarts the collection.
+
+
+WHAT THE OUTPUT SHOULD BE
+-------------------------
+
+Let S[1..408] be the organization's sites in the order this endpoint returns
+them (ascending by site id; the endpoint's own order, confirmed stable across
+repeated calls).
+
+    Request:  ...memberships/sites?limit=100&start=<id of S[101]>
+    Expected: a 100-element array whose first element is S[102]
+
+That is what "site UUID to start after" means, and it is what the endpoint does
+when the cursor is the last id of a previously returned page:
+
+    Request:  ...memberships/sites?limit=100&start=<id of S[100]>
+    Expected: a 100-element array whose first element is S[101]      <-- works
+
+
+WHAT THE OUTPUT ACTUALLY IS
+---------------------------
+
+    Request:  ...memberships/sites?limit=100&start=<id of S[101]>
+              (concretely: start=34562508-564e-4122-9e92-38118b7fba3f)
+
+    Actual:   HTTP 200
+              a 100-element array whose first element is S[1]
+              (concretely: 004921c4-7b9e-4f71-8649-30f5c06ed672)
+
+              i.e. the first page of the collection, exactly as if `start` had
+              not been supplied at all.  No error field, no 4xx, no warning
+              header.
+
+Reproduced 5 times out of 5 for that cursor, and 5 out of 5 for the id of S[1].
+The control case (cursor = id of S[100]) succeeded 5 out of 5 in the same run.
+
+
+WHY THIS MATTERS
+----------------
+
+1. Silent truncation.  A caller that paginates with any cursor other than a
+   previously-returned page boundary -- for example, resuming a long job from a
+   stored site id -- receives the first page again.  With de-duplication it sees
+   a short list and believes the organization is smaller than it is; without
+   de-duplication it processes the same 100 sites forever.  Either way nothing
+   in the response says so.
+
+2. "Loop until an empty page" does not terminate.  Because an unrecognized
+   cursor yields a full first page rather than an empty array, the standard
+   termination condition for cursor pagination becomes an infinite loop.
+   Callers must instead stop on a short page, which is only correct if the API
+   never returns a short non-final page.
+
+3. It defeats the natural correctness check.  A caller cannot verify its own
+   pagination, because the malformed answer is indistinguishable from a
+   legitimate first page.
+
+For context, `terminus org:site:list` returns all 408 sites in a single call and
+is unaffected; the problem is specific to using this endpoint's cursor directly.
+
+
+ADDITIONAL OBSERVATIONS
+-----------------------
+
+These are reported as observations, not as a diagnosis of the mechanism.
+
+* Cursor validity tracked page boundaries.  In a positional scan of one
+  organization (408 sites, limit=100), `start` was honored at positions 100,
+  200, 300, 400 and 408 -- the last element of each page the API itself
+  returns -- and ignored at positions 1, 2, 50, 99, 101, 102, 150, 199, 201,
+  250, 299, 301, 350, 399, 401, 405 and 407.
+
+* Cursor validity appeared to depend on earlier requests.  The id at position 50
+  was ignored when tested cold, then honored consistently after a single
+  `limit=50` request (for which position 50 IS a page boundary) had been made
+  earlier in the same session -- including for subsequent `limit=100` requests.
+  This suggests `start` is resolved against pagination the backend has already
+  computed, rather than by a `WHERE id > start` predicate.
+
+* The cursor past the end of the collection behaved inconsistently.  Using the
+  id of the LAST site returned an empty array (correct) in later runs, but in an
+  early run returned a full 100-element first page.
+
+* Every observation above was made with HTTP 200 responses.  No request in any
+  of these tests returned a 4xx or 5xx status.
+
+
+REPRODUCTION
+------------
+
+The script below is standalone: it needs only bash, curl and jq, and reads
+nothing but the credentials described in its header.  It is read-only apart from
+the POST that exchanges a machine token for a session token.
+
+  * It uses $PANTHEON_MACHINE_TOKEN if that is set, and otherwise reads the
+    token from the single file in ~/.terminus/cache/tokens/.
+  * $PANTHEON_ORG_ID selects the organization, defaulting to
+    23c7208e-5f2a-4388-9fc4-5c3a038ef8b9.
+  * $REPEATS sets how many times each case is probed (default 5).
+  * It requires an organization with more than 100 sites.
+
+It first collects the reference site list using the cursor pattern that works,
+then probes four cursors and tallies the verdicts.  CASE A and CASE D are
+controls that should pass; CASE B and CASE C are the defect.  The cursors in
+CASE B and CASE C are chosen so that they can never coincidentally be page
+boundaries of the caller's own pagination (position limit+1 and position 1).
+
+An identical copy of this script is stored alongside this report as
+reproduce-pagination-bug.sh.
+
+--------------------------- begin reproduce-pagination-bug.sh ------------------
+#!/bin/bash
+#
+# Reproduce: the Pantheon API's organization site-list pagination cursor (`start`) is
+# silently ignored for most site ids -- the API answers HTTP 200 with the FIRST page
+# again, instead of the page after the cursor and instead of any error.
+#
+# Standalone: needs only bash, curl and jq.  Nothing else is read, sourced or imported.
+#
+# Credentials:
+#   $PANTHEON_MACHINE_TOKEN   used if set; otherwise the single JSON file in
+#                             ~/.terminus/cache/tokens/ is read (Terminus' own cache).
+# Organization:
+#   $PANTHEON_ORG_ID          defaults to 23c7208e-5f2a-4388-9fc4-5c3a038ef8b9
+# Tuning:
+#   $REPEATS                  probes per case (default 5), so each verdict is a tally
+#                             rather than a single sample.
+#
+# Read-only: every request is a GET except the POST that exchanges the machine token
+# for a session token.  Requires an organization with more than 100 sites.
+#
+set -u
+
+API="https://api.pantheon.io/v0"
+PANTHEON_ORG_ID="${PANTHEON_ORG_ID:-23c7208e-5f2a-4388-9fc4-5c3a038ef8b9}"
+REPEATS="${REPEATS:-5}"
+LIMIT=100          # the maximum this endpoint documents
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+for tool in curl jq; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool is required but not on PATH"
+done
+
+# ---------------------------------------------------------------- credentials --
+if [ -n "${PANTHEON_MACHINE_TOKEN:-}" ]; then
+    machine_token="$PANTHEON_MACHINE_TOKEN"
+    echo "Using \$PANTHEON_MACHINE_TOKEN"
+else
+    cache="$HOME/.terminus/cache/tokens"
+    [ -d "$cache" ] || die "\$PANTHEON_MACHINE_TOKEN is unset and $cache does not exist"
+    token_file=""
+    count=0
+    for candidate in "$cache"/*; do
+        [ -f "$candidate" ] || continue
+        token_file="$candidate"
+        count=$((count + 1))
+    done
+    [ "$count" -eq 1 ] || die "expected exactly one token file in $cache, found $count -- set \$PANTHEON_MACHINE_TOKEN to choose one"
+    machine_token=$(jq -r '.token // empty' < "$token_file")
+    [ -n "$machine_token" ] || die "$token_file has no .token"
+    echo "Using the machine token from $token_file"
+fi
+
+session=$(curl -s -X POST -H "Content-Type: application/json" \
+    "$API/authorize/machine-token" \
+    -d "{\"machine_token\": \"$machine_token\", \"client\": \"pagination-bug-report\"}" \
+    | jq -r '.session // empty')
+[ -n "$session" ] || die "could not exchange the machine token for a session token"
+
+echo "Organization: $PANTHEON_ORG_ID"
+echo "Endpoint:     GET $API/organizations/\$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT&start=<site id>"
+echo "Repeats per case: $REPEATS"
+echo
+
+# ------------------------------------------------------------------- helpers --
+# get_page [cursor] -> the raw JSON array
+get_page() {
+    local url="$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT"
+    [ -n "${1:-}" ] && url="$url&start=$1"
+    curl -s -H "Authorization: Bearer $session" "$url"
+}
+
+# classify <json page> <expected first id, or EMPTY> -> CORRECT | PAGE-1-AGAIN | OTHER
+classify() {
+    local length first
+    length=$(echo "$1" | jq 'length')
+    first=$(echo "$1" | jq -r '.[0].id // empty')
+    if [ "$2" = "EMPTY" ]; then
+        [ "$length" -eq 0 ] && { echo CORRECT; return; }
+    elif [ "$first" = "$2" ]; then
+        echo CORRECT; return
+    fi
+    if [ "$first" = "$page1_first" ]; then echo PAGE-1-AGAIN; else echo OTHER; fi
+}
+
+# probe <label> <cursor> <expected first id, or EMPTY>
+probe() {
+    local label="$1" cursor="$2" expected="$3"
+    local correct=0 repeated=0 other=0 i
+    for ((i = 0; i < REPEATS; i++)); do
+        case $(classify "$(get_page "$cursor")" "$expected") in
+            CORRECT)      correct=$((correct + 1)) ;;
+            PAGE-1-AGAIN) repeated=$((repeated + 1)) ;;
+            *)            other=$((other + 1)) ;;
+        esac
+    done
+    printf '  %-46s correct=%d  RETURNED-PAGE-1-AGAIN=%d  other=%d\n' \
+        "$label" "$correct" "$repeated" "$other"
+}
+
+# ------------------------------------------------- collect the reference list --
+echo "Collecting the site list, cursor = last id of each full page (the pattern that works) ..."
+page=$(get_page)
+page1_first=$(echo "$page" | jq -r '.[0].id')
+page1_length=$(echo "$page" | jq 'length')
+[ "$page1_length" -eq "$LIMIT" ] || die "this organization has only $page1_length sites; reproducing needs more than $LIMIT"
+
+all_ids=$(echo "$page" | jq -r '.[].id')
+cursor=$(echo "$page" | jq -r '.[-1].id')
+pages=1
+while :; do
+    page=$(get_page "$cursor")
+    length=$(echo "$page" | jq 'length')
+    [ "$length" -eq 0 ] && break
+    [ "$(echo "$page" | jq -r '.[0].id')" = "$page1_first" ] && \
+        die "the cursor was ignored while collecting the reference list; re-run"
+    all_ids="$all_ids"$'\n'$(echo "$page" | jq -r '.[].id')
+    pages=$((pages + 1))
+    [ "$length" -lt "$LIMIT" ] && break
+    cursor=$(echo "$page" | jq -r '.[-1].id')
+done
+
+total=$(echo "$all_ids" | wc -l | tr -d ' ')
+unique=$(echo "$all_ids" | sort -u | wc -l | tr -d ' ')
+[ "$total" = "$unique" ] || die "the reference walk itself returned duplicates ($total collected, $unique unique); re-run"
+echo "  $total sites over $pages pages, ascending by id, no duplicates"
+echo
+
+id_at() { echo "$all_ids" | sed -n "$1p"; }      # 1-based position in that order
+
+# --------------------------------------------------------------- the evidence --
+echo "CASE A (control) -- cursor = last id of page 1 (position $LIMIT)."
+echo "                    Correct answer: the page starting at site $((LIMIT + 1))."
+probe "start=<id at position $LIMIT>" "$(id_at $LIMIT)" "$(id_at $((LIMIT + 1)))"
+echo
+echo "CASE B (defect) -- cursor = first id of page 2 (position $((LIMIT + 1)))."
+echo "                   Correct answer: the page starting at site $((LIMIT + 2))."
+probe "start=<id at position $((LIMIT + 1))>" "$(id_at $((LIMIT + 1)))" "$(id_at $((LIMIT + 2)))"
+echo
+echo "CASE C (defect) -- cursor = the FIRST site id (position 1)."
+echo "                   Correct answer: the page starting at site 2."
+probe "start=<id at position 1>" "$(id_at 1)" "$(id_at 2)"
+echo
+echo "CASE D (context) -- cursor = the LAST site id (position $total)."
+echo "                    Correct answer: an empty array."
+probe "start=<id at position $total>" "$(id_at "$total")" "EMPTY"
+echo
+
+# ------------------------------------------------- one failing request in full --
+echo "The failing request from CASE B, in full:"
+echo
+echo "  curl -s -H \"Authorization: Bearer \$SESSION\" \\"
+echo "    \"$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT&start=$(id_at $((LIMIT + 1)))\""
+echo
+echo "  expected first id: $(id_at $((LIMIT + 2)))   (the site after the cursor)"
+echo "  actual   first id: $(get_page "$(id_at $((LIMIT + 1)))" | jq -r '.[0].id')   (the first site in the collection)"
+echo "  HTTP status:       $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $session" \
+    "$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT&start=$(id_at $((LIMIT + 1)))")"
+echo
+echo "Any nonzero RETURNED-PAGE-1-AGAIN count above is the defect: a cursored request was"
+echo "answered with the first page of the collection, HTTP 200, no error of any kind."
+---------------------------- end reproduce-pagination-bug.sh -------------------
+
+
+OBSERVED OUTPUT
+---------------
+
+Run against organization 23c7208e-5f2a-4388-9fc4-5c3a038ef8b9 on 2026-07-28.
+This is the verbatim output, not a summary; the only alteration is the operator's
+token-file name on the first line, replaced with <redacted>:
+
+    Using the machine token from /home/node/.terminus/cache/tokens/<redacted>
+    Organization: 23c7208e-5f2a-4388-9fc4-5c3a038ef8b9
+    Endpoint:     GET https://api.pantheon.io/v0/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=100&start=<site id>
+    Repeats per case: 5
+
+    Collecting the site list, cursor = last id of each full page (the pattern that works) ...
+      408 sites over 5 pages, ascending by id, no duplicates
+
+    CASE A (control) -- cursor = last id of page 1 (position 100).
+                        Correct answer: the page starting at site 101.
+      start=<id at position 100>                     correct=5  RETURNED-PAGE-1-AGAIN=0  other=0
+
+    CASE B (defect) -- cursor = first id of page 2 (position 101).
+                       Correct answer: the page starting at site 102.
+      start=<id at position 101>                     correct=0  RETURNED-PAGE-1-AGAIN=5  other=0
+
+    CASE C (defect) -- cursor = the FIRST site id (position 1).
+                       Correct answer: the page starting at site 2.
+      start=<id at position 1>                       correct=0  RETURNED-PAGE-1-AGAIN=5  other=0
+
+    CASE D (context) -- cursor = the LAST site id (position 408).
+                        Correct answer: an empty array.
+      start=<id at position 408>                     correct=5  RETURNED-PAGE-1-AGAIN=0  other=0
+
+    The failing request from CASE B, in full:
+
+      curl -s -H "Authorization: Bearer $SESSION" \
+        "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=34562508-564e-4122-9e92-38118b7fba3f"
+
+      expected first id: 34d63387-d5e3-4791-9271-f58c15256ef4   (the site after the cursor)
+      actual   first id: 004921c4-7b9e-4f71-8649-30f5c06ed672   (the first site in the collection)
+      HTTP status:       200
+
+    Any nonzero RETURNED-PAGE-1-AGAIN count above is the defect: a cursored request was
+    answered with the first page of the collection, HTTP 200, no error of any kind.
+
+
+WHAT WE WOULD LIKE
+------------------
+
+Any one of the following would resolve this for API consumers:
+
+1. Honor `start` for any valid site id in the organization, as the swagger
+   description states -- i.e. return the sites ordered after that id.
+
+2. If a supplied cursor cannot be honored, respond with an error (for example
+   400) naming the problem, rather than returning the first page.  A loud
+   failure is far less damaging than a plausible wrong answer.
+
+3. Alternatively, document precisely which cursor values are valid, and return
+   an explicit next-page cursor (or a `Link: rel="next"` header) in each
+   response, so callers never have to construct one.
+
+A stated total count for the collection would also let callers verify their own
+pagination independently.
+
+
+WORKAROUND IN USE
+-----------------
+
+Pass `limit=100` and use as the cursor only the last id of the page just
+received; stop when a page contains fewer than 100 items (never when it is
+empty, per point 2 above).  Additionally, de-duplicate by site id and treat any
+page that contributes no new ids as an ignored cursor: retry the same cursor,
+and fail loudly rather than continuing, since the alternative is a silently
+incomplete result.

@@ -91,9 +91,9 @@ that trades speed or brevity for completeness is made for that reason.
 |---|---|
 | Apex / A-record legacy domains (a domain pointed straight at `23.185.0.4` / `2620:12a:8000::4` with no CNAME anywhere) | User decision, 2026-07-28: the downstream rewriter replaces CNAMEs only, so a domain with no CNAME is not actionable by it. Consequence accepted: such domains are absent from the CSV. |
 | Custom domains fronted by U-M Cloudflare | Another team owns them (PROMPT.md). No code is needed either way: a proxied domain resolves to Cloudflare A/AAAA records with no CNAME visible in public DNS, so the chain reaches a definitive no-hit on its own. |
-| Skipping the domains call for `initialized: false` environments | Measured saving is 8.9% of API calls (~1–2 min of a ~20 min sweep) and its safety rests on a 25-site sample, not a documented Pantheon guarantee. A wrong assumption produces a missing row — the one failure the output cannot reveal (PD#14). |
-| A per-run DNS memo cache | API calls (~2,000 × ~0.3 s) dominate the runtime; duplicate CNAME targets across custom domains are rare in this data. Not worth the extra state in the walk. |
-| Resumability / checkpointing | A whole re-run is ~20 minutes; `--resume-from` machinery (PD#7) is not worth it at that cost. Re-running is the recovery procedure. |
+| Skipping the domains call for `initialized: false` environments | Measured saving is 8.9% of API calls (~2 min of a ~21 min sweep) and its safety rests on a 25-site sample, not a documented Pantheon guarantee. A wrong assumption produces a missing row — the one failure the output cannot reveal (PD#14). |
+| A per-run DNS memo cache | API calls (~2,060 × 0.61 s measured) dominate the runtime; duplicate CNAME targets across custom domains are rare in this data. Not worth the extra state in the walk. |
+| Resumability / checkpointing | A whole re-run is ~21 minutes; `--resume-from` machinery (PD#7) is not worth it at that cost. Re-running is the recovery procedure. |
 | Parallelism | PROMPT.md: no significant work on speed. Sequential keeps the failure taxonomy (§7) trivially attributable. |
 | Recorded API fixtures / e2e tier | The script is deleted within months; hand-maintained fixtures would rot first. §10 covers the logic offline with injected fakes. |
 | Importing from `psh/` | PROMPT.md: copy, do not modularize, so deletion is a `git rm` of three paths. |
@@ -144,30 +144,53 @@ limit is not the same as no limit.
 
 ### 4.1 The pagination cursor's silent failure mode — READ THIS
 
-Measured 2026-07-28. The `start` cursor is **sometimes silently ignored**: instead of an error
-or an empty page, the API returns **page 1 again**. Observed with the 101st, 405th, 407th and
-408th site ids as cursors (repeatably), and **once** with a legitimate page-boundary id
-(`start=<200th>`, which then succeeded on 13 consecutive retries). The intermittency is not
-explained; it is only characterized. Two consequences are load-bearing:
+Measured 2026-07-28 and written up in full, with a standalone reproduction script, in
+`pantheon-api-pagination-bug-report.txt` and `reproduce-pagination-bug.sh` **in this
+directory** — that report is the authority for this section; re-run the script before
+trusting any of it a second time.
 
-1. **"Loop until an empty page" is an infinite loop.** The API never returns `[]` — a cursor
-   past the end returns page 1. NEVER write that stop condition.
-2. **A silently ignored cursor looks exactly like a complete sweep.** Without detection, the
-   loop either spins forever or (with a naive dedupe) returns a truncated list with no
-   indication — 100 of 408 sites, and the CSV cannot reveal the loss.
+**The cursor is honored only when the supplied id is the last element of a page the API has
+already computed for that organization.** For any other site id, the API returns **the first
+page again**, with HTTP 200 and no error, warning, or header. The failure is not random: a
+positional scan of the 408-site organization (`limit=100`) found `start` honored at positions
+100, 200, 300, 400 and 408 — every page boundary — and ignored at positions 1, 2, 50, 99, 101,
+102, 150, 199, 201, 250, 299, 301, 350, 399, 401, 405 and 407. The apparent flakiness in
+earlier notes was self-inflicted: an earlier `limit=50` request created a boundary at position
+50, after which that cursor stayed valid, including for later `limit=100` requests.
 
-What is reliable, measured over **7 consecutive full walks / 25 pages / 0 resets**, each
-yielding 408 unique ids identical to `terminus org:site:list`: `limit=100`, cursor = the
-**last id of the previous full page**, stop when a page returns fewer than 100 items.
+Three consequences are load-bearing:
 
-The implementation MUST therefore (G4a, §7):
+1. **The walk pattern is the only correct usage**, and it is structurally safe: passing the
+   last id of the page you just received always passes a boundary. Measured over **10+
+   consecutive full walks**, every one returning 408 unique ids identical to
+   `terminus org:site:list`'s 408, with zero resets.
+2. **"Loop until an empty page" is wrong**, though not for the reason first recorded here. The
+   final boundary cursor *does* return `[]` (CASE D of the report, 7/7) — but an *unrecognized*
+   cursor returns a full first page rather than `[]`, so a loop with that stop condition never
+   terminates once it goes off the boundary. Stop on a **short page** instead.
+3. **A silently ignored cursor is indistinguishable from a complete listing.** Without
+   detection, the loop either spins or (with a naive dedupe) returns 100 of 408 sites, and the
+   CSV cannot reveal the loss.
 
-- request `limit=100` and use the previous full page's last `site.id` as `start`;
+The implementation MUST therefore (G4a/G4b, §7):
+
+- request `limit=100` and use the previous full page's last **`site.id`** as `start` — the
+  swagger says the cursor is a site UUID; the element's top-level membership `id` is equal to
+  `site.id` for all 408 sites today, but that equality is an observation, not a contract;
 - keep a `seen` set of site ids and dedupe against it;
-- treat a page that contributes **zero new ids** as a cursor reset: sleep `RETRY_SLEEP` and
-  retry the **same** cursor, up to 3 attempts, then **exit 2** with a named error;
-- stop when a page returns fewer than 100 items;
+- treat a **non-empty** page that contributes **zero new ids** as a cursor reset: sleep
+  `RETRY_SLEEP` and retry the **same** cursor, up to 3 attempts, then **exit 2** with a named
+  error. The non-empty qualifier is load-bearing — without it, the legitimate final empty page
+  of an exact-multiple-of-100 organization is misread as a fault and aborts a good sweep;
+- stop when a page returns fewer than 100 items — including **zero** items, which is exactly
+  what an organization holding an exact multiple of 100 sites produces on its final request;
 - cap the loop at 100 pages (10,000 sites) as a runaway guard, exiting 2 if exceeded.
+
+If G4a ever fires in production, one documented recovery was observed but **not adopted**,
+because it rests on a single observation: re-issuing the *uncursored* first-page request
+appeared to re-establish a previously-ignored cursor's validity. Prefer switching the site list
+to `terminus org:site:list` (one call, all 408, no cursor) over building on that inference —
+see §15 question 4.
 
 **Transport.** One `httpx.Client` for the whole sweep, so ~2,000 requests share one TLS
 connection. `httpx` is already a direct dependency of this project (declared under the
@@ -295,7 +318,7 @@ produce output.
 | G2 | Machine token unresolvable (0 or >1 cache files, unreadable, no `token` key) | — | fatal message naming what was found | — | — | no, **exit 2** |
 | G3 | `POST /authorize/machine-token` fails | — | fatal message | — | — | no, **exit 2** |
 | G4 | Organization site listing fails, or a `SITE` arg's name lookup fails | 1 (per §7.1) | fatal message | — | — | no, **exit 2** |
-| G4a | A site-list page contributes zero new ids (the cursor was silently ignored, §4.1) | 3 attempts of the same cursor, `RETRY_SLEEP` apart | `ATTENTION: site listing cursor was ignored …` per attempt, then a fatal message | — | — | no, **exit 2** after the third |
+| G4a | A **non-empty** site-list page contributes zero new ids (the cursor was silently ignored, §4.1). An **empty** page is not this condition — it is a legitimate end of collection | 3 attempts of the same cursor, `RETRY_SLEEP` apart | `ATTENTION: site listing cursor was ignored …` per attempt, then a fatal message | — | — | no, **exit 2** after the third |
 | G4b | The site-list loop exceeds 100 pages | — | fatal message | — | — | no, **exit 2** |
 | G5 | `environments` call fails for a site | 1 | `ATTENTION: <site>: could not list environments: <reason>` | no | **yes** (once for the site) | yes, next site |
 | G6 | `domains` call fails for an environment | 1 | `ATTENTION: <site>.<env>: could not list domains: <reason>` | no | **yes** (once for the env) | yes, next env |
@@ -333,7 +356,7 @@ body raises the named `PantheonApiError`, which the caller turns into G4/G5/G6.
 
 | Flow | Nil input | Empty input | Upstream error |
 |---|---|---|---|
-| Site listing | organization with no sites → first page is `[]` → sweep 0 sites, summary all zeros, exit 0 (an empty **first** page is legitimate; an empty page is only impossible *after* a cursor, §4.1) | short first page (<100) → loop stops after one call | G4 / G4a / G4b |
+| Site listing | organization with no sites → first page is `[]` → sweep 0 sites, summary all zeros, exit 0 | two empty-ish shapes, both legitimate and both terminating on the "fewer than 100" rule: a short page (the common case, 8 of 408) and a genuinely **empty** page, which is what an organization holding an exact multiple of 100 sites returns for its final boundary cursor (§4.1). The empty page MUST NOT trip the G4a detector — that detector fires only on a **non-empty** page contributing no new ids | G4 / G4a / G4b |
 | Environment listing | site with `{}` environments → 0 envs swept, site counted | — | G5 |
 | Domain listing | environment with `[]` domains → nothing examined | environment with platform domain only → 0 custom domains | G6 |
 | Chain walk | `NoAnswer` for the first hop → no hit | — | G8/G9/G10 |
@@ -382,6 +405,9 @@ Required coverage — each item is a behavior a defect could silently break:
    custom domain); no hit via `NoAnswer`; no hit via `NXDOMAIN`; transient; malformed name;
    loop; hop-limit overrun; custom domain that is itself a platform domain.
 3. Pagination: three pages (100/100/8) yielding 208 unique sites; a zero-site organization;
+   **an organization whose site count is an exact multiple of 100** — a full page followed by
+   an empty one, which §4.1 confirms is what the API really returns for the final boundary
+   cursor, and which must terminate normally rather than trip the reset detector;
    **the ignored-cursor case (§4.1)** — a fake `get` that returns page 1 again for a cursor
    must produce a retry and then a named error, NEVER an infinite loop and NEVER a silently
    short list; and the 100-page runaway cap. **PD#14: the multi-page test MUST be shown going
@@ -406,7 +432,7 @@ a test pass. A red test here is a finding about the code.
 
 | # | Decision | Rationale |
 |---|---|---|
-| D1 | Pantheon API, not Terminus | Measured: `env:list` 7.4 s and `domain:list` 2.0–2.9 s per call vs ~0.3 s over a reused API connection; 408 sites × ~5 calls is ~2 h vs ~20 min. CLAUDE.md prefers the API for new code. |
+| D1 | Pantheon API, not Terminus | Measured: `env:list` 7.4 s and `domain:list` 2.0–2.9 s per Terminus call, vs **0.61 s** per API call over a reused `httpx` connection (24 sequential calls timed); 408 sites × ~5.04 calls is ~2 h vs ~21 min. CLAUDE.md prefers the API for new code. |
 | D2 | Self-contained script, code copied not imported | PROMPT.md. Deletion is `git rm` of three paths plus two `pyproject.toml` lines. |
 | D3 | Committed `find-platform-domains-dns.py` symlink | ruff, pyright, CodeGraph, and importers all key off the `.py` extension; verified 2026-07-28 that ruff 0.15.22 traverses into symlinked `.py` files and pyright 1.1.411 analyzes them. Same convention as `pantheon-sitehealth-emails.py`. |
 | D4 | stderr + counted + non-zero exit for indeterminates | User decision. Keeps stdout a clean CSV while making incompleteness impossible to miss. |
@@ -416,7 +442,7 @@ a test pass. A red test here is a finding about the code.
 | D8 | No `rich` | §8. |
 | D9 | Machine token from env or Terminus cache | §3, with the PD#6 tension stated. |
 | D10 | Every environment queried, uninitialized included | §2.2. |
-| D11 | Site list stays on the API, with the G4a reset detector rather than switching to `terminus org:site:list` | User decision after the §4.1 finding was presented. The walk pattern measured 0 resets in 25 pages; the detector converts the residual silent-truncation risk into a loud exit 2, which is cheaper than a second failure vocabulary in the script. §15 question 4 revisits it with production evidence. |
+| D11 | Site list stays on the API, with the G4a reset detector rather than switching to `terminus org:site:list` | User decision after the §4.1 finding was presented. The characterization has since sharpened (§4.1): the walk pattern is *structurally* safe, because it only ever passes page boundaries, and it measured 0 resets across 10+ full walks. The detector is kept anyway — it costs a `seen` set the loop needs regardless, and it converts the residual silent-truncation risk into a loud exit 2. §15 question 4 revisits it with production evidence. |
 
 ## 12. Verified facts
 
@@ -425,10 +451,15 @@ Everything load-bearing here was confirmed against the authority on 2026-07-28, 
 | Claim | How it was verified |
 |---|---|
 | API pagination is `limit`≤100 + exclusive `start` cursor | swagger `GetOrganizationSiteMemberships` |
-| The walk pattern (cursor = last id of the previous full page) is reliable | 7 consecutive live full walks, 25 pages, 0 resets, 408 unique ids each, identical to `terminus org:site:list`'s 408 |
-| The cursor is sometimes silently ignored, returning page 1 (§4.1) | live: `start` = 101st / 405th / 407th / 408th site id each returned page 1 (repeatably); `start` = 200th id did so once and then succeeded 13 times |
-| A cursor past the last site returns page 1, **never** `[]` | live: `start` = the maximum site id → 100 items beginning at the first site |
-| Membership id equals site id for all 408 sites (so either is a valid cursor value today) | live: full walk comparing `.id` against `.site.id`, 0 differences |
+| The walk pattern (cursor = last id of the previous full page) is reliable | 10+ consecutive live full walks, 0 resets, 408 unique ids each, identical to `terminus org:site:list`'s 408 |
+| The cursor is honored **only** at a page boundary; every other id silently returns page 1 with HTTP 200 (§4.1) | live positional scan, `limit=100`: honored at positions 100/200/300/400/408, ignored at 1/2/50/99/101/102/150/199/201/250/299/301/350/399/401/405/407. Reproduced 5/5 and 2/2 for positions 1 and 101 by `reproduce-pagination-bug.sh` |
+| The final boundary cursor returns `[]` — so an exact-multiple-of-100 organization really does end on an empty page | live: `start` = the maximum site id → empty array, 7/7 across two script runs |
+| An *unrecognized* cursor returns a full first page, never `[]` — which is why "loop until empty" cannot be the stop condition | the same positional scan: every ignored position returned `n=100` |
+| The collection is ordered ascending by site id and stable across calls | live: every full walk's ids sorted identically; `sort -u` count equals the collected count |
+| Membership id equals site id for all 408 sites (so either works as a cursor today; the swagger specifies the **site** UUID) | live: full walk comparing `.id` against `.site.id`, 0 differences |
+| Nothing in these tests ever returned a 4xx or 5xx | every probe and walk recorded HTTP 200, including the failing ones. **Consequence:** the §7.1 retry policy's 5xx/429 paths have never been exercised against the real API — they are covered only by `httpx.MockTransport` in §10, item 5 |
+| A Pantheon API call costs **0.61 s** over a reused `httpx` connection | live: 24 sequential calls on one client, 14.64 s total. (The ~1.3 s figures from the `curl` probes include a fresh TLS handshake per call and are not representative of the script.) So 408 sites × ~5.04 calls ≈ 2,060 calls ≈ 21 minutes, plus the per-custom-domain DNS walks |
+| A site has ~4.0 environments on average | live: 25-site sample, 101 environments. (`its-wws-test1` has 7, which is atypical — do not extrapolate the runtime from it) |
 | `/environments` includes multidevs | live: `its-wws-test1` → `autopilot, dev, live, test, test-jpr, test-mark, test-md` |
 | Domain entries carry `type: platform\|custom` | live: `its-wws-test1.live` → 1 platform + 2 custom |
 | An uninitialized environment exposes only its platform domain | live: `vpao-accopp.live` (`initialized: false`) |
@@ -469,7 +500,7 @@ echo "exit=$?"; cat /tmp/pd.csv; cat /tmp/pd.err
 ./find-platform-domains-dns -c /dev/null; echo "exit=$?"
 ```
 
-A full-organization sweep is NOT an acceptance step: it takes ~20 minutes and its output is
+A full-organization sweep is NOT an acceptance step: it takes ~21 minutes and its output is
 operational data, not evidence of correctness. Run it when you actually want the list.
 
 ## 14. Deletion checklist (post-migration)
@@ -480,6 +511,10 @@ operational data, not evidence of correctness. Run it when you actually want the
 3. Remove the CLAUDE.md paragraph describing the utility.
 4. Leave `CONTEXT.md`'s glossary additions in place — those terms describe Pantheon, not this
    script.
+5. Leave `pantheon-api-pagination-bug-report.txt` and `reproduce-pagination-bug.sh` in this
+   directory. They document a defect in **Pantheon's API**, not in this utility, and stay
+   useful (and re-runnable) for as long as that endpoint is paginated — including for whoever
+   next writes a paginated consumer here.
 
 ## 15. Closing audit questions (answer after implementation)
 
@@ -490,8 +525,10 @@ operational data, not evidence of correctness. Run it when you actually want the
    downstream rewriter?
 3. Did any custom domain turn out to be attached to an `initialized: false` environment,
    contradicting the 25-site sample in §2.2?
-4. Did the G4a ignored-cursor detector fire during a real full sweep? If it did, did the retry
-   clear it, and should the site list move to `terminus org:site:list` (one call, no cursor)
-   after all?
+4. Did the G4a ignored-cursor detector fire during a real full sweep? §4.1 says it should not
+   be able to — the walk only ever passes page boundaries — so if it fires, the boundary model
+   in the bug report is incomplete. In that case move the site list to `terminus org:site:list`
+   (one call, no cursor) rather than tuning the retry, and re-run
+   `reproduce-pagination-bug.sh` to see whether Pantheon's behavior has changed.
 5. Did the pagination loop ever see a page that was neither 100 nor final — i.e. does the API
    ever return a short non-final page, which would break the stop condition?
