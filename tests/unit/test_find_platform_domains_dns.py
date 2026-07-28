@@ -266,11 +266,13 @@ def test_get_returns_decoded_json(fpd):
 
 def test_401_reauthenticates_once_then_succeeds(fpd):
     calls = []
+    auth_headers_seen = []   # Fix round 1, I4: pin that the RETRIED request uses the NEW token
 
     def handler(request):
         calls.append(request.url.path)
         if request.url.path.endswith("/authorize/machine-token"):
             return httpx.Response(200, json={"session": f"sess-{calls.count('/v0/authorize/machine-token')}"})
+        auth_headers_seen.append(request.headers["Authorization"])
         if calls.count("/v0/sites/abc") == 1:
             return httpx.Response(401, json={"error": "expired"})
         return httpx.Response(200, json={"ok": True})
@@ -279,6 +281,32 @@ def test_401_reauthenticates_once_then_succeeds(fpd):
     assert session.get("/sites/abc") == {"ok": True}
     assert calls.count("/v0/authorize/machine-token") == 2   # re-authenticated exactly once
     assert session.token == "sess-2"
+    assert auth_headers_seen == ["Bearer sess-1", "Bearer sess-2"]   # retry used the new token
+
+
+def test_reauthentication_does_not_consume_the_transport_retry_budget(fpd, monkeypatch):
+    # Fix round 1, I3: SPEC section 7.1 / the ApiSession docstring both say "a re-auth does
+    # NOT consume the transport retry".  Sequence: 401 (re-auth) -> 500 (should still get its
+    # own, unconsumed, transport retry) -> 200.  If a re-auth wrongly incremented
+    # transport_attempts, the following 500 would look like the SECOND transport failure and
+    # raise immediately instead of retrying -- exactly what the class docstring warns a
+    # session expiring mid-sweep would silently do to the next real failure.
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    site_calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess-2"})
+        site_calls.append(1)
+        n = len(site_calls)
+        if n == 1:
+            return httpx.Response(401, json={"error": "expired"})
+        if n == 2:
+            return httpx.Response(500, text="boom")
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler).get("/sites/abc") == {"ok": True}
+    assert len(site_calls) == 3
 
 
 def test_401_twice_raises_session_expired_not_a_plain_api_error(fpd):
@@ -327,7 +355,12 @@ def test_reauthentication_notifies_the_caller(fpd):
 
 
 def test_500_is_retried_once_then_succeeds(fpd, monkeypatch):
-    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)    # the seam that keeps the suite fast
+    # Fix round 1, I2: a plain `0` proves only "the suite doesn't sleep" -- it cannot tell
+    # apart a retry that sleeps RETRY_SLEEP from one that was deleted outright.  The spy
+    # (reused from Task 1, not re-invented) records whether RETRY_SLEEP was actually consumed
+    # as a sleep duration.
+    spy = _RetrySleepSpy()
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", spy)
     calls = []
 
     def handler(request):
@@ -340,18 +373,22 @@ def test_500_is_retried_once_then_succeeds(fpd, monkeypatch):
 
     assert make_session(fpd, handler).get("/sites/abc") == {"ok": True}
     assert len(calls) == 2
+    assert spy.times_slept == 1
 
 
 def test_500_twice_raises_named_error(fpd, monkeypatch):
     monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    calls = []  # Fix round 1, I1: pin the retry COUNT, not just that it eventually raises.
 
     def handler(request):
         if request.url.path.endswith("/authorize/machine-token"):
             return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
         return httpx.Response(500, text="boom")
 
     with pytest.raises(fpd.PantheonApiError, match="500"):
         make_session(fpd, handler).get("/sites/abc")
+    assert len(calls) == 2   # exactly one retry, not a widened/unbounded attempt count
 
 
 def test_429_is_retried_like_a_5xx(fpd, monkeypatch):
@@ -393,6 +430,66 @@ def test_undecodable_body_raises_named_error(fpd):
         make_session(fpd, handler).get("/x")
 
 
+def test_neither_token_nor_response_body_ever_leaks_into_error_text(fpd, monkeypatch):
+    # Fix round 1, C1.  SPEC section 3's threat model, property (a): neither the machine token
+    # nor the session token, nor any response body, is ever visible in an exception's message
+    # or its chained cause.  Instrumented here (PD#14), not asserted in prose, at THIS task's
+    # own ApiSession seam -- no main() is needed, and SPEC section 10 item 12's main()-driven
+    # G7a/G5 version is still owed by Task 5; this does not discharge it.  Covers the three
+    # message-construction sites a mutation could slip a response body into: the auth non-200
+    # branch, the 5xx-exhausted branch, and the generic (not 401/429/5xx/200) GET-status
+    # branch -- the shape SPEC section 8's cleartext-credential warning describes.  Also pins
+    # property (b): the machine token travels in the POST body, never on the URL.
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    machine_token_sentinel = "MACHINE-TOKEN-sentinel"
+    body_sentinel = "OTHER-PEOPLES-PASSWORD-sentinel"
+
+    def assert_sentinels_absent(exc):
+        assert machine_token_sentinel not in str(exc)
+        assert body_sentinel not in str(exc)
+        if exc.__cause__ is not None:
+            assert machine_token_sentinel not in repr(exc.__cause__)
+            assert body_sentinel not in repr(exc.__cause__)
+
+    # -- auth non-200: the token exchange itself fails.
+    auth_requests = []
+
+    def auth_failure_handler(request):
+        auth_requests.append(request)
+        return httpx.Response(403, text=f"forbidden: {body_sentinel}")
+
+    client = httpx.Client(transport=httpx.MockTransport(auth_failure_handler), timeout=1.0)
+    with pytest.raises(fpd.PantheonApiError) as excinfo:
+        fpd.ApiSession(client, machine_token_sentinel)
+    assert_sentinels_absent(excinfo.value)
+
+    # property (b): the token travels in the POST body, never on the URL.
+    assert auth_requests[0].method == "POST"
+    assert machine_token_sentinel.encode() in auth_requests[0].content
+    assert machine_token_sentinel not in str(auth_requests[0].url)
+
+    # -- 5xx-exhausted: the token exchange succeeds; the GET fails twice.
+    def five_xx_handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(500, text=f"internal error: {body_sentinel}")
+
+    with pytest.raises(fpd.PantheonApiError) as excinfo:
+        make_session(fpd, five_xx_handler).get("/sites/abc")
+    assert_sentinels_absent(excinfo.value)
+
+    # -- generic non-200 GET status: neither a retry status nor 200 -- e.g. a 403 whose body
+    # is plain, undecodable-as-anything-useful text.
+    def other_status_handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(403, text=f"forbidden: {body_sentinel}")
+
+    with pytest.raises(fpd.PantheonApiError) as excinfo:
+        make_session(fpd, other_status_handler).get("/sites/abc")
+    assert_sentinels_absent(excinfo.value)
+
+
 def test_machine_token_prefers_the_environment(fpd, monkeypatch):
     monkeypatch.setenv("PANTHEON_MACHINE_TOKEN", "from-env")
     assert fpd.machine_token() == "from-env"
@@ -414,7 +511,7 @@ def test_machine_token_refuses_to_guess_between_several_cache_files(fpd, monkeyp
     (cache / "a@umich.edu").write_text('{"token": "a"}')
     (cache / "b@umich.edu").write_text('{"token": "b"}')
     monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
-    with pytest.raises(fpd.MachineTokenError, match="2"):
+    with pytest.raises(fpd.MachineTokenError, match="found 2"):
         fpd.machine_token()
 
 
@@ -442,4 +539,30 @@ def test_machine_token_cache_file_without_a_token_key_is_named(fpd, monkeypatch,
     (cache / "someone@umich.edu").write_text('{"email": "someone@umich.edu"}')
     monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
     with pytest.raises(fpd.MachineTokenError, match="no 'token' key"):
+        fpd.machine_token()
+
+
+def test_machine_token_cache_file_holding_a_non_object_json_value_is_named(fpd, monkeypatch, tmp_path):
+    # Fix round 1, M1: a truncated Terminus cache write can leave a cache file holding valid
+    # JSON that is not a container at all (null/123/true/a bare string) -- "token" not in data
+    # then raises a bare, unnamed TypeError ("argument of type 'NoneType' is not iterable"),
+    # not the named MachineTokenError SPEC G2 requires.
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "someone@umich.edu").write_text("null")
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match="no 'token' key"):
+        fpd.machine_token()
+
+
+def test_machine_token_empty_cache_directory_is_named(fpd, monkeypatch, tmp_path):
+    # Fix round 1, M4: an EXISTING but empty tokens/ directory (0 files) is a distinct shadow
+    # from the missing-directory case above, and exercises the `or 'none'` fallback in the
+    # "found 0 (...)" message.
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match=r"found 0 \(none\)"):
         fpd.machine_token()

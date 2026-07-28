@@ -228,7 +228,11 @@ def machine_token():
         data = json.loads(files[0].read_text())
     except (OSError, json.JSONDecodeError) as e:
         raise MachineTokenError(f"could not read {files[0]}: {e}") from e
-    if "token" not in data:
+    # A truncated Terminus cache write can leave valid JSON that is not an object at all
+    # (null/123/true/a bare string) -- guard the container check itself, or "token" not in
+    # data raises a bare, unnamed TypeError instead of the named MachineTokenError SPEC G2
+    # requires (fix round 1, M1).
+    if not isinstance(data, dict) or "token" not in data:
         raise MachineTokenError(f"{files[0]} has no 'token' key")
     return data["token"]
 
@@ -251,6 +255,10 @@ class ApiSession:
         self.token = self._authenticate()
 
     def _authenticate(self):
+        # Fix round 1, M2: httpx.InvalidURL and httpx.StreamError are NOT httpx.HTTPError
+        # subclasses (verified, httpx 0.28.1), so they would bypass this except clause.
+        # API_BASE is a fixed literal here, so InvalidURL cannot arise from this call; nothing
+        # in THIS file enforces that invariant, it is recorded so it is not silently assumed.
         try:
             response = self._client.post(
                 f"{API_BASE}/authorize/machine-token",
@@ -288,6 +296,11 @@ class ApiSession:
         """GET {API_BASE}{path} and return the decoded JSON, or raise PantheonApiError."""
         transport_attempts = 0
         reauthed = False
+        # Fix round 1, M2: same httpx.InvalidURL / httpx.StreamError gap as _authenticate()
+        # above.  `path` is the one caller-supplied segment reaching this f-string, and SPEC
+        # section 3 requires every caller to urllib.parse.quote(name, safe="") it before this
+        # point -- nothing in THIS file enforces that, it is recorded so it is not silently
+        # assumed by a later caller.
         while True:
             try:
                 response = self._client.get(
