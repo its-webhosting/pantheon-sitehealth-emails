@@ -10,6 +10,7 @@ INJECTED as a parameter, never patched; httpx.MockTransport backs the ApiSession
 import csv
 import importlib.util
 import io
+import signal
 import struct
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -37,6 +38,48 @@ def fpd():
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+@pytest.fixture(autouse=True)
+def _restore_sigint_handler():
+    """Fix round 2, N1 (Critical).  report_stop() calls the REAL `signal.signal(SIGINT,
+    SIG_IGN)` for a real reason (m5, fix round 1) -- but a process's signal handler is global and
+    outlives the test that set it.  Only the dedicated m5 test replaces the seam
+    (`fpd.signal.signal`) with a recording stub that never touches the real handler; the other
+    ten tests that reach report_stop() (directly or via main()) call the real one, so SIG_IGN
+    leaked into the REST of the pytest session -- measured: still SIG_IGN after the whole --fast
+    suite finished, 312 tests after the last leaking one.  This is a repo-wide test-isolation
+    guard, not a per-test concern, so it is autouse and restores whatever handler was in place
+    BEFORE this test ran, regardless of what the test itself (or the code under test) did to
+    it -- it does not need to know about `fpd.signal.signal` at all, only about the process-level
+    handler `signal.signal`/`signal.getsignal` observe.  Session-scoped would not work here: it
+    would capture the ORIGINAL handler once, at the first test, and restore it only once, at the
+    very end -- masking a leak between any two tests in between, which is exactly the shape of
+    this defect.
+    """
+    original = signal.getsignal(signal.SIGINT)
+    yield
+    signal.signal(signal.SIGINT, original)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sigint_handler_is_never_left_ignored_at_session_end():
+    """Fix round 2, N1: the instrument that would have caught the leak the fixture above fixes.
+
+    Deliberately SEPARATE from `_restore_sigint_handler` (which is function-scoped, restoring
+    after each test): this one is session-scoped, so its teardown runs exactly once, at the very
+    end of the WHOLE pytest session -- reproducing the shape the leak was actually measured in
+    ("still SIG_IGN after the whole --fast suite finished"), not just "after the last test in
+    this file." A per-test check would have passed throughout the leak's lifetime, since each
+    individual leaking test finished with SIG_IGN still set and simply never got asked about it;
+    the defect was only visible in the SESSION's final state, which is what this asserts on.
+    """
+    yield
+    handler = signal.getsignal(signal.SIGINT)
+    assert handler is not signal.SIG_IGN, (
+        f"SIGINT is still SIG_IGN at the end of the pytest session ({handler!r}) -- something "
+        "called the real signal.signal(SIGINT, SIG_IGN) (report_stop()'s m5 guard) without it "
+        "being restored; see _restore_sigint_handler above")
 
 
 def patch_dns(monkeypatch, fpd, zone, calls=None):
@@ -1530,6 +1573,33 @@ def test_build_session_pins_no_redirects_and_the_http_timeout(fpd, monkeypatch):
     assert session._client.timeout == fpd.httpx.Timeout(fpd.HTTP_TIMEOUT)
 
 
+def test_build_session_never_constructs_a_client_when_the_token_cannot_be_resolved(fpd, monkeypatch):
+    """Fix round 2, N10.  build_session() used to construct its httpx.Client BEFORE calling
+    machine_token() -- harmless while an unresolvable token used to crash the whole interpreter,
+    but this round's C1 fix made "the token cannot be resolved" a reachable, non-fatal
+    MachineTokenError, so the client built first would leak (never closed -- nothing holds a
+    reference to it once the exception unwinds).  Spies on httpx.Client's constructor rather than
+    asserting on a leaked object (there is nothing left to assert ON once it's unreferenced):
+    the right assertion is that construction never happened at all.
+    """
+    calls = []
+    real_client = fpd.httpx.Client
+
+    def spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(fpd.httpx, "Client", spy)
+
+    def boom():
+        raise fpd.MachineTokenError("no token")
+
+    monkeypatch.setattr(fpd, "machine_token", boom)
+    with pytest.raises(fpd.MachineTokenError):
+        fpd.build_session()
+    assert calls == []
+
+
 def test_main_writes_csv_with_unix_line_endings_only(fpd, monkeypatch, tmp_path, capsys):
     """Carry-forward 4 (task 5 dispatch).
 
@@ -1616,6 +1686,32 @@ def test_report_stop_lists_multiple_remaining_site_names_space_separated(fpd, ca
     assert "find-platform-domains-dns s2 s3" in err
 
 
+def test_report_stop_says_something_sane_when_ctrl_c_lands_before_the_first_site_starts(
+        fpd, monkeypatch, capsys):
+    """Fix round 2, N3.  KeyboardInterrupt is asynchronous and can land ANYWHERE -- including
+    inside sweep()'s own `self.remaining = list(sites)` or `self._progress(...)` call, both of
+    which run BEFORE `self.current_site = site["name"]`.  Fix round 1's m7 comment claimed
+    current_site "cannot be falsy" by the time report_stop() runs -- true only for SYNCHRONOUS
+    failures (inside sweep_site()), false here.  Reproduced by raising KeyboardInterrupt from
+    _progress itself, the exact call the finding names, rather than from anywhere inside
+    sweep_site() (which every other abort test in this file already uses, and which cannot
+    reproduce this specific gap).
+    """
+    sweeper, _out = make_sweeper(fpd)
+
+    def boom(_message):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sweeper, "_progress", boom)
+    with pytest.raises(KeyboardInterrupt):
+        sweeper.sweep([{"id": "u1", "name": "s1"}])
+    assert sweeper.last_site == ""
+    fpd.report_stop(sweeper, "interrupted")
+    err = capsys.readouterr().err
+    assert "Stopped during ." not in err
+    assert "Stopped during startup." in err
+
+
 def test_get_converts_invalid_url_into_a_named_error(fpd, monkeypatch):
     """Carry-forward 7 (task 5 dispatch).
 
@@ -1667,6 +1763,13 @@ def test_ctrl_c_during_prepare_sweep_returns_130_cleanly(fpd, monkeypatch, tmp_p
     KeyboardInterrupt at the top level (the exit-code contract already held), but the operator
     got a raw Python traceback instead of the program's own message shape, and there was no
     handler AT ALL to route through, unlike every other abort path in main().
+
+    Fix round 2, N2: a bare `assert fpd.main(...) == 130` cannot fail cleanly against a
+    regression -- if the KeyboardInterrupt escapes main() uncaught, it also escapes THIS test
+    function uncaught, and pytest treats an escaping KeyboardInterrupt as a session abort, not a
+    normal failure: the run prints a "!!! KeyboardInterrupt !!!" banner, a "N passed" summary
+    with NO "FAILED" line, and silently drops every test collected after this one. Catching it
+    explicitly and calling pytest.fail() converts that into an ordinary, reported failure.
     """
     config = tmp_path / "c.toml"
     config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
@@ -1676,7 +1779,11 @@ def test_ctrl_c_during_prepare_sweep_returns_130_cleanly(fpd, monkeypatch, tmp_p
 
     monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
     monkeypatch.setattr(fpd, "build_session", boom)
-    assert fpd.main(["-c", str(config)]) == 130
+    try:
+        rc = fpd.main(["-c", str(config)])
+    except KeyboardInterrupt:
+        pytest.fail("KeyboardInterrupt escaped main() instead of being handled and returning 130")
+    assert rc == 130
     assert "interrupted" in capsys.readouterr().err.lower()
 
 

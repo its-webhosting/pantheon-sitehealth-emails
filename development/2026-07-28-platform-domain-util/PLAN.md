@@ -14,7 +14,9 @@ as CSV on stdout, with every indeterminate lookup reported on stderr and counted
 plus a committed `.py` symlink for tooling, and one offline unit-test file. It imports nothing
 from `psh/`, `check/`, `plugin/`, or `script_context`; the DNS walk and resolver seam are
 **copied** from `check/pantheon_cdn_change/chain.py` and `psh/dns_classify.py` so deletion after
-the CDN migration is a `git rm` of three paths plus two `pyproject.toml` lines. Pantheon data
+the CDN migration is a `git rm` of three paths plus three `pyproject.toml` lines (SPEC section 14
+item 2: two `[tool.ruff.lint.per-file-ignores]` entries plus the `[tool.pyright].include` one).
+Pantheon data
 comes from the Pantheon API over one reused `httpx` connection; DNS goes through a single
 monkeypatchable `resolve()` seam.
 

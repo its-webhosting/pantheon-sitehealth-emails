@@ -4,13 +4,16 @@
 TEMPORARY.  Delete after Pantheon's Fastly -> Pantheon-Cloudflare CDN migration completes;
 see development/2026-07-28-platform-domain-util/SPEC.md section 14 for the checklist.
 
-Standalone by design: this imports nothing from psh/, check/, plugin/ or script_context, so
-removing it is `git rm` of the script, its .py symlink and its test file.  The DNS walk and the
-resolver seam are COPIES of check/pantheon_cdn_change/chain.py and psh/dns_classify.py.
+Standalone by design: this imports nothing from psh/, check/, plugin/ or script_context, so most
+of removing it is `git rm` of the script, its .py symlink and its test file -- SPEC section 14's
+full checklist also has three pyproject.toml entries and a ruff-check.sh case arm (fix round 2,
+N6: this sentence previously undercounted the same way CLAUDE.md's copy of it did).  The DNS walk
+and the resolver seam are COPIES of check/pantheon_cdn_change/chain.py and psh/dns_classify.py.
 
 Output: CSV on stdout, `site_name,site_env,custom_domain,dns_record,platform_domain`, no header.
 Operator messages, including every indeterminate lookup, go to stderr.  Exit 0 = clean sweep,
-1 = completed with indeterminates, 2 = could not complete.
+1 = completed with indeterminates, 2 = could not complete, 130 = interrupted (fix round 2, N7:
+this line omitted 130, which main()'s own docstring and CLAUDE.md both document).
 
 Requires: dnspython and httpx (httpx is declared under this project's `cloudflare` extra, which
 the documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and a Pantheon
@@ -84,7 +87,8 @@ def skipped(message):
 def warning(message):
     """A finding that still produced its row -- G12, G13, G13a (SPEC section 8).
 
-    Two prefixes rather than one: with a single ATTENTION: prefix an operator reading
+    Three prefixes rather than one (fix round 2, N5: this used to say "two," before the
+    `RETRY:` prefix existed): with a single ATTENTION: prefix an operator reading
     `indeterminate=17` at the end of a sweep cannot grep out those 17, because the
     row-producing warnings are interleaved and look identical.  The count and the log have to
     be reconcilable (PD#5).
@@ -92,15 +96,23 @@ def warning(message):
     print(f"WARNING: {message}", file=sys.stderr, flush=True)
 
 
-def retry(message):
+def retrying(message):
     """A transient condition being retried automatically -- NOT counted as indeterminate.
+
+    Named `retrying`, not `retry` (fix round 2, N9 -- PD#11, terminology): `retry` is verb-shaped,
+    which in this file denotes an action, not a state -- `RETRY_SLEEP`, `DNS_RETRY_SLEEP`, and
+    `resolve_cname_retrying` all name actual retrying, while `skipped`/`warning` (its two
+    siblings) are state words naming what's being reported.  `retrying` matches that pattern.
 
     Fix round 1, R1.  org_sites()'s ignored-cursor retry (SPEC section 4.1) used to reuse
     skipped(), but SKIPPED: is defined as "produced no row and WAS counted as indeterminate"
     (SPEC section 8) -- and a retry that goes on to succeed is never counted anywhere, since it
     happens entirely inside prepare_sweep(), before any Counters object exists.  That broke the
     one property SKIPPED: exists to guarantee: `grep -c SKIPPED` reconciling exactly against the
-    final `indeterminate=N`.  A third prefix keeps that reconciliation exact.
+    final `indeterminate=N`.  A third prefix keeps that reconciliation exact.  This is the ONLY
+    retry in the program that gets a stderr line at all: the DNS retry (resolve_cname_retrying)
+    and the API transport/401/429/5xx retries (ApiSession.get) all retry silently -- see this
+    function's own docstring's SPEC section 8 cross-reference for why only this one is loud.
     """
     print(f"RETRY: {message}", file=sys.stderr, flush=True)
 
@@ -455,7 +467,7 @@ def org_sites(get, org_id):
                     "were listed, so the sweep would be silently incomplete. "
                     f"Run 'terminus org:site:list {org_id} --format=json | jq length' to check "
                     f"whether {len(collected)} is the true site count (SPEC section 4.1)")
-            retry(
+            retrying(
                 f"site listing cursor {cursor} was ignored (page repeated); retrying "
                 f"({ignored}/{CURSOR_ATTEMPTS - 1})")
             time.sleep(RETRY_SLEEP)
@@ -582,7 +594,15 @@ class Sweeper:
         # SPEC section 7.3's "where did it stop" line.  Initialized here, not only in sweep(),
         # so report_stop() cannot raise AttributeError while reporting some other failure.
         self.last_site = ""       # the last site that COMPLETED
-        self.current_site = ""     # the site in flight, for "Stopped during <site>"
+        # Fix round 2, N3.  "startup", not "": KeyboardInterrupt is asynchronous and can land
+        # inside sweep()'s own `self.remaining = list(sites)` or `self._progress(...)` call --
+        # BOTH run before `self.current_site = site["name"]` -- producing the malformed "Stopped
+        # during ." otherwise (report_stop no longer has an `or 'startup'` fallback of its own,
+        # per fix round 1's m7, which correctly removed it for every SYNCHRONOUS failure but
+        # missed this asynchronous one).  Fixing the invariant here, at its one source, means
+        # current_site is truthy for the WHOLE lifetime of a Sweeper, not just after the first
+        # site's own assignment -- report_stop() needs no fallback logic of its own either way.
+        self.current_site = "startup"
         self.remaining = []
 
     def _progress(self, message):
@@ -700,9 +720,18 @@ def build_session(notify=None):
 
     follow_redirects is left at httpx's default of False ON PURPOSE (SPEC section 3, threat
     model property (c)): the Authorization header must never be replayed to a redirect target.
+
+    machine_token() is called BEFORE the httpx.Client is constructed (fix round 2, N10): this
+    round's C1 fix made an unreadable token cache a reachable, non-fatal-to-the-process failure
+    (it now raises a named MachineTokenError instead of crashing the interpreter), which means
+    the client this function used to build first would have leaked -- never closed, since
+    nothing held a reference to it once the exception unwound.  Resolving the token first means
+    no client is ever constructed on that path at all, which is simpler than a try/except that
+    closes one just to immediately re-raise.
     """
+    token = machine_token()
     client = httpx.Client(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT})
-    return ApiSession(client, machine_token(), notify=notify)
+    return ApiSession(client, token, notify=notify)
 
 
 def main(argv):
@@ -854,12 +883,14 @@ def report_stop(sweeper, reason):
     if sweeper.last_site:
         print(f"Stopped after {sweeper.last_site}.", file=sys.stderr)
     else:
-        # Fix round 1, m7: the `or 'startup'` fallback this line used to carry was unreachable
-        # through any real call site -- sweep() sets current_site to the site's name before
-        # sweep_site() (where any failure occurs) is ever called, so current_site cannot be
-        # falsy by the time main()'s exception handlers call this function.  Removed rather than
-        # kept "just in case": an untested, unreachable-by-construction fallback is exactly the
-        # kind of instrument that reads as load-bearing to a future maintainer but cannot go red.
+        # No `or 'startup'` fallback needed here (fix round 1, m7 removed one; fix round 2, N3
+        # corrects that removal): current_site is truthy for a Sweeper's WHOLE lifetime, because
+        # `Sweeper.__init__` seeds it with the "startup" placeholder itself, not "".  m7's
+        # original reasoning -- "sweep() sets current_site before sweep_site() is ever called, so
+        # it cannot be falsy here" -- holds only for SYNCHRONOUS failures; a KeyboardInterrupt is
+        # asynchronous and can land inside sweep()'s own `self.remaining = list(sites)` or
+        # `self._progress(...)` call, both of which run before the per-site assignment, which is
+        # exactly how "Stopped during ." (malformed) was reproduced.
         print(f"Stopped during {sweeper.current_site}.", file=sys.stderr)
     if sweeper.remaining:
         names = " ".join(site["name"] for site in sweeper.remaining)

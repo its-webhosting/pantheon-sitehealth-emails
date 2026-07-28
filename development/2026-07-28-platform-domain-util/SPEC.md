@@ -100,7 +100,7 @@ that trades speed or brevity for completeness is made for that reason.
 | Custom domains fronted by U-M Cloudflare | Another team owns them (PROMPT.md). No code is needed either way: a proxied domain resolves to Cloudflare A/AAAA records with no CNAME visible in public DNS, so the chain reaches a definitive no-hit on its own. |
 | Skipping the domains call for `initialized: false` environments | Measured saving is ~9% of **environments**, hence ~7% of API calls (~3 min of a ~38 min sweep) and its safety rests on a 25-site sample, not a documented Pantheon guarantee. A wrong assumption produces a missing row — the one failure the output cannot reveal (PD#14). |
 | A per-run DNS memo cache | API calls (~2,030 × ~1.1 s measured, §12) dominate the runtime; duplicate CNAME targets across custom domains are rare in this data. Not worth the extra state in the walk. |
-| Resumability / checkpointing (`--resume-from`, a state file) | A whole re-run is ~38 minutes (§12) — longer than the ~21 first recorded here, which is why this was re-decided rather than assumed. Still not worth the machinery for a script due for deletion: the sweep is read-only, its stdout is streamed so a partial sweep's rows are already valid, and **§7.3 requires an aborted sweep to print the last site processed and the number remaining**, so an operator can resume by passing the remaining names as `SITE` arguments. That line is the whole recovery story (PD#7). |
+| Resumability / checkpointing (`--resume-from`, a state file) | A whole re-run is ~38 minutes (§12) — longer than the ~21 first recorded here, which is why this was re-decided rather than assumed. Still not worth the machinery for a script due for deletion: the sweep is read-only, its stdout is streamed so a partial sweep's rows are already valid, and **§7.3 requires an aborted sweep to print the last site processed and the names of every site not yet reached** (amended, fix round 2 of task 5, N8: this row previously said only "the number remaining"), so an operator can resume by passing those names as `SITE` arguments. That line is the whole recovery story (PD#7). |
 | Parallelism | PROMPT.md: no significant work on speed. Sequential keeps the failure taxonomy (§7) trivially attributable. |
 | Recorded API fixtures / e2e tier | The script is deleted within months; hand-maintained fixtures would rot first. §10 covers the logic offline with injected fakes. |
 | Importing from `psh/` | PROMPT.md: copy, do not modularize, so deletion is a `git rm` of three paths. |
@@ -375,7 +375,7 @@ produce output.
 | G13 | Hit whose `platform_domain` is not one of this environment's own platform domains | — | `WARNING: … points at <t>, which belongs to a different site/environment (expected one of: …)` | **yes** | no | yes |
 | G13a | Hit whose `dns_record` is **not** the custom domain — the record to rewrite is a mid-chain alias | — | `WARNING: … the record to change is <dns_record>, not the custom domain; verify who else points at it before rewriting` | **yes** | no | yes |
 | G14 | Hit, clean | — | nothing | **yes** | no | yes |
-| G15 | `KeyboardInterrupt` (Ctrl-C) | — | the summary line for the work done so far, plus the last site processed and how many remain (§7.3) | rows already written stay written | — | no, **exit 130** |
+| G15 | `KeyboardInterrupt` (Ctrl-C) | — | the summary line for the work done so far, plus the last site processed and the names of every site not yet reached (§7.3; amended, fix round 2 of task 5, N8: this row previously said only "how many remain") | rows already written stay written | — | no, **exit 130** |
 | G16 | `BrokenPipeError` on stdout (`… \| head`) | — | `ERROR: sweep did not complete (stdout closed (broken pipe))`, **followed by the §7.3 abort report** — this reuses the same shared abort-reporting function every exit-2/130 path calls (`report_stop`), which is why all of them share this `ERROR: sweep did not complete (<reason>)` shape rather than G16 having bespoke wording; stderr is unaffected by a closed stdout, so there is no reason to withhold it. The handler MUST also `os.dup2` devnull onto stdout before returning: CPython re-flushes stdout at interpreter shutdown, that flush raises again on a closed pipe, and a failed final flush becomes **exit 120**, overriding the 2 (verified live 2026-07-28) | — | — | no, **exit 2** |
 | G17 | An API response has an unexpected shape (a missing/wrongly-typed key) | — | named `PantheonApiShapeError`, reported exactly like G4/G5/G6 depending on which call produced it | no | **yes** when per-site/per-env | as per G4/G5/G6 |
 | G18 | Anything else uncaught | — | the exception, then `ERROR: unexpected failure; the sweep is incomplete` | — | — | no, **exit 2** |
@@ -444,17 +444,21 @@ valid; the sweep never rewrites or retracts a row.
   Three prefixes (amended, fix round 1 of task 5), because one was ambiguous and a second turned
   out to be too broad. `SKIPPED:` marks a domain, environment or site that produced **no row and
   was counted as indeterminate**; `WARNING:` marks a finding that **still produced its row**
-  (G12, G13, G13a); `RETRY:` marks a transient condition being retried automatically and is
-  **never counted** — currently only the G4a ignored-cursor retry, which happens entirely inside
-  `prepare_sweep()`, before any counters exist, and is not reported at all if the retry
-  eventually succeeds and the sweep proceeds normally. With a single `ATTENTION:` prefix, an
-  operator reading `indeterminate=17` at the end of a 38-minute sweep could not `grep` out those
-  17 — the count and the log could not be reconciled, which is PD#5's "surfaced actionably"
-  failing in the one place it matters. The original two-prefix design reused `SKIPPED:` for the
-  G4a retry line too, which broke the same reconciliation the scheme exists to provide: a G4a
-  retry that goes on to succeed is `SKIPPED:`-prefixed but never counted anywhere, so
-  `grep -c SKIPPED` could exceed the final `indeterminate=N` on such a run. `RETRY:` closes that
-  gap by removing the retry line from the `SKIPPED:` count entirely, rather than inventing a
+  (G12, G13, G13a); `RETRY:` marks the ONE retry in the program that gets a stderr line **at
+  all** — the G4a ignored-cursor retry, which happens entirely inside `prepare_sweep()`, before
+  any counters exist, and is **never counted**, not reported again if it eventually succeeds
+  (the sweep then just proceeds normally). This is deliberately not a general "retries are
+  RETRY:-prefixed" rule (fix round 2, N9: an earlier draft of this paragraph read as one): the
+  DNS retry (§6.2's Timeout/NoNameservers-then-retry-once) and the API transport/401/429/5xx
+  retries (§7.1) both retry **silently** — RETRY: exists to fix ONE specific reconciliation
+  problem (below), not to announce every retry in the codebase. With a single `ATTENTION:`
+  prefix, an operator reading `indeterminate=17` at the end of a 38-minute sweep could not `grep`
+  out those 17 — the count and the log could not be reconciled, which is PD#5's "surfaced
+  actionably" failing in the one place it matters. The original two-prefix design reused
+  `SKIPPED:` for the G4a retry line too, which broke the same reconciliation the scheme exists to
+  provide: a G4a retry that goes on to succeed is `SKIPPED:`-prefixed but never counted anywhere,
+  so `grep -c SKIPPED` could exceed the final `indeterminate=N` on such a run. `RETRY:` closes
+  that gap by removing the retry line from the `SKIPPED:` count entirely, rather than inventing a
   place to count it.
 
   `sites=N envs=N custom_domains=N rows=N indeterminate=N`. The summary is printed on **every**
@@ -593,7 +597,7 @@ a test pass. A red test here is a finding about the code.
 | # | Decision | Rationale |
 |---|---|---|
 | D1 | Pantheon API, not Terminus | Measured: `env:list` 7.4 s and `domain:list` 2.0–2.9 s per Terminus call, vs **~1.1 s** per API call over a reused `httpx` connection (§12); 408 sites × ~5 calls is **~2 h vs ~38 min**. The margin narrowed when the timing was re-measured honestly, but the conclusion did not change. CLAUDE.md prefers the API for new code. |
-| D2 | Self-contained script, code copied not imported | PROMPT.md. Deletion is `git rm` of three paths plus two `pyproject.toml` lines. |
+| D2 | Self-contained script, code copied not imported | PROMPT.md. Deletion is `git rm` of three paths plus three `pyproject.toml` lines (amended, fix round 2 of task 5: §14 item 2 names all three — two `[tool.ruff.lint.per-file-ignores]` entries plus the `[tool.pyright].include` one — this row previously said two). |
 | D3 | Committed `find-platform-domains-dns.py` symlink | ruff, pyright, CodeGraph, and importers all key off the `.py` extension; verified 2026-07-28 that ruff 0.15.22 traverses into symlinked `.py` files and pyright 1.1.411 analyzes them. Same convention as `pantheon-sitehealth-emails.py`. |
 | D4 | stderr + counted + non-zero exit for indeterminates | User decision. Keeps stdout a clean CSV while making incompleteness impossible to miss. |
 | D5 | `dns_record` column | User requirement: the downstream rewriter must edit the record that actually holds the CNAME, which is not always the custom domain. |

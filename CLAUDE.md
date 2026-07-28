@@ -82,7 +82,8 @@ would otherwise be blind to the extension-less real file. It uses the Pantheon A
 token from `$PANTHEON_MACHINE_TOKEN` or `~/.terminus/cache/tokens/`), and its DNS walk is a
 **copy** of `check/pantheon_cdn_change/chain.py` plus `psh/dns_classify.py`'s resolver seam —
 copied, not imported, so most of deleting this feature is `git rm` of those three files (the
-full checklist, including two `pyproject.toml` entries and a `ruff-check.sh` case arm, is
+full checklist, including **three** `pyproject.toml` entries — two `[tool.ruff.lint.per-file-
+ignores]` lines plus the `[tool.pyright].include` one — and a `ruff-check.sh` case arm, is
 `development/2026-07-28-platform-domain-util/SPEC.md` §14). Note the API's site-list cursor has
 a silent failure mode (it can return page 1 again instead of the next page); the script detects
 it and exits 2 rather than sweeping a truncated site list. **Delete this script after Pantheon's
