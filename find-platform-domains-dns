@@ -16,12 +16,17 @@ Requires: dnspython and httpx (httpx is declared under this project's `cloudflar
 the documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and a Pantheon
 machine token, from $PANTHEON_MACHINE_TOKEN or ~/.terminus/cache/tokens/.
 """
+import argparse
+import contextlib
+import csv
 import dataclasses
+import io
 import json
 import os
 import struct
 import sys
 import time
+import tomllib
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
@@ -298,18 +303,25 @@ class ApiSession:
         """GET {API_BASE}{path} and return the decoded JSON, or raise PantheonApiError."""
         transport_attempts = 0
         reauthed = False
-        # Fix round 1, M2: same httpx.InvalidURL / httpx.StreamError gap as _authenticate()
-        # above.  `path` is the one caller-supplied segment reaching this f-string, and SPEC
-        # section 3 requires every caller to urllib.parse.quote(name, safe="") it before this
-        # point -- nothing in THIS file enforces that, it is recorded so it is not silently
-        # assumed by a later caller.
+        # `path` is the one caller-supplied segment reaching this f-string.  SPEC section 3
+        # requires the SITE argv to be quote(name, safe="")-encoded before it gets here, but
+        # org_id (read straight from TOML) and the API's own site/env ids are NOT quoted --
+        # carry-forward from the task 5 dispatch (item 7).  httpx.InvalidURL and
+        # httpx.StreamError are NOT httpx.HTTPError subclasses (verified, httpx 0.28.1), so a
+        # hostile or malformed org_id -- e.g. a literal newline, valid inside a TOML basic
+        # string -- reached this call as an unnamed exit-1 traceback until the except clause
+        # below folded them into the existing transport-retry-then-fail path.  Both are
+        # deterministic for a fixed path, so the one wasted RETRY_SLEEP buys nothing, but
+        # reusing the existing branch is the smallest change that converts either into a named
+        # PantheonApiError (SPEC section 7's exit 1 is reserved for "completed with
+        # indeterminates", never for an uncaught exception).
         while True:
             try:
                 response = self._client.get(
                     f"{API_BASE}{path}",
                     headers={"Authorization": f"Bearer {self.token}",
                              "User-Agent": USER_AGENT})
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, httpx.InvalidURL, httpx.StreamError) as e:
                 transport_attempts += 1
                 if transport_attempts > 1:
                     raise PantheonApiError(f"{path}: {e}") from e
@@ -627,3 +639,159 @@ class Sweeper:
                                result.dns_record, result.platform_domain])
         self._stream.flush()      # so a 38-minute sweep can be watched with tail -f
         self.counters.rows += 1
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        allow_abbrev=False,          # house rule: no --for -> --for-real class of foot-gun
+        description="List Pantheon custom domains whose DNS still reaches a platform domain.")
+    parser.add_argument("-c", "--config", default="pantheon-sitehealth-emails.toml",
+                        help="TOML file to read [Pantheon].org_id from")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="per-site progress on stderr")
+    parser.add_argument("site", nargs="*", metavar="SITE",
+                        help="site names to sweep; default is the whole organization")
+    return parser
+
+
+def org_id_from_config(path):
+    """[Pantheon].org_id from the TOML file.
+
+    Deliberately NOT the main program's config engine: org_id is a literal, so tomllib is the
+    whole requirement, and depending on script_context would defeat this script's standalone,
+    delete-in-one-commit design.
+    """
+    with Path(path).open("rb") as handle:
+        return tomllib.load(handle)["Pantheon"]["org_id"]
+
+
+def build_session(notify=None):
+    """The production ApiSession, over one reused connection.  Monkeypatched by the CLI tests.
+
+    follow_redirects is left at httpx's default of False ON PURPOSE (SPEC section 3, threat
+    model property (c)): the Authorization header must never be replayed to a redirect target.
+    """
+    client = httpx.Client(timeout=HTTP_TIMEOUT, headers={"User-Agent": USER_AGENT})
+    return ApiSession(client, machine_token(), notify=notify)
+
+
+def main(argv):
+    """Exit 0 = clean sweep, 1 = completed with indeterminates, 2 = could not complete,
+    130 = interrupted (SPEC section 7).
+
+    The exit-code discipline is the point of the structure below.  Python exits 1 on ANY
+    uncaught traceback, and section 7 reserves 1 for "completed with indeterminates" -- so a
+    Ctrl-C, a broken pipe, or an unexpected API shape leaking out of here would be
+    indistinguishable from a healthy sweep that had a few DNS timeouts.  Every other outcome is
+    routed away from 1, and the only `return 1` in the program is the indeterminate branch.
+    """
+    options = build_arg_parser().parse_args(argv)
+
+    def note(message):                       # the G7 re-authentication note, -v only
+        if options.verbose:
+            print(message, file=sys.stderr, flush=True)
+
+    try:
+        session, sites = prepare_sweep(options, note)
+    except StartupError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
+    sweeper = Sweeper(session.get, csv.writer(sys.stdout, lineterminator="\n"), sys.stdout,
+                      verbose=options.verbose)
+    try:
+        sweeper.sweep(sites)
+    except KeyboardInterrupt:
+        report_stop(sweeper, "interrupted")
+        return 130
+    except SessionExpiredError as e:
+        report_stop(sweeper, f"session expired: {e}")
+        return 2
+    except BrokenPipeError:
+        # `find-platform-domains-dns | head` is the natural first thing an operator types.
+        # stderr is unaffected by a closed stdout, so the abort report is printed here too --
+        # SPEC section 8 says the summary appears on EVERY path that entered the site loop.
+        report_stop(sweeper, "stdout closed (broken pipe)")
+        # The dup2 is REQUIRED, not tidiness (verified: without it this exits 120, not 2).
+        # CPython flushes sys.stdout again during interpreter shutdown; on a closed pipe that
+        # flush ALSO raises, and a failed final flush is converted into exit code 120 plus an
+        # "Exception ignored on flushing sys.stdout" message -- overriding the 2 returned here
+        # and reintroducing exactly the ambiguous exit code SPEC section 7 exists to prevent.
+        # This is the recipe from Python's own "Note on SIGPIPE" (library/signal docs).
+        # suppress(), not try/except/pass: ruff SIM105.  sys.stdout may not be backed by a
+        # real file descriptor -- pytest's capture object raises io.UnsupportedOperation from
+        # fileno() -- and in that case there is no shutdown-flush hazard to defend against.
+        # Named exceptions only (PD#2); suppressing broadly would hide a real dup2 failure.
+        with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.close(devnull)
+        return 2
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: an uncaught exception here would exit 1, which section 7 reserves for a COMPLETED sweep.  It is re-reported by name, never swallowed silently (PD#2)
+        report_stop(sweeper, f"unexpected {type(e).__name__}: {e}")
+        return 2
+    print(sweeper.counters.summary(), file=sys.stderr)
+    return 1 if sweeper.counters.indeterminate else 0
+
+
+class StartupError(Exception):
+    """The sweep could not be started: SPEC G1-G4b, or a listing-time G7a. Always exit 2."""
+
+
+def prepare_sweep(options, note):
+    """Config -> session -> site list, or StartupError with an operator-ready message.
+
+    Split out of main() so that main() is a readable dispatch of exit codes: with this inline,
+    main() carried 9 returns and a cyclomatic complexity of 12, over ruff's PLR0911/C901 limits.
+    Every failure here means the same thing to the caller -- the sweep never started, exit 2 --
+    so collapsing them into one named error loses nothing.
+    """
+    try:
+        org_id = org_id_from_config(options.config)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        # UnicodeDecodeError is NOT an OSError: a config that is not valid UTF-8 raised it
+        # uncaught, which exits 1 -- the code SPEC section 7 reserves for a COMPLETED sweep.
+        raise StartupError(f"could not read {options.config}: {e}") from e
+    except (KeyError, TypeError) as e:
+        # TypeError covers `Pantheon = "not-a-table"`, where ["Pantheon"]["org_id"] subscripts
+        # a string.  Verified: without it, exit 1 with a traceback.
+        raise StartupError(f"{options.config} has no usable [Pantheon].org_id ({e!r})") from e
+    try:
+        session = build_session(notify=note)
+    except (MachineTokenError, PantheonApiError) as e:
+        raise StartupError(str(e)) from e
+    try:
+        sites = (named_sites(session.get, options.site) if options.site
+                 else org_sites(session.get, org_id))
+    except (PantheonApiError, SiteListingError, SessionExpiredError) as e:
+        raise StartupError(f"could not list sites: {e}") from e
+    return session, sites
+
+
+def report_stop(sweeper, reason):
+    """SPEC section 7.3: an aborted sweep MUST say where it stopped, or the operator has no way
+    to resume except starting the 38-minute sweep over.
+
+    Unconditional on purpose.  An earlier draft printed the position only `if sweeper.last_site`
+    -- i.e. never, when the very first site was the one interrupted, which is precisely when an
+    operator most needs to know where they are.  And it printed a COUNT of unreached sites
+    rather than their names, which is not a recovery instruction: the order is ascending by site
+    UUID and the operator has no copy of that list.  The names are already in hand.
+    """
+    print(f"ERROR: sweep did not complete ({reason})", file=sys.stderr)
+    print(sweeper.counters.summary(), file=sys.stderr)
+    if sweeper.last_site:
+        print(f"Stopped after {sweeper.last_site}.", file=sys.stderr)
+    else:
+        print(f"Stopped during {sweeper.current_site or 'startup'}.", file=sys.stderr)
+    if sweeper.remaining:
+        names = " ".join(site["name"] for site in sweeper.remaining)
+        count = len(sweeper.remaining)
+        print(f"{count} site{'' if count == 1 else 's'} not reached. Resume with:\n"
+              f"  find-platform-domains-dns {names}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

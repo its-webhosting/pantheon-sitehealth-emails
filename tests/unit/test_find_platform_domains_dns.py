@@ -1109,3 +1109,424 @@ def test_counters_summary_format(fpd):
     # indeterminate=N` summary line).  Nothing referenced `Counters.summary()` before this.
     counters = fpd.Counters(sites=3, envs=5, custom_domains=7, rows=2, indeterminate=1)
     assert counters.summary() == "sites=3 envs=5 custom_domains=7 rows=2 indeterminate=1"
+
+
+# ---------------------------------------------------------------------------------------------
+# Task 5: CLI, main(), exit codes
+# ---------------------------------------------------------------------------------------------
+
+
+class _StubSession:
+    """Stands in for ApiSession: an organization of one site with one environment.
+
+    Takes the loaded module so it can raise the module's OWN PantheonApiError -- the sweep
+    catches that class by identity, so a stand-in raising anything else would not exercise the
+    G6 path at all.  `indeterminate=True` makes the domains call fail, which is the shortest
+    path to a counted indeterminate without touching DNS.
+    """
+
+    def __init__(self, fpd, *, indeterminate):
+        self._fpd = fpd
+        self._indeterminate = indeterminate
+
+    def get(self, path):
+        if "/memberships/sites" in path:
+            return [{"id": "mem-1", "site": {"id": "u1", "name": "s1"}}]
+        if path.endswith("/environments"):
+            return {"live": {}}
+        if self._indeterminate:
+            raise self._fpd.PantheonApiError("HTTP 500")
+        return [{"id": "live-s1.pantheonsite.io", "type": "platform"}]
+
+
+def test_org_id_is_read_from_the_config(fpd, tmp_path):
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\nplan_info = {}\n')
+    assert fpd.org_id_from_config(config) == "org-uuid"
+
+
+def test_missing_org_id_raises_out_of_the_low_level_helper(fpd, tmp_path):
+    # org_id_from_config is deliberately thin; prepare_sweep is what converts this into a
+    # StartupError.  The exit-code contract is pinned by the main() tests below, which is where
+    # it matters -- a bare KeyError reaching an operator would be the defect (PD#2).
+    config = tmp_path / "c.toml"
+    config.write_text("[Database]\ntype = \"sqlite\"\n")
+    with pytest.raises(KeyError):
+        fpd.org_id_from_config(config)
+
+
+def test_parser_rejects_abbreviations(fpd):
+    parser = fpd.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--verb"])          # allow_abbrev=False
+
+
+def test_parser_accepts_site_arguments(fpd):
+    options = fpd.build_arg_parser().parse_args(["-v", "alpha", "beta"])
+    assert (options.verbose, options.site) == (True, ["alpha", "beta"])
+
+
+def test_main_returns_2_when_the_config_has_no_org_id(fpd, tmp_path, capsys):
+    config = tmp_path / "c.toml"
+    config.write_text("[Database]\n")
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "org_id" in capsys.readouterr().err
+
+
+def test_main_returns_2_when_the_config_is_missing(fpd, tmp_path, capsys):
+    assert fpd.main(["-c", str(tmp_path / "nope.toml")]) == 2
+    assert "nope.toml" in capsys.readouterr().err
+
+
+def test_main_returns_2_for_a_config_whose_pantheon_is_not_a_table(fpd, tmp_path, capsys):
+    # SPEC section 10 item 15.  ["Pantheon"]["org_id"] subscripts a str -> TypeError, which was
+    # uncaught and therefore exit 1 -- the code reserved for a COMPLETED sweep.
+    config = tmp_path / "c.toml"
+    config.write_text('Pantheon = "not-a-table"\n')
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "no usable [Pantheon].org_id" in capsys.readouterr().err
+
+
+def test_main_returns_2_for_a_config_that_is_not_utf8(fpd, tmp_path, capsys):
+    # UnicodeDecodeError is not an OSError, so it escaped the original handler.
+    config = tmp_path / "c.toml"
+    config.write_bytes(b'[Pantheon]\norg_id = "x"\n\xff\xfe garbage\n')
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "could not read" in capsys.readouterr().err
+
+
+def test_verbose_prints_the_reauthentication_note_and_quiet_does_not(fpd, monkeypatch, tmp_path,
+                                                                     capsys):
+    """SPEC section 10 item 11 -- driven through main(), where the verbosity gate lives."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        if calls.count(request.url.path) == 1 and request.url.path.endswith("/environments"):
+            return httpx.Response(401, json={"error": "expired"})
+        if request.url.path.endswith("/environments"):
+            return httpx.Response(200, json={"live": {}})
+        if "/memberships/sites" in request.url.path:
+            return httpx.Response(200, json=[{"id": "m1", "site": {"id": "u1", "name": "s1"}}])
+        return httpx.Response(200, json=[{"id": "live-s1.pantheonsite.io", "type": "platform"}])
+
+    def build(**kwargs):
+        return fpd.ApiSession(httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0),
+                              "mt", **kwargs)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", build)
+    fpd.main(["-c", str(config), "-v"])
+    assert "session expired; re-authenticated" in capsys.readouterr().err
+    calls.clear()
+    fpd.main(["-c", str(config)])
+    assert "session expired; re-authenticated" not in capsys.readouterr().err
+
+
+def test_main_returns_1_when_the_sweep_had_an_indeterminate(fpd, monkeypatch, tmp_path, capsys):
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=True))
+    assert fpd.main(["-c", str(config)]) == 1
+    assert "indeterminate=1" in capsys.readouterr().err
+
+
+def test_main_returns_0_on_a_clean_sweep(fpd, monkeypatch, tmp_path, capsys):
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config)]) == 0
+    assert "indeterminate=0" in capsys.readouterr().err
+
+
+def _main_with_sweep_raising(fpd, monkeypatch, tmp_path, error):
+    """Run main() against a stub whose sweep raises `error` on the first domains call."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise error
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+    return fpd.main(["-c", str(config)])
+
+
+def test_an_abort_names_the_completed_site_and_the_unreached_ones(fpd, monkeypatch, tmp_path,
+                                                                  capsys):
+    """SPEC section 7.3: the names, not just a count -- they are the resume instruction."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class TwoSites(_StubSession):
+        def get(self, path):
+            if "/memberships/sites" in path:
+                return [{"id": "m1", "site": {"id": "u1", "name": "s1"}},
+                        {"id": "m2", "site": {"id": "u2", "name": "s2"}}]
+            if path.endswith("/environments"):
+                if "/u2/" in path:
+                    raise KeyboardInterrupt
+                return {"live": {}}
+            return [{"id": "live-s1.pantheonsite.io", "type": "platform"}]
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_k: TwoSites(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config)]) == 130
+    err = capsys.readouterr().err
+    assert "Stopped after s1." in err
+    assert "find-platform-domains-dns s2" in err      # paste-able resume command
+
+
+def test_ctrl_c_returns_130_and_says_where_it_stopped(fpd, monkeypatch, tmp_path, capsys):
+    # SPEC G15 + section 7.3.  130 matches the main program's abort_reason convention; the
+    # default (an uncaught KeyboardInterrupt) would exit 1, which section 7 reserves for a
+    # COMPLETED sweep.
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, KeyboardInterrupt()) == 130
+    err = capsys.readouterr().err
+    assert "did not complete (interrupted)" in err
+    assert "sites=" in err                       # the summary is printed on an abort too
+
+
+def test_broken_pipe_returns_2_and_reports_like_every_other_abort(fpd, monkeypatch, tmp_path,
+                                                                  capsys):
+    # SPEC G16 + section 8: `| head` must not produce a traceback at exit 1, AND stderr is
+    # unaffected by a closed stdout, so the summary and position line are printed here too.
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, BrokenPipeError()) == 2
+    err = capsys.readouterr().err
+    assert "broken pipe" in err
+    assert "sites=" in err          # the summary, which this path used to omit
+    assert "Stopped" in err
+
+
+def test_session_expiry_returns_2_not_1(fpd, monkeypatch, tmp_path, capsys):
+    # SPEC G7a: the whole point is that this is distinguishable from a completed sweep.
+    error = fpd.SessionExpiredError("token revoked")
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, error) == 2
+    assert "session expired" in capsys.readouterr().err
+
+
+def test_an_unexpected_error_returns_2_never_1(fpd, monkeypatch, tmp_path, capsys):
+    # SPEC G18.  Exit 1 must mean ONLY "completed with indeterminates".
+    assert _main_with_sweep_raising(fpd, monkeypatch, tmp_path, ValueError("surprise")) == 2
+    assert "unexpected ValueError" in capsys.readouterr().err
+
+
+def test_no_token_ever_reaches_stdout_or_stderr(fpd, monkeypatch, tmp_path, capsys):
+    """SPEC section 3, threat-model property (a) -- instrumented rather than asserted.
+
+    An unmeasured security claim is PD#14 in its design-time form: "Applies at design time too
+    -- to a new counter, artifact, or notice -- not only in tests."
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    secrets = ("MACHINE-TOKEN-e7f2a1", "SESSION-TOKEN-9b4c3d")
+
+    def handler(request):
+        # The two paths SPEC section 3 names: a per-site G5 (environments 500) and, after it,
+        # an authentication failure that survives re-authentication (G7a).  A test that only
+        # failed the site listing would traverse neither.
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": secrets[1]})
+        if "/memberships/sites" in request.url.path:
+            return httpx.Response(200, json=[{"id": "m1", "site": {"id": "u1", "name": "s1"}},
+                                             {"id": "m2", "site": {"id": "u2", "name": "s2"}}])
+        if "/u1/" in request.url.path:
+            return httpx.Response(500, text="boom")            # G5
+        return httpx.Response(401, json={"error": "expired"})  # -> G7a on retry
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: secrets[0])
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    monkeypatch.setattr(fpd, "build_session", lambda **kwargs: fpd.ApiSession(
+        httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0), secrets[0], **kwargs))
+    assert fpd.main(["-c", str(config), "-v"]) == 2     # G7a aborts; -v is the noisiest mode
+    captured = capsys.readouterr()
+    for secret in secrets:
+        assert secret not in captured.out
+        assert secret not in captured.err
+
+
+def test_no_token_ever_reaches_stdout_or_stderr_at_default_verbosity(fpd, monkeypatch, tmp_path,
+                                                                     capsys):
+    """Carry-forward 1 (task 5 dispatch): the test above only drove -v.  SPEC section 3's threat
+    model makes no verbosity exception, so the default (quiet) path needs its own instrumented
+    proof -- an untested half of a security property is PD#14 in its design-time form.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    secrets = ("MACHINE-TOKEN-1a2b3c", "SESSION-TOKEN-4d5e6f")
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": secrets[1]})
+        if "/memberships/sites" in request.url.path:
+            return httpx.Response(200, json=[{"id": "m1", "site": {"id": "u1", "name": "s1"}},
+                                             {"id": "m2", "site": {"id": "u2", "name": "s2"}}])
+        if "/u1/" in request.url.path:
+            return httpx.Response(500, text="boom")            # G5
+        return httpx.Response(401, json={"error": "expired"})  # -> G7a on retry
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: secrets[0])
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    monkeypatch.setattr(fpd, "build_session", lambda **kwargs: fpd.ApiSession(
+        httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0), secrets[0], **kwargs))
+    assert fpd.main(["-c", str(config)]) == 2           # no -v this time
+    captured = capsys.readouterr()
+    for secret in secrets:
+        assert secret not in captured.out
+        assert secret not in captured.err
+
+
+def test_build_session_pins_no_redirects_and_the_http_timeout(fpd, monkeypatch):
+    """Carry-forwards 2 and 3 (task 5 dispatch).
+
+    ApiSession receives an already-built client and never inspects it, so build_session is the
+    ONLY place either property can be pinned.  follow_redirects=False is httpx's own default, and
+    SPEC section 3 property (c) says it MUST NOT be changed to True (an Authorization header must
+    never be replayed to a redirect target); HTTP_TIMEOUT was defined in task 2 and referenced
+    nowhere until build_session applies it here -- dead code until this test and this call site.
+    """
+    monkeypatch.setattr(fpd.ApiSession, "_authenticate", lambda self: "sess")
+    session = fpd.build_session()
+    assert session._client.follow_redirects is False
+    assert session._client.timeout == fpd.httpx.Timeout(fpd.HTTP_TIMEOUT)
+
+
+def test_main_writes_csv_with_unix_line_endings_only(fpd, monkeypatch, tmp_path, capsys):
+    """Carry-forward 4 (task 5 dispatch).
+
+    test_csv_uses_unix_line_endings (above) pins only the writer THAT TEST's own make_sweeper
+    helper builds -- it cannot go red against a production main() that forgets
+    lineterminator="\\n", because it never constructs main()'s writer at all.  This drives a real
+    hit through the real main(), over the real sys.stdout capsys captures, and checks the actual
+    bytes.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    patch_dns(monkeypatch, fpd,
+              {("occb.bus.umich.edu", "CNAME"): ["live-s1.pantheonsite.io."]})
+
+    class Hit(_StubSession):
+        def get(self, path):
+            if "/memberships/sites" in path:
+                return [{"id": "m1", "site": {"id": "u1", "name": "s1"}}]
+            if path.endswith("/environments"):
+                return {"live": {}}
+            return [{"id": "live-s1.pantheonsite.io", "type": "platform"},
+                    {"id": "occb.bus.umich.edu", "type": "custom"}]
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Hit(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config)]) == 0
+    out = capsys.readouterr().out
+    assert out == "s1,live,occb.bus.umich.edu,occb.bus.umich.edu,live-s1.pantheonsite.io\n"
+    assert "\r" not in out
+
+
+def test_shape_error_during_listing_returns_2_not_1(fpd, monkeypatch, tmp_path, capsys):
+    """Carry-forward 5 (task 5 dispatch): G17 at LISTING time (as opposed to per-site/per-env,
+    which SPEC G17 says is counted like G4/G5/G6) must still exit 2, not fall through to the
+    indeterminate-driven return.  PantheonApiShapeError is a PantheonApiError subclass, so
+    prepare_sweep's existing except tuple already catches it -- this proves that, rather than
+    assuming it from reading the class hierarchy.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class Malformed(_StubSession):
+        def get(self, path):
+            if "/memberships/sites" in path:
+                return [{"id": "m1", "site": {"id": "u1"}}]     # no "name" -> shape error
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: Malformed(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "could not list sites" in capsys.readouterr().err
+
+
+def test_report_stop_says_during_when_no_site_completed_yet(fpd, capsys):
+    """Carry-forward 6 (task 5 dispatch): SPEC section 7.3's position line is UNCONDITIONAL.  An
+    earlier draft printed it only `if sweeper.last_site` -- i.e. never, when the very first site
+    is the one interrupted, which is exactly when the operator most needs it.  Exercises
+    report_stop() directly rather than through main(), so the "no site has completed yet" state
+    doesn't depend on how a particular stub happens to fail.
+    """
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.current_site = "s1"
+    sweeper.remaining = [{"name": "s1"}]
+    fpd.report_stop(sweeper, "interrupted")
+    err = capsys.readouterr().err
+    assert "Stopped during s1." in err
+    assert "1 site not reached" in err
+    assert "find-platform-domains-dns s1" in err
+
+
+def test_report_stop_lists_multiple_remaining_site_names_space_separated(fpd, capsys):
+    """Carry-forward 6 (task 5 dispatch): the names are the recovery instruction, not a count
+    (SPEC section 7.3) -- pin the plural grammar and the space-separated join together, since a
+    single-remaining-site test can't tell a join from a single f-string interpolation apart.
+    """
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.last_site = "s1"
+    sweeper.remaining = [{"name": "s2"}, {"name": "s3"}]
+    fpd.report_stop(sweeper, "interrupted")
+    err = capsys.readouterr().err
+    assert "Stopped after s1." in err
+    assert "2 sites not reached" in err
+    assert "find-platform-domains-dns s2 s3" in err
+
+
+def test_get_converts_invalid_url_into_a_named_error(fpd, monkeypatch):
+    """Carry-forward 7 (task 5 dispatch).
+
+    org_id (read straight from TOML) and the API's own site/env ids are unquoted path segments --
+    SPEC section 3's quote(name, safe="") mandate covers only the SITE argv, not these.
+    httpx.InvalidURL is NOT an httpx.HTTPError subclass (verified, httpx 0.28.1), so it bypassed
+    BOTH of get()'s handlers before this fix -- an exit-1 traceback for something as ordinary as a
+    literal newline in the config file.  No MockTransport needed: URL validation raises before
+    any transport is reached.
+    """
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    session = fpd.ApiSession.__new__(fpd.ApiSession)
+    session._client = httpx.Client()
+    session._machine_token = "mt"          # constructing the seam directly, bypassing
+    session.token = "sess"                 # __init__'s real _authenticate() POST
+    session._notify = lambda _message: None
+    with pytest.raises(fpd.PantheonApiError):
+        session.get("/organizations/org\nid/memberships/sites")
+
+
+def test_hostile_org_id_does_not_produce_an_unnamed_traceback(fpd, monkeypatch, tmp_path, capsys):
+    """Carry-forward 7 (task 5 dispatch), driven through the real main()/prepare_sweep/org_sites
+    path rather than ApiSession.get() directly: a config file's [Pantheon].org_id is attacker- or
+    operator-typo-controlled and reaches org_sites()'s URL completely unquoted.  Uses a REAL
+    ApiSession over an httpx.MockTransport (not the _StubSession fake), because the fake's get()
+    never builds an httpx.URL at all and so cannot exercise the bug this test guards.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org\\nid"\n')     # TOML \n escape -> a literal newline
+
+    def handler(_request):
+        return httpx.Response(200, json={"session": "sess"})
+
+    def build(**kwargs):
+        return fpd.ApiSession(httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0),
+                              "mt", **kwargs)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    monkeypatch.setattr(fpd, "build_session", build)
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "could not list sites" in capsys.readouterr().err
