@@ -7,18 +7,12 @@ loaded FRESH PER TEST so no module-level state leaks between tests.
 Seams (SPEC section 9): `resolve` is monkeypatched on the loaded module; the API getter is
 INJECTED as a parameter, never patched; httpx.MockTransport backs the ApiSession tests.
 """
-# csv/io/httpx are unused until later tasks (Task 4's CSV-mechanics/injected-stream tests, Task
-# 2's ApiSession/MockTransport tests); front-loaded here (PLAN.md Task 1 Step 3) so no later
-# task appends an import mid-file and trips E402 -- see the module docstring's import-block note.
-import csv  # noqa: F401
 import importlib.util
-import io  # noqa: F401
 import struct
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import dns.resolver
-import httpx  # noqa: F401
 import pytest
 from helpers.dnsfake import make_resolver
 
@@ -103,6 +97,57 @@ def test_transient_error_is_indeterminate_and_retried_once(fpd, monkeypatch):
     assert calls == [("x.umich.edu", "CNAME"), ("x.umich.edu", "CNAME")]  # retried exactly once
 
 
+def test_no_nameservers_is_indeterminate_and_retried_once(fpd, monkeypatch):
+    # The NoNameservers sibling of the test above (SPEC section 9's DNS_RETRY_SLEEP row): the
+    # Timeout test above never executes the NoNameservers branch (:113-115) at all, so without
+    # this test that branch -- including its retry -- has no coverage (PD#14).
+    monkeypatch.setattr(fpd, "DNS_RETRY_SLEEP", 0)  # the suite must never actually sleep
+    calls = []
+    patch_dns(monkeypatch, fpd, {("y.umich.edu", "CNAME"): dns.resolver.NoNameservers()}, calls)
+    result = fpd.walk("y.umich.edu")
+    assert result.dns_record == ""
+    assert "transient DNS error at y.umich.edu" in result.problem
+    assert calls == [("y.umich.edu", "CNAME"), ("y.umich.edu", "CNAME")]  # retried exactly once
+
+
+class _RetrySleepSpy:
+    """A drop-in for DNS_RETRY_SLEEP that RECORDS being used as a sleep duration, without
+    patching `time.sleep` itself (SPEC section 9: "there is no patching of time.sleep").
+
+    CPython's time.sleep() converts its argument via `__index__` before falling back to a float
+    conversion (verified empirically: a plain object implementing only `__index__` is accepted
+    and the method is called). A spy that returns 0 from `__index__` is therefore observed on
+    every call it participates in, and nothing actually sleeps -- so the assertion is on which
+    branch asked to sleep, never on wall-clock time.
+    """
+
+    def __init__(self):
+        self.times_slept = 0
+
+    def __index__(self):
+        self.times_slept += 1
+        return 0
+
+
+def test_transient_delay_asymmetry_only_no_nameservers_sleeps(fpd, monkeypatch):
+    # SPEC section 6.2's asymmetry, pinned: a Timeout has already spent dnspython's own ~5s
+    # lifetime, so it retries with NO added delay; NoNameservers comes back in ~0.3s, so it is
+    # the one that gets DNS_RETRY_SLEEP before its retry.  Swapping which branch sleeps (the
+    # mutation this test is red-capable against) would silently turn a burst of SERVFAILs back
+    # into an immediate re-fire into the same rate limit (SPEC section 6.2).
+    timeout_spy = _RetrySleepSpy()
+    monkeypatch.setattr(fpd, "DNS_RETRY_SLEEP", timeout_spy)
+    patch_dns(monkeypatch, fpd, {("timeout.umich.edu", "CNAME"): dns.resolver.Timeout()})
+    fpd.walk("timeout.umich.edu")
+    assert timeout_spy.times_slept == 0
+
+    nns_spy = _RetrySleepSpy()
+    monkeypatch.setattr(fpd, "DNS_RETRY_SLEEP", nns_spy)
+    patch_dns(monkeypatch, fpd, {("nns.umich.edu", "CNAME"): dns.resolver.NoNameservers()})
+    fpd.walk("nns.umich.edu")
+    assert nns_spy.times_slept == 1
+
+
 def test_malformed_name_is_indeterminate_not_a_crash(fpd, monkeypatch):
     patch_dns(monkeypatch, fpd,
               {("a..b", "CNAME"): fpd.MalformedNameError("a..b: EmptyLabel")})
@@ -134,7 +179,7 @@ def test_custom_domain_that_is_itself_a_platform_domain_is_indeterminate(fpd, mo
 
 
 # -- The copied resolve() itself (SPEC section 10 item 9).  Every test above monkeypatches the
-# -- seam, so without these two the copied code is never executed -- and copied code with its
+# -- seam, so without these three the copied code is never executed -- and copied code with its
 # -- safety net removed is exactly where a transcription slip ships green (PD#14).  Ported from
 # -- tests/unit/test_dns_classify.py, which covers the original.
 
@@ -143,6 +188,33 @@ def test_resolve_converts_a_malformed_name_into_the_named_exception(fpd):
     # not a DNSException at all, so nothing downstream would catch it.
     with pytest.raises(fpd.MalformedNameError):
         fpd.resolve("\\300.com", "CNAME")
+
+
+def test_resolve_converts_a_real_idna_exception(fpd, monkeypatch):
+    # dns.name.IDNAException derives from dns.exception.DNSException but NOT from SyntaxError, so
+    # the resolve() clause that catches it (:61) is a SEPARATE except clause from the parse-time
+    # one above -- deleting dns.name.IDNAException from that tuple leaves every other test here
+    # green (ported from tests/unit/test_dns_classify.py::test_resolve_converts_a_real_idna_exception,
+    # which found exactly that gap). IDNACodec.decode() raises it on an "xn--" label whose
+    # punycode tail fails to decode -- a real, non-fabricated raise, confirmed by calling the
+    # actual dnspython codec below -- but that decode() path is never reached by
+    # dns.resolver.resolve(hostname, rrtype) for any hostname string (encoding a query name never
+    # calls decode(); verified empirically against dnspython 2.8.0, which is what is pinned here).
+    # So the underlying dns.resolver.resolve is monkeypatched to raise the SAME real exception
+    # instance, to prove resolve()'s except clause converts it.
+    real_exc = None
+    try:
+        fpd.dns.name.IDNA_2003_Practical.decode(b"xn--0")   # real raise, not hand-constructed
+        pytest.fail("expected dns.name.IDNAException")
+    except fpd.dns.name.IDNAException as e:
+        real_exc = e   # exception-clause names are cleared on block exit -- rebind explicitly
+
+    def boom(*_args, **_kwargs):
+        raise real_exc
+
+    monkeypatch.setattr(fpd.dns.resolver, "resolve", boom)
+    with pytest.raises(fpd.MalformedNameError):
+        fpd.resolve("xn--0.example.org", "A")
 
 
 def test_wire_level_struct_error_is_transient_not_a_malformed_name(fpd, monkeypatch):

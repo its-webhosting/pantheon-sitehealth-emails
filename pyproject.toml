@@ -131,6 +131,11 @@ ignore = [
 "find-platform-domains-dns.py" = ["T201"]  # a CLI tool: print IS its output (stdout = the CSV,
     # stderr = operator messages).  Temporary, deleted with the script after the Pantheon CDN
     # migration -- see development/2026-07-28-platform-domain-util/SPEC.md section 14.
+"find-platform-domains-dns" = ["T201"]  # the extension-less real file the .py entry above
+    # symlinks to -- .claude/hooks/ruff-check.sh's edit-time hook hands ruff THIS path (an edit
+    # lands on the real file, not the symlink), and per-file-ignores is keyed on the path ruff is
+    # given, so the .py entry alone leaves the hook's own invocation reporting T201.  Same
+    # justification and deletion condition as the .py entry above.
 
 [tool.pyright]
 # Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode; the whole psh/

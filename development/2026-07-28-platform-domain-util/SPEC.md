@@ -477,6 +477,7 @@ works test-first and cannot ask.
 | `get` callable | **injected**, not patched: `org_sites(get, org_id)`, `Sweeper(get=…)` etc. take the getter as a parameter. Production passes `ApiSession.get`; tests pass a dict-driven fake | every enumeration and sweep test |
 | `httpx.MockTransport` | passed into `ApiSession`'s client at construction | the retry / re-auth / JSON-error tests, and only those |
 | `RETRY_SLEEP` | module-level constant, monkeypatched to `0` | the retry tests (so the suite never actually sleeps) |
+| `DNS_RETRY_SLEEP` | module-level constant, monkeypatched to `0` for the NoNameservers retry-count test, or to a call-recording stand-in implementing `__index__` (never a real delay) for the Timeout-vs-NoNameservers asymmetry test | the DNS retry tests |
 | the output **stream** | **injected** alongside the CSV writer: `Sweeper(get, writer, stream, …)`. Production passes `sys.stdout`; tests pass the same `io.StringIO` the writer wraps | the per-row flush requirement (§5), which is otherwise untestable — a test's writer and `sys.stdout` are unrelated objects, so nothing would pin the flush |
 
 Five further seams are used **by tests only**, and are declared here because the Spine makes
@@ -533,10 +534,15 @@ Required coverage — each item is a behavior a defect could silently break:
    (via the injected stream seam, §9).
 9. **The copied `resolve()` itself**, executed for real rather than monkeypatched — it has no
    coverage otherwise, and it is copied code, which is exactly where a transcription slip ships
-   green (PD#14). Two cases, ported from `tests/unit/test_dns_classify.py`: the literal text
-   `"\300.com"` raises `MalformedNameError`, and a `dns.resolver.resolve` monkeypatched to raise
+   green (PD#14). Three cases, ported from `tests/unit/test_dns_classify.py`: the literal text
+   `"\300.com"` raises `MalformedNameError`; a `dns.resolver.resolve` monkeypatched to raise
    `struct.error` surfaces as `dns.resolver.NoNameservers` (transient), **not** as a malformed
-   name — the distinction §6.3 calls load-bearing.
+   name — the distinction §6.3 calls load-bearing; and a `dns.resolver.resolve` monkeypatched to
+   raise a real `dns.name.IDNAException` (obtained by calling the actual dnspython IDNA codec,
+   not hand-constructed) is also converted to `MalformedNameError` — this is `resolve()`'s
+   *second* except clause (§6.3's "unchanged copies" of the exception handling), a separate
+   branch from the parse-time one the first two cases exercise, and it has no coverage of its
+   own without this case.
 10. `machine_token()`: `$PANTHEON_MACHINE_TOKEN` wins; the single-cache-file path; and the two
     G2 branches the plan would otherwise leave untested — an unreadable/undecodable file, and a
     file with no `token` key.
@@ -664,8 +670,11 @@ operational data, not evidence of correctness. Run it when you actually want the
 ## 14. Deletion checklist (post-migration)
 
 1. `git rm find-platform-domains-dns find-platform-domains-dns.py tests/unit/test_find_platform_domains_dns.py`
-2. Remove the `find-platform-domains-dns.py` entries from `[tool.ruff.lint.per-file-ignores]`
-   and `[tool.pyright].include` in `pyproject.toml`.
+2. Remove **both** `find-platform-domains-dns.py` and `find-platform-domains-dns` entries from
+   `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` (the extension-less entry exists
+   because `.claude/hooks/ruff-check.sh` hands ruff the real, extension-less path at edit time,
+   not the symlink), the `find-platform-domains-dns.py` entry from `[tool.pyright].include`, and
+   the `"$REPO_ROOT/find-platform-domains-dns")` arm from that hook's `case` statement.
 3. Remove the CLAUDE.md paragraph describing the utility.
 4. Leave `CONTEXT.md`'s glossary additions in place — those terms describe Pantheon, not this
    script.

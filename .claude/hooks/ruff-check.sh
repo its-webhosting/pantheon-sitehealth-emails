@@ -74,10 +74,12 @@ esac
 
 # --- Python only.  The main program is EXTENSION-LESS, so it needs its own arm; the
 # committed pantheon-sitehealth-emails.py symlink is what ruff/pyright/CodeGraph resolve
-# it through, but an edit lands on the real file.
+# it through, but an edit lands on the real file.  find-platform-domains-dns (temporary
+# utility, see development/2026-07-28-platform-domain-util/SPEC.md) is the same shape.
 case "$ABS" in
     *.py) ;;
     "$REPO_ROOT/pantheon-sitehealth-emails") ;;
+    "$REPO_ROOT/find-platform-domains-dns") ;;
     *) exit 0 ;;
 esac
 
