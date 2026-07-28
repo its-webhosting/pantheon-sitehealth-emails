@@ -66,3 +66,16 @@ The Pantheon feature that waives overage billing for a site during a given month
 The CMS a site runs — WordPress (including a WordPress network) or Drupal — as reported
 by Pantheon.
 _Avoid_: platform (that word means Pantheon itself)
+
+**Environment**:
+One deployable instance of a site — `dev`, `test`, `live`, or a multidev (`test-mark`,
+`autopilot`, …). Each environment has its own domain list.
+
+**Custom domain**:
+A hostname a site owner connected to a site environment (`example.umich.edu`). Pantheon
+labels these `type: custom`. Primary domains are custom domains.
+
+**Platform domain**:
+The Pantheon-provided hostname for a site environment, ending in `.pantheonsite.io`
+(`live-bus-occb.pantheonsite.io`). Pantheon labels these `type: platform`.
+_Avoid_: Pantheon domain, pantheonsite name

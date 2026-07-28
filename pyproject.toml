@@ -128,13 +128,16 @@ ignore = [
     "DTZ002",   # naive datetimes mirror the program's own date semantics (6)
 ]
 "development/finalize-session.py" = ["T201"]  # a CLI tool: print IS its output
+"find-platform-domains-dns.py" = ["T201"]  # a CLI tool: print IS its output (stdout = the CSV,
+    # stderr = operator messages).  Temporary, deleted with the script after the Pantheon CDN
+    # migration -- see development/2026-07-28-platform-domain-util/SPEC.md section 14.
 
 [tool.pyright]
 # Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode; the whole psh/
 # package is type-checked -- psh/cli.py (the relocated main()) entered the gate at I14a when
 # psh/_legacy.py was deleted, so there is no longer anything to grandfather here.  The
 # strictness ratchets up as later increments tighten typing (ledger tracks).
-include = ["psh"]
+include = ["psh", "find-platform-domains-dns.py"]
 typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]
