@@ -587,7 +587,11 @@ class Sweeper:
             self.counters.indeterminate += 1
             return
         for name, kind in unknown:          # G6a
-            skipped(f"{site['name']}.{env_id} {name}: unknown domain type {kind!r}; "
+            # Quoted explicitly, not `{kind!r}`: repr() only adds quotes for a str value, so a
+            # domain entry with NO `type` key at all (kind is None) rendered the unquoted
+            # `unknown domain type None` -- SPEC G6a's wire format is always the quoted
+            # `'<type>'` form (fix round 1, M4).
+            skipped(f"{site['name']}.{env_id} {name}: unknown domain type '{kind}'; "
                     "not examined")
             self.counters.indeterminate += 1
         for custom_domain in custom_domains:

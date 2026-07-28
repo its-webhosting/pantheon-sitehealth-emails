@@ -835,6 +835,12 @@ def test_clean_hit_writes_exactly_the_five_fields(fpd, monkeypatch, capsys):
 
 
 def test_csv_uses_unix_line_endings(fpd, monkeypatch):
+    # Fix round 1, I3: this pins ONLY the `csv.writer(..., lineterminator="\n")` configuration
+    # that THIS TEST's own `make_sweeper` helper constructs (tests:817-824) -- the script itself
+    # contains no `csv.writer` call at all, since the writer is injected by the caller (SPEC
+    # section 9). The production pin -- that `main()` actually constructs its writer with
+    # `lineterminator="\n"` over real `sys.stdout` -- has no seam here and is a required Task 5
+    # deliverable (`"\r" not in` captured stdout from a real `main()` invocation).
     patch_dns(monkeypatch, fpd, {
         ("a.umich.edu", "CNAME"): ["live-x.pantheonsite.io."],
         ("live-x.pantheonsite.io", "A"): ["23.185.0.4"],
@@ -966,6 +972,13 @@ def test_a_session_expiry_aborts_the_sweep_instead_of_counting_indeterminates(fp
     with pytest.raises(fpd.SessionExpiredError):
         sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
     assert sweeper.counters.indeterminate == 0
+    # Fix round 1, I1.  SPEC section 7.3's "Stopped after <site>" / "Stopped during <site>" split
+    # depends on `last_site` meaning ONLY a site that COMPLETED -- s1 never completed here, so
+    # last_site must still be empty and current_site must name the site in flight.  Moving the
+    # `self.last_site = site["name"]` assignment above `self.sweep_site(site)` in `sweep()`
+    # passed all 67 tests before these two assertions existed.
+    assert sweeper.last_site == ""
+    assert sweeper.current_site == "s1"
 
 
 def test_a_malformed_domains_payload_is_one_environments_indeterminate(fpd, monkeypatch, capsys):
@@ -996,7 +1009,7 @@ def test_sweep_records_where_it_stopped(fpd, monkeypatch):
     assert sweeper.remaining == []
 
 
-def test_sweep_site_counts_environments_and_domains(fpd, monkeypatch):
+def test_sweep_site_counts_environments_and_domains(fpd, monkeypatch, capsys):
     patch_dns(monkeypatch, fpd, {})     # every domain is a clean no-hit
     responses = {
         "/sites/uuid/environments": {"dev": {}, "live": {}},
@@ -1006,10 +1019,14 @@ def test_sweep_site_counts_environments_and_domains(fpd, monkeypatch):
             {"id": "live-s.pantheonsite.io", "type": "platform"},
             {"id": "a.umich.edu", "type": "custom"}],
     }
-    sweeper, out = make_sweeper(fpd, get=lambda path: responses[path])
+    sweeper, out = make_sweeper(fpd, get=lambda path: responses[path])       # verbose=False
     sweeper.sweep_site({"id": "uuid", "name": "s"})
     assert (sweeper.counters.sites, sweeper.counters.envs, sweeper.counters.custom_domains) == (1, 2, 1)
     assert out.getvalue() == ""
+    # Fix round 1, I2.  The per-site progress/summary lines are "stderr, -v only" (SPEC
+    # section 8); deleting the `if self._verbose:` gate in `_progress` passed all 67 tests
+    # before this assertion existed, since every prior -v test ran with verbose=True.
+    assert capsys.readouterr().err == ""
 
 
 def test_failed_environment_listing_counts_once_and_continues(fpd, monkeypatch, capsys):
@@ -1040,3 +1057,55 @@ def test_failed_domain_listing_counts_once_and_continues_to_the_next_environment
     assert sweeper.counters.indeterminate == 1
     assert sweeper.counters.envs == 2
     assert "could not list domains" in capsys.readouterr().err
+
+
+def test_sweep_env_reports_and_counts_an_unknown_domain_type(fpd, monkeypatch, capsys):
+    # Fix round 1, C1 (SPEC G6a / section 10 item 18).  The reviewer's mutation -- rename the
+    # loop variable `unknown` to `_unknown` and delete the four-line report-and-count loop --
+    # passed all 67 tests before this test existed, because none of the tests claimed as
+    # covering it actually reached `sweep_env` with an unrecognized `type` entry.
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        return [{"id": "live-s.pantheonsite.io", "type": "platform"},
+                {"id": "x.umich.edu", "type": "brand-new-type"}]
+
+    sweeper, _out = make_sweeper(fpd, get=get)
+    sweeper.sweep_env({"id": "u", "name": "s"}, "live")
+    err = capsys.readouterr().err
+    assert "unknown domain type" in err
+    assert sweeper.counters.indeterminate == 1
+    assert sweeper.counters.custom_domains == 0
+
+
+def test_verbose_sweep_prints_the_per_site_progress_counter(fpd, monkeypatch, capsys):
+    # Fix round 1, M1 (SPEC section 8's `[12/408] bus-occb`).  `test_verbose_reports_per_site_
+    # counts` only calls `sweep_site` directly and never exercises `sweep()`'s own progress
+    # line, so deleting it passed all 67 tests.
+    patch_dns(monkeypatch, fpd, {})
+    sweeper, _out = make_sweeper(
+        fpd, get=lambda path: {} if path.endswith("environments") else [], verbose=True)
+    sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    err = capsys.readouterr().err
+    assert "[1/2] s1" in err
+    assert "[2/2] s2" in err
+
+
+def test_cross_site_warning_with_no_platform_domains_reports_none_listed(fpd, monkeypatch, capsys):
+    # Fix round 1, M2 (SPEC section 7.2's traced empty-platform-set shadow): an environment
+    # whose OWN `type: platform` set is empty still gets a useful "expected one of" message,
+    # not a bare trailing "()".
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-other.pantheonsite.io."],
+        ("live-other.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu", set())
+    assert "expected one of: none listed" in capsys.readouterr().err
+
+
+def test_counters_summary_format(fpd):
+    # Fix round 1, M3 (SPEC section 8's `sites=N envs=N custom_domains=N rows=N
+    # indeterminate=N` summary line).  Nothing referenced `Counters.summary()` before this.
+    counters = fpd.Counters(sites=3, envs=5, custom_domains=7, rows=2, indeterminate=1)
+    assert counters.summary() == "sites=3 envs=5 custom_domains=7 rows=2 indeterminate=1"
