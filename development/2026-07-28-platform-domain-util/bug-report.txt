@@ -1,0 +1,330 @@
+================================================================================
+BUG REPORT
+Pantheon API: the organization site-list pagination cursor (`start`) is silently
+ignored for most site ids, and the first page is returned again
+================================================================================
+
+API base:       https://api.pantheon.io/v0
+Endpoint:       GET /v0/organizations/{org_id}/memberships/sites?limit=&start=
+Organization:   23c7208e-5f2a-4388-9fc4-5c3a038ef8b9  (408 sites at time of test)
+Client:         curl 8.14.1 (aarch64-unknown-linux-gnu) libcurl/8.14.1, HTTP/2,
+                direct HTTPS, no proxy
+Correlation:    Responses carry no request-id or correlation header of any kind
+                (verified: the failing response returned only content-type, date,
+                via and alt-svc).  The machine-token exchange sends the client
+                string "pagination-bug-report", which may be the only handle for
+                locating these sessions in your logs.  Exact UTC timestamps of the
+                run are in OBSERVED OUTPUT below.
+Severity:       High.  The failure is silent: it produces a wrong-but-plausible
+                result with HTTP 200 and no error, so a caller cannot detect it
+                without independently knowing the correct answer.
+
+
+SUMMARY
+-------
+
+The swagger spec for this endpoint documents:
+
+    "Pagination is handled via query parameters (limit and start)."
+    start -- "Pagination cursor (site UUID to start after)"
+
+For most site UUIDs, `start` is not honored.  Instead of returning the sites
+after the cursor, the API returns the FIRST page of the collection again, with
+HTTP 200 and no error, warning, or header indicating that the cursor was
+disregarded.
+
+The cursor IS honored when the supplied id happens to be the last id of a page
+the API has already returned for that organization -- which is why the obvious
+"walk" pattern (pass the last id of each page you receive) works, and why the
+defect is easy to miss.  Any other id silently restarts the collection.
+
+If the intended design is that only API-issued page-boundary ids are valid
+cursors, please note three things before closing this as working as designed:
+
+  1. The API issues no cursor.  There is no cursor field in the response body and
+     no Link/rel=next header, so every cursor a caller can possibly send is one
+     it constructed itself from response data.
+  2. The swagger defines the parameter as a "site UUID to start after", not as an
+     opaque token, and every id used below is a real site UUID belonging to the
+     organization being listed.
+  3. CASE C below uses the id of the FIRST site in the collection -- an id the API
+     itself returned, in the very page it returned it in -- and that is ignored
+     too.  So "only ids we issued" does not describe the actual behavior either.
+
+Whatever the intended cursor contract turns out to be, a cursor that cannot be
+honored should produce an error rather than silently returning page 1 (see WHAT
+WE WOULD LIKE, option 2).
+
+
+WHAT THE OUTPUT SHOULD BE
+-------------------------
+
+Let S[1..408] be the organization's sites in the order this endpoint returns
+them.  That order is ascending by site id; the reproduction script below asserts
+it rather than assuming it, and stops if it does not hold.
+
+    Request:  ...memberships/sites?limit=100&start=<id of S[101]>
+    Expected: a 100-element array whose first element is S[102]
+
+That is what "site UUID to start after" means, and it is what the endpoint does
+when the cursor is the last id of a previously returned page:
+
+    Request:  ...memberships/sites?limit=100&start=<id of S[100]>
+    Expected: a 100-element array whose first element is S[101]      <-- works
+
+
+WHAT THE OUTPUT ACTUALLY IS
+---------------------------
+
+    Request:  ...memberships/sites?limit=100&start=<id of S[101]>
+              (concretely: start=34562508-564e-4122-9e92-38118b7fba3f)
+
+    Actual:   HTTP/2 200
+              a 100-element array whose first element is S[1]
+              (concretely: 004921c4-7b9e-4f71-8649-30f5c06ed672)
+
+              i.e. the first page of the collection, exactly as if `start` had
+              not been supplied at all.  No error field, no 4xx, no warning
+              header.
+
+Reproduced 5 times out of 5 for that cursor, and 5 out of 5 for the id of S[1].
+The control case (cursor = id of S[100]) succeeded 5 out of 5 in the same run.
+The controls also rule out the obvious alternative explanations: if the
+collection order were unstable between requests, or the session were degrading,
+CASE A and CASE D could not pass in the same run in which CASE B and CASE C fail.
+
+
+WHY THIS MATTERS
+----------------
+
+1. Silent truncation.  A caller that paginates with any cursor other than a
+   previously-returned page boundary -- for example, resuming a long job from a
+   stored site id -- receives the first page again.  With de-duplication it sees
+   a short list and believes the organization is smaller than it is; without
+   de-duplication it processes the same 100 sites forever.  Either way nothing
+   in the response says so.
+
+2. "Loop until an empty page" does not terminate.  Because an unrecognized
+   cursor yields a full first page rather than an empty array, the standard
+   termination condition for cursor pagination becomes an infinite loop.
+   Callers must instead stop on a short page, which is only correct if the API
+   never returns a short non-final page.
+
+3. It defeats the natural correctness check.  A caller cannot verify its own
+   pagination, because the malformed answer is indistinguishable from a
+   legitimate first page.
+
+For context, `terminus org:site:list` returns all 408 sites from a single command
+invocation and is unaffected -- it does not rely on this endpoint's `start`
+cursor.  The problem is specific to using this endpoint's cursor directly.
+
+
+ADDITIONAL OBSERVATIONS
+-----------------------
+
+These are reported as observations, not as a diagnosis of the mechanism.
+
+* Cursor validity tracked page boundaries.  In a positional scan of one
+  organization (408 sites, limit=100), `start` was honored at positions 100,
+  200, 300, 400 and 408 -- the last element of each page the API itself
+  returns -- and ignored at positions 1, 2, 50, 99, 101, 102, 150, 199, 201,
+  250, 299, 301, 350, 399, 401, 405 and 407.
+
+* Cursor validity appeared to depend on earlier requests.  The id at position 50
+  was ignored when tested cold, then honored consistently after a single
+  `limit=50` request (for which position 50 IS a page boundary) had been made
+  earlier in the same session -- including for subsequent `limit=100` requests.
+  This suggests `start` is resolved against pagination the backend has already
+  computed, rather than by a `WHERE id > start` predicate.
+
+* The cursor past the end of the collection behaved inconsistently.  Using the
+  id of the LAST site returned an empty array (correct) in later runs, but in an
+  early run returned a full 100-element first page.
+
+* Every observation above was made with HTTP 200 responses.  No request in any
+  of these tests returned a 4xx or 5xx status.
+
+
+REPRODUCTION
+------------
+
+The attached script, reproduce-pagination-bug.txt is a standalone Bash script:
+it needs bash, curl, jq and the usual POSIX text utilities (awk, grep, head, sed,
+sort, tr, wc), and reads nothing but the credentials described in its header.
+It is read-only apart from the POST that exchanges a machine token for a session token.
+
+Save the script and rename it to reproduce-pagination-bug.sh
+
+  * The script uses $PANTHEON_MACHINE_TOKEN if that is set, and otherwise reads the
+    token from the single file in ~/.terminus/cache/tokens/.  The token is passed
+    to curl on stdin, never on argv.
+  * $PANTHEON_ORG_ID selects the organization, defaulting to
+    23c7208e-5f2a-4388-9fc4-5c3a038ef8b9.
+  * $REPEATS sets how many times each case is probed (default 5).
+  * **It requires an organization with at least 102 sites**, and stops with a clear
+    message otherwise: the probes need a site id that is provably not a page
+    boundary, which needs at least two ids beyond the first page.
+  * Every request is checked for HTTP 200 and the script stops on anything else,
+    so a transport or authentication failure can never be misreported as a
+    defect verdict.
+
+The script first collects the reference site list using the cursor pattern that
+works -- asserting along the way that the list is free of duplicates and ascending
+by id, since every expectation is expressed as a position in that list -- and then
+runs four cases.  Each case is self-contained and needs no cross-referencing: it
+states what is being asked and why, prints the exact curl command, the expected
+answer and the answer actually received, and finally the tally over $REPEATS
+identical requests.
+
+  CASE A  control -- the cursor value that works, which is why this is easy to miss
+  CASE B  defect  -- the same page walked one position further
+  CASE C  defect  -- the first id the API ever returned, which is also ignored
+  CASE D  control -- the end of the collection, which behaves correctly
+
+The controls are not decoration: a degrading session or a collection reordering
+underneath the run would break CASE A and CASE D too, and they pass in the same
+run in which B and C fail.  The cursors in CASE B and CASE C are chosen so that
+they cannot coincidentally be page boundaries of the caller's own pagination:
+position 1, and position limit+1 in a collection of at least limit+2 elements.
+
+
+OBSERVED OUTPUT
+---------------
+
+Run against organization 23c7208e-5f2a-4388-9fc4-5c3a038ef8b9 on 2026-07-28,
+15:44:43Z to 15:45:43Z.  This is the verbatim output, indented by four spaces and
+otherwise unaltered:
+
+    Using the machine token from ~/.terminus/cache/tokens/
+    Started (UTC):  2026-07-28 15:44:43Z
+    Organization:   23c7208e-5f2a-4388-9fc4-5c3a038ef8b9
+    Endpoint:       GET https://api.pantheon.io/v0/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=100&start=<site id>
+    curl:           curl 8.14.1 (aarch64-unknown-linux-gnu) libcurl/8.14.1 OpenSSL/3.5.6 zlib/1.3.1 brotli/1.1.0 zstd/1.5.7 libidn2/2.3.8 libpsl/0.21.2 libssh2/1.11.1 nghttp2/1.64.0 nghttp3/1.8.0 librtmp/2.3 OpenLDAP/2.6.10
+    Client string:  pagination-bug-report  (sent in the machine-token exchange; responses
+                    carry no request-id header, so this is the only correlation handle)
+    Repeats/case:   5
+
+    Collecting the site list, cursor = last id of each full page (the pattern that works) ...
+      408 sites over 5 pages, verified ascending by id and free of duplicates
+
+    ===============================================================================
+    CASE A  (CONTROL)  cursor = the last id of page 1, i.e. the id of site 100
+    ===============================================================================
+      This is the one cursor value that works, and it is why the defect is easy to miss:
+      a caller that walks the collection by passing the last id of each page it receives
+      never notices anything wrong.  Asking to start after site 100 correctly returns a page
+      beginning at site 101.
+
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=3451851f-50e1-40bf-91e7-dc3df0e71bc5"
+
+      Expected:  100 elements, the first being 34562508-564e-4122-9e92-38118b7fba3f
+      Actual:    HTTP/2 200, 100 elements, the first being 34562508-564e-4122-9e92-38118b7fba3f
+                 ^^ as expected.
+      Response date: Tue, 28 Jul 2026 15:44:58 GMT
+
+      Over 5 identical requests:  correct=5  returned-page-1-again=0  other=0   <-- as documented
+
+    ===============================================================================
+    CASE B  (DEFECT)   cursor = the first id of page 2, i.e. the id of site 101
+    ===============================================================================
+      The cursor is a real site UUID in this organization, returned by this very endpoint
+      in the page before.  It differs from CASE A only in being one position further along,
+      so asking to start after site 101 must return a page beginning at site 102.
+      It is not a page boundary of any pagination the caller has requested, which appears to
+      be what matters.
+
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=34562508-564e-4122-9e92-38118b7fba3f"
+
+      Expected:  100 elements, the first being 34d63387-d5e3-4791-9271-f58c15256ef4
+      Actual:    HTTP/2 200, 100 elements, the first being 004921c4-7b9e-4f71-8649-30f5c06ed672
+                 ^^ that is the FIRST site in the collection: the cursor was
+                    ignored and the listing restarted from the beginning.
+      Response date: Tue, 28 Jul 2026 15:45:12 GMT
+
+      Over 5 identical requests:  correct=0  returned-page-1-again=5  other=0   <-- DEFECT
+
+    ===============================================================================
+    CASE C  (DEFECT)   cursor = the id of the FIRST site in the collection, site 1
+    ===============================================================================
+      This one closes the "only use cursors we issued you" explanation.  The id below is
+      the first element of the first page the API returned, in the very response it was
+      returned in -- there is no more API-issued id available.  Asking to start after site 1
+      must return a page beginning at site 2.
+
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=004921c4-7b9e-4f71-8649-30f5c06ed672"
+
+      Expected:  100 elements, the first being 0068879e-59a2-412b-abb4-641a2f2217e4
+      Actual:    HTTP/2 200, 100 elements, the first being 004921c4-7b9e-4f71-8649-30f5c06ed672
+                 ^^ that is the FIRST site in the collection: the cursor was
+                    ignored and the listing restarted from the beginning.
+      Response date: Tue, 28 Jul 2026 15:45:27 GMT
+
+      Over 5 identical requests:  correct=0  returned-page-1-again=5  other=0   <-- DEFECT
+
+    ===============================================================================
+    CASE D  (CONTROL)  cursor = the id of the LAST site in the collection, site 408
+    ===============================================================================
+      The end of the collection behaves correctly: asking to start after the final site
+      returns an empty array, which is how a caller is supposed to learn it is done.  That
+      makes the defect above more surprising, not less -- the cursor IS understood here.
+
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=fd5750cd-391a-4ebb-8944-370886bec2ab"
+
+      Expected:  an empty array -- there are no sites after the last one
+      Actual:    HTTP/2 200, an empty array
+                 ^^ as expected.
+      Response date: Tue, 28 Jul 2026 15:45:40 GMT
+
+      Over 5 identical requests:  correct=5  returned-page-1-again=0  other=0   <-- as documented
+
+    Finished (UTC): 2026-07-28 15:45:43Z
+
+    Reading the verdicts: 'returned-page-1-again' counts responses that were the first
+    page of the collection instead of the page after the cursor -- HTTP 200, no error of
+    any kind.  Any nonzero count is the defect.  ('other' would mean a response that was
+    neither the expected page nor the first page; it should never occur, since every
+    non-200 stops the script instead of producing a verdict.)
+
+
+WHAT WE WOULD LIKE
+------------------
+
+Any one of the following would resolve this for API consumers:
+
+1. Honor `start` for any valid site id in the organization, as the swagger
+   description states -- i.e. return the sites ordered after that id.
+
+2. If a supplied cursor cannot be honored, respond with an error (for example
+   400) naming the problem, rather than returning the first page.  A loud
+   failure is far less damaging than a plausible wrong answer.
+
+3. Alternatively, document precisely which cursor values are valid, and return
+   an explicit next-page cursor (or a `Link: rel="next"` header) in each
+   response, so callers never have to construct one.
+
+Two smaller things would help independently of which option you choose:
+
+  * A stated total count for the collection, so callers can verify their own
+    pagination rather than having to trust it.
+  * A request-id (or similar correlation) response header.  There is none today,
+    which is why this report can offer you only an organization id, a client
+    string and a UTC time window to find these requests by.
+
+
+WORKAROUND IN USE
+-----------------
+
+Pass `limit=100` and use as the cursor only the last id of the page just
+received; stop when a page contains fewer than 100 items (never when it is
+empty, per point 2 above).  Additionally, de-duplicate by site id and treat any
+non-empty page that contributes no new ids as an ignored cursor: retry the same
+cursor, and fail loudly rather than continuing, since the alternative is a
+silently incomplete result.
