@@ -23,6 +23,7 @@ import sys
 import time
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import quote
 
 import dns.exception
 import dns.name
@@ -329,3 +330,142 @@ class ApiSession:
                 return response.json()
             except json.JSONDecodeError as e:
                 raise PantheonApiError(f"{path}: undecodable response body: {e}") from e
+
+
+PAGE_LIMIT = 100          # the API's documented maximum
+MAX_PAGES = 100           # runaway guard: 10,000 sites is far beyond any real organization
+CURSOR_ATTEMPTS = 3       # how many times one ignored cursor is retried before giving up
+
+
+class SiteListingError(Exception):
+    """The organization's site list could not be enumerated completely (SPEC G4a/G4b)."""
+
+
+def _require(payload, key, where):
+    """payload[key], or a named PantheonApiShapeError naming what was missing (SPEC G17).
+
+    Without this, an unexpected response shape is a bare KeyError -- an uncaught traceback whose
+    exit code is 1, which SPEC section 7 reserves for "completed with indeterminates".
+    """
+    if not isinstance(payload, dict) or key not in payload:
+        raise PantheonApiShapeError(f"{where}: response has no '{key}'")
+    return payload[key]
+
+
+def org_sites(get, org_id):
+    """Every site in the organization, as [{"id", "name"}], in the API's ascending-id order.
+
+    The cursor has a SILENT failure mode, characterized in full in this directory's
+    pantheon-api-pagination-bug-report.txt (SPEC section 4.1): `start` is honored ONLY when the
+    id is the last element of a page the API has already computed.  Any other id returns the
+    FIRST page again, with HTTP 200 and no error.  Three rules follow, all load-bearing:
+
+      * Pass the last id of the page just received, and nothing else.  That is always a
+        boundary, which is why this pattern works where arbitrary cursors do not.
+      * Stop on a SHORT page, never on an empty one.  An empty page is legitimate (an
+        organization holding an exact multiple of PAGE_LIMIT sites ends on one, verified live),
+        but an UNRECOGNIZED cursor returns a full first page rather than [], so "loop until
+        empty" never terminates once the loop leaves the boundaries.
+      * A non-empty page that contributes zero new ids means the cursor was ignored.  Retry the
+        SAME cursor; if it keeps happening, raise -- a short list here is a silent truncation of
+        the whole sweep, which the CSV cannot reveal.
+    """
+    collected = {}
+    cursor = None
+    ignored = 0
+    for _page in range(MAX_PAGES):
+        path = f"/organizations/{org_id}/memberships/sites?limit={PAGE_LIMIT}"
+        if cursor is not None:
+            path += f"&start={cursor}"
+        page = get(path)
+        if not isinstance(page, list):
+            raise PantheonApiShapeError(f"{path}: expected a JSON array of memberships")
+        for entry in page:
+            site = _require(entry, "site", path)
+            _require(site, "id", path)
+            _require(site, "name", path)      # read later by the sweep; a bare KeyError there
+                                              # escapes main() entirely and exits 1
+        fresh = [entry for entry in page if entry["site"]["id"] not in collected]
+        if page and not fresh:
+            ignored += 1
+            if ignored >= CURSOR_ATTEMPTS:
+                raise SiteListingError(
+                    f"the site-list cursor {cursor} was ignored {ignored} times "
+                    f"(the API kept returning the first page); only {len(collected)} sites "
+                    "were listed, so the sweep would be silently incomplete. "
+                    "Run 'terminus org:site:list --format=json | jq length' to check whether "
+                    f"{len(collected)} is the true site count (SPEC section 4.1)")
+            skipped(
+                f"site listing cursor {cursor} was ignored (page repeated); retrying "
+                f"({ignored}/{CURSOR_ATTEMPTS - 1})")
+            time.sleep(RETRY_SLEEP)
+            continue
+        ignored = 0
+        for entry in fresh:
+            site = entry["site"]
+            collected[site["id"]] = {"id": site["id"], "name": site["name"]}
+        if len(page) < PAGE_LIMIT:
+            return list(collected.values())
+        cursor = page[-1]["site"]["id"]
+    raise SiteListingError(
+        f"the site list did not end after {MAX_PAGES} pages ({len(collected)} sites so far)")
+
+
+def named_sites(get, names):
+    """Resolve explicit SITE arguments to [{"id", "name"}] without paging the organization.
+
+    quote(..., safe="") is not decoration: an argument containing '#' truncates the path and an
+    argument containing '?' starts a query string, so an unencoded name would silently request a
+    DIFFERENT resource instead of failing.  The name in the returned dict comes from the API
+    response, not from argv, so a differently-cased argument cannot produce CSV rows whose
+    site_name the downstream script fails to match (SPEC section 3).
+    """
+    resolved = []
+    for name in names:
+        where = f"/site-names/{name}"
+        answer = get(f"/site-names/{quote(name, safe='')}")
+        # BOTH keys go through _require.  An `answer.get("name", name)` fallback would silently
+        # reinstate the argv spelling -- the exact mismatch SPEC section 3 requires be avoided.
+        resolved.append({"id": _require(answer, "id", where),
+                         "name": _require(answer, "name", where)})
+    return resolved
+
+
+def site_environments(get, site_id):
+    """Every environment of a site, keyed by environment id -- multidevs included."""
+    path = f"/sites/{site_id}/environments"
+    environments = get(path)
+    if not isinstance(environments, dict):
+        # sorted() over a list would silently iterate strings, and the domains calls built from
+        # them would 404 one by one -- a whole site quietly mis-swept (SPEC G17).
+        raise PantheonApiShapeError(f"{path}: expected a JSON object keyed by environment id")
+    return environments
+
+
+def partition_domains(entries):
+    """Split one environment's domain list into (custom domains, platform domains, unknown).
+
+    Primary domains are custom domains and are IN scope.  The platform set is returned because
+    the cross-site check (SPEC G13) compares each hit against it -- at zero extra API cost.
+    """
+    if not isinstance(entries, list):
+        raise PantheonApiShapeError("domains: expected a JSON array")
+    custom, platform, unknown = [], set(), []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            # A JSON array of strings would otherwise reach entry.get() and raise a bare
+            # AttributeError, which escapes as an exit-1 traceback.
+            raise PantheonApiShapeError(f"domains: expected objects, got {type(entry).__name__}")
+        name = normalize(_require(entry, "id", "domains"))
+        kind = entry.get("type")
+        if kind == "custom":
+            custom.append(name)
+        elif kind == "platform":
+            platform.add(name)
+        else:
+            # G6a.  `type` is custom|platform in every entry observed, but that is an
+            # observation and not a documented enumeration -- so an unrecognized value is
+            # reported and counted, never silently dropped (SPEC section 1: the expensive
+            # failure is a missing row that the CSV cannot reveal).
+            unknown.append((name, kind))
+    return custom, platform, unknown

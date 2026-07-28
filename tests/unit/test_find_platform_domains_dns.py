@@ -580,3 +580,195 @@ def test_machine_token_empty_cache_directory_is_named(fpd, monkeypatch, tmp_path
     monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
     with pytest.raises(fpd.MachineTokenError, match=r"found 0 \(none\)"):
         fpd.machine_token()
+
+
+def fake_site(n):
+    # The membership id deliberately DIFFERS from the site id.  In production they are equal for
+    # all 408 sites, but SPEC section 4.1 says that equality "is an observation, not a contract"
+    # and requires the cursor to be site.id -- so the fixture must be able to tell them apart,
+    # or the one decision that section argues for has no red-capable test (PD#14).
+    return {"id": f"mem-{n:04d}", "site": {"id": f"id-{n:04d}", "name": f"site-{n:04d}"}}
+
+
+def paged_get(pages):
+    """A fake `get` returning canned site-list pages in order; records the cursors it saw."""
+    seen_cursors = []
+
+    def get(path):
+        cursor = path.split("start=")[1] if "start=" in path else None
+        seen_cursors.append(cursor)
+        assert pages, "the code requested more pages than this test provided"
+        return pages.pop(0)
+
+    get.cursors = seen_cursors
+    return get
+
+
+def test_org_sites_walks_every_page(fpd):
+    pages = [[fake_site(n) for n in range(100)],
+             [fake_site(n) for n in range(100, 200)],
+             [fake_site(n) for n in range(200, 208)]]
+    get = paged_get(pages)
+    sites = fpd.org_sites(get, "org-1")
+    assert len(sites) == 208
+    assert sites[0] == {"id": "id-0000", "name": "site-0000"}
+    assert sites[-1]["name"] == "site-0207"
+    # The cursor is the LAST *site* id of the previous FULL page -- "id-0099", never the
+    # membership id "mem-0099" (SPEC section 4.1).
+    assert get.cursors == [None, "id-0099", "id-0199"]
+
+
+def test_org_sites_stops_on_a_short_first_page(fpd):
+    get = paged_get([[fake_site(n) for n in range(3)]])
+    assert len(fpd.org_sites(get, "org-1")) == 3
+    assert get.cursors == [None]
+
+
+def test_org_sites_handles_an_empty_organization(fpd):
+    get = paged_get([[]])
+    assert fpd.org_sites(get, "org-1") == []
+
+
+def test_org_sites_handles_a_site_count_that_is_an_exact_multiple_of_the_page_size(fpd):
+    # SPEC section 4.1: the FINAL boundary cursor really does return [] (verified live, 7/7).
+    # An organization with exactly 200 sites therefore ends on an empty page, which must
+    # terminate the loop normally -- NOT trip the zero-new-ids reset detector, which would
+    # turn a perfectly good listing into a fatal error.
+    pages = [[fake_site(n) for n in range(100)],
+             [fake_site(n) for n in range(100, 200)],
+             []]
+    get = paged_get(pages)
+    sites = fpd.org_sites(get, "org-1")
+    assert len(sites) == 200
+    assert get.cursors == [None, "id-0099", "id-0199"]
+
+
+def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch, capsys):
+    # SPEC section 4.1: the API sometimes ignores `start` and returns page 1 again.  The loop must
+    # notice (zero new ids) and retry the SAME cursor -- not spin, not truncate.
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    page1 = [fake_site(n) for n in range(100)]
+    pages = [page1, list(page1), [fake_site(n) for n in range(100, 105)]]
+    get = paged_get(pages)
+    sites = fpd.org_sites(get, "org-1")
+    assert len(sites) == 105
+    assert get.cursors == [None, "id-0099", "id-0099"]     # same cursor, retried
+    # The ATTENTION line is the ONLY thing that distinguishes a detector-driven retry from a
+    # loop that blunders into repeating the same cursor by accident -- both produce the cursor
+    # sequence above, so without this assertion the test passes with the detector deleted.
+    assert "cursor id-0099 was ignored" in capsys.readouterr().err
+
+
+def test_org_sites_gives_up_loudly_when_the_cursor_stays_ignored(fpd, monkeypatch):
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    page1 = [fake_site(n) for n in range(100)]
+    # A fifth, short page is provided deliberately.  With the detector the loop never reaches
+    # it (it raises after the third ignored page).  WITHOUT the detector the loop consumes it
+    # and returns normally -- so the failure is a clean "DID NOT RAISE" rather than an
+    # IndexError from a test fixture running out of canned pages.
+    get = paged_get([page1, list(page1), list(page1), list(page1),
+                     [fake_site(n) for n in range(100, 105)]])
+    with pytest.raises(fpd.SiteListingError, match="cursor"):
+        fpd.org_sites(get, "org-1")
+    assert len(get.cursors) == 4      # first page + CURSOR_ATTEMPTS retries, then it stops
+
+
+def test_org_sites_caps_the_page_loop(fpd, monkeypatch):
+    monkeypatch.setattr(fpd, "MAX_PAGES", 3)
+    counter = {"n": 0}
+
+    def get(path):
+        counter["n"] += 1
+        base = counter["n"] * 100
+        return [fake_site(n) for n in range(base, base + 100)]
+
+    with pytest.raises(fpd.SiteListingError, match="page"):
+        fpd.org_sites(get, "org-1")
+
+
+def test_named_sites_resolves_each_name_and_prefers_the_canonical_name(fpd):
+    def get(path):
+        assert path.startswith("/site-names/")
+        slug = path.rsplit("/", 1)[1]
+        # The real endpoint returns the canonical name alongside the id (verified live).
+        return {"id": "uuid-" + slug, "name": slug.lower()}
+
+    assert fpd.named_sites(get, ["Alpha", "beta"]) == [
+        {"id": "uuid-Alpha", "name": "alpha"},   # canonical name wins over the argv casing
+        {"id": "uuid-beta", "name": "beta"},
+    ]
+
+
+def test_named_sites_percent_encodes_the_site_name(fpd):
+    seen = []
+
+    def get(path):
+        seen.append(path)
+        return {"id": "uuid", "name": "x"}
+
+    fpd.named_sites(get, ["we#ird/name?x"])
+    # Unencoded, '#' would truncate the path and '?' would start a query string, silently
+    # requesting a different resource instead of failing.
+    assert seen == ["/site-names/we%23ird%2Fname%3Fx"]
+
+
+def test_unexpected_response_shapes_raise_the_named_error(fpd):
+    # SPEC G17: a bare KeyError here would be an uncaught traceback exiting 1, which section 7
+    # reserves for "completed with indeterminates".
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: {"not": "a list"}, "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: [{"no_site_key": 1}], "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.site_environments(lambda _path: ["dev", "live"], "abc")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.partition_domains({"not": "a list"})
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.named_sites(lambda _path: {"no": "id"}, ["alpha"])
+    # The keys the SWEEP reads later, not just the ones the listing reads: a bare KeyError on
+    # site["name"] escapes main() entirely and exits 1 (SPEC section 10 item 16).
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: [{"site": {"id": "u1"}}], "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.named_sites(lambda _path: {"id": "uuid"}, ["alpha"])
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.partition_domains(["a-string-not-an-object"])
+
+
+def test_partition_domains_splits_custom_from_platform(fpd):
+    entries = [
+        {"id": "live-its-wws-test1.pantheonsite.io", "type": "platform"},
+        {"id": "WWS-test1.cdn-dev.it.umich.edu", "type": "custom", "primary": True},
+        {"id": "www.wws-test1.cdn-dev.it.umich.edu", "type": "custom", "primary": False},
+    ]
+    custom, platform, unknown = fpd.partition_domains(entries)
+    # Primary domains ARE included, and everything is normalized.
+    assert custom == ["wws-test1.cdn-dev.it.umich.edu", "www.wws-test1.cdn-dev.it.umich.edu"]
+    assert platform == {"live-its-wws-test1.pantheonsite.io"}
+    assert unknown == []
+
+
+def test_partition_domains_of_an_uninitialized_environment(fpd):
+    entries = [{"id": "live-vpao-accopp.pantheonsite.io", "type": "platform"}]
+    assert fpd.partition_domains(entries) == ([], {"live-vpao-accopp.pantheonsite.io"}, [])
+
+
+def test_partition_domains_reports_an_unknown_type_instead_of_dropping_it(fpd):
+    # SPEC G6a.  `custom`/`platform` is an observation, not a documented enumeration, and a
+    # silently dropped domain is the one failure the CSV cannot reveal (SPEC section 1).
+    entries = [
+        {"id": "live-s.pantheonsite.io", "type": "platform"},
+        {"id": "something.umich.edu", "type": "brand-new-type"},
+    ]
+    custom, _platform, unknown = fpd.partition_domains(entries)
+    assert custom == []
+    assert unknown == [("something.umich.edu", "brand-new-type")]
+
+
+def test_site_environments_returns_every_environment(fpd):
+    def get(path):
+        assert path == "/sites/abc/environments"
+        return {"dev": {"initialized": True}, "live": {"initialized": False},
+                "test-mark": {"initialized": True}}
+
+    assert sorted(fpd.site_environments(get, "abc")) == ["dev", "live", "test-mark"]
