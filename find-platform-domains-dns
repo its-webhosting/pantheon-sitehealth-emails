@@ -334,7 +334,8 @@ class ApiSession:
 
 PAGE_LIMIT = 100          # the API's documented maximum
 MAX_PAGES = 100           # runaway guard: 10,000 sites is far beyond any real organization
-CURSOR_ATTEMPTS = 3       # how many times one ignored cursor is retried before giving up
+CURSOR_ATTEMPTS = 3       # requests carrying one ignored cursor tolerated before giving up
+                          # (3 attempts = 2 retries) -- SPEC section 4.1's "up to 3 attempts"
 
 
 class SiteListingError(Exception):
@@ -350,6 +351,22 @@ def _require(payload, key, where):
     if not isinstance(payload, dict) or key not in payload:
         raise PantheonApiShapeError(f"{where}: response has no '{key}'")
     return payload[key]
+
+
+def _require_str(payload, key, where):
+    """_require(payload, key, where), additionally demanding the value be a str (SPEC G17: "a
+    missing/wrongly-typed key").
+
+    A wrongly-typed id/name that skipped this check would still reach a dict key or an f-string
+    downstream -- e.g. `collected[site["id"]]` raises the bare, unnamed `TypeError: unhashable
+    type: 'list'` for a list-valued id -- an uncaught exit-1 traceback in a program where exit 1
+    is reserved for "completed with indeterminates" (SPEC section 7).
+    """
+    value = _require(payload, key, where)
+    if not isinstance(value, str):
+        raise PantheonApiShapeError(
+            f"{where}: '{key}' should be a string, got {type(value).__name__}")
+    return value
 
 
 def org_sites(get, org_id):
@@ -382,8 +399,8 @@ def org_sites(get, org_id):
             raise PantheonApiShapeError(f"{path}: expected a JSON array of memberships")
         for entry in page:
             site = _require(entry, "site", path)
-            _require(site, "id", path)
-            _require(site, "name", path)      # read later by the sweep; a bare KeyError there
+            _require_str(site, "id", path)
+            _require_str(site, "name", path)  # read later by the sweep; a bare KeyError there
                                               # escapes main() entirely and exits 1
         fresh = [entry for entry in page if entry["site"]["id"] not in collected]
         if page and not fresh:
@@ -393,8 +410,8 @@ def org_sites(get, org_id):
                     f"the site-list cursor {cursor} was ignored {ignored} times "
                     f"(the API kept returning the first page); only {len(collected)} sites "
                     "were listed, so the sweep would be silently incomplete. "
-                    "Run 'terminus org:site:list --format=json | jq length' to check whether "
-                    f"{len(collected)} is the true site count (SPEC section 4.1)")
+                    f"Run 'terminus org:site:list {org_id} --format=json | jq length' to check "
+                    f"whether {len(collected)} is the true site count (SPEC section 4.1)")
             skipped(
                 f"site listing cursor {cursor} was ignored (page repeated); retrying "
                 f"({ignored}/{CURSOR_ATTEMPTS - 1})")
@@ -456,7 +473,7 @@ def partition_domains(entries):
             # A JSON array of strings would otherwise reach entry.get() and raise a bare
             # AttributeError, which escapes as an exit-1 traceback.
             raise PantheonApiShapeError(f"domains: expected objects, got {type(entry).__name__}")
-        name = normalize(_require(entry, "id", "domains"))
+        name = normalize(_require_str(entry, "id", "domains"))
         kind = entry.get("type")
         if kind == "custom":
             custom.append(name)

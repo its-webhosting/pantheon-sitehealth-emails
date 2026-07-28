@@ -590,25 +590,36 @@ def fake_site(n):
     return {"id": f"mem-{n:04d}", "site": {"id": f"id-{n:04d}", "name": f"site-{n:04d}"}}
 
 
-def paged_get(pages):
-    """A fake `get` returning canned site-list pages in order; records the cursors it saw."""
-    seen_cursors = []
+class PagedGet:
+    """A fake `get` returning canned site-list pages in order; records every path requested.
 
-    def get(path):
+    A callable class rather than a function-with-bolted-on-attribute (fix round 1, M3): the
+    `_RetrySleepSpy` above is the file's existing precedent for this shape, a plain function
+    decorated with `.cursors` trips pyright's reportFunctionMemberAccess wherever this file is
+    later brought under pyright (it isn't today, but nothing should rely on that), and one
+    object holding both `.paths` (M1: pins the request path, not just its cursor) and
+    `.cursors` (derived, for the existing cursor-sequence assertions) is one model instead of
+    a closure plus an attribute bolted onto it.
+    """
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.paths = []
+        self.cursors = []
+
+    def __call__(self, path):
+        self.paths.append(path)
         cursor = path.split("start=")[1] if "start=" in path else None
-        seen_cursors.append(cursor)
-        assert pages, "the code requested more pages than this test provided"
-        return pages.pop(0)
-
-    get.cursors = seen_cursors
-    return get
+        self.cursors.append(cursor)
+        assert self.pages, "the code requested more pages than this test provided"
+        return self.pages.pop(0)
 
 
 def test_org_sites_walks_every_page(fpd):
     pages = [[fake_site(n) for n in range(100)],
              [fake_site(n) for n in range(100, 200)],
              [fake_site(n) for n in range(200, 208)]]
-    get = paged_get(pages)
+    get = PagedGet(pages)
     sites = fpd.org_sites(get, "org-1")
     assert len(sites) == 208
     assert sites[0] == {"id": "id-0000", "name": "site-0000"}
@@ -616,16 +627,20 @@ def test_org_sites_walks_every_page(fpd):
     # The cursor is the LAST *site* id of the previous FULL page -- "id-0099", never the
     # membership id "mem-0099" (SPEC section 4.1).
     assert get.cursors == [None, "id-0099", "id-0199"]
+    # Fix round 1, M1: the cursor-substring extraction above would stay green even if the org
+    # id were dropped from the path, or "/memberships/sites" were typo'd -- pin the first
+    # request's full path too (named_sites already does this for its own path, at :693).
+    assert get.paths[0] == "/organizations/org-1/memberships/sites?limit=100"
 
 
 def test_org_sites_stops_on_a_short_first_page(fpd):
-    get = paged_get([[fake_site(n) for n in range(3)]])
+    get = PagedGet([[fake_site(n) for n in range(3)]])
     assert len(fpd.org_sites(get, "org-1")) == 3
     assert get.cursors == [None]
 
 
 def test_org_sites_handles_an_empty_organization(fpd):
-    get = paged_get([[]])
+    get = PagedGet([[]])
     assert fpd.org_sites(get, "org-1") == []
 
 
@@ -637,7 +652,7 @@ def test_org_sites_handles_a_site_count_that_is_an_exact_multiple_of_the_page_si
     pages = [[fake_site(n) for n in range(100)],
              [fake_site(n) for n in range(100, 200)],
              []]
-    get = paged_get(pages)
+    get = PagedGet(pages)
     sites = fpd.org_sites(get, "org-1")
     assert len(sites) == 200
     assert get.cursors == [None, "id-0099", "id-0199"]
@@ -649,7 +664,7 @@ def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch, cap
     monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
     page1 = [fake_site(n) for n in range(100)]
     pages = [page1, list(page1), [fake_site(n) for n in range(100, 105)]]
-    get = paged_get(pages)
+    get = PagedGet(pages)
     sites = fpd.org_sites(get, "org-1")
     assert len(sites) == 105
     assert get.cursors == [None, "id-0099", "id-0099"]     # same cursor, retried
@@ -666,11 +681,15 @@ def test_org_sites_gives_up_loudly_when_the_cursor_stays_ignored(fpd, monkeypatc
     # it (it raises after the third ignored page).  WITHOUT the detector the loop consumes it
     # and returns normally -- so the failure is a clean "DID NOT RAISE" rather than an
     # IndexError from a test fixture running out of canned pages.
-    get = paged_get([page1, list(page1), list(page1), list(page1),
+    get = PagedGet([page1, list(page1), list(page1), list(page1),
                      [fake_site(n) for n in range(100, 105)]])
-    with pytest.raises(fpd.SiteListingError, match="cursor"):
+    with pytest.raises(fpd.SiteListingError, match="cursor") as excinfo:
         fpd.org_sites(get, "org-1")
     assert len(get.cursors) == 4      # first page + CURSOR_ATTEMPTS retries, then it stops
+    # The fatal message MUST carry the real org id: it names a `terminus org:site:list <org_id>`
+    # cross-check (SPEC section 4.1/G4a), and that command is a positional-argument usage error
+    # without it (verified live: "Not enough arguments (missing: \"organization\")").
+    assert "org-1" in str(excinfo.value)
 
 
 def test_org_sites_caps_the_page_loop(fpd, monkeypatch):
@@ -733,6 +752,17 @@ def test_unexpected_response_shapes_raise_the_named_error(fpd):
         fpd.named_sites(lambda _path: {"id": "uuid"}, ["alpha"])
     with pytest.raises(fpd.PantheonApiShapeError):
         fpd.partition_domains(["a-string-not-an-object"])
+    # Fix round 1, main-review M2: `_require` only guards PRESENCE, not type.  A wrongly-typed
+    # `site.id` used later as a dict key (`collected[site["id"]]`) raised a bare, unnamed
+    # `TypeError: unhashable type: 'list'` -- an uncaught exit-1 traceback in a program where
+    # exit 1 is reserved for "completed with indeterminates" (SPEC G17: "a missing/wrongly-typed
+    # key").
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: [{"site": {"id": ["not-a-string"], "name": "n"}}], "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.org_sites(lambda _path: [{"site": {"id": "u1", "name": ["not-a-string"]}}], "org-1")
+    with pytest.raises(fpd.PantheonApiShapeError):
+        fpd.partition_domains([{"id": ["not-a-string"], "type": "custom"}])
 
 
 def test_partition_domains_splits_custom_from_platform(fpd):
