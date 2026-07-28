@@ -170,12 +170,22 @@ exchanges a machine token for a session token.
 
 It first collects the reference site list using the cursor pattern that works --
 asserting along the way that the list is free of duplicates and ascending by id,
-since every expectation below is expressed as a position in that list -- then
-probes four cursors and tallies the verdicts.  CASE A and CASE D are controls
-that should pass; CASE B and CASE C are the defect.  The cursors in CASE B and
-CASE C are chosen so that they cannot coincidentally be page boundaries of the
-caller's own pagination: position 1, and position limit+1 in a collection with at
-least limit+2 elements.
+since every expectation is expressed as a position in that list -- and then runs
+four cases.  Each case is self-contained and needs no cross-referencing: it
+states what is being asked and why, prints the exact curl command, the expected
+answer and the answer actually received, and finally the tally over $REPEATS
+identical requests.
+
+  CASE A  control -- the cursor value that works, which is why this is easy to miss
+  CASE B  defect  -- the same page walked one position further
+  CASE C  defect  -- the first id the API ever returned, which is also ignored
+  CASE D  control -- the end of the collection, which behaves correctly
+
+The controls are not decoration: a degrading session or a collection reordering
+underneath the run would break CASE A and CASE D too, and they pass in the same
+run in which B and C fail.  The cursors in CASE B and CASE C are chosen so that
+they cannot coincidentally be page boundaries of the caller's own pagination:
+position 1, and position limit+1 in a collection of at least limit+2 elements.
 
 An identical copy of this script is stored alongside this report as
 reproduce-pagination-bug.sh.
@@ -297,20 +307,82 @@ classify() {
     if [ "$first" = "$page1_first" ]; then echo PAGE-1-AGAIN; else echo OTHER; fi
 }
 
-# probe <label> <cursor> <expected first id, or EMPTY>
-probe() {
-    local label="$1" cursor="$2" expected="$3"
+# describe <expected first id, or EMPTY> -> the expectation in words
+describe_expectation() {
+    if [ "$1" = "EMPTY" ]; then
+        echo "an empty array -- there are no sites after the last one"
+    else
+        echo "$LIMIT elements, the first being $1"
+    fi
+}
+
+# run_case <heading> <verdict-word> <explanation> <cursor> <expected first id, or EMPTY>
+#
+# One self-contained block per case: what is being asked, the exact command, the expected
+# answer, the answer actually received, and the tally over $REPEATS requests.  The first
+# request is made with -D - so that the status, the Date header and the body all come from
+# the SAME response; the remaining REPEATS-1 requests only feed the tally.
+run_case() {
+    local heading="$1" verdict_word="$2" explanation="$3" cursor="$4" expected="$5"
+    local url raw status date_hdr body first length verdict
     local correct=0 repeated=0 other=0 i page
-    for ((i = 0; i < REPEATS; i++)); do
-        page=$(get_page "$cursor") || die "the probe request failed; see the message above"
+
+    url="$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT"
+    [ -n "$cursor" ] && url="$url&start=$cursor"
+
+    echo "==============================================================================="
+    echo "$heading"
+    echo "==============================================================================="
+    printf '%s\n' "$explanation"
+    echo
+    echo "  Command:"
+    echo "    curl -s -H \"Authorization: Bearer \$SESSION\" \\"
+    echo "      \"$url\""
+    echo
+
+    raw=$(curl -s -D - -H "Authorization: Bearer $session" "$url") || die "request failed for $url"
+    status=$(printf '%s\n' "$raw" | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')
+    date_hdr=$(printf '%s\n' "$raw" | tr -d '\r' | grep -i '^date:' | head -1)
+    body=$(printf '%s\n' "$raw" | awk 'in_body {print} /^\r?$/ {in_body = 1}')
+    case "$status" in
+        *200*) ;;
+        *) die "$url returned '$status' (expected 200); stopping rather than reporting a verdict" ;;
+    esac
+    length=$(printf '%s' "$body" | jq 'length')
+    first=$(printf '%s' "$body" | jq -r '.[0].id // empty')
+    verdict=$(classify "$body" "$expected")
+
+    echo "  Expected:  $(describe_expectation "$expected")"
+    if [ "$length" -eq 0 ]; then
+        echo "  Actual:    $status, an empty array"
+    else
+        echo "  Actual:    $status, $length elements, the first being $first"
+    fi
+    if [ "$verdict" = "PAGE-1-AGAIN" ]; then
+        echo "             ^^ that is the FIRST site in the collection: the cursor was"
+        echo "                ignored and the listing restarted from the beginning."
+    elif [ "$verdict" = "CORRECT" ]; then
+        echo "             ^^ as expected."
+    fi
+    echo "  Response $date_hdr"
+    echo
+
+    case "$verdict" in
+        CORRECT)      correct=1 ;;
+        PAGE-1-AGAIN) repeated=1 ;;
+        *)            other=1 ;;
+    esac
+    for ((i = 1; i < REPEATS; i++)); do
+        page=$(get_page "$cursor") || die "a repeat request failed; see the message above"
         case $(classify "$page" "$expected") in
             CORRECT)      correct=$((correct + 1)) ;;
             PAGE-1-AGAIN) repeated=$((repeated + 1)) ;;
             *)            other=$((other + 1)) ;;
         esac
     done
-    printf '  %-46s correct=%d  RETURNED-PAGE-1-AGAIN=%d  other=%d\n' \
-        "$label" "$correct" "$repeated" "$other"
+    printf '  Over %d identical requests:  correct=%d  returned-page-1-again=%d  other=%d   <-- %s\n' \
+        "$REPEATS" "$correct" "$repeated" "$other" "$verdict_word"
+    echo
 }
 
 # ------------------------------------------------- collect the reference list --
@@ -350,50 +422,53 @@ echo
 id_at() { echo "$all_ids" | sed -n "$1p"; }      # 1-based position in that order
 
 # --------------------------------------------------------------- the evidence --
-echo "CASE A (control) -- cursor = last id of page 1 (position $LIMIT)."
-echo "                    Correct answer: the page starting at site $((LIMIT + 1))."
-probe "start=<id at position $LIMIT>" "$(id_at $LIMIT)" "$(id_at $((LIMIT + 1)))"
-echo
-echo "CASE B (defect) -- cursor = first id of page 2 (position $((LIMIT + 1)))."
-echo "                   Correct answer: the page starting at site $((LIMIT + 2))."
-probe "start=<id at position $((LIMIT + 1))>" "$(id_at $((LIMIT + 1)))" "$(id_at $((LIMIT + 2)))"
-echo
-echo "CASE C (defect) -- cursor = the FIRST site id (position 1)."
-echo "                   Correct answer: the page starting at site 2."
-probe "start=<id at position 1>" "$(id_at 1)" "$(id_at 2)"
-echo
-echo "CASE D (control) -- cursor = the LAST site id (position $total)."
-echo "                    Correct answer: an empty array."
-probe "start=<id at position $total>" "$(id_at "$total")" "EMPTY"
-echo
+# Two controls (A, D) and two defect cases (B, C).  The controls matter: they are what
+# rules out "your session was degrading" or "the collection reordered underneath you" --
+# those would break A and D too, and they pass in the same run.
 
-# ------------------------------------------- ONE failing request, headers + body --
-# Headers and body come from the SAME response, so the status shown is provably the
-# status of the body shown.
-b_cursor=$(id_at $((LIMIT + 1)))
-b_url="$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT&start=$b_cursor"
-b_raw=$(curl -s -D - -H "Authorization: Bearer $session" "$b_url") || die "the demonstration request failed"
-b_status=$(printf '%s\n' "$b_raw" | head -1 | tr -d '\r')
-b_date=$(printf '%s\n' "$b_raw" | tr -d '\r' | grep -i '^date:' | head -1)
-b_body=$(printf '%s\n' "$b_raw" | awk 'body {print} /^\r?$/ {body = 1}')
+run_case \
+    "CASE A  (CONTROL)  cursor = the last id of page 1, i.e. the id of site $LIMIT" \
+    "as documented" \
+    "  This is the one cursor value that works, and it is why the defect is easy to miss:
+  a caller that walks the collection by passing the last id of each page it receives
+  never notices anything wrong.  Asking to start after site $LIMIT correctly returns a page
+  beginning at site $((LIMIT + 1))." \
+    "$(id_at $LIMIT)" "$(id_at $((LIMIT + 1)))"
 
-echo "The failing request from CASE B, in full:"
-echo
-echo "  curl -s -D - -H \"Authorization: Bearer \$SESSION\" \\"
-echo "    \"$b_url\""
-echo
-echo "  response status:   $b_status"
-echo "  response $b_date"
-echo "  expected first id: $(id_at $((LIMIT + 2)))   (the site after the cursor)"
-echo "  actual   first id: $(printf '%s' "$b_body" | jq -r '.[0].id')   (the first site in the collection)"
-echo "  elements returned: $(printf '%s' "$b_body" | jq 'length')"
-echo
+run_case \
+    "CASE B  (DEFECT)   cursor = the first id of page 2, i.e. the id of site $((LIMIT + 1))" \
+    "DEFECT" \
+    "  The cursor is a real site UUID in this organization, returned by this very endpoint
+  in the page before.  It differs from CASE A only in being one position further along,
+  so asking to start after site $((LIMIT + 1)) must return a page beginning at site $((LIMIT + 2)).
+  It is not a page boundary of any pagination the caller has requested, which appears to
+  be what matters." \
+    "$(id_at $((LIMIT + 1)))" "$(id_at $((LIMIT + 2)))"
+
+run_case \
+    "CASE C  (DEFECT)   cursor = the id of the FIRST site in the collection, site 1" \
+    "DEFECT" \
+    "  This one closes the \"only use cursors we issued you\" explanation.  The id below is
+  the first element of the first page the API returned, in the very response it was
+  returned in -- there is no more API-issued id available.  Asking to start after site 1
+  must return a page beginning at site 2." \
+    "$(id_at 1)" "$(id_at 2)"
+
+run_case \
+    "CASE D  (CONTROL)  cursor = the id of the LAST site in the collection, site $total" \
+    "as documented" \
+    "  The end of the collection behaves correctly: asking to start after the final site
+  returns an empty array, which is how a caller is supposed to learn it is done.  That
+  makes the defect above more surprising, not less -- the cursor IS understood here." \
+    "$(id_at "$total")" "EMPTY"
+
 echo "Finished (UTC): $(date -u '+%Y-%m-%d %H:%M:%SZ')"
 echo
-echo "Any nonzero RETURNED-PAGE-1-AGAIN count above is the defect: a cursored request was"
-echo "answered with the first page of the collection, HTTP 200, no error of any kind."
-echo "('other' would mean a response that was neither the expected page nor the first page;"
-echo "it should never occur, since every non-200 stops the script instead.)"
+echo "Reading the verdicts: 'returned-page-1-again' counts responses that were the first"
+echo "page of the collection instead of the page after the cursor -- HTTP 200, no error of"
+echo "any kind.  Any nonzero count is the defect.  ('other' would mean a response that was"
+echo "neither the expected page nor the first page; it should never occur, since every"
+echo "non-200 stops the script instead of producing a verdict.)"
 ---------------------------- end reproduce-pagination-bug.sh -------------------
 
 
@@ -401,11 +476,11 @@ OBSERVED OUTPUT
 ---------------
 
 Run against organization 23c7208e-5f2a-4388-9fc4-5c3a038ef8b9 on 2026-07-28,
-15:09:44Z to 15:10:57Z.  This is the verbatim output, indented by four spaces and
+15:44:43Z to 15:45:43Z.  This is the verbatim output, indented by four spaces and
 otherwise unaltered:
 
     Using the machine token from ~/.terminus/cache/tokens/
-    Started (UTC):  2026-07-28 15:09:44Z
+    Started (UTC):  2026-07-28 15:44:43Z
     Organization:   23c7208e-5f2a-4388-9fc4-5c3a038ef8b9
     Endpoint:       GET https://api.pantheon.io/v0/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=100&start=<site id>
     curl:           curl 8.14.1 (aarch64-unknown-linux-gnu) libcurl/8.14.1 OpenSSL/3.5.6 zlib/1.3.1 brotli/1.1.0 zstd/1.5.7 libidn2/2.3.8 libpsl/0.21.2 libssh2/1.11.1 nghttp2/1.64.0 nghttp3/1.8.0 librtmp/2.3 OpenLDAP/2.6.10
@@ -416,39 +491,91 @@ otherwise unaltered:
     Collecting the site list, cursor = last id of each full page (the pattern that works) ...
       408 sites over 5 pages, verified ascending by id and free of duplicates
 
-    CASE A (control) -- cursor = last id of page 1 (position 100).
-                        Correct answer: the page starting at site 101.
-      start=<id at position 100>                     correct=5  RETURNED-PAGE-1-AGAIN=0  other=0
+    ===============================================================================
+    CASE A  (CONTROL)  cursor = the last id of page 1, i.e. the id of site 100
+    ===============================================================================
+      This is the one cursor value that works, and it is why the defect is easy to miss:
+      a caller that walks the collection by passing the last id of each page it receives
+      never notices anything wrong.  Asking to start after site 100 correctly returns a page
+      beginning at site 101.
 
-    CASE B (defect) -- cursor = first id of page 2 (position 101).
-                       Correct answer: the page starting at site 102.
-      start=<id at position 101>                     correct=0  RETURNED-PAGE-1-AGAIN=5  other=0
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=3451851f-50e1-40bf-91e7-dc3df0e71bc5"
 
-    CASE C (defect) -- cursor = the FIRST site id (position 1).
-                       Correct answer: the page starting at site 2.
-      start=<id at position 1>                       correct=0  RETURNED-PAGE-1-AGAIN=5  other=0
+      Expected:  100 elements, the first being 34562508-564e-4122-9e92-38118b7fba3f
+      Actual:    HTTP/2 200, 100 elements, the first being 34562508-564e-4122-9e92-38118b7fba3f
+                 ^^ as expected.
+      Response date: Tue, 28 Jul 2026 15:44:58 GMT
 
-    CASE D (control) -- cursor = the LAST site id (position 408).
-                        Correct answer: an empty array.
-      start=<id at position 408>                     correct=5  RETURNED-PAGE-1-AGAIN=0  other=0
+      Over 5 identical requests:  correct=5  returned-page-1-again=0  other=0   <-- as documented
 
-    The failing request from CASE B, in full:
+    ===============================================================================
+    CASE B  (DEFECT)   cursor = the first id of page 2, i.e. the id of site 101
+    ===============================================================================
+      The cursor is a real site UUID in this organization, returned by this very endpoint
+      in the page before.  It differs from CASE A only in being one position further along,
+      so asking to start after site 101 must return a page beginning at site 102.
+      It is not a page boundary of any pagination the caller has requested, which appears to
+      be what matters.
 
-      curl -s -D - -H "Authorization: Bearer $SESSION" \
-        "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=34562508-564e-4122-9e92-38118b7fba3f"
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=34562508-564e-4122-9e92-38118b7fba3f"
 
-      response status:   HTTP/2 200 
-      response date: Tue, 28 Jul 2026 15:10:57 GMT
-      expected first id: 34d63387-d5e3-4791-9271-f58c15256ef4   (the site after the cursor)
-      actual   first id: 004921c4-7b9e-4f71-8649-30f5c06ed672   (the first site in the collection)
-      elements returned: 100
+      Expected:  100 elements, the first being 34d63387-d5e3-4791-9271-f58c15256ef4
+      Actual:    HTTP/2 200, 100 elements, the first being 004921c4-7b9e-4f71-8649-30f5c06ed672
+                 ^^ that is the FIRST site in the collection: the cursor was
+                    ignored and the listing restarted from the beginning.
+      Response date: Tue, 28 Jul 2026 15:45:12 GMT
 
-    Finished (UTC): 2026-07-28 15:10:57Z
+      Over 5 identical requests:  correct=0  returned-page-1-again=5  other=0   <-- DEFECT
 
-    Any nonzero RETURNED-PAGE-1-AGAIN count above is the defect: a cursored request was
-    answered with the first page of the collection, HTTP 200, no error of any kind.
-    ('other' would mean a response that was neither the expected page nor the first page;
-    it should never occur, since every non-200 stops the script instead.)
+    ===============================================================================
+    CASE C  (DEFECT)   cursor = the id of the FIRST site in the collection, site 1
+    ===============================================================================
+      This one closes the "only use cursors we issued you" explanation.  The id below is
+      the first element of the first page the API returned, in the very response it was
+      returned in -- there is no more API-issued id available.  Asking to start after site 1
+      must return a page beginning at site 2.
+
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=004921c4-7b9e-4f71-8649-30f5c06ed672"
+
+      Expected:  100 elements, the first being 0068879e-59a2-412b-abb4-641a2f2217e4
+      Actual:    HTTP/2 200, 100 elements, the first being 004921c4-7b9e-4f71-8649-30f5c06ed672
+                 ^^ that is the FIRST site in the collection: the cursor was
+                    ignored and the listing restarted from the beginning.
+      Response date: Tue, 28 Jul 2026 15:45:27 GMT
+
+      Over 5 identical requests:  correct=0  returned-page-1-again=5  other=0   <-- DEFECT
+
+    ===============================================================================
+    CASE D  (CONTROL)  cursor = the id of the LAST site in the collection, site 408
+    ===============================================================================
+      The end of the collection behaves correctly: asking to start after the final site
+      returns an empty array, which is how a caller is supposed to learn it is done.  That
+      makes the defect above more surprising, not less -- the cursor IS understood here.
+
+      Command:
+        curl -s -H "Authorization: Bearer $SESSION" \
+          "https://api.pantheon.io/v0/organizations/23c7208e-5f2a-4388-9fc4-5c3a038ef8b9/memberships/sites?limit=100&start=fd5750cd-391a-4ebb-8944-370886bec2ab"
+
+      Expected:  an empty array -- there are no sites after the last one
+      Actual:    HTTP/2 200, an empty array
+                 ^^ as expected.
+      Response date: Tue, 28 Jul 2026 15:45:40 GMT
+
+      Over 5 identical requests:  correct=5  returned-page-1-again=0  other=0   <-- as documented
+
+    Finished (UTC): 2026-07-28 15:45:43Z
+
+    Reading the verdicts: 'returned-page-1-again' counts responses that were the first
+    page of the collection instead of the page after the cursor -- HTTP 200, no error of
+    any kind.  Any nonzero count is the defect.  ('other' would mean a response that was
+    neither the expected page nor the first page; it should never occur, since every
+    non-200 stops the script instead of producing a verdict.)
 
 
 WHAT WE WOULD LIKE

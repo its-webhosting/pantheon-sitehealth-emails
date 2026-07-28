@@ -114,20 +114,82 @@ classify() {
     if [ "$first" = "$page1_first" ]; then echo PAGE-1-AGAIN; else echo OTHER; fi
 }
 
-# probe <label> <cursor> <expected first id, or EMPTY>
-probe() {
-    local label="$1" cursor="$2" expected="$3"
+# describe <expected first id, or EMPTY> -> the expectation in words
+describe_expectation() {
+    if [ "$1" = "EMPTY" ]; then
+        echo "an empty array -- there are no sites after the last one"
+    else
+        echo "$LIMIT elements, the first being $1"
+    fi
+}
+
+# run_case <heading> <verdict-word> <explanation> <cursor> <expected first id, or EMPTY>
+#
+# One self-contained block per case: what is being asked, the exact command, the expected
+# answer, the answer actually received, and the tally over $REPEATS requests.  The first
+# request is made with -D - so that the status, the Date header and the body all come from
+# the SAME response; the remaining REPEATS-1 requests only feed the tally.
+run_case() {
+    local heading="$1" verdict_word="$2" explanation="$3" cursor="$4" expected="$5"
+    local url raw status date_hdr body first length verdict
     local correct=0 repeated=0 other=0 i page
-    for ((i = 0; i < REPEATS; i++)); do
-        page=$(get_page "$cursor") || die "the probe request failed; see the message above"
+
+    url="$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT"
+    [ -n "$cursor" ] && url="$url&start=$cursor"
+
+    echo "==============================================================================="
+    echo "$heading"
+    echo "==============================================================================="
+    printf '%s\n' "$explanation"
+    echo
+    echo "  Command:"
+    echo "    curl -s -H \"Authorization: Bearer \$SESSION\" \\"
+    echo "      \"$url\""
+    echo
+
+    raw=$(curl -s -D - -H "Authorization: Bearer $session" "$url") || die "request failed for $url"
+    status=$(printf '%s\n' "$raw" | head -1 | tr -d '\r' | sed 's/[[:space:]]*$//')
+    date_hdr=$(printf '%s\n' "$raw" | tr -d '\r' | grep -i '^date:' | head -1)
+    body=$(printf '%s\n' "$raw" | awk 'in_body {print} /^\r?$/ {in_body = 1}')
+    case "$status" in
+        *200*) ;;
+        *) die "$url returned '$status' (expected 200); stopping rather than reporting a verdict" ;;
+    esac
+    length=$(printf '%s' "$body" | jq 'length')
+    first=$(printf '%s' "$body" | jq -r '.[0].id // empty')
+    verdict=$(classify "$body" "$expected")
+
+    echo "  Expected:  $(describe_expectation "$expected")"
+    if [ "$length" -eq 0 ]; then
+        echo "  Actual:    $status, an empty array"
+    else
+        echo "  Actual:    $status, $length elements, the first being $first"
+    fi
+    if [ "$verdict" = "PAGE-1-AGAIN" ]; then
+        echo "             ^^ that is the FIRST site in the collection: the cursor was"
+        echo "                ignored and the listing restarted from the beginning."
+    elif [ "$verdict" = "CORRECT" ]; then
+        echo "             ^^ as expected."
+    fi
+    echo "  Response $date_hdr"
+    echo
+
+    case "$verdict" in
+        CORRECT)      correct=1 ;;
+        PAGE-1-AGAIN) repeated=1 ;;
+        *)            other=1 ;;
+    esac
+    for ((i = 1; i < REPEATS; i++)); do
+        page=$(get_page "$cursor") || die "a repeat request failed; see the message above"
         case $(classify "$page" "$expected") in
             CORRECT)      correct=$((correct + 1)) ;;
             PAGE-1-AGAIN) repeated=$((repeated + 1)) ;;
             *)            other=$((other + 1)) ;;
         esac
     done
-    printf '  %-46s correct=%d  RETURNED-PAGE-1-AGAIN=%d  other=%d\n' \
-        "$label" "$correct" "$repeated" "$other"
+    printf '  Over %d identical requests:  correct=%d  returned-page-1-again=%d  other=%d   <-- %s\n' \
+        "$REPEATS" "$correct" "$repeated" "$other" "$verdict_word"
+    echo
 }
 
 # ------------------------------------------------- collect the reference list --
@@ -167,47 +229,50 @@ echo
 id_at() { echo "$all_ids" | sed -n "$1p"; }      # 1-based position in that order
 
 # --------------------------------------------------------------- the evidence --
-echo "CASE A (control) -- cursor = last id of page 1 (position $LIMIT)."
-echo "                    Correct answer: the page starting at site $((LIMIT + 1))."
-probe "start=<id at position $LIMIT>" "$(id_at $LIMIT)" "$(id_at $((LIMIT + 1)))"
-echo
-echo "CASE B (defect) -- cursor = first id of page 2 (position $((LIMIT + 1)))."
-echo "                   Correct answer: the page starting at site $((LIMIT + 2))."
-probe "start=<id at position $((LIMIT + 1))>" "$(id_at $((LIMIT + 1)))" "$(id_at $((LIMIT + 2)))"
-echo
-echo "CASE C (defect) -- cursor = the FIRST site id (position 1)."
-echo "                   Correct answer: the page starting at site 2."
-probe "start=<id at position 1>" "$(id_at 1)" "$(id_at 2)"
-echo
-echo "CASE D (control) -- cursor = the LAST site id (position $total)."
-echo "                    Correct answer: an empty array."
-probe "start=<id at position $total>" "$(id_at "$total")" "EMPTY"
-echo
+# Two controls (A, D) and two defect cases (B, C).  The controls matter: they are what
+# rules out "your session was degrading" or "the collection reordered underneath you" --
+# those would break A and D too, and they pass in the same run.
 
-# ------------------------------------------- ONE failing request, headers + body --
-# Headers and body come from the SAME response, so the status shown is provably the
-# status of the body shown.
-b_cursor=$(id_at $((LIMIT + 1)))
-b_url="$API/organizations/$PANTHEON_ORG_ID/memberships/sites?limit=$LIMIT&start=$b_cursor"
-b_raw=$(curl -s -D - -H "Authorization: Bearer $session" "$b_url") || die "the demonstration request failed"
-b_status=$(printf '%s\n' "$b_raw" | head -1 | tr -d '\r')
-b_date=$(printf '%s\n' "$b_raw" | tr -d '\r' | grep -i '^date:' | head -1)
-b_body=$(printf '%s\n' "$b_raw" | awk 'body {print} /^\r?$/ {body = 1}')
+run_case \
+    "CASE A  (CONTROL)  cursor = the last id of page 1, i.e. the id of site $LIMIT" \
+    "as documented" \
+    "  This is the one cursor value that works, and it is why the defect is easy to miss:
+  a caller that walks the collection by passing the last id of each page it receives
+  never notices anything wrong.  Asking to start after site $LIMIT correctly returns a page
+  beginning at site $((LIMIT + 1))." \
+    "$(id_at $LIMIT)" "$(id_at $((LIMIT + 1)))"
 
-echo "The failing request from CASE B, in full:"
-echo
-echo "  curl -s -D - -H \"Authorization: Bearer \$SESSION\" \\"
-echo "    \"$b_url\""
-echo
-echo "  response status:   $b_status"
-echo "  response $b_date"
-echo "  expected first id: $(id_at $((LIMIT + 2)))   (the site after the cursor)"
-echo "  actual   first id: $(printf '%s' "$b_body" | jq -r '.[0].id')   (the first site in the collection)"
-echo "  elements returned: $(printf '%s' "$b_body" | jq 'length')"
-echo
+run_case \
+    "CASE B  (DEFECT)   cursor = the first id of page 2, i.e. the id of site $((LIMIT + 1))" \
+    "DEFECT" \
+    "  The cursor is a real site UUID in this organization, returned by this very endpoint
+  in the page before.  It differs from CASE A only in being one position further along,
+  so asking to start after site $((LIMIT + 1)) must return a page beginning at site $((LIMIT + 2)).
+  It is not a page boundary of any pagination the caller has requested, which appears to
+  be what matters." \
+    "$(id_at $((LIMIT + 1)))" "$(id_at $((LIMIT + 2)))"
+
+run_case \
+    "CASE C  (DEFECT)   cursor = the id of the FIRST site in the collection, site 1" \
+    "DEFECT" \
+    "  This one closes the \"only use cursors we issued you\" explanation.  The id below is
+  the first element of the first page the API returned, in the very response it was
+  returned in -- there is no more API-issued id available.  Asking to start after site 1
+  must return a page beginning at site 2." \
+    "$(id_at 1)" "$(id_at 2)"
+
+run_case \
+    "CASE D  (CONTROL)  cursor = the id of the LAST site in the collection, site $total" \
+    "as documented" \
+    "  The end of the collection behaves correctly: asking to start after the final site
+  returns an empty array, which is how a caller is supposed to learn it is done.  That
+  makes the defect above more surprising, not less -- the cursor IS understood here." \
+    "$(id_at "$total")" "EMPTY"
+
 echo "Finished (UTC): $(date -u '+%Y-%m-%d %H:%M:%SZ')"
 echo
-echo "Any nonzero RETURNED-PAGE-1-AGAIN count above is the defect: a cursored request was"
-echo "answered with the first page of the collection, HTTP 200, no error of any kind."
-echo "('other' would mean a response that was neither the expected page nor the first page;"
-echo "it should never occur, since every non-200 stops the script instead.)"
+echo "Reading the verdicts: 'returned-page-1-again' counts responses that were the first"
+echo "page of the collection instead of the page after the cursor -- HTTP 200, no error of"
+echo "any kind.  Any nonzero count is the defect.  ('other' would mean a response that was"
+echo "neither the expected page nor the first page; it should never occur, since every"
+echo "non-200 stops the script instead of producing a verdict.)"
