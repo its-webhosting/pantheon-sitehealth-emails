@@ -13,6 +13,7 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import dns.resolver
+import httpx
 import pytest
 from helpers.dnsfake import make_resolver
 
@@ -228,3 +229,217 @@ def test_wire_level_struct_error_is_transient_not_a_malformed_name(fpd, monkeypa
     monkeypatch.setattr(fpd.dns.resolver, "resolve", boom)
     with pytest.raises(dns.resolver.NoNameservers):
         fpd.resolve("valid.umich.edu", "CNAME")
+
+
+# -- Task 2: Pantheon API session (SPEC section 9's ApiSession/retry/re-auth seams).
+
+def make_session(fpd, handler, notify=None):
+    """An ApiSession whose transport is a MockTransport running `handler`.
+
+    No `import httpx` here -- it is in the import block at the top of the file (Task 1).
+    """
+    client = httpx.Client(transport=httpx.MockTransport(handler), timeout=1.0)
+    return fpd.ApiSession(client, "fake-machine-token", notify=notify)
+
+
+def test_session_authenticates_once_at_construction(fpd):
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"session": "sess-1"})
+
+    session = make_session(fpd, handler)
+    assert session.token == "sess-1"
+    assert seen == ["https://api.pantheon.io/v0/authorize/machine-token"]
+
+
+def test_get_returns_decoded_json(fpd):
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess-1"})
+        assert request.headers["Authorization"] == "Bearer sess-1"
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler).get("/sites/abc") == {"ok": True}
+
+
+def test_401_reauthenticates_once_then_succeeds(fpd):
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": f"sess-{calls.count('/v0/authorize/machine-token')}"})
+        if calls.count("/v0/sites/abc") == 1:
+            return httpx.Response(401, json={"error": "expired"})
+        return httpx.Response(200, json={"ok": True})
+
+    session = make_session(fpd, handler)
+    assert session.get("/sites/abc") == {"ok": True}
+    assert calls.count("/v0/authorize/machine-token") == 2   # re-authenticated exactly once
+    assert session.token == "sess-2"
+
+
+def test_401_twice_raises_session_expired_not_a_plain_api_error(fpd):
+    # SPEC G7a.  It must NOT be a PantheonApiError: the sweep catches those per site, so a
+    # revoked token would otherwise turn into ~400 indeterminates instead of an abort.
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(401, json={"error": "nope"})
+
+    with pytest.raises(fpd.SessionExpiredError, match="expired or revoked"):
+        make_session(fpd, handler).get("/sites/abc")
+    assert not issubclass(fpd.SessionExpiredError, fpd.PantheonApiError)
+
+
+def test_failure_to_reauthenticate_is_also_session_expired(fpd):
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            calls.append(1)
+            # The first (constructor) authentication succeeds; the mid-sweep one fails.
+            return httpx.Response(200, json={"session": "sess"}) if len(calls) == 1 \
+                else httpx.Response(403, text="revoked")
+        return httpx.Response(401, json={"error": "expired"})
+
+    with pytest.raises(fpd.SessionExpiredError, match="could not re-authenticate"):
+        make_session(fpd, handler).get("/sites/abc")
+
+
+def test_reauthentication_notifies_the_caller(fpd):
+    # SPEC section 8: the G7 note is the operator's only sign that the session expired.
+    notes = []
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": f"sess-{calls.count('/v0/authorize/machine-token')}"})
+        if calls.count("/v0/sites/abc") == 1:
+            return httpx.Response(401, json={"error": "expired"})
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler, notify=notes.append).get("/sites/abc") == {"ok": True}
+    assert notes == ["session expired; re-authenticated"]
+
+
+def test_500_is_retried_once_then_succeeds(fpd, monkeypatch):
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)    # the seam that keeps the suite fast
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(503, text="unavailable")
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler).get("/sites/abc") == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_500_twice_raises_named_error(fpd, monkeypatch):
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(500, text="boom")
+
+    with pytest.raises(fpd.PantheonApiError, match="500"):
+        make_session(fpd, handler).get("/sites/abc")
+
+
+def test_429_is_retried_like_a_5xx(fpd, monkeypatch):
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
+        return httpx.Response(429 if len(calls) == 1 else 200, json={"ok": True})
+
+    assert make_session(fpd, handler).get("/x") == {"ok": True}
+    assert len(calls) == 2
+
+
+def test_connect_error_is_retried_once_then_raises_named_error(fpd, monkeypatch):
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
+        raise httpx.ConnectError("no route")
+
+    with pytest.raises(fpd.PantheonApiError, match="no route"):
+        make_session(fpd, handler).get("/x")
+    assert len(calls) == 2
+
+
+def test_undecodable_body_raises_named_error(fpd):
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(200, text="<html>not json</html>")
+
+    with pytest.raises(fpd.PantheonApiError):
+        make_session(fpd, handler).get("/x")
+
+
+def test_machine_token_prefers_the_environment(fpd, monkeypatch):
+    monkeypatch.setenv("PANTHEON_MACHINE_TOKEN", "from-env")
+    assert fpd.machine_token() == "from-env"
+
+
+def test_machine_token_reads_the_single_terminus_cache_file(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "someone@umich.edu").write_text('{"token": "from-cache", "email": "x"}')
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    assert fpd.machine_token() == "from-cache"
+
+
+def test_machine_token_refuses_to_guess_between_several_cache_files(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "a@umich.edu").write_text('{"token": "a"}')
+    (cache / "b@umich.edu").write_text('{"token": "b"}')
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match="2"):
+        fpd.machine_token()
+
+
+def test_machine_token_missing_cache_directory_is_named(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError):
+        fpd.machine_token()
+
+
+def test_machine_token_undecodable_cache_file_is_named(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "someone@umich.edu").write_text("this is not json")
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match="could not read"):
+        fpd.machine_token()
+
+
+def test_machine_token_cache_file_without_a_token_key_is_named(fpd, monkeypatch, tmp_path):
+    monkeypatch.delenv("PANTHEON_MACHINE_TOKEN", raising=False)
+    cache = tmp_path / ".terminus" / "cache" / "tokens"
+    cache.mkdir(parents=True)
+    (cache / "someone@umich.edu").write_text('{"email": "someone@umich.edu"}')
+    monkeypatch.setattr(fpd.Path, "home", staticmethod(lambda: tmp_path))
+    with pytest.raises(fpd.MachineTokenError, match="no 'token' key"):
+        fpd.machine_token()

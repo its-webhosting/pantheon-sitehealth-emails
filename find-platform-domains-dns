@@ -16,14 +16,18 @@ Requires: dnspython and httpx (httpx is declared under this project's `cloudflar
 the documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and a Pantheon
 machine token, from $PANTHEON_MACHINE_TOKEN or ~/.terminus/cache/tokens/.
 """
+import json
+import os
 import struct
 import sys
 import time
+from pathlib import Path
 from typing import NamedTuple
 
 import dns.exception
 import dns.name
 import dns.resolver
+import httpx
 
 PLATFORM_SUFFIX = ".pantheonsite.io"
 MAX_CNAME_DEPTH = 8
@@ -163,3 +167,152 @@ def walk(custom_domain):  # noqa: PLR0911 -- 7 returns, one per documented outco
             return WalkResult(name, target, "")
         name = target
     return WalkResult("", "", f"CNAME chain exceeds {MAX_CNAME_DEPTH} hops")
+
+
+API_BASE = "https://api.pantheon.io/v0"
+HTTP_TIMEOUT = 30.0
+RETRY_SLEEP = 2.0            # monkeypatched to 0 by the tests -- see SPEC section 9
+USER_AGENT = "find-platform-domains-dns"
+
+
+class PantheonApiError(Exception):
+    """A Pantheon API call failed after its one retry, or returned an undecodable body."""
+
+
+class PantheonApiShapeError(PantheonApiError):
+    """A Pantheon API response decoded as JSON but did not have the documented shape.
+
+    A subclass of PantheonApiError on purpose: the sweep already treats an API failure for one
+    site or environment as G5/G6 (report, count one indeterminate, carry on), and an
+    unexpected shape deserves exactly that treatment rather than a traceback at exit 1
+    (SPEC G17).
+    """
+
+
+class SessionExpiredError(Exception):
+    """Re-authentication failed, or the retried request 401'd again (SPEC G7a).
+
+    Deliberately NOT a subclass of PantheonApiError: the sweep catches PantheonApiError per
+    site and per environment, so if this were one, a revoked machine token 5 minutes into a
+    38-minute sweep would degrade into one indeterminate per remaining site -- ~400 ATTENTION
+    lines, exit 1, and 33 more minutes of pointless work -- instead of stopping. It must
+    propagate to main() and abort with exit 2.
+    """
+
+
+class MachineTokenError(Exception):
+    """No Pantheon machine token could be resolved without guessing (SPEC section 3)."""
+
+
+def machine_token():
+    """$PANTHEON_MACHINE_TOKEN, else the single JSON file in ~/.terminus/cache/tokens/.
+
+    Zero files, several files, an unreadable file or a missing `token` key is an error, never a
+    guess: picking one of several would silently sweep the wrong Pantheon account (PD#1).
+    """
+    from_env = os.environ.get("PANTHEON_MACHINE_TOKEN")   # inlined: a module constant named
+    if from_env:                                          # *_TOKEN holding a literal trips S105
+        return from_env
+    cache = Path.home() / ".terminus" / "cache" / "tokens"
+    if not cache.is_dir():
+        raise MachineTokenError(
+            f"no machine token: {cache} does not exist and $PANTHEON_MACHINE_TOKEN is unset. "
+            "Authenticate terminus, or set the environment variable.")
+    files = sorted(p for p in cache.iterdir() if p.is_file())
+    if len(files) != 1:
+        raise MachineTokenError(
+            f"no machine token: expected exactly one file in {cache}, found {len(files)}"
+            f" ({', '.join(p.name for p in files) or 'none'}). "
+            "Set $PANTHEON_MACHINE_TOKEN to choose one.")
+    try:
+        data = json.loads(files[0].read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        raise MachineTokenError(f"could not read {files[0]}: {e}") from e
+    if "token" not in data:
+        raise MachineTokenError(f"{files[0]} has no 'token' key")
+    return data["token"]
+
+
+class ApiSession:
+    """One authenticated Pantheon API session over one reused httpx connection.
+
+    Retry policy (SPEC section 7.1): ONE retry, RETRY_SLEEP apart, on a transport failure, 5xx,
+    or 429.  ONE re-authentication on a 401, which does NOT consume the transport retry -- a
+    session that expires 15 minutes into a 20-minute sweep must not also spend the retry budget.
+    """
+
+    def __init__(self, client, token_value, notify=None):
+        self._client = client
+        self._machine_token = token_value
+        # notify(message) is called when the session is re-authenticated mid-sweep (G7).  main()
+        # passes a function that prints under -v; without it a session expiry is invisible at
+        # every verbosity, which SPEC section 8 explicitly promises it is not.
+        self._notify = notify or (lambda _message: None)
+        self.token = self._authenticate()
+
+    def _authenticate(self):
+        try:
+            response = self._client.post(
+                f"{API_BASE}/authorize/machine-token",
+                json={"machine_token": self._machine_token, "client": USER_AGENT})
+        except httpx.HTTPError as e:
+            raise PantheonApiError(f"could not authenticate to Pantheon: {e}") from e
+        if response.status_code != 200:  # noqa: PLR2004 -- HTTP status literal
+            raise PantheonApiError(
+                f"could not authenticate to Pantheon: HTTP {response.status_code}")
+        try:
+            return response.json()["session"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise PantheonApiError(f"authentication response had no session token: {e}") from e
+
+    def _renew(self, path, *, reauthed):
+        """Re-authenticate after a 401, or raise SessionExpiredError (SPEC G7a).
+
+        Split out of get() to keep that method under ruff's C901 complexity limit -- and it
+        reads better anyway: get() dispatches on status, this owns the session lifecycle.
+        """
+        if reauthed:
+            # A second 401 on a session we just minted means the machine token itself is
+            # revoked or expired.  Retrying forever, or counting it as one site's
+            # indeterminate, both waste the rest of a 38-minute sweep.
+            raise SessionExpiredError(
+                f"{path}: HTTP 401 again after re-authenticating -- the machine token is "
+                "expired or revoked")
+        try:
+            self.token = self._authenticate()
+        except PantheonApiError as e:
+            raise SessionExpiredError(f"could not re-authenticate mid-sweep: {e}") from e
+        self._notify("session expired; re-authenticated")
+
+    def get(self, path):
+        """GET {API_BASE}{path} and return the decoded JSON, or raise PantheonApiError."""
+        transport_attempts = 0
+        reauthed = False
+        while True:
+            try:
+                response = self._client.get(
+                    f"{API_BASE}{path}",
+                    headers={"Authorization": f"Bearer {self.token}",
+                             "User-Agent": USER_AGENT})
+            except httpx.HTTPError as e:
+                transport_attempts += 1
+                if transport_attempts > 1:
+                    raise PantheonApiError(f"{path}: {e}") from e
+                time.sleep(RETRY_SLEEP)
+                continue
+            if response.status_code == 401:  # noqa: PLR2004 -- HTTP status literal
+                self._renew(path, reauthed=reauthed)
+                reauthed = True
+                continue
+            if response.status_code == 429 or response.status_code >= 500:  # noqa: PLR2004 -- HTTP status literals
+                transport_attempts += 1
+                if transport_attempts > 1:
+                    raise PantheonApiError(f"{path}: HTTP {response.status_code}")
+                time.sleep(RETRY_SLEEP)
+                continue
+            if response.status_code != 200:  # noqa: PLR2004 -- HTTP status literal
+                raise PantheonApiError(f"{path}: HTTP {response.status_code}")
+            try:
+                return response.json()
+            except json.JSONDecodeError as e:
+                raise PantheonApiError(f"{path}: undecodable response body: {e}") from e
