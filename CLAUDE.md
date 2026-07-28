@@ -68,8 +68,12 @@ a `sites=… indeterminate=…` summary go to stderr; exit 0 = clean sweep, 1 = 
 indeterminates, 2 = could not complete, 130 = interrupted. There is no `--resume-from`; instead,
 an aborted sweep prints the last site it completed (or, if the very first site was interrupted,
 which one it was mid-processing) and the **names** of every site not yet reached, as a
-paste-able `find-platform-domains-dns <names…>` re-run command — the names are the point, since
-"137 sites not reached" gives the operator no way to reconstruct which 137 they were.
+paste-able re-run command **rebuilt from the argv the dead run received** (so `-c CONFIG` and
+`-v` survive — dropping `-c` handed the operator a command reading a different config file) —
+the names are the point, since "137 sites not reached" gives the operator no way to reconstruct
+which 137 they were. Resuming re-sweeps the interrupted site, so appending to the same CSV
+duplicates that site's rows. `-c` is read **only** on the whole-organization path: a
+`SITE`-argument sweep never uses `[Pantheon].org_id` and does not require the file to exist.
 
 ```bash
 ./find-platform-domains-dns its-wws-test1     # one site

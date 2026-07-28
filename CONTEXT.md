@@ -78,4 +78,8 @@ labels these `type: custom`. Primary domains are custom domains.
 **Platform domain**:
 The Pantheon-provided hostname for a site environment, ending in `.pantheonsite.io`
 (`live-bus-occb.pantheonsite.io`). Pantheon labels these `type: platform`.
+_Also known as_: **legacy GCDN name** — `check/pantheon_cdn_change/` calls the same
+`.pantheonsite.io` suffix `LEGACY_GCDN_SUFFIX`, because there it is being detected as evidence
+that a domain is still served by the outgoing Fastly CDN. Same hostnames, two names, because
+the two callers care about different things: identity here, CDN generation there.
 _Avoid_: Pantheon domain, pantheonsite name

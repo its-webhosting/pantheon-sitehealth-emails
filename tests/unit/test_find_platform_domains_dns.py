@@ -768,7 +768,7 @@ def test_org_sites_retries_an_ignored_cursor_then_succeeds(fpd, monkeypatch, cap
     sites = fpd.org_sites(get, "org-1")
     assert len(sites) == 105
     assert get.cursors == [None, "id-0099", "id-0099"]     # same cursor, retried
-    # The ATTENTION line is the ONLY thing that distinguishes a detector-driven retry from a
+    # The RETRY: line is the ONLY thing that distinguishes a detector-driven retry from a
     # loop that blunders into repeating the same cursor by accident -- both produce the cursor
     # sequence above, so without this assertion the test passes with the detector deleted.
     assert "cursor id-0099 was ignored" in capsys.readouterr().err
@@ -1077,7 +1077,7 @@ def test_verbose_reports_per_site_counts(fpd, monkeypatch, capsys):
 
 def test_a_session_expiry_aborts_the_sweep_instead_of_counting_indeterminates(fpd, monkeypatch):
     # SPEC G7a.  If SessionExpiredError were caught per site, a revoked token 5 minutes into a
-    # 38-minute sweep would emit ~400 ATTENTION lines and exit 1 instead of stopping.
+    # 38-minute sweep would emit ~400 SKIPPED: lines and exit 1 instead of stopping.
     patch_dns(monkeypatch, fpd, {})
 
     def get(path):
@@ -1400,7 +1400,9 @@ def test_an_abort_names_the_completed_site_and_the_unreached_ones(fpd, monkeypat
     assert fpd.main(["-c", str(config)]) == 130
     err = capsys.readouterr().err
     assert "Stopped after s1." in err
-    assert "find-platform-domains-dns s2" in err      # paste-able resume command
+    # Paste-able resume command -- and it carries the -c the operator actually used (whole-branch
+    # review m2): without it the pasted command reads a DIFFERENT config file.
+    assert f"find-platform-domains-dns -c {config} s2" in err
 
 
 def test_ctrl_c_returns_130_and_says_where_it_stopped(fpd, monkeypatch, tmp_path, capsys):
@@ -1424,17 +1426,73 @@ def test_broken_pipe_returns_2_and_reports_like_every_other_abort(fpd, monkeypat
     assert "Stopped" in err
 
 
+class _UndrainableStdout:
+    """A stdout backed by a REAL file descriptor whose flush always fails.
+
+    Whole-branch review I1.  This is the shape production presents on the paths that produce exit
+    120 -- a closed pipe, a full disk, an over-quota redirect target: writes land in the buffer,
+    and the flush is what raises.  A plain opened file (what these two tests used to install) has
+    a real descriptor but flushes perfectly, so it can no longer reach the descriptor-replacement
+    branch now that detach_doomed_stdout() only fires when the flush actually fails -- and a test
+    that cannot reach the branch it names is PD#14 exactly.
+    """
+
+    def __init__(self, handle, error):
+        self._handle = handle
+        self._error = error
+        self.flush_calls = 0
+
+    def write(self, text):
+        return self._handle.write(text)
+
+    def flush(self):
+        self.flush_calls += 1
+        raise self._error
+
+    def fileno(self):
+        return self._handle.fileno()
+
+
+def assert_dup2_detached_stdout(fpd, monkeypatch, tmp_path, error, run):
+    """Install an _UndrainableStdout, run `run()`, and assert the os.dup2 recipe fired once.
+
+    Records the os.dup2 call rather than relying on the process exit code, which pytest cannot
+    observe in-process.
+    """
+    handle = (tmp_path / "stdout").open("w")
+    expected_fd = handle.fileno()               # captured before dup2 repoints this fd number
+    calls = []
+    real_dup2 = fpd.os.dup2
+
+    def recording_dup2(fd, target_fd):
+        calls.append((fd, target_fd))
+        return real_dup2(fd, target_fd)
+
+    stdout = _UndrainableStdout(handle, error)
+    monkeypatch.setattr(fpd.sys, "stdout", stdout)
+    monkeypatch.setattr(fpd.os, "dup2", recording_dup2)
+    try:
+        run()
+    finally:
+        handle.close()
+    assert stdout.flush_calls >= 1               # the real-flush attempt, not a skipped one
+    assert len(calls) == 1
+    assert calls[0][1] == expected_fd            # dup2's target was the real stdout's own fd
+
+
 def test_broken_pipe_dup2_recipe_actually_runs(fpd, monkeypatch, tmp_path):
     """Fix round 1, I1.  test_broken_pipe_returns_2_and_reports_like_every_other_abort (above)
     runs under capsys, whose captured sys.stdout has no real file descriptor --
-    sys.stdout.fileno() raises io.UnsupportedOperation there, which the BrokenPipeError handler's
+    sys.stdout.fileno() raises io.UnsupportedOperation there, which the handler's
     contextlib.suppress(...) swallows, so the ENTIRE dup2 recipe silently never executes under
     that test.  Reviewer's mutation (replace the `with contextlib.suppress(...)` body with `pass`)
     left all 96 tests green while a real `find-platform-domains-dns bus-occb | head -0` exits
     120, not 2 -- the exact defect class this repo keeps getting burned by (an instrument that
-    cannot go red, PD#14).  This test gives sys.stdout a REAL file descriptor (a plain opened
-    file, not capsys's pseudo-stream) so the recipe actually runs, and records the os.dup2 call
-    rather than relying on process exit code alone (which pytest cannot observe in-process).
+    cannot go red, PD#14).
+
+    Whole-branch review I1 moved the recipe from main()'s BrokenPipeError arm into report_stop()
+    and made it conditional on the flush really failing, so the stdout installed here is now an
+    _UndrainableStdout rather than a plain file -- see that class's docstring.
     """
     config = tmp_path / "c.toml"
     config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
@@ -1447,24 +1505,45 @@ def test_broken_pipe_dup2_recipe_actually_runs(fpd, monkeypatch, tmp_path):
 
     monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
     monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
-
-    real_stdout = (tmp_path / "stdout").open("w")
-    expected_fd = real_stdout.fileno()          # captured before dup2 repoints this fd number
-    calls = []
-    real_dup2 = fpd.os.dup2
-
-    def recording_dup2(fd, target_fd):
-        calls.append((fd, target_fd))
-        return real_dup2(fd, target_fd)
-
-    monkeypatch.setattr(fpd.sys, "stdout", real_stdout)
-    monkeypatch.setattr(fpd.os, "dup2", recording_dup2)
-    try:
+    def run():
         assert fpd.main(["-c", str(config)]) == 2
+
+    assert_dup2_detached_stdout(fpd, monkeypatch, tmp_path, BrokenPipeError(), run)
+
+
+def test_a_healthy_stdout_is_never_detached_on_an_abort(fpd, monkeypatch, tmp_path, capsys):
+    """Whole-branch review I1, the other half of the conditional.
+
+    An UNCONDITIONAL dup2 in report_stop() is not free: it silences every later write to that
+    descriptor.  Under pytest's default fd-level capture that is the session's own captured
+    stdout, and 19 subsequent tests errored with EBADF (measured while building this fix).  In
+    production it would discard a row still sitting in a healthy stdout's buffer -- SPEC section 1
+    names a missing row as the expensive failure.  So: flush for real, and replace the descriptor
+    only when that flush fails.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise KeyboardInterrupt
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+
+    calls = []
+    monkeypatch.setattr(fpd.os, "dup2", lambda fd, target: calls.append((fd, target)))
+    handle = (tmp_path / "stdout").open("w")     # a REAL descriptor that flushes perfectly
+    monkeypatch.setattr(fpd.sys, "stdout", handle)
+    try:
+        assert fpd.main(["-c", str(config)]) == 130
     finally:
-        real_stdout.close()
-    assert len(calls) == 1
-    assert calls[0][1] == expected_fd            # dup2's target was the real stdout's own fd
+        handle.close()
+    assert calls == []
+    assert "Stopped during" in capsys.readouterr().err
 
 
 def test_session_expiry_returns_2_not_1(fpd, monkeypatch, tmp_path, capsys):
@@ -1664,7 +1743,7 @@ def test_report_stop_says_during_when_no_site_completed_yet(fpd, capsys):
     sweeper, _out = make_sweeper(fpd)
     sweeper.current_site = "s1"
     sweeper.remaining = [{"name": "s1"}]
-    fpd.report_stop(sweeper, "interrupted")
+    fpd.report_stop(sweeper, "interrupted", [])
     err = capsys.readouterr().err
     assert "Stopped during s1." in err
     assert "1 site not reached" in err
@@ -1679,11 +1758,12 @@ def test_report_stop_lists_multiple_remaining_site_names_space_separated(fpd, ca
     sweeper, _out = make_sweeper(fpd)
     sweeper.last_site = "s1"
     sweeper.remaining = [{"name": "s2"}, {"name": "s3"}]
-    fpd.report_stop(sweeper, "interrupted")
+    fpd.report_stop(sweeper, "interrupted", ["-v"])
     err = capsys.readouterr().err
     assert "Stopped after s1." in err
     assert "2 sites not reached" in err
-    assert "find-platform-domains-dns s2 s3" in err
+    # The -v the dead run used survives into the resume command (whole-branch review m2).
+    assert "find-platform-domains-dns -v s2 s3" in err
 
 
 def test_report_stop_says_something_sane_when_ctrl_c_lands_before_the_first_site_starts(
@@ -1706,7 +1786,7 @@ def test_report_stop_says_something_sane_when_ctrl_c_lands_before_the_first_site
     with pytest.raises(KeyboardInterrupt):
         sweeper.sweep([{"id": "u1", "name": "s1"}])
     assert sweeper.last_site == ""
-    fpd.report_stop(sweeper, "interrupted")
+    fpd.report_stop(sweeper, "interrupted", [])
     err = capsys.readouterr().err
     assert "Stopped during ." not in err
     assert "Stopped during startup." in err
@@ -1804,5 +1884,336 @@ def test_report_stop_ignores_a_second_sigint_while_printing(fpd, monkeypatch):
     monkeypatch.setattr(fpd.signal, "signal", lambda sig, handler: calls.append((sig, handler)))
     sweeper, _out = make_sweeper(fpd)
     sweeper.last_site = "s1"
-    fpd.report_stop(sweeper, "interrupted")
+    fpd.report_stop(sweeper, "interrupted", [])
     assert calls == [(fpd.signal.SIGINT, fpd.signal.SIG_IGN)]
+
+
+# ---------------------------------------------------------------------------------------------
+# Whole-branch review fix wave
+# ---------------------------------------------------------------------------------------------
+
+
+def test_org_id_from_config_rejects_a_non_string_org_id(fpd, tmp_path):
+    """Whole-branch review C1.  `org_id = 12345` (no quotes -- an ordinary TOML typo) reached
+    `quote(org_id, safe="")` in org_sites() and died as `TypeError: quote_from_bytes() expected
+    bytes`, an unnamed traceback at exit 1 -- the code SPEC section 7 reserves for a COMPLETED
+    sweep.  The earlier fix round added `except (KeyError, TypeError)` around the config read,
+    which catches a wrong-typed TABLE (`Pantheon = "not-a-table"`) but never a wrong-typed VALUE:
+    that TypeError is raised much later, inside org_sites(), outside that guard.  Validate where
+    the value is read, the same discipline _require_str already applies to API payloads.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text("[Pantheon]\norg_id = 12345\n")
+    with pytest.raises(TypeError, match="should be a string"):
+        fpd.org_id_from_config(config)
+    config.write_text('[Pantheon]\norg_id = ["a"]\n')
+    with pytest.raises(TypeError, match="should be a string"):
+        fpd.org_id_from_config(config)
+
+
+def test_main_returns_2_for_a_non_string_org_id(fpd, monkeypatch, tmp_path, capsys):
+    """Whole-branch review C1, through the real main(): the exit code is the contract, and the
+    guard only counts if prepare_sweep's existing config arm converts it into a StartupError.
+
+    build_session is stubbed so the red run cannot reach the network: without the fix the
+    TypeError is raised inside org_sites(), i.e. AFTER the session is built.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text("[Pantheon]\norg_id = 12345\n")
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "no usable [Pantheon].org_id" in capsys.readouterr().err
+
+
+def test_named_sites_type_checks_the_id_and_the_name(fpd):
+    """Whole-branch review m6 -- the same class as C1, on the API side.
+
+    named_sites used plain `_require` (presence only) where org_sites and partition_domains both
+    use `_require_str`.  A non-str `name` from `/site-names/` flows straight into report_stop()'s
+    `" ".join(site["name"] for site in sweeper.remaining)`, which raises the bare, unnamed
+    `TypeError: sequence item 0: expected str instance` -- an exit-1 traceback while REPORTING an
+    abort, i.e. it destroys the very resume line SPEC section 7.3 calls the whole recovery story.
+    """
+    with pytest.raises(fpd.PantheonApiShapeError, match="should be a string"):
+        fpd.named_sites(lambda _path: {"id": "uuid", "name": ["not-a-string"]}, ["alpha"])
+    with pytest.raises(fpd.PantheonApiShapeError, match="should be a string"):
+        fpd.named_sites(lambda _path: {"id": 12345, "name": "alpha"}, ["alpha"])
+
+
+def test_main_returns_2_when_stdout_is_closed(fpd, monkeypatch, tmp_path, capsys):
+    """Whole-branch review I2.  `find-platform-domains-dns bus-occb >&-` leaves CPython with
+    `sys.stdout is None`, and `csv.writer(sys.stdout, ...)` at the top of the sweep sits outside
+    every handler: measured `TypeError: argument 1 must have a "write" method`, exit 1 -- the code
+    SPEC section 7 reserves for a COMPLETED sweep.
+
+    A REAL config and a stubbed session, not `-c /dev/null`: the guard has to be reached, and a
+    config failure would return 2 before `csv.writer` is ever constructed -- a green check over
+    untraversed code (PD#14).
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.sys, "stdout", None)
+    assert fpd.main(["-c", str(config)]) == 2
+    assert "standard output" in capsys.readouterr().err
+
+
+def test_main_returns_2_when_stderr_is_closed_rather_than_polluting_the_csv(fpd, monkeypatch,
+                                                                            tmp_path, capsys):
+    """Whole-branch review I2, the worse half.  With fd 2 closed, `sys.stderr is None`, and
+    `print(msg, file=None)` routes to **sys.stdout** -- so every SKIPPED:/WARNING:/summary line
+    landed in the CSV, exit 0, no diagnostic at all.  Measured: `find-platform-domains-dns
+    its-wws-test1 2>&- > out` wrote `sites=1 envs=7 ... indeterminate=0` into `out` and exited 0,
+    silently violating SPEC section 5's "NEVER write anything but CSV rows to stdout" and feeding
+    the downstream DNS-rewriting script a summary line as if it were a row.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.sys, "stderr", None)
+    assert fpd.main(["-c", str(config)]) == 2
+    captured = capsys.readouterr()
+    # The diagnostic goes to whichever stream still exists -- stdout here -- and the run stops
+    # before a single sweep line can be written, so no summary/SKIPPED line ever joins the CSV.
+    assert "standard error" in captured.out
+    assert "sites=" not in captured.out
+
+
+@pytest.mark.parametrize(("make_error", "expected_code"), [
+    (lambda _fpd: OSError(28, "No space left on device"), 2),
+    (lambda _fpd: KeyboardInterrupt(), 130),
+    (lambda fpd: fpd.SessionExpiredError("token revoked"), 2),
+    (lambda _fpd: BrokenPipeError(), 2),
+])
+def test_every_abort_path_detaches_a_doomed_stdout_from_the_shutdown_flush(
+        fpd, monkeypatch, tmp_path, make_error, expected_code):
+    """Whole-branch review I1.  The os.dup2 recipe was applied ONLY in the BrokenPipeError arm,
+    but the mechanism it defends against is not pipe-specific: CPython re-flushes sys.stdout at
+    interpreter shutdown, and ANY failure of that flush is converted into exit **120** plus an
+    "Exception ignored on flushing sys.stdout" message, overriding whatever main() returned.
+    SPEC section 7 does not list 120.
+
+    Measured live before the fix, with an ordinary disk-full redirect target:
+
+        $ ./find-platform-domains-dns bus-occb > /dev/full
+        ERROR: sweep did not complete (unexpected OSError: [Errno 28] No space left on device)
+        sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+        Stopped during bus-occb.
+        ... Exception ignored on flushing sys.stdout: OSError: [Errno 28] ...
+        exit=120
+
+    A full disk or an over-quota redirect target on a 38-minute org-wide CSV is ordinary, and it
+    lands in main()'s `except BaseException` arm, not the BrokenPipeError one.  The recipe now
+    lives in report_stop(), which every exit-2/130 abort path already calls -- so this is
+    parametrized over all four arms rather than pinned on the one that happened to have it.
+
+    Uses _UndrainableStdout (a REAL descriptor whose flush fails), because capsys's pseudo-stream
+    has no descriptor at all -- contextlib.suppress swallows the whole recipe there and it
+    silently never executes.  That is the round-1 lesson this parametrization inherits (PD#14).
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    error = make_error(fpd)
+
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise error
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+
+    def run():
+        assert fpd.main(["-c", str(config)]) == expected_code
+
+    assert_dup2_detached_stdout(
+        fpd, monkeypatch, tmp_path, OSError(28, "No space left on device"), run)
+
+
+class _HitSession(_StubSession):
+    """One site, one environment, one custom domain that hits the environment's OWN platform
+    domain.  The clean-hit shape: one CSV row, no warnings at all."""
+
+    def get(self, path):
+        if "/memberships/sites" in path:
+            return [{"id": "m1", "site": {"id": "u1", "name": "s1"}}]
+        if path.endswith("/environments"):
+            return {"live": {}}
+        return [{"id": "live-s1.pantheonsite.io", "type": "platform"},
+                {"id": "occb.bus.umich.edu", "type": "custom"}]
+
+
+def _main_over_one_hit(fpd, monkeypatch, tmp_path, argv_extra=()):
+    """Drive the REAL main() over a single clean hit.  Returns (exit code, config path)."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    patch_dns(monkeypatch, fpd, {
+        ("occb.bus.umich.edu", "CNAME"): ["live-s1.pantheonsite.io."],
+        ("live-s1.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: _HitSession(fpd,
+                                                                           indeterminate=False))
+    return fpd.main(["-c", str(config), *argv_extra]), config
+
+
+def test_main_wires_the_verbose_flag_into_the_sweeper(fpd, monkeypatch, tmp_path, capsys):
+    """Whole-branch review I3.  `verbose=options.verbose` -> `verbose=False` in main() left all
+    106 tests green: every -v assertion in this file constructs its own Sweeper with
+    verbose=True, so nothing pinned the WIRE between the parsed option and the object.  In
+    production that mutation loses every per-site progress line -- the only liveness signal on a
+    38-minute run, and a SPEC section 8 contract.
+    """
+    assert _main_over_one_hit(fpd, monkeypatch, tmp_path, ["-v"])[0] == 0
+    assert "[1/1] s1" in capsys.readouterr().err
+
+
+class _FlushRecordingStream(io.StringIO):
+    """An in-memory stdout that records what had been written at each flush."""
+
+    def __init__(self):
+        super().__init__()
+        self.flushes = []
+
+    def flush(self):
+        self.flushes.append(self.getvalue())
+
+
+def test_main_wires_real_stdout_into_the_sweeper_so_rows_are_flushed(fpd, monkeypatch, tmp_path):
+    """Whole-branch review I3, the sharpest of the three.  SPEC section 9 justifies the injected
+    stream seam precisely as pinning "the per-row flush requirement (section 5), which is
+    otherwise untestable" -- yet as built it pinned the flush in a TEST-constructed Sweeper only.
+    Replacing main()'s stream argument (`sys.stdout`) with a throwaway `io.StringIO()` left all
+    106 tests green while, in production, rows stopped being flushed: stdout stays block-buffered
+    and `tail -f` shows nothing for 8 KB.  The seam existed; the wiring it exists to protect did
+    not.
+    """
+    stream = _FlushRecordingStream()
+    monkeypatch.setattr(fpd.sys, "stdout", stream)
+    assert _main_over_one_hit(fpd, monkeypatch, tmp_path)[0] == 0
+    assert stream.getvalue() == (
+        "s1,live,occb.bus.umich.edu,occb.bus.umich.edu,live-s1.pantheonsite.io\n")
+    # Flushed AFTER the row was written, on the stream main() actually writes to.
+    assert stream.flushes == [stream.getvalue()]
+
+
+def test_sweep_env_hands_check_domain_the_environments_own_platform_set(fpd, monkeypatch, capsys):
+    """Whole-branch review I3.  Passing `set()` instead of `platform_domains` at sweep_env's
+    call to check_domain left all 106 tests green -- every G13 test calls check_domain directly
+    with a hand-built set, so nothing pinned that partition_domains' platform set actually
+    REACHES check_domain.  In production that mutation makes every hit in the real sweep emit a
+    spurious G13 "belongs to a different site/environment (expected one of: none listed)",
+    turning the cross-site check from a signal into noise on ~every row.
+    """
+    patch_dns(monkeypatch, fpd, {
+        ("occb.bus.umich.edu", "CNAME"): ["live-s1.pantheonsite.io."],
+        ("live-s1.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    entries = [{"id": "live-s1.pantheonsite.io", "type": "platform"},
+               {"id": "occb.bus.umich.edu", "type": "custom"}]
+    sweeper, out = make_sweeper(fpd, get=lambda _path: entries)
+    sweeper.sweep_env({"id": "u1", "name": "s1"}, "live")
+    assert sweeper.counters.rows == 1
+    assert out.getvalue().endswith("live-s1.pantheonsite.io\n")
+    assert capsys.readouterr().err == ""     # a clean hit warns about nothing at all
+
+
+def test_a_named_site_sweep_never_reads_the_config(fpd, monkeypatch, tmp_path, capsys):
+    """Whole-branch review m1.  prepare_sweep read (and required) [Pantheon].org_id on BOTH
+    paths, but named_sites() never uses it -- so `find-platform-domains-dns bus-occb` failed
+    exit 2 from any directory without the default config, on a value that run does not consume.
+
+    Measured before the fix, from a directory with no pantheon-sitehealth-emails.toml:
+
+        $ find-platform-domains-dns its-wws-test1
+        ERROR: could not read pantheon-sitehealth-emails.toml: [Errno 2] No such file ...
+        exit=2
+
+    The config is now read only on the whole-organization path, which is the only one that
+    builds an /organizations/{org_id}/ URL.  A gate on an unused value is a failure mode with
+    no failure behind it.
+    """
+    class Named(_StubSession):
+        def get(self, path):
+            if path.startswith("/site-names/"):
+                return {"id": "u1", "name": "s1"}
+            if path.endswith("/environments"):
+                return {"live": {}}
+            return [{"id": "live-s1.pantheonsite.io", "type": "platform"}]
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Named(fpd, indeterminate=False))
+    absent = tmp_path / "there-is-no-such-config.toml"
+    assert fpd.main(["-c", str(absent), "alpha"]) == 0
+    assert "could not read" not in capsys.readouterr().err
+
+
+def test_a_whole_organization_sweep_still_requires_the_config(fpd, monkeypatch, tmp_path, capsys):
+    """Whole-branch review m1's other side: the org path DOES consume org_id, so the G1 gate
+    must stay exactly where it was there.  Without this, "read the config lazily" could decay
+    into "never read the config", and a missing org_id would surface as a 404 mid-sweep.
+    """
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
+    absent = tmp_path / "there-is-no-such-config.toml"
+    assert fpd.main(["-c", str(absent)]) == 2
+    assert "could not read" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("argv", "names", "expected"), [
+    ([], ["s2", "s3"], "find-platform-domains-dns s2 s3"),
+    (["-v"], ["s2"], "find-platform-domains-dns -v s2"),
+    (["-c", "prod.toml"], ["s2"], "find-platform-domains-dns -c prod.toml s2"),
+    (["--config=prod.toml", "-v"], ["s2"], "find-platform-domains-dns --config=prod.toml -v s2"),
+    # The SITE positionals of the dead run are replaced, never appended twice.
+    (["-v", "alpha", "beta"], ["beta"], "find-platform-domains-dns -v beta"),
+    # A site name sitting in an option's VALUE slot must survive: dropping it would leave -c
+    # swallowing the next token and the pasted command would read the wrong file.
+    (["-c", "beta", "alpha"], ["alpha"], "find-platform-domains-dns -c beta alpha"),
+    # shlex.join quotes what a shell would otherwise split.
+    (["-c", "my config.toml"], ["s2"], "find-platform-domains-dns -c 'my config.toml' s2"),
+])
+def test_resume_command_keeps_every_flag_and_replaces_only_the_site_positionals(
+        fpd, argv, names, expected):
+    """Whole-branch review m2.  The section 7.3 resume line printed a bare
+    `find-platform-domains-dns <names...>`, discarding -c CONFIG and -v: an operator who ran
+    `-c prod.toml` pasted a command that reads a DIFFERENT file, and one who ran -v lost the only
+    liveness signal on the re-run.  The main program rebuilds from sys.argv for exactly this
+    reason (CLAUDE.md section Database), and psh/lifecycle.py's rerun_command() is the shape
+    copied here -- including deriving the value-taking option strings from the parser rather than
+    listing them, since a hardcoded list rots the first time an option is added.
+    """
+    assert fpd.resume_command(argv, names) == expected
+
+
+def test_the_printed_resume_command_carries_the_operators_own_flags(fpd, monkeypatch, tmp_path,
+                                                                     capsys):
+    """Whole-branch review m2, through the real main(): the pure helper is only worth having if
+    report_stop() actually prints its output."""
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+
+    class TwoSites(_StubSession):
+        def get(self, path):
+            if "/memberships/sites" in path:
+                return [{"id": "m1", "site": {"id": "u1", "name": "s1"}},
+                        {"id": "m2", "site": {"id": "u2", "name": "s2"}}]
+            if path.endswith("/environments"):
+                if "/u2/" in path:
+                    raise KeyboardInterrupt
+                return {"live": {}}
+            return [{"id": "live-s1.pantheonsite.io", "type": "platform"}]
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_k: TwoSites(fpd, indeterminate=False))
+    assert fpd.main(["-c", str(config), "-v"]) == 130
+    assert f"find-platform-domains-dns -c {config} -v s2" in capsys.readouterr().err

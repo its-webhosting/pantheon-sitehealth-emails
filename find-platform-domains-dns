@@ -26,6 +26,7 @@ import dataclasses
 import io
 import json
 import os
+import shlex
 import signal
 import struct
 import sys
@@ -205,7 +206,8 @@ def walk(custom_domain):  # noqa: PLR0911 -- 7 returns, one per documented outco
 API_BASE = "https://api.pantheon.io/v0"
 HTTP_TIMEOUT = 30.0
 RETRY_SLEEP = 2.0            # monkeypatched to 0 by the tests -- see SPEC section 9
-USER_AGENT = "find-platform-domains-dns"
+PROGRAM_NAME = "find-platform-domains-dns"
+USER_AGENT = PROGRAM_NAME    # the API client string and the resume command name the same program
 
 
 class PantheonApiError(Exception):
@@ -227,7 +229,7 @@ class SessionExpiredError(Exception):
 
     Deliberately NOT a subclass of PantheonApiError: the sweep catches PantheonApiError per
     site and per environment, so if this were one, a revoked machine token 5 minutes into a
-    38-minute sweep would degrade into one indeterminate per remaining site -- ~400 ATTENTION
+    38-minute sweep would degrade into one indeterminate per remaining site -- ~400 SKIPPED:
     lines, exit 1, and 33 more minutes of pointless work -- instead of stopping. It must
     propagate to main() and abort with exit 2.
     """
@@ -282,7 +284,7 @@ class ApiSession:
 
     Retry policy (SPEC section 7.1): ONE retry, RETRY_SLEEP apart, on a transport failure, 5xx,
     or 429.  ONE re-authentication on a 401, which does NOT consume the transport retry -- a
-    session that expires 15 minutes into a 20-minute sweep must not also spend the retry budget.
+    session that expires 15 minutes into a 38-minute sweep must not also spend the retry budget.
     """
 
     def __init__(self, client, token_value, notify=None):
@@ -496,10 +498,15 @@ def named_sites(get, names):
     for name in names:
         where = f"/site-names/{name}"
         answer = get(f"/site-names/{quote(name, safe='')}")
-        # BOTH keys go through _require.  An `answer.get("name", name)` fallback would silently
-        # reinstate the argv spelling -- the exact mismatch SPEC section 3 requires be avoided.
-        resolved.append({"id": _require(answer, "id", where),
-                         "name": _require(answer, "name", where)})
+        # BOTH keys go through _require_str.  An `answer.get("name", name)` fallback would
+        # silently reinstate the argv spelling -- the exact mismatch SPEC section 3 requires be
+        # avoided.  _require_str, not _require (whole-branch review m6, the same class as C1):
+        # presence alone let a non-str `name` reach report_stop()'s `" ".join(...)` as the bare,
+        # unnamed `TypeError: sequence item 0: expected str instance` -- an exit-1 traceback
+        # raised while REPORTING an abort, which destroys the resume line SPEC section 7.3 calls
+        # the whole recovery story.  org_sites() and partition_domains() already type-check here.
+        resolved.append({"id": _require_str(answer, "id", where),
+                         "name": _require_str(answer, "name", where)})
     return resolved
 
 
@@ -696,7 +703,8 @@ def build_arg_parser():
         allow_abbrev=False,          # house rule: no --for -> --for-real class of foot-gun
         description="List Pantheon custom domains whose DNS still reaches a platform domain.")
     parser.add_argument("-c", "--config", default="pantheon-sitehealth-emails.toml",
-                        help="TOML file to read [Pantheon].org_id from")
+                        help="TOML file to read [Pantheon].org_id from; whole-organization "
+                             "sweeps only, a SITE sweep never reads it")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="per-site progress on stderr")
     parser.add_argument("site", nargs="*", metavar="SITE",
@@ -710,9 +718,24 @@ def org_id_from_config(path):
     Deliberately NOT the main program's config engine: org_id is a literal, so tomllib is the
     whole requirement, and depending on script_context would defeat this script's standalone,
     delete-in-one-commit design.
+
+    The type check is the config-side twin of _require_str (whole-branch review C1).  TOML is a
+    typed format, so `org_id = 12345` (an unquoted value -- an ordinary typo, not hostility) hands
+    back an int that reaches `quote(org_id, safe="")` in org_sites() and dies there as `TypeError:
+    quote_from_bytes() expected bytes` -- an unnamed traceback at exit 1, the code SPEC section 7
+    reserves for a COMPLETED sweep.  An earlier fix round's `except (KeyError, TypeError)` around
+    the CALL to this function catches a wrong-typed TABLE (`Pantheon = "not-a-table"`, where the
+    subscript itself raises) but never a wrong-typed VALUE, whose TypeError is raised a whole
+    session later.  Raising here -- where the value is read -- lands inside that same guard and
+    becomes the named StartupError with an operator-ready message.  TypeError, not a bespoke
+    class, because that guard already exists and already means "unusable [Pantheon].org_id".
     """
     with Path(path).open("rb") as handle:
-        return tomllib.load(handle)["Pantheon"]["org_id"]
+        org_id = tomllib.load(handle)["Pantheon"]["org_id"]
+    if not isinstance(org_id, str):
+        raise TypeError(
+            f"[Pantheon].org_id should be a string, got {type(org_id).__name__}")
+    return org_id
 
 
 def build_session(notify=None):
@@ -751,6 +774,7 @@ def main(argv):
             print(message, file=sys.stderr, flush=True)
 
     try:
+        require_usable_streams()
         session, sites = prepare_sweep(options, note)
     except (KeyboardInterrupt, StartupError) as e:
         # Both routed through one small helper (fix round 1, m6) rather than two more `return`
@@ -764,35 +788,22 @@ def main(argv):
     try:
         sweeper.sweep(sites)
     except KeyboardInterrupt:
-        report_stop(sweeper, "interrupted")
+        report_stop(sweeper, "interrupted", argv)
         return 130
     except SessionExpiredError as e:
-        report_stop(sweeper, f"session expired: {e}")
+        report_stop(sweeper, f"session expired: {e}", argv)
         return 2
     except BrokenPipeError:
         # `find-platform-domains-dns | head` is the natural first thing an operator types.
         # stderr is unaffected by a closed stdout, so the abort report is printed here too --
         # SPEC section 8 says the summary appears on EVERY path that entered the site loop.
-        report_stop(sweeper, "stdout closed (broken pipe)")
-        # The dup2 is REQUIRED, not tidiness (verified: without it this exits 120, not 2).
-        # CPython flushes sys.stdout again during interpreter shutdown; on a closed pipe that
-        # flush ALSO raises, and a failed final flush is converted into exit code 120 plus an
-        # "Exception ignored on flushing sys.stdout" message -- overriding the 2 returned here
-        # and reintroducing exactly the ambiguous exit code SPEC section 7 exists to prevent.
-        # This is the recipe from Python's own "Note on SIGPIPE" (library/signal docs).
-        # suppress(), not try/except/pass: ruff SIM105.  sys.stdout may not be backed by a
-        # real file descriptor -- pytest's capture object raises io.UnsupportedOperation from
-        # fileno() -- and in that case there is no shutdown-flush hazard to defend against.
-        # Named exceptions only (PD#2); suppressing broadly would hide a real dup2 failure.
-        with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
-            os.close(devnull)
+        # report_stop() applies the os.dup2 recipe this arm used to own -- see its docstring.
+        report_stop(sweeper, "stdout closed (broken pipe)", argv)
         return 2
     except SystemExit:
         raise
     except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: an uncaught exception here would exit 1, which section 7 reserves for a COMPLETED sweep.  It is re-reported by name, never swallowed silently (PD#2)
-        report_stop(sweeper, f"unexpected {type(e).__name__}: {e}")
+        report_stop(sweeper, f"unexpected {type(e).__name__}: {e}", argv)
         return 2
     print(sweeper.counters.summary(), file=sys.stderr)
     return 1 if sweeper.counters.indeterminate else 0
@@ -800,6 +811,36 @@ def main(argv):
 
 class StartupError(Exception):
     """The sweep could not be started: SPEC G1-G4b, or a listing-time G7a. Always exit 2."""
+
+
+def require_usable_streams():
+    """Refuse to sweep when stdout or stderr is closed (whole-branch review I2).
+
+    Both halves were measured, and the second is the worse one:
+
+      * `find-platform-domains-dns bus-occb >&-` leaves `sys.stdout is None`, and
+        `csv.writer(sys.stdout, ...)` sits outside every handler in main() -- `TypeError:
+        argument 1 must have a "write" method`, an unnamed traceback at exit 1, which SPEC
+        section 7 reserves for a COMPLETED sweep.
+      * `find-platform-domains-dns its-wws-test1 2>&-` leaves `sys.stderr is None`, and
+        `print(msg, file=None)` falls back to **sys.stdout** -- so every SKIPPED:/WARNING:/summary
+        line lands in the CSV, exit 0, no diagnostic at all.  That is SPEC section 5's "NEVER
+        write anything but CSV rows to stdout" violated silently, and the downstream
+        DNS-rewriting script then eats `sites=1 envs=7 ...` as if it were a row.
+
+    Raised as a StartupError so main() routes it through report_startup_failure() (exit 2, the
+    "could not complete" code) without a seventh `return` -- main() is at ruff's PLR0911 limit by
+    design.  report_startup_failure() prints with `file=sys.stderr`, which is exactly the
+    "whichever stream still exists" behavior wanted here: with stderr gone, CPython's print()
+    falls back to stdout, so the operator still sees one line naming the problem.  That single
+    line is a deliberate, one-off exception to section 5 -- the alternative is total silence,
+    which is PD#1.
+    """
+    if sys.stdout is None:
+        raise StartupError("standard output is closed; there is nowhere to write the CSV")
+    if sys.stderr is None:
+        raise StartupError(
+            "standard error is closed; every operator message would land in the CSV on stdout")
 
 
 def report_startup_failure(e):
@@ -824,6 +865,28 @@ def report_startup_failure(e):
     return 2
 
 
+def org_id_or_startup_error(config_path):
+    """org_id_from_config(config_path), with every failure named as SPEC G1's StartupError.
+
+    Its own function rather than inline in prepare_sweep(): whole-branch review m1 made the call
+    conditional, and a conditional wrapped around two try/except blocks pushes prepare_sweep()
+    over ruff's C901 complexity limit -- the same reason prepare_sweep() itself was split out of
+    main().
+    """
+    try:
+        return org_id_from_config(config_path)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        # UnicodeDecodeError is NOT an OSError: a config that is not valid UTF-8 raised it
+        # uncaught, which exits 1 -- the code SPEC section 7 reserves for a COMPLETED sweep.
+        raise StartupError(f"could not read {config_path}: {e}") from e
+    except (KeyError, TypeError) as e:
+        # KeyError covers a missing [Pantheon] table or org_id key.  TypeError covers BOTH
+        # `Pantheon = "not-a-table"` (where ["Pantheon"]["org_id"] subscripts a string) and, since
+        # whole-branch review C1, a wrong-TYPED org_id -- org_id_from_config() now raises it
+        # rather than letting an int reach quote() a whole session later.
+        raise StartupError(f"{config_path} has no usable [Pantheon].org_id ({e!r})") from e
+
+
 def prepare_sweep(options, note):
     """Config -> session -> site list, or StartupError with an operator-ready message.
 
@@ -832,16 +895,12 @@ def prepare_sweep(options, note):
     Every failure here means the same thing to the caller -- the sweep never started, exit 2 --
     so collapsing them into one named error loses nothing.
     """
-    try:
-        org_id = org_id_from_config(options.config)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
-        # UnicodeDecodeError is NOT an OSError: a config that is not valid UTF-8 raised it
-        # uncaught, which exits 1 -- the code SPEC section 7 reserves for a COMPLETED sweep.
-        raise StartupError(f"could not read {options.config}: {e}") from e
-    except (KeyError, TypeError) as e:
-        # TypeError covers `Pantheon = "not-a-table"`, where ["Pantheon"]["org_id"] subscripts
-        # a string.  Verified: without it, exit 1 with a traceback.
-        raise StartupError(f"{options.config} has no usable [Pantheon].org_id ({e!r})") from e
+    # Read the config ONLY on the whole-organization path (whole-branch review m1).  named_sites()
+    # resolves each SITE argument through /site-names/{name} and never touches org_id, so
+    # requiring it there made `find-platform-domains-dns bus-occb` fail exit 2 from any directory
+    # without the default config -- a gate on a value that run does not consume.  The org path is
+    # the only one that builds an /organizations/{org_id}/ URL, and its G1 gate is unchanged.
+    org_id = "" if options.site else org_id_or_startup_error(options.config)
     try:
         session = build_session(notify=note)
     except (MachineTokenError, PantheonApiError, OSError) as e:
@@ -859,7 +918,90 @@ def prepare_sweep(options, note):
     return session, sites
 
 
-def report_stop(sweeper, reason):
+def option_strings_taking_a_value():
+    """Every option string that consumes a following argument, derived from the parser itself.
+
+    Derived rather than hardcoded, for the reason psh/lifecycle.py's namesake records: a
+    hardcoded list rots the first time an option is added, and resume_command() would then
+    mistake that option's VALUE for a site name and delete it.
+    """
+    return {
+        opt
+        for action in build_arg_parser()._actions  # noqa: SLF001 -- argparse exposes value-taking options only via the private _actions list
+        if action.option_strings and action.nargs != 0
+        for opt in action.option_strings
+    }
+
+
+def resume_command(argv, names):
+    """The SPEC section 7.3 resume command: this invocation, with `names` in place of its SITE
+    positionals.
+
+    Whole-branch review m2.  This line used to be a bare `find-platform-domains-dns <names...>`,
+    rebuilt from nothing: every flag the operator actually passed was discarded.  An operator who
+    ran `-c prod.toml` pasted a command that reads a DIFFERENT config file -- silently sweeping
+    another organization -- and one who ran `-v` lost the only liveness signal on the 38-minute
+    re-run.  The main program rebuilds its own abort hint from sys.argv for exactly this reason
+    (CLAUDE.md section Database); psh/lifecycle.py's rerun_command() is the shape copied here.
+
+    `argv` is main()'s own argument list, i.e. sys.argv[1:] in production.  The program name is
+    the PROGRAM_NAME literal rather than sys.argv[0] because section 7.3 specifies that spelling
+    and because sys.argv[0] is the test runner's path whenever main() is driven in-process.
+
+    Only POSITIONAL site names are dropped: a site name sitting in an option's value slot
+    (`-c beta`) must survive, or `-c` swallows the next token and the pasted command is mangled.
+    """
+    value_options = option_strings_taking_a_value()
+    kept = []
+    previous = None
+    for arg in argv:
+        if previous not in value_options and not arg.startswith("-"):
+            previous = arg
+            continue                      # a SITE positional: `names` replaces all of them
+        kept.append(arg)
+        previous = arg
+    return shlex.join([PROGRAM_NAME, *kept, *names])
+
+
+def detach_doomed_stdout():
+    """Point sys.stdout's file descriptor at /dev/null so the interpreter's shutdown flush of it
+    cannot raise -- and cannot therefore override this program's exit code with 120.
+
+    The recipe is Python's own, from the "Note on SIGPIPE" in the library/signal docs.  Called
+    only from report_stop(), i.e. only on a path that is already aborting.
+
+    The flush is attempted for real, and the descriptor is replaced ONLY when that flush fails.
+    Both halves of that are load-bearing:
+
+      * Flushing first means a healthy stdout still holding a row (an abort landing between
+        writerow() and the per-row flush) writes that row instead of losing it to /dev/null --
+        SPEC section 1 names a missing row as the expensive failure.
+      * Replacing only on failure means an abort with a perfectly good stdout has NO global
+        side effect.  An unconditional dup2 here silences every later write to that descriptor,
+        which is not hypothetical: under pytest's default fd-level capture it repoints the
+        session's captured stdout at /dev/null, and every subsequent test errors with EBADF
+        (measured: 19 errors).  A guard whose only red-capable test would have to disable the
+        harness is PD#14 in its most literal form.
+
+    A flush that fails is exactly the condition being defended against, and a flush that
+    succeeds proves there is nothing left for the shutdown flush to choke on -- 120 can only
+    arise when there is pending data that cannot be written.
+
+    suppress(), not try/except/pass: ruff SIM105.  Named exceptions only (PD#2) -- a broad
+    suppression would hide a real dup2 failure.  ValueError/io.UnsupportedOperation are the
+    "stdout is not backed by a real file descriptor" shapes (pytest's capsys object raises
+    io.UnsupportedOperation from fileno()), where there is no descriptor to replace at all.
+    """
+    try:
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+            os.close(devnull)
+
+
+def report_stop(sweeper, reason, argv):
     """SPEC section 7.3: an aborted sweep MUST say where it stopped, or the operator has no way
     to resume except starting the 38-minute sweep over.
 
@@ -876,8 +1018,19 @@ def report_stop(sweeper, reason):
     MUST monkeypatch signal.signal, or SIG_IGN persists for the REST of that pytest session --
     signal handlers are process-global and are not restored automatically (the identical trap
     CLAUDE.md's Testing section documents for abort_run()).
+
+    Also detaches a doomed sys.stdout from the interpreter's shutdown flush (whole-branch review
+    I1).  That recipe used to live in main()'s BrokenPipeError arm alone, but the mechanism is not
+    pipe-specific: CPython re-flushes sys.stdout at shutdown, ANY failure of that flush is turned
+    into exit **120** plus an "Exception ignored on flushing sys.stdout" message, and 120 is not in
+    SPEC section 7's taxonomy.  Measured live: `find-platform-domains-dns bus-occb > /dev/full`
+    printed a correct named message, the summary and this whole report -- then exited 120.  A full
+    disk or an over-quota redirect target on a 38-minute org-wide CSV is ordinary, and it arrives
+    through main()'s `except BaseException` arm, not the BrokenPipeError one.  report_stop() is
+    the one function EVERY exit-2/130 abort path calls, so it is the one place the recipe belongs.
     """
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    detach_doomed_stdout()
     print(f"ERROR: sweep did not complete ({reason})", file=sys.stderr)
     print(sweeper.counters.summary(), file=sys.stderr)
     if sweeper.last_site:
@@ -893,10 +1046,10 @@ def report_stop(sweeper, reason):
         # exactly how "Stopped during ." (malformed) was reproduced.
         print(f"Stopped during {sweeper.current_site}.", file=sys.stderr)
     if sweeper.remaining:
-        names = " ".join(site["name"] for site in sweeper.remaining)
         count = len(sweeper.remaining)
+        command = resume_command(argv, [site["name"] for site in sweeper.remaining])
         print(f"{count} site{'' if count == 1 else 's'} not reached. Resume with:\n"
-              f"  find-platform-domains-dns {names}", file=sys.stderr)
+              f"  {command}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -105,6 +105,8 @@ that trades speed or brevity for completeness is made for that reason.
 | Recorded API fixtures / e2e tier | The script is deleted within months; hand-maintained fixtures would rot first. §10 covers the logic offline with injected fakes. |
 | Importing from `psh/` | PROMPT.md: copy, do not modularize, so deletion is a `git rm` of three paths. |
 | A `docs/` usage page | The script's module docstring plus §3 here is the documentation. A doc page for a doomed script is inventory, not value. |
+| Percent-encoding the `site_id` / `env_id` path segments (`/sites/{site_id}/environments/{env_id}/domains`) | **Accepted residual, still open — nothing in this spec or the code claims it is closed** (whole-branch review m10). Unlike `org_id` (config, operator-typo-controlled, quoted since task 3's fix round) and the `SITE` argv (§3), these two come from the API's own responses, and a value that produces an invalid URL now raises `httpx.InvalidURL` — folded into `ApiSession.get`'s handler in task 5 — so it surfaces as the named `PantheonApiError`, i.e. G5/G6, not as an exit-1 traceback. There is deliberately **no test**: constructing an API response whose ids break a URL would pin a shape Pantheon does not produce. |
+| A G0 check ahead of `argparse` | **Accepted residual.** The closed-stream guard (G0) runs immediately after `parse_args`, so a run that is BOTH invoked with a closed stderr AND has a command-line typo gets argparse's own fallback: the usage message goes to stdout and the process exits 2 (verified live). That is loud, in the §7 taxonomy, and writes no CSV. Moving the check earlier costs `main()` a seventh `return` (ruff `PLR0911`) or a possibly-unbound `options` under pyright, neither of which is worth it for a typo-plus-closed-stderr combination. |
 
 ## 3. CLI contract
 
@@ -114,9 +116,9 @@ find-platform-domains-dns [-h] [-c CONFIG] [-v] [SITE ...]
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `SITE ...` | none = whole organization | Pantheon site names to sweep. Each is resolved with `GET /v0/site-names/{name}`, so a targeted sweep does **not** page the organization list. The name MUST be `urllib.parse.quote(name, safe="")`-encoded into the path — an argument containing `#`, `?` or `%` would otherwise silently change which resource is requested rather than failing — and the `site_name` written to the CSV MUST be the **canonical name from the response** (`{"id": …, "name": …}`, verified live), read with the same `_require` guard as `id` — a silent fallback to the argv string would reintroduce exactly the mismatch this rule exists to prevent — not the argv string, so that a differently-cased argument cannot produce CSV rows the downstream script fails to match. |
-| `-c`, `--config` | `pantheon-sitehealth-emails.toml` | TOML file read **only** for `[Pantheon].org_id`. Parsed with `tomllib`; the config-substitution engine is NOT used (that value is a literal). |
-| `-v`, `--verbose` | off | Per-site progress to stderr. ATTENTION lines and the summary are printed regardless. |
+| `SITE ...` | none = whole organization | Pantheon site names to sweep. Each is resolved with `GET /v0/site-names/{name}`, so a targeted sweep does **not** page the organization list. The name MUST be `urllib.parse.quote(name, safe="")`-encoded into the path — an argument containing `#`, `?` or `%` would otherwise silently change which resource is requested rather than failing — and the `site_name` written to the CSV MUST be the **canonical name from the response** (`{"id": …, "name": …}`, verified live), read with the same `_require_str` guard as `id` — a silent fallback to the argv string would reintroduce exactly the mismatch this rule exists to prevent — not the argv string, so that a differently-cased argument cannot produce CSV rows the downstream script fails to match. `_require_str`, not `_require` (amended, whole-branch review m6): presence alone let a non-str `name` reach §7.3's `" ".join(…)` as an unnamed `TypeError`, i.e. an exit-1 traceback raised *while reporting an abort*. |
+| `-c`, `--config` | `pantheon-sitehealth-emails.toml` | TOML file read **only** for `[Pantheon].org_id`, and **only on the whole-organization path** (amended, whole-branch review m1): a `SITE`-argument sweep never uses `org_id`, so reading the config there made `find-platform-domains-dns bus-occb` fail exit 2 from any directory lacking the default config — a gate on a value the run does not consume. Parsed with `tomllib`; the config-substitution engine is NOT used (that value is a literal). The value MUST be type-checked as a `str` where it is read (amended, whole-branch review C1) — TOML is a typed format, so `org_id = 12345` otherwise reaches `urllib.parse.quote` a whole session later as an unnamed `TypeError` at exit 1. |
+| `-v`, `--verbose` | off | Per-site progress to stderr. `SKIPPED:`/`WARNING:`/`RETRY:` lines and the summary are printed regardless. |
 
 The parser MUST set `allow_abbrev=False`, matching the main tool's house rule.
 
@@ -259,17 +261,24 @@ Example, mid-chain hit (`www.example.umich.edu → alias.umich.edu → live-y.pa
 some-site,live,www.example.umich.edu,alias.umich.edu,live-y.pantheonsite.io
 ```
 
-**NEVER** write anything but CSV rows to stdout. Progress, ATTENTION lines, and the summary go
-to stderr, so `find-platform-domains-dns > domains.csv` yields a clean file.
+**NEVER** write anything but CSV rows to stdout. Progress, `SKIPPED:`/`WARNING:`/`RETRY:` lines,
+and the summary go to stderr, so `find-platform-domains-dns > domains.csv` yields a clean file.
+
+**The one sanctioned exception is G0** (§7): when stderr itself is closed, the single line naming
+that fact goes to stdout, because CPython's `print(…, file=None)` falls back there. That is one
+line on a run that writes no CSV at all, and the alternative is total silence, which is PD#1.
 
 ## 6. Algorithm
 
 ### 6.1 Sweep flow
 
 ```
- pantheon-sitehealth-emails.toml ──[Pantheon].org_id──┐
- $PANTHEON_MACHINE_TOKEN or                           │
- ~/.terminus/cache/tokens/<user> ──machine token──┐   │
+ stdout and stderr both open?  ── no ──→ G0: named message, exit 2 (before anything else)
+        │ yes
+        v
+ pantheon-sitehealth-emails.toml ──[Pantheon].org_id──┐   (read ONLY when there are no SITE
+ $PANTHEON_MACHINE_TOKEN or                           │    args — the org branch below is the
+ ~/.terminus/cache/tokens/<user> ──machine token──┐   │    only consumer; a str, or G1)
                                                   v   v
                         POST /v0/authorize/machine-token  →  session token
                                                   │
@@ -292,8 +301,9 @@ to stderr, so `find-platform-domains-dns > domains.csv` yields a clean file.
    walk the chain (§6.2)
         │
         ├── no hit ─────────→ nothing
-        ├── indeterminate ──→ ATTENTION on stderr, counter += 1, no row
+        ├── indeterminate ──→ SKIPPED: on stderr, counter += 1, no row
         └── hit ────────────→ two integrity checks (§7), then one CSV row on stdout
+                              (a check that fires prints WARNING: and still writes the row)
 ```
 
 ### 6.2 Chain walk
@@ -356,7 +366,8 @@ produce output.
 
 | # | Condition | Retry | Operator sees (stderr) | CSV row | Counted indeterminate | Run continues |
 |---|---|---|---|---|---|---|
-| G1 | Config file missing / unparseable / no `[Pantheon].org_id` | — | fatal message | — | — | no, **exit 2** |
+| G0 | `sys.stdout` or `sys.stderr` is `None` — the descriptor was closed by the caller (`>&-`, `2>&-`) (added, whole-branch review I2) | — | fatal message naming which stream, **on whichever stream still exists** (§5's one sanctioned exception) | — | — | no, **exit 2** |
+| G1 | Config file missing / unparseable / `[Pantheon].org_id` absent or not a string | — | fatal message | — | — | no, **exit 2** |
 | G2 | Machine token unresolvable (0 or >1 cache files, unreadable, no `token` key) | — | fatal message naming what was found | — | — | no, **exit 2** |
 | G3 | `POST /authorize/machine-token` fails | — | fatal message | — | — | no, **exit 2** |
 | G4 | Organization site listing fails, or a `SITE` arg's name lookup fails | 1 (per §7.1) | fatal message | — | — | no, **exit 2** |
@@ -376,12 +387,12 @@ produce output.
 | G13a | Hit whose `dns_record` is **not** the custom domain — the record to rewrite is a mid-chain alias | — | `WARNING: … the record to change is <dns_record>, not the custom domain; verify who else points at it before rewriting` | **yes** | no | yes |
 | G14 | Hit, clean | — | nothing | **yes** | no | yes |
 | G15 | `KeyboardInterrupt` (Ctrl-C) | — | the summary line for the work done so far, plus the last site processed and the names of every site not yet reached (§7.3; amended, fix round 2 of task 5, N8: this row previously said only "how many remain") | rows already written stay written | — | no, **exit 130** |
-| G16 | `BrokenPipeError` on stdout (`… \| head`) | — | `ERROR: sweep did not complete (stdout closed (broken pipe))`, **followed by the §7.3 abort report** — this reuses the same shared abort-reporting function every exit-2/130 path calls (`report_stop`), which is why all of them share this `ERROR: sweep did not complete (<reason>)` shape rather than G16 having bespoke wording; stderr is unaffected by a closed stdout, so there is no reason to withhold it. The handler MUST also `os.dup2` devnull onto stdout before returning: CPython re-flushes stdout at interpreter shutdown, that flush raises again on a closed pipe, and a failed final flush becomes **exit 120**, overriding the 2 (verified live 2026-07-28) | — | — | no, **exit 2** |
+| G16 | `BrokenPipeError` on stdout (`… \| head`) | — | `ERROR: sweep did not complete (stdout closed (broken pipe))`, **followed by the §7.3 abort report** — this reuses the same shared abort-reporting function every exit-2/130 path calls (`report_stop`), which is why all of them share this `ERROR: sweep did not complete (<reason>)` shape rather than G16 having bespoke wording; stderr is unaffected by a closed stdout, so there is no reason to withhold it. `report_stop` MUST also flush stdout and, **if that flush fails**, `os.dup2` devnull onto its descriptor: CPython re-flushes stdout at interpreter shutdown, that flush raises again on a closed pipe, and a failed final flush becomes **exit 120**, overriding the 2 (verified live 2026-07-28). Amended, whole-branch review I1: the recipe lives in `report_stop` rather than in this arm, because the mechanism is not pipe-specific — a full disk or an over-quota redirect target reaches the G18 arm and produced the same 120 (verified live with `> /dev/full`). Making it conditional on the flush failing is equally load-bearing: unconditional, it discards a row still sitting in a healthy stdout's buffer, and under pytest's fd-level capture it repoints the session's own stdout at `/dev/null` | — | — | no, **exit 2** |
 | G17 | An API response has an unexpected shape (a missing/wrongly-typed key) | — | named `PantheonApiShapeError`, reported exactly like G4/G5/G6 depending on which call produced it | no | **yes** when per-site/per-env | as per G4/G5/G6 |
 | G18 | Anything else uncaught | — | the exception, then `ERROR: unexpected failure; the sweep is incomplete` | — | — | no, **exit 2** |
 
 **Exit codes.** `0` = sweep completed with zero indeterminates. `1` = sweep completed with ≥1
-indeterminate. `2` = the sweep could not be completed (G1–G4b, G7a, G16, G18, or an `argparse`
+indeterminate. `2` = the sweep could not be completed (G0, G1–G4b, G7a, G16, G18, or an `argparse`
 usage error). `130` = interrupted by Ctrl-C (G15), matching the main program's `abort_reason`
 convention (CLAUDE.md § Database). Rationale: a cron wrapper or a human MUST be able to tell a
 complete sweep from a partial one without reading stderr (PD#1).
@@ -433,8 +444,25 @@ The names are the point (§2.2 rejects resumability *because* this line exists):
 reached" is not a recovery instruction, because the operator cannot reconstruct which 137 they
 were — the order is ascending by site UUID and they have no copy of that list. The sweep holds
 them in `Sweeper.remaining`, so printing them costs nothing and turns the line into a
-paste-able `find-platform-domains-dns <names…>` re-run. Rows already written to stdout stay
-valid; the sweep never rewrites or retracts a row.
+paste-able re-run. Rows already written to stdout stay valid; the sweep never rewrites or
+retracts a row.
+
+**The command MUST be rebuilt from the argv the run actually received**, with the unreached names
+replacing its `SITE` positionals and **every option preserved** (amended, whole-branch review m2:
+it used to be a bare `find-platform-domains-dns <names…>`, which silently discarded `-c CONFIG` —
+so an operator who ran `-c prod.toml` pasted a command that reads a *different* file — and `-v`,
+the only liveness signal on the re-run). The main program rebuilds its own abort hint from
+`sys.argv` for exactly this reason (CLAUDE.md § Database), and the value-taking option strings are
+derived from the parser rather than listed, so the list cannot rot when an option is added. A site
+name occupying an option's value slot (`-c beta`) is **not** a positional and MUST survive.
+
+**Resuming re-sweeps the site that was in flight.** `Sweeper.remaining` is recomputed only after a
+site *completes*, so an interrupted site is still in the list and its already-written rows are
+written again by the re-run. That is deliberate — dropping it would risk the missing row §1 calls
+the expensive failure — but it means `>> domains.csv` produces **duplicate rows** for that one
+site. Either redirect the resume run to a separate file, or expect duplicates and de-duplicate
+before handing the CSV downstream. This directly affects §15 question 1, whose whole purpose is
+spotting a `dns_record` that legitimately appears twice.
 
 ## 8. Observability (PD#5)
 
@@ -539,8 +567,11 @@ Required coverage — each item is a behavior a defect could silently break:
 5. `ApiSession`: 401 → re-authenticate once → success; 500 → one retry → success; 500 twice →
    `PantheonApiError`; `httpx.ConnectError` → one retry; undecodable body → `PantheonApiError`.
 6. Hit handling: clean hit writes exactly the five expected fields in order; G12 dead target
-   still writes the row and emits ATTENTION; G13 cross-site target still writes the row and
-   emits ATTENTION; G12 with a transient lookup does **not** emit ATTENTION.
+   still writes the row and emits `WARNING:`; G13 cross-site target still writes the row and
+   emits `WARNING:`; G12 with a transient lookup emits **nothing**. Plus the wire (added,
+   whole-branch review I3): `sweep_env` MUST hand `check_domain` the platform-domain set
+   `partition_domains` returned — passing `set()` there makes every real hit emit a spurious G13
+   and left the whole suite green.
 7. Counters and exit codes: a sweep with one indeterminate returns 1; a clean sweep returns 0;
    G5 counts the site once and continues to the next site.
 8. CSV mechanics: the writer emits `\n`, not `\r\n`, and each row is flushed as it is written
@@ -575,11 +606,21 @@ Required coverage — each item is a behavior a defect could silently break:
     one indeterminate per remaining site; `BrokenPipeError` returns 2.
 14. G13a: a mid-chain hit (`dns_record != custom_domain`) still writes its row and emits the
     shared-alias WARNING; a direct hit does not.
-15. **Exit 1 is unreachable except as specified.** `main()` returns 2, not 1, for: a config
-    whose `[Pantheon]` is not a table (a `TypeError` from subscripting a string), a config that
-    is not valid UTF-8 (a `UnicodeDecodeError`), and an API response missing a key that
-    `_require` guards. Each of these was an uncaught traceback — and therefore exit 1 — in an
-    earlier draft.
+15. **Exit 1 is unreachable except as specified.** `main()` returns 2, not 1, for **every entry
+    in this list, which is exhaustive as of the whole-branch review** — new members are added
+    here as they are found, and each was an uncaught traceback (therefore exit 1) when it was:
+    a config whose `[Pantheon]` is not a table (a `TypeError` from subscripting a string); a
+    config that is not valid UTF-8 (a `UnicodeDecodeError`); an API response missing a key that
+    `_require` guards; an unreadable `~/.terminus/cache/tokens/` (a `PermissionError`, fix round
+    1 of task 5); **a wrongly-typed `[Pantheon].org_id`** (`org_id = 12345`, which reached
+    `urllib.parse.quote` as `TypeError: quote_from_bytes() expected bytes` — whole-branch review
+    C1, the third instance of this class this branch shipped, which is why the list is now marked
+    exhaustive and why the value is validated where it is *read*); **a wrongly-typed `name`/`id`
+    from `/site-names/`** (whole-branch review m6, the same class on the API side); and
+    **a closed `sys.stdout`** (`csv.writer(None, …)` → `TypeError`, whole-branch review I2 / G0).
+    The paired G0 half — a closed `sys.stderr` — is not an exit-1 case but a *silent* one: every
+    operator line landed in the CSV at exit 0, so it is tested for the stdout content, not the
+    exit code alone.
 16. **Response-shape coverage is exhaustive over the keys actually read**: a site entry without
     `name`, a `/site-names/` answer without `name`, and a domains array whose element is a
     string all raise `PantheonApiShapeError` rather than `KeyError`/`AttributeError`.
@@ -683,6 +724,14 @@ operational data, not evidence of correctness. Run it when you actually want the
 ## 14. Deletion checklist (post-migration)
 
 1. `git rm find-platform-domains-dns find-platform-domains-dns.py tests/unit/test_find_platform_domains_dns.py`
+   — but **first relocate `_sigint_handler_is_never_left_ignored_at_session_end`** (the
+   session-scoped autouse fixture at the top of that test file) to `tests/conftest.py`. It is a
+   **repo-wide** instrument: it asserts the whole pytest session ends with SIGINT not left at
+   `SIG_IGN`, and the main program's `abort_run()` sets `SIG_IGN` for the same reason this
+   utility's `report_stop()` does. `git rm`-ing the file deletes that guard along with the
+   utility it happened to be written for (added, whole-branch review m7). Its function-scoped
+   sibling `_restore_sigint_handler` goes with the file — it exists only for this utility's own
+   tests.
 2. Remove **both** `find-platform-domains-dns.py` and `find-platform-domains-dns` entries from
    `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml` (the extension-less entry exists
    because `.claude/hooks/ruff-check.sh` hands ruff the real, extension-less path at edit time,
@@ -691,8 +740,12 @@ operational data, not evidence of correctness. Run it when you actually want the
 3. Remove the CLAUDE.md paragraph describing the utility.
 4. Leave `CONTEXT.md`'s glossary additions in place — those terms describe Pantheon, not this
    script.
-5. Leave `pantheon-api-pagination-bug-report.txt`, `reproduce-pagination-bug.sh` **and
-   `bug-report.txt`** in this directory. `bug-report.txt` is the operator's hand-edited copy
+5. **Leave this whole directory in place** — `development/` is a permanent per-feature archive
+   (`development/README.md`), so nothing here is ever deleted, and this item singles out three
+   files only because they stay *operationally useful* after the utility is gone, not because
+   the rest may be removed (clarified, whole-branch review m8). Those three are
+   `pantheon-api-pagination-bug-report.txt`, `reproduce-pagination-bug.sh` **and
+   `bug-report.txt`**. `bug-report.txt` is the operator's hand-edited copy
    for sending to Pantheon (commit `b65776d`), with the script attached separately rather than
    inlined; it is deliberately a second copy and will drift from the generated one, so treat
    the generated pair as the record and `bug-report.txt` as the thing that was actually sent. They document a defect in **Pantheon's API**, not in this utility, and stay

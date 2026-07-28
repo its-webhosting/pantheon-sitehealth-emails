@@ -585,3 +585,155 @@ predicted results exactly:
 among the sanctioned test sites, so the `dns_record` column's mid-chain behavior is verified
 only by unit test, not against real DNS. A full-organization sweep (out of scope for Task 6)
 would very likely surface one, per SPEC §12's sampled rate of non-zero-but-rare mid-chain hits.
+
+---
+
+## Re-verification after the whole-branch review fix wave (2026-07-28)
+
+The fix wave changed `main()` (a G0 closed-stream gate, the `report_stop` stdout-detach, the
+config read moved onto the org-only path, and a resume command rebuilt from argv), so SPEC §13's
+commands were re-run rather than assumed to still hold. Verbatim output.
+
+```
+$ ./run-tests --fast
+... 1185 passed, 3 skipped, 2 deselected, 15 warnings in 32.64s
+(ruff, campaign ratchet — passed; pyright, campaign ratchet — passed; both gate before pytest)
+
+$ ./find-platform-domains-dns --help
+usage: find-platform-domains-dns [-h] [-c CONFIG] [-v] [SITE ...]
+
+List Pantheon custom domains whose DNS still reaches a platform domain.
+
+positional arguments:
+  SITE                 site names to sweep; default is the whole organization
+
+options:
+  -h, --help           show this help message and exit
+  -c, --config CONFIG  TOML file to read [Pantheon].org_id from; whole-
+                       organization sweeps only, a SITE sweep never reads it
+  -v, --verbose        per-site progress on stderr
+
+$ ./find-platform-domains-dns its-wws-test1; echo "exit=$?"
+sites=1 envs=7 custom_domains=2 rows=0 indeterminate=0
+exit=0
+
+$ ./find-platform-domains-dns bus-occb; echo "exit=$?"
+bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io
+sites=1 envs=3 custom_domains=1 rows=1 indeterminate=0
+exit=0
+
+$ ./find-platform-domains-dns -c /dev/null; echo "exit=$?"
+ERROR: /dev/null has no usable [Pantheon].org_id (KeyError('Pantheon'))
+exit=2
+
+$ ./find-platform-domains-dns bus-occb | head -0; echo "exit=${PIPESTATUS[0]}"
+ERROR: sweep did not complete (stdout closed (broken pipe))
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+1 site not reached. Resume with:
+  find-platform-domains-dns bus-occb
+exit=2
+```
+
+### The four live reproductions the fix wave closed
+
+Each was measured before the fix and re-measured after it. Before/after, verbatim.
+
+**C1 — a non-string `[Pantheon].org_id`.**
+
+```
+BEFORE
+$ printf '[Pantheon]\norg_id = 12345\n' > /tmp/bad1.toml
+$ ./find-platform-domains-dns -c /tmp/bad1.toml; echo "exit=$?"
+Traceback (most recent call last):
+  ...
+  File "/workspace/./find-platform-domains-dns", line 449, in org_sites
+    path = f"/organizations/{quote(org_id, safe='')}/memberships/sites?limit={PAGE_LIMIT}"
+TypeError: quote_from_bytes() expected bytes
+exit=1
+
+AFTER
+$ ./find-platform-domains-dns -c /tmp/bad1.toml; echo "exit=$?"
+ERROR: /tmp/bad1.toml has no usable [Pantheon].org_id (TypeError('[Pantheon].org_id should be a string, got int'))
+exit=2
+$ printf '[Pantheon]\norg_id = ["a"]\n' > /tmp/bad2.toml
+$ ./find-platform-domains-dns -c /tmp/bad2.toml; echo "exit=$?"
+ERROR: /tmp/bad2.toml has no usable [Pantheon].org_id (TypeError('[Pantheon].org_id should be a string, got list'))
+exit=2
+```
+
+**I1 — exit 120 from the interpreter's shutdown flush, on any stdout failure that is not a pipe.**
+
+```
+BEFORE
+$ ./find-platform-domains-dns bus-occb > /dev/full; echo "exit=$?"
+ERROR: sweep did not complete (unexpected OSError: [Errno 28] No space left on device)
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+1 site not reached. Resume with:
+  find-platform-domains-dns bus-occb
+Exception ignored on flushing sys.stdout:
+OSError: [Errno 28] No space left on device
+exit=120
+
+AFTER
+$ ./find-platform-domains-dns bus-occb > /dev/full; echo "exit=$?"
+ERROR: sweep did not complete (unexpected OSError: [Errno 28] No space left on device)
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+1 site not reached. Resume with:
+  find-platform-domains-dns bus-occb
+exit=2
+```
+
+**I2 — a closed stdout, and (worse) a closed stderr silently polluting the CSV.**
+
+```
+BEFORE
+$ ./find-platform-domains-dns bus-occb >&-
+Traceback (most recent call last):
+  ...
+  File "/workspace/./find-platform-domains-dns", line 762, in main
+    sweeper = Sweeper(session.get, csv.writer(sys.stdout, lineterminator="\n"), sys.stdout,
+TypeError: argument 1 must have a "write" method
+exit=1
+
+$ ./find-platform-domains-dns its-wws-test1 2>&- > /tmp/o.out; echo $?
+0
+$ cat /tmp/o.out
+sites=1 envs=7 custom_domains=2 rows=0 indeterminate=0      <-- a summary line inside the CSV
+
+AFTER
+$ ./find-platform-domains-dns its-wws-test1 >&- ; echo "exit=$?"
+ERROR: standard output is closed; there is nowhere to write the CSV
+exit=2
+$ ./find-platform-domains-dns its-wws-test1 2>&- > /tmp/o.out; echo "exit=$?"
+exit=2
+$ cat /tmp/o.out
+ERROR: standard error is closed; every operator message would land in the CSV on stdout
+```
+
+**m1 / m2 — the config gate on a path that does not consume it, and a resume command that
+dropped every flag.**
+
+```
+BEFORE
+$ cd /tmp && /workspace/find-platform-domains-dns its-wws-test1; echo "exit=$?"
+ERROR: could not read pantheon-sitehealth-emails.toml: [Errno 2] No such file or directory: 'pantheon-sitehealth-emails.toml'
+exit=2
+
+AFTER
+$ cd /tmp && /workspace/find-platform-domains-dns its-wws-test1; echo "exit=$?"
+sites=1 envs=7 custom_domains=2 rows=0 indeterminate=0
+exit=0
+
+AFTER (m2: the resume command now carries -v and -c)
+$ ./find-platform-domains-dns -v -c pantheon-sitehealth-emails.toml bus-occb its-wws-test1 | head -0
+[1/2] bus-occb
+ERROR: sweep did not complete (stdout closed (broken pipe))
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+2 sites not reached. Resume with:
+  find-platform-domains-dns -v -c pantheon-sitehealth-emails.toml bus-occb its-wws-test1
+exit=2
+```
