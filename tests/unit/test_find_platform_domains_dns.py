@@ -431,15 +431,17 @@ def test_undecodable_body_raises_named_error(fpd):
 
 
 def test_neither_token_nor_response_body_ever_leaks_into_error_text(fpd, monkeypatch):
-    # Fix round 1, C1.  SPEC section 3's threat model, property (a): neither the machine token
-    # nor the session token, nor any response body, is ever visible in an exception's message
-    # or its chained cause.  Instrumented here (PD#14), not asserted in prose, at THIS task's
-    # own ApiSession seam -- no main() is needed, and SPEC section 10 item 12's main()-driven
-    # G7a/G5 version is still owed by Task 5; this does not discharge it.  Covers the three
-    # message-construction sites a mutation could slip a response body into: the auth non-200
-    # branch, the 5xx-exhausted branch, and the generic (not 401/429/5xx/200) GET-status
-    # branch -- the shape SPEC section 8's cleartext-credential warning describes.  Also pins
-    # property (b): the machine token travels in the POST body, never on the URL.
+    # Fix round 1, C1 (extended in fix round 2 to add the undecodable-body case the round-1
+    # version substituted a generic-status case for instead).  SPEC section 3's threat model,
+    # property (a): neither the machine token nor the session token, nor any response body, is
+    # ever visible in an exception's message or its chained cause.  Instrumented here (PD#14),
+    # not asserted in prose, at THIS task's own ApiSession seam -- no main() is needed, and
+    # SPEC section 10 item 12's main()-driven G7a/G5 version is still owed by Task 5; this does
+    # not discharge it.  Covers the FOUR message-construction sites a mutation could slip a
+    # response body into: the auth non-200 branch, the 5xx-exhausted branch, the generic (not
+    # 401/429/5xx/200) GET-status branch, and the undecodable-(as JSON)-body branch -- the
+    # shape SPEC section 8's cleartext-credential warning describes.  Also pins property (b):
+    # the machine token travels in the POST body, never on the URL.
     monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
     machine_token_sentinel = "MACHINE-TOKEN-sentinel"
     body_sentinel = "OTHER-PEOPLES-PASSWORD-sentinel"
@@ -487,6 +489,18 @@ def test_neither_token_nor_response_body_ever_leaks_into_error_text(fpd, monkeyp
 
     with pytest.raises(fpd.PantheonApiError) as excinfo:
         make_session(fpd, other_status_handler).get("/sites/abc")
+    assert_sentinels_absent(excinfo.value)
+
+    # -- undecodable body (fix round 2): a 200 response whose body is not valid JSON at all --
+    # the json.JSONDecodeError branch, distinct from every case above (all of which raise on a
+    # non-200 status without ever calling response.json()).
+    def undecodable_body_handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(200, text=f"<html>{body_sentinel}</html>")
+
+    with pytest.raises(fpd.PantheonApiError) as excinfo:
+        make_session(fpd, undecodable_body_handler).get("/sites/abc")
     assert_sentinels_absent(excinfo.value)
 
 
