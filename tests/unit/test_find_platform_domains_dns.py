@@ -7,7 +7,9 @@ loaded FRESH PER TEST so no module-level state leaks between tests.
 Seams (SPEC section 9): `resolve` is monkeypatched on the loaded module; the API getter is
 INJECTED as a parameter, never patched; httpx.MockTransport backs the ApiSession tests.
 """
+import csv
 import importlib.util
+import io
 import struct
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -802,3 +804,239 @@ def test_site_environments_returns_every_environment(fpd):
                 "test-mark": {"initialized": True}}
 
     assert sorted(fpd.site_environments(get, "abc")) == ["dev", "live", "test-mark"]
+
+
+def make_sweeper(fpd, get=None, *, verbose=False):
+    """A Sweeper writing into an in-memory stream.
+
+    `verbose` is keyword-only: ruff's FBT002 rejects a boolean positional default, and the
+    tests/** per-file-ignores block covers FBT003 (positional bools at call sites), not FBT002.
+    No `import csv`/`import io` here -- they are in the top-of-file import block (Task 1).
+    """
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    sweeper = fpd.Sweeper(get or (lambda path: {}), writer, out, verbose=verbose)
+    return sweeper, out
+
+
+def test_clean_hit_writes_exactly_the_five_fields(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {
+        ("occb.bus.umich.edu", "CNAME"): ["live-bus-occb.pantheonsite.io."],
+        ("live-bus-occb.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "uuid", "name": "bus-occb"}, "live", "occb.bus.umich.edu",
+                         {"live-bus-occb.pantheonsite.io"})
+    assert out.getvalue() == (
+        "bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io\n")
+    assert sweeper.counters.rows == 1
+    assert sweeper.counters.indeterminate == 0
+    assert capsys.readouterr().err == ""      # a clean hit says nothing at all
+
+
+def test_csv_uses_unix_line_endings(fpd, monkeypatch):
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-x.pantheonsite.io."],
+        ("live-x.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-x.pantheonsite.io"})
+    assert "\r" not in out.getvalue()
+
+
+def test_indeterminate_domain_reports_and_counts_but_writes_no_row(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {("a.umich.edu", "CNAME"): dns.resolver.Timeout()})
+    sweeper, out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu", set())
+    assert out.getvalue() == ""
+    assert sweeper.counters.indeterminate == 1
+    err = capsys.readouterr().err
+    # SKIPPED:, not WARNING: -- this domain produced no row and WAS counted (SPEC section 8).
+    assert err.startswith("SKIPPED:")
+    assert "s.live" in err and "a.umich.edu" in err
+
+
+def test_dead_platform_domain_warns_but_still_writes_the_row(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {("a.umich.edu", "CNAME"): ["live-gone.pantheonsite.io."]})
+    #  ^ no A or AAAA for live-gone -> NoAnswer for both -> definitively dead
+    sweeper, out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-gone.pantheonsite.io"})
+    assert out.getvalue().strip().endswith("live-gone.pantheonsite.io")
+    assert sweeper.counters.rows == 1
+    assert sweeper.counters.indeterminate == 0        # a warning, NOT an indeterminate
+    assert "does not resolve" in capsys.readouterr().err
+
+
+def test_transient_lookup_of_the_platform_domain_does_not_warn(fpd, monkeypatch, capsys):
+    # The dead-target check exists to warn; it must never cry wolf on a blip (SPEC G12).
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-x.pantheonsite.io."],
+        ("live-x.pantheonsite.io", "A"): dns.resolver.Timeout(),
+    })
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-x.pantheonsite.io"})
+    assert sweeper.counters.rows == 1
+    assert "does not resolve" not in capsys.readouterr().err
+
+
+def test_cross_site_target_warns_but_still_writes_the_row(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-other.pantheonsite.io."],
+        ("live-other.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert sweeper.counters.rows == 1
+    assert sweeper.counters.indeterminate == 0
+    err = capsys.readouterr().err
+    assert "different site" in err and "live-s.pantheonsite.io" in err
+
+
+def test_mid_chain_hit_warns_that_the_record_is_an_alias(fpd, monkeypatch, capsys):
+    # SPEC G13a.  Rewriting alias.umich.edu moves every other name pointing at it.
+    patch_dns(monkeypatch, fpd, {
+        ("www.example.umich.edu", "CNAME"): ["alias.umich.edu."],
+        ("alias.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "www.example.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert out.getvalue().split(",")[3] == "alias.umich.edu"
+    err = capsys.readouterr().err
+    assert "the record to change is alias.umich.edu" in err
+    assert sweeper.counters.rows == 1
+
+
+def test_direct_hit_does_not_warn_about_an_alias(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, _out = make_sweeper(fpd)
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert "the record to change is" not in capsys.readouterr().err
+
+
+def test_each_row_is_flushed_as_it_is_written(fpd, monkeypatch):
+    # SPEC section 5: a 38-minute sweep must be watchable with tail -f.  Testable only because
+    # the stream is injected (SPEC section 9).
+    flushes = []
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    sweeper, out = make_sweeper(fpd)
+    monkeypatch.setattr(out, "flush", lambda: flushes.append(len(out.getvalue())))
+    sweeper.check_domain({"id": "u", "name": "s"}, "live", "a.umich.edu",
+                         {"live-s.pantheonsite.io"})
+    assert len(flushes) == 1
+    assert flushes[0] > 0        # flushed AFTER the row was written, not before
+
+
+def test_verbose_reports_per_site_counts(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {})
+    responses = {
+        "/sites/uuid/environments": {"dev": {}, "live": {}},
+        "/sites/uuid/environments/dev/domains": [
+            {"id": "dev-s.pantheonsite.io", "type": "platform"}],
+        "/sites/uuid/environments/live/domains": [
+            {"id": "live-s.pantheonsite.io", "type": "platform"},
+            {"id": "a.umich.edu", "type": "custom"}],
+    }
+    sweeper, _out = make_sweeper(fpd, get=lambda path: responses[path], verbose=True)
+    sweeper.sweep_site({"id": "uuid", "name": "s"})
+    assert "s: 2 environments, 1 custom domains" in capsys.readouterr().err
+
+
+def test_a_session_expiry_aborts_the_sweep_instead_of_counting_indeterminates(fpd, monkeypatch):
+    # SPEC G7a.  If SessionExpiredError were caught per site, a revoked token 5 minutes into a
+    # 38-minute sweep would emit ~400 ATTENTION lines and exit 1 instead of stopping.
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        raise fpd.SessionExpiredError("token revoked")
+
+    sweeper, _out = make_sweeper(fpd, get=get)
+    with pytest.raises(fpd.SessionExpiredError):
+        sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.counters.indeterminate == 0
+
+
+def test_a_malformed_domains_payload_is_one_environments_indeterminate(fpd, monkeypatch, capsys):
+    # SPEC G17 + section 10 item 17.  partition_domains sits INSIDE sweep_env's try; outside
+    # it, one malformed payload aborted every remaining site of a 38-minute sweep.
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        if path.endswith("/environments"):
+            return {"live": {}}
+        return {"not": "a list"} if "/u1/" in path else []
+
+    sweeper, _out = make_sweeper(fpd, get=get)
+    sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.counters.sites == 2          # it kept going
+    assert sweeper.counters.indeterminate == 1
+    assert "SKIPPED: s1.live: could not list domains" in capsys.readouterr().err
+
+
+def test_sweep_records_where_it_stopped(fpd, monkeypatch):
+    # SPEC section 7.3: without this an aborted 38-minute sweep gives the operator no way to
+    # resume except starting over.
+    patch_dns(monkeypatch, fpd, {})
+    sweeper, _out = make_sweeper(
+        fpd, get=lambda path: {} if path.endswith("environments") else [])
+    sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.last_site == "s2"
+    assert sweeper.remaining == []
+
+
+def test_sweep_site_counts_environments_and_domains(fpd, monkeypatch):
+    patch_dns(monkeypatch, fpd, {})     # every domain is a clean no-hit
+    responses = {
+        "/sites/uuid/environments": {"dev": {}, "live": {}},
+        "/sites/uuid/environments/dev/domains": [
+            {"id": "dev-s.pantheonsite.io", "type": "platform"}],
+        "/sites/uuid/environments/live/domains": [
+            {"id": "live-s.pantheonsite.io", "type": "platform"},
+            {"id": "a.umich.edu", "type": "custom"}],
+    }
+    sweeper, out = make_sweeper(fpd, get=lambda path: responses[path])
+    sweeper.sweep_site({"id": "uuid", "name": "s"})
+    assert (sweeper.counters.sites, sweeper.counters.envs, sweeper.counters.custom_domains) == (1, 2, 1)
+    assert out.getvalue() == ""
+
+
+def test_failed_environment_listing_counts_once_and_continues(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        raise fpd.PantheonApiError("HTTP 500")
+
+    sweeper, _ = make_sweeper(fpd, get=get)
+    sweeper.sweep([{"id": "u1", "name": "s1"}, {"id": "u2", "name": "s2"}])
+    assert sweeper.counters.indeterminate == 2        # once per site, and it kept going
+    assert sweeper.counters.sites == 2
+    assert "could not list environments" in capsys.readouterr().err
+
+
+def test_failed_domain_listing_counts_once_and_continues_to_the_next_environment(fpd, monkeypatch, capsys):
+    patch_dns(monkeypatch, fpd, {})
+
+    def get(path):
+        if path.endswith("/environments"):
+            return {"dev": {}, "live": {}}
+        if "/dev/" in path:
+            raise fpd.PantheonApiError("HTTP 503")
+        return [{"id": "live-s.pantheonsite.io", "type": "platform"}]
+
+    sweeper, _ = make_sweeper(fpd, get=get)
+    sweeper.sweep_site({"id": "u", "name": "s"})
+    assert sweeper.counters.indeterminate == 1
+    assert sweeper.counters.envs == 2
+    assert "could not list domains" in capsys.readouterr().err

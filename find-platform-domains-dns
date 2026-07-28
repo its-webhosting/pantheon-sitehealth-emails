@@ -16,6 +16,7 @@ Requires: dnspython and httpx (httpx is declared under this project's `cloudflar
 the documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and a Pantheon
 machine token, from $PANTHEON_MACHINE_TOKEN or ~/.terminus/cache/tokens/.
 """
+import dataclasses
 import json
 import os
 import struct
@@ -486,3 +487,139 @@ def partition_domains(entries):
             # failure is a missing row that the CSV cannot reveal).
             unknown.append((name, kind))
     return custom, platform, unknown
+
+
+@dataclasses.dataclass
+class Counters:
+    """What the summary line reports, and what the exit code is derived from."""
+    sites: int = 0
+    envs: int = 0
+    custom_domains: int = 0
+    rows: int = 0
+    indeterminate: int = 0
+
+    def summary(self):
+        return (f"sites={self.sites} envs={self.envs} custom_domains={self.custom_domains} "
+                f"rows={self.rows} indeterminate={self.indeterminate}")
+
+
+def platform_domain_is_dead(name):
+    """True only when `name` DEFINITIVELY resolves to no address (SPEC G12).
+
+    A transient or malformed outcome counts as alive: this check exists to warn that the
+    downstream rewriter will find no addresses, and a warning that fires on a blip is worse
+    than no warning at all.
+    """
+    for rrtype in ("A", "AAAA"):
+        try:
+            if list(resolve(name, rrtype)):
+                return False
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+            continue
+        except (dns.resolver.NoNameservers, dns.resolver.Timeout, MalformedNameError):
+            return False
+    return True
+
+
+class Sweeper:
+    """Walks sites -> environments -> custom domains, writing CSV rows and counting outcomes.
+
+    Holds its collaborators (the API getter, the CSV writer, the counters) rather than threading
+    them through five-parameter functions.
+    """
+
+    def __init__(self, get, writer, stream, *, verbose=False):
+        self._get = get
+        self._writer = writer
+        # The stream is INJECTED rather than reaching for sys.stdout, so that the "flush after
+        # every row" requirement (SPEC section 5) is testable: in a test the writer and
+        # sys.stdout are unrelated objects, so nothing would pin the flush (SPEC section 9).
+        self._stream = stream
+        self._verbose = verbose
+        self.counters = Counters()
+        # SPEC section 7.3's "where did it stop" line.  Initialized here, not only in sweep(),
+        # so report_stop() cannot raise AttributeError while reporting some other failure.
+        self.last_site = ""       # the last site that COMPLETED
+        self.current_site = ""     # the site in flight, for "Stopped during <site>"
+        self.remaining = []
+
+    def _progress(self, message):
+        if self._verbose:
+            print(message, file=sys.stderr, flush=True)
+
+    def sweep(self, sites):
+        self.remaining = list(sites)
+        for number, site in enumerate(sites, start=1):
+            self._progress(f"[{number}/{len(sites)}] {site['name']}")
+            self.current_site = site["name"]
+            self.sweep_site(site)
+            self.last_site = site["name"]
+            self.remaining = list(sites[number:])
+
+    def sweep_site(self, site):
+        self.counters.sites += 1
+        before = (self.counters.envs, self.counters.custom_domains)
+        try:
+            environments = site_environments(self._get, site["id"])
+        except PantheonApiError as e:
+            # PantheonApiShapeError is a PantheonApiError, so an unexpected shape lands here too
+            # (SPEC G17).  SessionExpiredError deliberately is NOT one -- it must propagate.
+            skipped(f"{site['name']}: could not list environments: {e}")
+            self.counters.indeterminate += 1
+            return
+        for env_id in sorted(environments):
+            self.sweep_env(site, env_id)
+        self._progress(f"    {site['name']}: {self.counters.envs - before[0]} environments, "
+                       f"{self.counters.custom_domains - before[1]} custom domains")
+
+    def sweep_env(self, site, env_id):
+        self.counters.envs += 1
+        try:
+            entries = self._get(f"/sites/{site['id']}/environments/{env_id}/domains")
+            # INSIDE the try on purpose: partition_domains raises PantheonApiShapeError on a
+            # malformed payload, and SPEC G17 says a shape error is reported "exactly like
+            # G4/G5/G6 depending on which call produced it" -- i.e. one environment's
+            # indeterminate, not the end of a 38-minute sweep.  Outside the try, one bad
+            # payload aborted everything after it.
+            custom_domains, platform_domains, unknown = partition_domains(entries)
+        except PantheonApiError as e:
+            skipped(f"{site['name']}.{env_id}: could not list domains: {e}")
+            self.counters.indeterminate += 1
+            return
+        for name, kind in unknown:          # G6a
+            skipped(f"{site['name']}.{env_id} {name}: unknown domain type {kind!r}; "
+                    "not examined")
+            self.counters.indeterminate += 1
+        for custom_domain in custom_domains:
+            self.counters.custom_domains += 1
+            self.check_domain(site, env_id, custom_domain, platform_domains)
+
+    def check_domain(self, site, env_id, custom_domain, platform_domains):
+        where = f"{site['name']}.{env_id} {custom_domain}"
+        result = walk(custom_domain)
+        if result.problem:
+            skipped(f"{where}: {result.problem}")
+            self.counters.indeterminate += 1
+            return
+        if not result.platform_domain:
+            return
+        if result.dns_record != custom_domain:
+            # SPEC G13a.  The record the downstream rewriter must change is a mid-chain alias,
+            # not this site's own domain -- so rewriting it moves every other name pointing at
+            # it, possibly in a zone this team does not control.
+            warning(
+                f"{where}: the record to change is {result.dns_record}, not the custom domain; "
+                "verify who else points at it before rewriting")
+        if result.platform_domain not in platform_domains:
+            warning(
+                f"{where}: points at {result.platform_domain}, which belongs to a different "
+                f"site/environment (expected one of: "
+                f"{', '.join(sorted(platform_domains)) or 'none listed'})")
+        if platform_domain_is_dead(result.platform_domain):
+            warning(
+                f"{where}: platform domain {result.platform_domain} does not resolve; the "
+                "downstream rewrite has no addresses to use")
+        self._writer.writerow([site["name"], env_id, custom_domain,
+                               result.dns_record, result.platform_domain])
+        self._stream.flush()      # so a 38-minute sweep can be watched with tail -f
+        self.counters.rows += 1
