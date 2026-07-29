@@ -501,10 +501,13 @@ def named_sites(get, names):
         # BOTH keys go through _require_str.  An `answer.get("name", name)` fallback would
         # silently reinstate the argv spelling -- the exact mismatch SPEC section 3 requires be
         # avoided.  _require_str, not _require (whole-branch review m6, the same class as C1):
-        # presence alone let a non-str `name` reach report_stop()'s `" ".join(...)` as the bare,
-        # unnamed `TypeError: sequence item 0: expected str instance` -- an exit-1 traceback
-        # raised while REPORTING an abort, which destroys the resume line SPEC section 7.3 calls
-        # the whole recovery story.  org_sites() and partition_domains() already type-check here.
+        # presence alone lets a non-str `name` reach the `shlex.join(...)` resume_command() builds
+        # the section 7.3 resume line with, as the bare, unnamed `TypeError: expected string or
+        # bytes-like object, got 'list'` -- an exit-1 traceback raised while REPORTING an abort,
+        # which destroys the resume line SPEC section 7.3 calls the whole recovery story.  (The
+        # citation named a `" ".join(...)` until the residual review: that call was replaced by
+        # shlex.join in the m2 fix, but the hazard is unchanged, so the guard stays and only the
+        # spelling moved.)  org_sites() and partition_domains() already type-check here.
         resolved.append({"id": _require_str(answer, "id", where),
                          "name": _require_str(answer, "name", where)})
     return resolved
@@ -766,6 +769,13 @@ def main(argv):
     Ctrl-C, a broken pipe, or an unexpected API shape leaking out of here would be
     indistinguishable from a healthy sweep that had a few DNS timeouts.  Every other outcome is
     routed away from 1, and the only `return 1` in the program is the indeterminate branch.
+
+    The summary print sits INSIDE the try (residual review, finding 1 -- SPEC G19).  Outside it,
+    an ENOSPC on that one line escaped main() entirely and the interpreter's shutdown flush of
+    the same doomed stderr turned the run into exit **120**, with a complete CSV on stdout and
+    nothing in section 7's taxonomy to describe it (measured: `find-platform-domains-dns bus-occb
+    2> /dev/full > /tmp/o3.out` -> exit 120).  Inside, it becomes an ordinary abort at exit 2:
+    a sweep whose outcome could not be reported has not been reported.
     """
     options = build_arg_parser().parse_args(argv)
 
@@ -776,36 +786,43 @@ def main(argv):
     try:
         require_usable_streams()
         session, sites = prepare_sweep(options, note)
-    except (KeyboardInterrupt, StartupError) as e:
-        # Both routed through one small helper (fix round 1, m6) rather than two more `return`
+    except (KeyboardInterrupt, StartupError, OSError) as e:
+        # All routed through one small helper (fix round 1, m6) rather than more `return`
         # statements inline: main() already sits at ruff's PLR0911 limit by design (the module
         # docstring on prepare_sweep records why it was split out in the first place), and a bare
         # `except KeyboardInterrupt: ... return 130` here would push it back over.
+        #
+        # OSError added by the residual review, finding 1.  prepare_sweep() converts every OSError
+        # it can NAME into a StartupError, but retrying() -- the G4a ignored-cursor line, the one
+        # stderr write that happens before main() has either a Sweeper or a StartupError to report
+        # (SPEC section 4.1) -- prints from inside org_sites(), and an ENOSPC there escaped main()
+        # as an uncaught OSError: exit 1, the code section 7 reserves for a COMPLETED sweep.  This
+        # is the startup half of the `except BaseException` last line of defence below.
         return report_startup_failure(e)
 
     sweeper = Sweeper(session.get, csv.writer(sys.stdout, lineterminator="\n"), sys.stdout,
                       verbose=options.verbose)
     try:
         sweeper.sweep(sites)
+        print(sweeper.counters.summary(), file=sys.stderr)
     except KeyboardInterrupt:
-        report_stop(sweeper, "interrupted", argv)
+        report_stop(sweeper, "interrupted", argv, options.site)
         return 130
     except SessionExpiredError as e:
-        report_stop(sweeper, f"session expired: {e}", argv)
+        report_stop(sweeper, f"session expired: {e}", argv, options.site)
         return 2
     except BrokenPipeError:
         # `find-platform-domains-dns | head` is the natural first thing an operator types.
         # stderr is unaffected by a closed stdout, so the abort report is printed here too --
         # SPEC section 8 says the summary appears on EVERY path that entered the site loop.
         # report_stop() applies the os.dup2 recipe this arm used to own -- see its docstring.
-        report_stop(sweeper, "stdout closed (broken pipe)", argv)
+        report_stop(sweeper, "stdout closed (broken pipe)", argv, options.site)
         return 2
     except SystemExit:
         raise
     except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: an uncaught exception here would exit 1, which section 7 reserves for a COMPLETED sweep.  It is re-reported by name, never swallowed silently (PD#2)
-        report_stop(sweeper, f"unexpected {type(e).__name__}: {e}", argv)
+        report_stop(sweeper, f"unexpected {type(e).__name__}: {e}", argv, options.site)
         return 2
-    print(sweeper.counters.summary(), file=sys.stderr)
     return 1 if sweeper.counters.indeterminate else 0
 
 
@@ -857,11 +874,16 @@ def report_startup_failure(e):
     don't exist. Split into its own function, rather than two more `return` statements inline in
     main(), because main() already sits at ruff's PLR0911 limit by design (see prepare_sweep's
     own docstring below for why it was split out in the first place).
+
+    Written through report_line() rather than print() (residual review, finding 1): this is one
+    of the two ends of the road, so an ENOSPC on ITS own stderr write has nowhere to propagate --
+    measured `./find-platform-domains-dns -c /dev/null 2> /dev/full` -> exit 120, outside SPEC
+    section 7's taxonomy.
     """
     if isinstance(e, KeyboardInterrupt):
-        print("ERROR: interrupted before the sweep began", file=sys.stderr)
+        report_line("ERROR: interrupted before the sweep began")
         return 130
-    print(f"ERROR: {e}", file=sys.stderr)
+    report_line(f"ERROR: {e}")
     return 2
 
 
@@ -933,7 +955,7 @@ def option_strings_taking_a_value():
     }
 
 
-def resume_command(argv, names):
+def resume_command(argv, original_sites, names):
     """The SPEC section 7.3 resume command: this invocation, with `names` in place of its SITE
     positionals.
 
@@ -950,12 +972,20 @@ def resume_command(argv, names):
 
     Only POSITIONAL site names are dropped: a site name sitting in an option's value slot
     (`-c beta`) must survive, or `-c` swallows the next token and the pasted command is mangled.
+
+    Residual review, finding 2.  The dropped token is identified by MEMBERSHIP in
+    `original_sites` -- argparse's own parse of this argv, i.e. `options.site` -- exactly as
+    psh/lifecycle.py's rerun_command() does it.  A "does not start with `-`" test instead deleted
+    the VALUE of any short-option BUNDLE, because the bundle is not itself an option string:
+    `-vc prod.toml s1 s2` rebuilt as `find-platform-domains-dns -vc s2`, which re-parses as
+    `--config=s2` with no site names at all -- a whole-organization sweep against a config file
+    named `s2`, and the site list this line exists to hand the operator is gone.
     """
     value_options = option_strings_taking_a_value()
     kept = []
     previous = None
     for arg in argv:
-        if previous not in value_options and not arg.startswith("-"):
+        if previous not in value_options and arg in original_sites:
             previous = arg
             continue                      # a SITE positional: `names` replaces all of them
         kept.append(arg)
@@ -986,22 +1016,85 @@ def detach_doomed_stdout():
     A flush that fails is exactly the condition being defended against, and a flush that
     succeeds proves there is nothing left for the shutdown flush to choke on -- 120 can only
     arise when there is pending data that cannot be written.
-
-    suppress(), not try/except/pass: ruff SIM105.  Named exceptions only (PD#2) -- a broad
-    suppression would hide a real dup2 failure.  ValueError/io.UnsupportedOperation are the
-    "stdout is not backed by a real file descriptor" shapes (pytest's capsys object raises
-    io.UnsupportedOperation from fileno()), where there is no descriptor to replace at all.
     """
     try:
         sys.stdout.flush()
     except (OSError, ValueError):
-        with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
-            os.close(devnull)
+        point_at_devnull(sys.stdout)
 
 
-def report_stop(sweeper, reason, argv):
+def point_at_devnull(stream):
+    """Repoint `stream`'s file descriptor at /dev/null, so nothing written to it can fail again.
+
+    The shared half of detach_doomed_stdout() and detach_doomed_stderr(); the recipe is Python's
+    own, from the "Note on SIGPIPE" in the library/signal docs.  Callers decide WHETHER a stream
+    is doomed -- this only carries it out, and it is never called on a stream that is working.
+
+    suppress(), not try/except/pass: ruff SIM105.  Named exceptions only (PD#2) -- a broad
+    suppression would hide a real dup2 failure.  ValueError/io.UnsupportedOperation are the
+    "not backed by a real file descriptor" shapes (pytest's capsys object raises
+    io.UnsupportedOperation from fileno()), where there is no descriptor to replace at all.
+    """
+    with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stream.fileno())
+        os.close(devnull)
+
+
+def detach_doomed_stderr():
+    """The stderr twin of detach_doomed_stdout(): point the operator stream that just failed at
+    /dev/null, so neither this program's own remaining messages nor the interpreter's shutdown
+    flush can raise again and override the exit code with 120 (SPEC G19).
+
+    It holds the SAME load-bearing property as its stdout sibling -- NEVER detach a stream that
+    is working -- but it proves the stream is doomed a different way, and the difference is
+    measured rather than stylistic.  detach_doomed_stdout() probes with a real flush because
+    nothing has tried to write yet and a stdout still holding a row must get its chance to write
+    it.  A flush probe is worthless here: sys.stderr is LINE-buffered, so its buffer is empty at
+    the moment of the probe on every path where no earlier stderr write has already failed, and
+    an empty flush succeeds on a filesystem that is 100% full -- it would report a doomed stream
+    healthy.  Measured: with a flush probe `find-platform-domains-dns -c /dev/null 2> /dev/full`
+    still exits 120; with this one it exits 2.  So the probe here is the caller's own failed
+    write: report_line() is the ONLY caller, and it calls this only from the except arm of a
+    print that really raised.
+
+    sys.stdout, when stderr is closed: CPython's `print(..., file=None)` falls back to sys.stdout
+    (the fallback require_usable_streams() already documents), so on `2>&- > /dev/full` -- G0
+    reporting its own abort onto a full stdout -- stdout is the stream that just failed.
+    Measured: exit 120 without this arm, exit 2 with it.
+    """
+    point_at_devnull(sys.stdout if sys.stderr is None else sys.stderr)
+
+
+def report_line(text):
+    """One line of an abort report, written to a stderr that may itself be failing (SPEC G19).
+
+    Every OTHER stderr write in this program is deliberately unguarded -- skipped(), warning(),
+    retrying(), Sweeper._progress(), main()'s -v note and its summary line all let an OSError
+    propagate, because main()'s handlers turn it into a named abort at exit 2.  This is the end
+    of that road: a failure HERE has nowhere left to propagate.  It escapes main() as an uncaught
+    OSError, and CPython's shutdown flush of the same doomed stream then overrides the exit code
+    with **120**, which SPEC section 7's taxonomy does not contain -- so a `case $?` over
+    0/1/2/130 in a cron wrapper falls through.  Measured live, all three before the guard:
+
+        $ ./find-platform-domains-dns bus-occb    2> /dev/full > /tmp/o3.out  -> exit 120
+        $ ./find-platform-domains-dns -v bus-occb 2> /dev/full > /tmp/o4.out  -> exit 120, and
+                                                    /tmp/o4.out EMPTY: the sweep died at the
+                                                    first progress line and nothing said so
+        $ ./find-platform-domains-dns -c /dev/null 2> /dev/full               -> exit 120
+
+    Swallowing the OSError is the point: there is nowhere to report "I could not report", and the
+    exit code is the only channel left (PD#1 -- the failure stays visible in the code, not in
+    prose).  The stream is detached so that the REST of the abort report, and the interpreter's
+    own shutdown flush, are no-ops rather than repeat failures.
+    """
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        detach_doomed_stderr()
+
+
+def report_stop(sweeper, reason, argv, original_sites):
     """SPEC section 7.3: an aborted sweep MUST say where it stopped, or the operator has no way
     to resume except starting the 38-minute sweep over.
 
@@ -1028,13 +1121,19 @@ def report_stop(sweeper, reason, argv):
     disk or an over-quota redirect target on a 38-minute org-wide CSV is ordinary, and it arrives
     through main()'s `except BaseException` arm, not the BrokenPipeError one.  report_stop() is
     the one function EVERY exit-2/130 abort path calls, so it is the one place the recipe belongs.
+
+    Every line goes out through report_line() rather than print() (residual review, finding 1),
+    which is the same defence pointed at the OTHER stream: with stderr doomed, the very first
+    print here raised INSIDE main()'s except handler, so the exit code went to 120 and the resume
+    line -- the whole recovery story of SPEC section 7.3 -- was never printed at all.  See
+    report_line() and detach_doomed_stderr() for why stderr needs a different probe from stdout.
     """
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     detach_doomed_stdout()
-    print(f"ERROR: sweep did not complete ({reason})", file=sys.stderr)
-    print(sweeper.counters.summary(), file=sys.stderr)
+    report_line(f"ERROR: sweep did not complete ({reason})")
+    report_line(sweeper.counters.summary())
     if sweeper.last_site:
-        print(f"Stopped after {sweeper.last_site}.", file=sys.stderr)
+        report_line(f"Stopped after {sweeper.last_site}.")
     else:
         # No `or 'startup'` fallback needed here (fix round 1, m7 removed one; fix round 2, N3
         # corrects that removal): current_site is truthy for a Sweeper's WHOLE lifetime, because
@@ -1044,12 +1143,13 @@ def report_stop(sweeper, reason, argv):
         # asynchronous and can land inside sweep()'s own `self.remaining = list(sites)` or
         # `self._progress(...)` call, both of which run before the per-site assignment, which is
         # exactly how "Stopped during ." (malformed) was reproduced.
-        print(f"Stopped during {sweeper.current_site}.", file=sys.stderr)
+        report_line(f"Stopped during {sweeper.current_site}.")
     if sweeper.remaining:
         count = len(sweeper.remaining)
-        command = resume_command(argv, [site["name"] for site in sweeper.remaining])
-        print(f"{count} site{'' if count == 1 else 's'} not reached. Resume with:\n"
-              f"  {command}", file=sys.stderr)
+        command = resume_command(argv, original_sites,
+                                 [site["name"] for site in sweeper.remaining])
+        report_line(f"{count} site{'' if count == 1 else 's'} not reached. Resume with:\n"
+                    f"  {command}")
 
 
 if __name__ == "__main__":

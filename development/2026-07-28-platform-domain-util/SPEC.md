@@ -105,7 +105,7 @@ that trades speed or brevity for completeness is made for that reason.
 | Recorded API fixtures / e2e tier | The script is deleted within months; hand-maintained fixtures would rot first. §10 covers the logic offline with injected fakes. |
 | Importing from `psh/` | PROMPT.md: copy, do not modularize, so deletion is a `git rm` of three paths. |
 | A `docs/` usage page | The script's module docstring plus §3 here is the documentation. A doc page for a doomed script is inventory, not value. |
-| Percent-encoding the `site_id` / `env_id` path segments (`/sites/{site_id}/environments/{env_id}/domains`) | **Accepted residual, still open — nothing in this spec or the code claims it is closed** (whole-branch review m10). Unlike `org_id` (config, operator-typo-controlled, quoted since task 3's fix round) and the `SITE` argv (§3), these two come from the API's own responses, and a value that produces an invalid URL now raises `httpx.InvalidURL` — folded into `ApiSession.get`'s handler in task 5 — so it surfaces as the named `PantheonApiError`, i.e. G5/G6, not as an exit-1 traceback. There is deliberately **no test**: constructing an API response whose ids break a URL would pin a shape Pantheon does not produce. |
+| Percent-encoding the API-sourced path and query segments. **This list is exhaustive: there are three, not one** (corrected, residual review finding 4 — the row named only the last of them and thereby under-stated its own scope, which PD#9 forbids: "Everything deferred is written down. Vague intentions are lies."). They are, by call site in `find-platform-domains-dns`: (1) the pagination cursor, `path += f"&start={cursor}"` in `org_sites()` — a site id taken from the previous page's `site.id`; (2) `f"/sites/{site_id}/environments"` in `site_environments()`; and (3) `f"/sites/{site['id']}/environments/{env_id}/domains"` in `Sweeper.sweep_env()` | **Accepted residual, still open — nothing in this spec or the code claims it is closed** (whole-branch review m10). Unlike `org_id` (config, operator-typo-controlled, quoted since task 3's fix round) and the `SITE` argv (§3), all three come from the API's own responses, and a value that produces an invalid URL now raises `httpx.InvalidURL` — folded into `ApiSession.get`'s handler in task 5 — so it surfaces as the named `PantheonApiError`, i.e. G4/G5/G6, not as an exit-1 traceback. (1) is the weakest of the three, and is named separately for that reason: it lands in a *query string*, where an `&` or `#` in a cursor would silently change the query rather than raise, so `httpx.InvalidURL` does not backstop it — what does is §4.1's G4a detector, which exits 2 on a page contributing no new ids. There is deliberately **no test** for any of the three: constructing an API response whose ids break a URL would pin a shape Pantheon does not produce. |
 | A G0 check ahead of `argparse` | **Accepted residual.** The closed-stream guard (G0) runs immediately after `parse_args`, so a run that is BOTH invoked with a closed stderr AND has a command-line typo gets argparse's own fallback: the usage message goes to stdout and the process exits 2 (verified live). That is loud, in the §7 taxonomy, and writes no CSV. Moving the check earlier costs `main()` a seventh `return` (ruff `PLR0911`) or a possibly-unbound `options` under pyright, neither of which is worth it for a typo-plus-closed-stderr combination. |
 
 ## 3. CLI contract
@@ -116,7 +116,7 @@ find-platform-domains-dns [-h] [-c CONFIG] [-v] [SITE ...]
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `SITE ...` | none = whole organization | Pantheon site names to sweep. Each is resolved with `GET /v0/site-names/{name}`, so a targeted sweep does **not** page the organization list. The name MUST be `urllib.parse.quote(name, safe="")`-encoded into the path — an argument containing `#`, `?` or `%` would otherwise silently change which resource is requested rather than failing — and the `site_name` written to the CSV MUST be the **canonical name from the response** (`{"id": …, "name": …}`, verified live), read with the same `_require_str` guard as `id` — a silent fallback to the argv string would reintroduce exactly the mismatch this rule exists to prevent — not the argv string, so that a differently-cased argument cannot produce CSV rows the downstream script fails to match. `_require_str`, not `_require` (amended, whole-branch review m6): presence alone let a non-str `name` reach §7.3's `" ".join(…)` as an unnamed `TypeError`, i.e. an exit-1 traceback raised *while reporting an abort*. |
+| `SITE ...` | none = whole organization | Pantheon site names to sweep. Each is resolved with `GET /v0/site-names/{name}`, so a targeted sweep does **not** page the organization list. The name MUST be `urllib.parse.quote(name, safe="")`-encoded into the path — an argument containing `#`, `?` or `%` would otherwise silently change which resource is requested rather than failing — and the `site_name` written to the CSV MUST be the **canonical name from the response** (`{"id": …, "name": …}`, verified live), read with the same `_require_str` guard as `id` — a silent fallback to the argv string would reintroduce exactly the mismatch this rule exists to prevent — not the argv string, so that a differently-cased argument cannot produce CSV rows the downstream script fails to match. `_require_str`, not `_require` (amended, whole-branch review m6): presence alone let a non-str `name` reach the `shlex.join(…)` that §7.3's resume line is built with, as an unnamed `TypeError: expected string or bytes-like object, got 'list'`, i.e. an exit-1 traceback raised *while reporting an abort*. (Citation refreshed, residual review finding 3: the m2 fix replaced that call's earlier `" ".join(…)` spelling with `shlex.join`; the hazard is unchanged and verified, so the guard stays.) |
 | `-c`, `--config` | `pantheon-sitehealth-emails.toml` | TOML file read **only** for `[Pantheon].org_id`, and **only on the whole-organization path** (amended, whole-branch review m1): a `SITE`-argument sweep never uses `org_id`, so reading the config there made `find-platform-domains-dns bus-occb` fail exit 2 from any directory lacking the default config — a gate on a value the run does not consume. Parsed with `tomllib`; the config-substitution engine is NOT used (that value is a literal). The value MUST be type-checked as a `str` where it is read (amended, whole-branch review C1) — TOML is a typed format, so `org_id = 12345` otherwise reaches `urllib.parse.quote` a whole session later as an unnamed `TypeError` at exit 1. |
 | `-v`, `--verbose` | off | Per-site progress to stderr. `SKIPPED:`/`WARNING:`/`RETRY:` lines and the summary are printed regardless. |
 
@@ -273,7 +273,8 @@ line on a run that writes no CSV at all, and the alternative is total silence, w
 ### 6.1 Sweep flow
 
 ```
- stdout and stderr both open?  ── no ──→ G0: named message, exit 2 (before anything else)
+ stdout and stderr both open?  ── no ──→ G0: named message, exit 2
+        │                                   (before any config or network work)
         │ yes
         v
  pantheon-sitehealth-emails.toml ──[Pantheon].org_id──┐   (read ONLY when there are no SITE
@@ -390,9 +391,10 @@ produce output.
 | G16 | `BrokenPipeError` on stdout (`… \| head`) | — | `ERROR: sweep did not complete (stdout closed (broken pipe))`, **followed by the §7.3 abort report** — this reuses the same shared abort-reporting function every exit-2/130 path calls (`report_stop`), which is why all of them share this `ERROR: sweep did not complete (<reason>)` shape rather than G16 having bespoke wording; stderr is unaffected by a closed stdout, so there is no reason to withhold it. `report_stop` MUST also flush stdout and, **if that flush fails**, `os.dup2` devnull onto its descriptor: CPython re-flushes stdout at interpreter shutdown, that flush raises again on a closed pipe, and a failed final flush becomes **exit 120**, overriding the 2 (verified live 2026-07-28). Amended, whole-branch review I1: the recipe lives in `report_stop` rather than in this arm, because the mechanism is not pipe-specific — a full disk or an over-quota redirect target reaches the G18 arm and produced the same 120 (verified live with `> /dev/full`). Making it conditional on the flush failing is equally load-bearing: unconditional, it discards a row still sitting in a healthy stdout's buffer, and under pytest's fd-level capture it repoints the session's own stdout at `/dev/null` | — | — | no, **exit 2** |
 | G17 | An API response has an unexpected shape (a missing/wrongly-typed key) | — | named `PantheonApiShapeError`, reported exactly like G4/G5/G6 depending on which call produced it | no | **yes** when per-site/per-env | as per G4/G5/G6 |
 | G18 | Anything else uncaught | — | the exception, then `ERROR: unexpected failure; the sweep is incomplete` | — | — | no, **exit 2** |
+| G19 | A **stderr write** itself failed — a full disk, an over-quota redirect target, `2> /dev/full` (added, residual review finding 1) | — | nothing: there is nowhere left to report it. The failing stream's descriptor is repointed at `/dev/null` so neither the rest of the abort report nor CPython's shutdown flush can raise again | rows already written stay written | — | no, **exit 2** (or **130** when the abort being reported was a Ctrl-C) |
 
 **Exit codes.** `0` = sweep completed with zero indeterminates. `1` = sweep completed with ≥1
-indeterminate. `2` = the sweep could not be completed (G0, G1–G4b, G7a, G16, G18, or an `argparse`
+indeterminate. `2` = the sweep could not be completed (G0, G1–G4b, G7a, G16, G18, G19, or an `argparse`
 usage error). `130` = interrupted by Ctrl-C (G15), matching the main program's `abort_reason`
 convention (CLAUDE.md § Database). Rationale: a cron wrapper or a human MUST be able to tell a
 complete sweep from a partial one without reading stderr (PD#1).
@@ -406,6 +408,46 @@ handlers for `KeyboardInterrupt`, `BrokenPipeError` and a final catch that retur
 **G12 detail.** The check resolves `platform_domain` for `A`, then `AAAA`. A definitive empty
 answer for both (`NoAnswer`/`NXDOMAIN`) means dead. Any transient or malformed outcome is
 treated as **alive** — the check MUST NOT cry wolf on a blip, since its only job is to warn.
+
+**G19 detail — why stderr needs a *different* probe from stdout.** Every operator message in
+this program goes to stderr, and until this fix none of those writes was guarded. Three live
+reproductions, all exiting **120** — a code §7's taxonomy does not contain, so a `case $?` over
+0/1/2/130 in a cron wrapper falls straight through:
+
+```
+$ ./find-platform-domains-dns bus-occb    2> /dev/full > /tmp/o3.out   -> exit 120  (complete CSV)
+$ ./find-platform-domains-dns -v bus-occb 2> /dev/full > /tmp/o4.out   -> exit 120  (EMPTY CSV)
+$ ./find-platform-domains-dns -c /dev/null 2> /dev/full                -> exit 120
+```
+
+CPython's `flush_std_files()` at interpreter shutdown flushes **both** std streams and turns a
+failure of either into exit 120, so this is the same mechanism G16's stdout recipe defends
+against, pointed at the other stream. The realistic case is
+`find-platform-domains-dns -v --all 2>>sweep.log > domains.csv` on a filesystem that fills.
+
+Three rules, all measured:
+
+1. **The two ends of the road are guarded, and only those.** `report_stop()` and
+   `report_startup_failure()` write through `report_line()`, which swallows an `OSError`/`ValueError`
+   from its own `print` and detaches the stream. Every other stderr write — `skipped()`,
+   `warning()`, `retrying()`, `Sweeper._progress()`, the `-v` re-auth note, the summary line — stays
+   **unguarded on purpose**: a failure there propagates into `main()`'s handlers and becomes a named
+   abort at exit 2. Guarding them individually would hide the failure instead (PD#1).
+2. **The summary print moved inside `main()`'s `try`.** Outside it, an ENOSPC on that one line
+   escaped `main()` entirely — the first reproduction above. A sweep whose outcome could not be
+   reported has not been reported, so it exits 2.
+3. **`detach_doomed_stderr()` must NOT copy `detach_doomed_stdout()`'s flush probe.** `sys.stderr`
+   is line-buffered, so its buffer is empty at the moment of the probe on every path where no
+   earlier stderr write has already failed — and an empty flush *succeeds* on a filesystem that is
+   100% full, reporting a doomed stream healthy (measured: the third reproduction above still exits
+   120 with a flush probe). The probe is instead the caller's own failed write. What both halves
+   share, and what is pinned in both directions by
+   `test_a_healthy_std{out,err}_is_never_detached_on_an_abort`, is the property that matters:
+   **a stream that is working is never detached.**
+
+**Deliberately unchanged:** a `-v` run whose stderr is doomed still writes no CSV, because the
+sweep really does stop at its first progress line. Continuing with the operator's output silently
+going nowhere is what PD#1 forbids; the fix makes the stop *loud* (exit 2), not invisible.
 
 **G13 detail.** The environment's own platform domains are the `type: platform` entries from
 the *same* `domains` response already fetched — the check costs zero extra API calls. The
@@ -521,7 +563,7 @@ works test-first and cannot ask.
 | `DNS_RETRY_SLEEP` | module-level constant, monkeypatched to `0` for the NoNameservers retry-count test, or to a call-recording stand-in implementing `__index__` (never a real delay) for the Timeout-vs-NoNameservers asymmetry test | the DNS retry tests |
 | the output **stream** | **injected** alongside the CSV writer: `Sweeper(get, writer, stream, …)`. Production passes `sys.stdout`; tests pass the same `io.StringIO` the writer wraps | the per-row flush requirement (§5), which is otherwise untestable — a test's writer and `sys.stdout` are unrelated objects, so nothing would pin the flush |
 
-Five further seams are used **by tests only**, and are declared here because the Spine makes
+Six further seams are used **by tests only**, and are declared here because the Spine makes
 this binding — "Seams under test are named and agreed — in the spec, before any
 implementation" — and an implementer working test-first may not invent one:
 
@@ -532,6 +574,7 @@ implementation" — and an implementer working test-first may not invent one:
 | `machine_token` | monkeypatched module attribute | the `main()` tests, so no real token is read |
 | `build_session` | monkeypatched module attribute | the `main()` tests, which inject a stub session |
 | the injected stream's `flush` | monkeypatched on the test's own `io.StringIO` | the per-row flush test |
+| `sys.stdout` / `sys.stderr` / `os.dup2` | monkeypatched on the module's own `sys` and `os` (a global mutation, undone by monkeypatch); the stream stand-in is a real-descriptor object whose flush (stdout) or write (stderr) fails, and `os.dup2` is replaced by a recorder | the exit-120 detach tests: G16's stdout half and G19's stderr half, in both directions (doomed → detached, healthy → never detached). Declared here by the residual review, which found the stdout half already using it undeclared |
 
 Beyond those, no seam is created. In particular there is **no** patching of `time.sleep`, and
 no patching of `httpx.Client` itself (the HTTP tests use `httpx.MockTransport`, which is the
@@ -629,6 +672,16 @@ Required coverage — each item is a behavior a defect could silently break:
     indeterminate and still processes the second site (§7 G17).
 18. G6a: a domain entry whose `type` is neither `custom` nor `platform` is reported, counted,
     and does not silently vanish.
+19. **G19 — a failed stderr write never leaves the §7 taxonomy** (added, residual review
+    finding 1). Five behaviors, each a live reproduction turned into a test: a completed sweep
+    whose summary line cannot be written returns 2 rather than escaping `main()`; each of the four
+    abort arms (`OSError`, `KeyboardInterrupt`, `SessionExpiredError`, `BrokenPipeError`) still
+    returns its own code with stderr doomed; a startup failure (G1) does too; the `retrying()`
+    line inside `prepare_sweep()` does too; and — the direction that must be able to go red — **a
+    healthy stderr is never detached**, driven over an abort with a REAL descriptor, because a
+    version of that test driven over a *completed* sweep, or over capsys's descriptor-less
+    pseudo-stream, stays green against an unconditional detach (PD#14; that first draft was
+    written, measured green under the mutation, and rewritten).
 
 **Tests are load-bearing.** NEVER weaken an assertion, delete a case, or relax a fake to make
 a test pass. A red test here is a finding about the code.

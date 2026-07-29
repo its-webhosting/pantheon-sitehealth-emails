@@ -1743,7 +1743,7 @@ def test_report_stop_says_during_when_no_site_completed_yet(fpd, capsys):
     sweeper, _out = make_sweeper(fpd)
     sweeper.current_site = "s1"
     sweeper.remaining = [{"name": "s1"}]
-    fpd.report_stop(sweeper, "interrupted", [])
+    fpd.report_stop(sweeper, "interrupted", [], [])
     err = capsys.readouterr().err
     assert "Stopped during s1." in err
     assert "1 site not reached" in err
@@ -1758,7 +1758,7 @@ def test_report_stop_lists_multiple_remaining_site_names_space_separated(fpd, ca
     sweeper, _out = make_sweeper(fpd)
     sweeper.last_site = "s1"
     sweeper.remaining = [{"name": "s2"}, {"name": "s3"}]
-    fpd.report_stop(sweeper, "interrupted", ["-v"])
+    fpd.report_stop(sweeper, "interrupted", ["-v"], [])
     err = capsys.readouterr().err
     assert "Stopped after s1." in err
     assert "2 sites not reached" in err
@@ -1786,7 +1786,7 @@ def test_report_stop_says_something_sane_when_ctrl_c_lands_before_the_first_site
     with pytest.raises(KeyboardInterrupt):
         sweeper.sweep([{"id": "u1", "name": "s1"}])
     assert sweeper.last_site == ""
-    fpd.report_stop(sweeper, "interrupted", [])
+    fpd.report_stop(sweeper, "interrupted", [], [])
     err = capsys.readouterr().err
     assert "Stopped during ." not in err
     assert "Stopped during startup." in err
@@ -1884,7 +1884,7 @@ def test_report_stop_ignores_a_second_sigint_while_printing(fpd, monkeypatch):
     monkeypatch.setattr(fpd.signal, "signal", lambda sig, handler: calls.append((sig, handler)))
     sweeper, _out = make_sweeper(fpd)
     sweeper.last_site = "s1"
-    fpd.report_stop(sweeper, "interrupted", [])
+    fpd.report_stop(sweeper, "interrupted", [], [])
     assert calls == [(fpd.signal.SIGINT, fpd.signal.SIG_IGN)]
 
 
@@ -1931,10 +1931,14 @@ def test_named_sites_type_checks_the_id_and_the_name(fpd):
     """Whole-branch review m6 -- the same class as C1, on the API side.
 
     named_sites used plain `_require` (presence only) where org_sites and partition_domains both
-    use `_require_str`.  A non-str `name` from `/site-names/` flows straight into report_stop()'s
-    `" ".join(site["name"] for site in sweeper.remaining)`, which raises the bare, unnamed
-    `TypeError: sequence item 0: expected str instance` -- an exit-1 traceback while REPORTING an
-    abort, i.e. it destroys the very resume line SPEC section 7.3 calls the whole recovery story.
+    use `_require_str`.  A non-str `name` from `/site-names/` flows straight into the
+    `shlex.join([...])` resume_command() builds the section 7.3 resume line with, which raises
+    the bare, unnamed `TypeError: expected string or bytes-like object, got 'list'` -- an exit-1
+    traceback while REPORTING an abort, i.e. it destroys the very resume line SPEC section 7.3
+    calls the whole recovery story.  (Citation refreshed by the residual review: the m2 fix
+    replaced that `" ".join(...)` with shlex.join.  The hazard is unchanged -- verified,
+    `shlex.join(['find-platform-domains-dns', ['x']])` raises exactly that TypeError -- so this
+    guard stays and only its citation moved.)
     """
     with pytest.raises(fpd.PantheonApiShapeError, match="should be a string"):
         fpd.named_sites(lambda _path: {"id": "uuid", "name": ["not-a-string"]}, ["alpha"])
@@ -2036,6 +2040,220 @@ def test_every_abort_path_detaches_a_doomed_stdout_from_the_shutdown_flush(
 
     assert_dup2_detached_stdout(
         fpd, monkeypatch, tmp_path, OSError(28, "No space left on device"), run)
+
+
+# ---------------------------------------------------------------------------------------------
+# Residual review, finding 1: the exit-120 class on STDERR (SPEC G19)
+# ---------------------------------------------------------------------------------------------
+
+
+class _UndrainableStderr:
+    """A stderr backed by a REAL file descriptor whose writes always fail.
+
+    The shape /dev/full, a full disk and an over-quota redirect target present.  sys.stderr is
+    LINE-buffered, so the OSError surfaces from the `print` itself rather than from a later
+    flush -- which is precisely why the stdout recipe's flush probe cannot simply be reused here:
+    at the moment report_line() would run that probe, stderr's buffer is empty on every path
+    where no earlier stderr write has already failed, and an empty flush succeeds on a filesystem
+    that is 100% full.
+    """
+
+    def __init__(self, handle, error):
+        self._handle = handle
+        self._error = error
+        self.write_calls = 0
+
+    def write(self, _text):
+        self.write_calls += 1
+        raise self._error
+
+    def flush(self):
+        raise self._error
+
+    def fileno(self):
+        return self._handle.fileno()
+
+
+def assert_dup2_detached_stderr(fpd, monkeypatch, tmp_path, run):
+    """Install an _UndrainableStderr, run `run()`, and assert its descriptor was repointed.
+
+    Records os.dup2 rather than performing it, exactly as
+    test_a_healthy_stdout_is_never_detached_on_an_abort does -- the process's real descriptors
+    must survive the test.  The consequence is that this fake keeps raising after the detach,
+    where production's stderr stops raising the moment its fd points at /dev/null, so the recipe
+    fires once per abort-report line here and once per abort in production.  "Detached at all,
+    and only onto stderr's own fd" is the property; "exactly once" is an artifact of the stub.
+    The end-to-end proof that production really recovers is the live `2> /dev/full` run pasted
+    into ACCEPTANCE.md.
+    """
+    handle = (tmp_path / "stderr").open("w")
+    expected_fd = handle.fileno()
+    calls = []
+    monkeypatch.setattr(fpd.os, "dup2", lambda fd, target: calls.append((fd, target)))
+    stderr = _UndrainableStderr(handle, OSError(28, "No space left on device"))
+    monkeypatch.setattr(fpd.sys, "stderr", stderr)
+    try:
+        run()
+    finally:
+        handle.close()
+    assert stderr.write_calls >= 1              # the real write attempt, not a skipped one
+    assert calls, "a doomed stderr was never detached from the interpreter's shutdown flush"
+    assert {target for _fd, target in calls} == {expected_fd}
+
+
+def _config_with_org_id(tmp_path):
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    return config
+
+
+def test_a_failed_summary_write_returns_2_instead_of_escaping_main(fpd, monkeypatch, tmp_path):
+    """Residual review, finding 1 -- the plainest instance, and the one measured live.
+
+        $ ./find-platform-domains-dns bus-occb 2> /dev/full > /tmp/o3.out; echo "exit=$?"
+        exit=120                    # a COMPLETE CSV in /tmp/o3.out, exit code outside SPEC
+                                    # section 7's taxonomy, so `case $?` over 0/1/2/130 falls
+                                    # through
+
+    main()'s final `print(sweeper.counters.summary(), file=sys.stderr)` sat OUTSIDE the try, so
+    an ENOSPC there escaped main() entirely; CPython then re-flushed the same doomed stream at
+    interpreter shutdown, and that failure overrode the exit code with 120.  Inside the try it
+    reaches report_stop() like every other abort -- which detaches the doomed stream and returns
+    2, the "could not complete" code, because a sweep whose outcome could not be reported has not
+    been reported.
+    """
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: _StubSession(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+    config = _config_with_org_id(tmp_path)
+
+    def run():
+        assert fpd.main(["-c", str(config)]) == 2
+
+    assert_dup2_detached_stderr(fpd, monkeypatch, tmp_path, run)
+
+
+@pytest.mark.parametrize(("make_error", "expected_code"), [
+    (lambda _fpd: OSError(28, "No space left on device"), 2),
+    (lambda _fpd: KeyboardInterrupt(), 130),
+    (lambda fpd: fpd.SessionExpiredError("token revoked"), 2),
+    (lambda _fpd: BrokenPipeError(), 2),
+])
+def test_every_abort_path_survives_a_doomed_stderr(fpd, monkeypatch, tmp_path, make_error,
+                                                    expected_code):
+    """Residual review, finding 1, on the abort arms.  report_stop()'s own four prints (the
+    ERROR: line, the summary, the position line and the resume command) were unguarded, so with
+    stderr doomed the FIRST of them raised INSIDE main()'s `except` handler -- destroying the
+    resume line SPEC section 7.3 calls the whole recovery story, and taking the exit code with
+    it.  Every arm goes through report_stop(), so every arm is parametrized here rather than
+    pinning the one that happened to be measured.
+    """
+    error = make_error(fpd)
+
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise error
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+    config = _config_with_org_id(tmp_path)
+
+    def run():
+        assert fpd.main(["-c", str(config)]) == expected_code
+
+    assert_dup2_detached_stderr(fpd, monkeypatch, tmp_path, run)
+
+
+def test_a_healthy_stderr_is_never_detached_on_an_abort(fpd, monkeypatch, tmp_path):
+    """Residual review, finding 1, the other direction -- the constraint the stdout half learned
+    the hard way (test_a_healthy_stdout_is_never_detached_on_an_abort).
+
+    An unconditional dup2 onto stderr silences every later write to that descriptor.  In
+    production that swallows the abort report itself -- the report_stop() output an operator needs
+    precisely when a sweep dies -- and under pytest's fd-level capture it repoints the session's
+    own captured stderr at /dev/null.  So the descriptor is replaced ONLY after a real write to it
+    has failed.
+
+    This test drives an ABORT (report_stop, i.e. the code path report_line() is used from) over a
+    REAL, healthy file descriptor.  Both halves are load-bearing, and the first draft of this test
+    had neither: driven over a COMPLETED sweep it never reached report_line() at all, and driven
+    over capsys's pseudo-stream `fileno()` raises io.UnsupportedOperation, so contextlib.suppress
+    swallows the recipe before os.dup2 is ever reached.  Either way the mutation "detach
+    unconditionally" stayed green -- an instrument that cannot go red on the condition it guards
+    (PD#14), which is the exact defect this project keeps re-learning.
+    """
+    class Boom(_StubSession):
+        def get(self, path):
+            if path.endswith("/domains"):
+                raise KeyboardInterrupt
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Boom(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+    calls = []
+    monkeypatch.setattr(fpd.os, "dup2", lambda fd, target: calls.append((fd, target)))
+    config = _config_with_org_id(tmp_path)
+    handle = (tmp_path / "stderr").open("w")       # a REAL descriptor that writes perfectly
+    monkeypatch.setattr(fpd.sys, "stderr", handle)
+    try:
+        assert fpd.main(["-c", str(config)]) == 130
+    finally:
+        handle.close()
+    assert calls == []
+    assert "Stopped during s1." in (tmp_path / "stderr").read_text()
+
+
+def test_a_startup_failure_survives_a_doomed_stderr(fpd, monkeypatch, tmp_path):
+    """Residual review, finding 1, before the sweep begins.  Measured live:
+
+        $ ./find-platform-domains-dns -c /dev/null 2> /dev/full; echo "exit=$?"
+        exit=120
+
+    report_startup_failure() is the other end of the road -- G0-G4b never reach report_stop() --
+    so its prints need the same guard.  This is also the case a flush probe cannot detect:
+    nothing has been written to stderr yet, so stderr's buffer is empty and flushing it succeeds
+    even on a filesystem with no space at all.
+    """
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+    absent = tmp_path / "there-is-no-such-config.toml"
+
+    def run():
+        assert fpd.main(["-c", str(absent)]) == 2
+
+    assert_dup2_detached_stderr(fpd, monkeypatch, tmp_path, run)
+
+
+def test_a_failed_retry_line_during_the_site_listing_returns_2(fpd, monkeypatch, tmp_path):
+    """Residual review, finding 1, on the one stderr write that happens before main() has a
+    Sweeper OR a StartupError to report: retrying(), the G4a ignored-cursor line (SPEC section
+    4.1).  It runs inside prepare_sweep(), whose handler caught only KeyboardInterrupt and
+    StartupError -- so an ENOSPC raised by that print escaped main() as an uncaught OSError,
+    exit 1 (the code section 7 reserves for a COMPLETED sweep) or 120 once the shutdown flush of
+    the same stream failed too.
+    """
+    class IgnoredCursor(_StubSession):
+        def get(self, path):
+            if "/memberships/sites" in path:
+                return [{"id": f"m{n}", "site": {"id": f"u{n}", "name": f"s{n}"}}
+                        for n in range(fpd.PAGE_LIMIT)]      # a FULL page, always the same one
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: IgnoredCursor(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+    config = _config_with_org_id(tmp_path)
+
+    def run():
+        assert fpd.main(["-c", str(config)]) == 2
+
+    assert_dup2_detached_stderr(fpd, monkeypatch, tmp_path, run)
 
 
 class _HitSession(_StubSession):
@@ -2169,21 +2387,22 @@ def test_a_whole_organization_sweep_still_requires_the_config(fpd, monkeypatch, 
     assert "could not read" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(("argv", "names", "expected"), [
-    ([], ["s2", "s3"], "find-platform-domains-dns s2 s3"),
-    (["-v"], ["s2"], "find-platform-domains-dns -v s2"),
-    (["-c", "prod.toml"], ["s2"], "find-platform-domains-dns -c prod.toml s2"),
-    (["--config=prod.toml", "-v"], ["s2"], "find-platform-domains-dns --config=prod.toml -v s2"),
+@pytest.mark.parametrize(("argv", "original_sites", "names", "expected"), [
+    ([], [], ["s2", "s3"], "find-platform-domains-dns s2 s3"),
+    (["-v"], [], ["s2"], "find-platform-domains-dns -v s2"),
+    (["-c", "prod.toml"], [], ["s2"], "find-platform-domains-dns -c prod.toml s2"),
+    (["--config=prod.toml", "-v"], [], ["s2"],
+     "find-platform-domains-dns --config=prod.toml -v s2"),
     # The SITE positionals of the dead run are replaced, never appended twice.
-    (["-v", "alpha", "beta"], ["beta"], "find-platform-domains-dns -v beta"),
+    (["-v", "alpha", "beta"], ["alpha", "beta"], ["beta"], "find-platform-domains-dns -v beta"),
     # A site name sitting in an option's VALUE slot must survive: dropping it would leave -c
     # swallowing the next token and the pasted command would read the wrong file.
-    (["-c", "beta", "alpha"], ["alpha"], "find-platform-domains-dns -c beta alpha"),
+    (["-c", "beta", "alpha"], ["alpha"], ["alpha"], "find-platform-domains-dns -c beta alpha"),
     # shlex.join quotes what a shell would otherwise split.
-    (["-c", "my config.toml"], ["s2"], "find-platform-domains-dns -c 'my config.toml' s2"),
+    (["-c", "my config.toml"], [], ["s2"], "find-platform-domains-dns -c 'my config.toml' s2"),
 ])
 def test_resume_command_keeps_every_flag_and_replaces_only_the_site_positionals(
-        fpd, argv, names, expected):
+        fpd, argv, original_sites, names, expected):
     """Whole-branch review m2.  The section 7.3 resume line printed a bare
     `find-platform-domains-dns <names...>`, discarding -c CONFIG and -v: an operator who ran
     `-c prod.toml` pasted a command that reads a DIFFERENT file, and one who ran -v lost the only
@@ -2192,7 +2411,31 @@ def test_resume_command_keeps_every_flag_and_replaces_only_the_site_positionals(
     copied here -- including deriving the value-taking option strings from the parser rather than
     listing them, since a hardcoded list rots the first time an option is added.
     """
-    assert fpd.resume_command(argv, names) == expected
+    assert fpd.resume_command(argv, original_sites, names) == expected
+
+
+def test_resume_command_survives_a_short_option_bundle(fpd):
+    """Residual review, finding 2.  resume_command() dropped every token that neither started
+    with `-` nor followed a value-taking option STRING; psh/lifecycle.py's rerun_command() -- the
+    shape this function's docstring says is copied here -- instead drops only tokens that are IN
+    `original_sites`.  The difference shows on an ordinary short-option bundle, which argparse
+    accepts:
+
+        argv = ['-vc', 'prod.toml', 's1', 's2'] -> Namespace(config='prod.toml', verbose=True,
+                                                            site=['s1', 's2'])
+        BEFORE: find-platform-domains-dns -vc s2
+        which re-parses as   Namespace(config='s2', verbose=True, site=[])
+
+    `-vc` is not the option string `-c`, so `prod.toml` was classified as a positional and
+    deleted.  Re-parsing the pasted line gives `-v` plus `--config=s2` with NO site names, i.e. a
+    whole-ORGANIZATION sweep reading a config file named `s2` -- loud in practice (exit 2), but the
+    operator has lost the site list this line exists to hand them (SPEC section 7.3 calls it the
+    whole recovery story).  `options.site` is exactly `original_sites` at the one call site, so
+    the membership test is available and needs no argv re-parsing.
+    """
+    argv = ["-vc", "prod.toml", "s1", "s2"]
+    assert fpd.resume_command(argv, ["s1", "s2"], ["s2"]) == (
+        "find-platform-domains-dns -vc prod.toml s2")
 
 
 def test_the_printed_resume_command_carries_the_operators_own_flags(fpd, monkeypatch, tmp_path,

@@ -737,3 +737,105 @@ Stopped during bus-occb.
   find-platform-domains-dns -v -c pantheon-sitehealth-emails.toml bus-occb its-wws-test1
 exit=2
 ```
+---
+
+## Re-verification after the residual fix wave (2026-07-28)
+
+The residual wave changed `main()` again (the summary print moved inside the try, an `OSError`
+arm on the startup handler, every abort-report line routed through `report_line()`, and
+`resume_command()` switched to a membership test), so SPEC §13 items 4, 5 and 8 were re-run
+rather than assumed to still hold. Verbatim output — no regression.
+
+```
+$ ./find-platform-domains-dns its-wws-test1; echo "exit=$?"
+sites=1 envs=7 custom_domains=2 rows=0 indeterminate=0
+exit=0
+
+$ ./find-platform-domains-dns bus-occb; echo "exit=$?"
+bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io
+sites=1 envs=3 custom_domains=1 rows=1 indeterminate=0
+exit=0
+
+$ ./find-platform-domains-dns bus-occb | head -0; echo "exit=${PIPESTATUS[0]}"
+ERROR: sweep did not complete (stdout closed (broken pipe))
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+1 site not reached. Resume with:
+  find-platform-domains-dns bus-occb
+exit=2
+
+$ ./run-tests --fast
+All checks passed!                        (ruff, campaign ratchet)
+0 errors, 0 warnings, 0 informations      (pyright, campaign ratchet)
+... 1194 passed, 3 skipped, 2 deselected, 15 warnings in 29.70s
+```
+
+### The live reproductions the residual wave closed
+
+**Finding 1 (G19) — a stderr write failure left the §7 exit-code taxonomy.** Four commands,
+before and after. Every "before" exited **120**, which no `case $?` over 0/1/2/130 catches.
+
+```
+BEFORE
+$ ./find-platform-domains-dns bus-occb 2> /dev/full > /tmp/o3.out; echo "exit=$?"
+exit=120
+$ cat /tmp/o3.out
+bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io
+                                    <-- a COMPLETE CSV, reported with a code outside the taxonomy
+
+$ ./find-platform-domains-dns -v bus-occb 2> /dev/full > /tmp/o4.out; echo "exit=$?"
+exit=120
+$ wc -c < /tmp/o4.out
+0                                   <-- EMPTY: the sweep died at its first _progress() write and
+                                        nothing, anywhere, said so
+
+$ ./find-platform-domains-dns -c /dev/null 2> /dev/full; echo "exit=$?"
+exit=120                            <-- report_startup_failure()'s own print, before any sweep
+
+$ ./find-platform-domains-dns its-wws-test1 2>&- > /dev/full; echo "exit=$?"
+exit=120                            <-- G0 reporting a closed stderr onto a full stdout
+
+AFTER
+$ ./find-platform-domains-dns bus-occb 2> /dev/full > /tmp/o3.out; echo "exit=$?"
+exit=2
+$ cat /tmp/o3.out
+bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io
+
+$ ./find-platform-domains-dns -v bus-occb 2> /dev/full > /tmp/o4.out; echo "exit=$?"
+exit=2
+
+$ ./find-platform-domains-dns -c /dev/null 2> /dev/full; echo "exit=$?"
+exit=2
+
+$ ./find-platform-domains-dns its-wws-test1 2>&- > /dev/full; echo "exit=$?"
+exit=2
+```
+
+The `-v` run still writes no CSV, and that is deliberate (SPEC §7's G19 detail): the sweep really
+does stop at its first progress line, because continuing with the operator's output going
+silently nowhere is what PD#1 forbids. What changed is that the stop is now **loud and inside
+the taxonomy** rather than an exit code nothing documents.
+
+**Finding 2 — `resume_command()` mangled a short-option bundle and dropped the site list.**
+
+```
+BEFORE (in-process, against the loaded module)
+>>> argv = ['-vc', 'prod.toml', 's1', 's2']
+>>> build_arg_parser().parse_args(argv)
+Namespace(config='prod.toml', verbose=True, site=['s1', 's2'])
+>>> resume_command(argv, ['s2'])
+'find-platform-domains-dns -vc s2'
+>>> build_arg_parser().parse_args(['-vc', 's2'])          # what the operator would paste
+Namespace(config='s2', verbose=True, site=[])             # whole-ORG sweep, config named 's2'
+
+AFTER (live, through the real abort report)
+$ ./find-platform-domains-dns -vc pantheon-sitehealth-emails.toml bus-occb its-wws-test1 | head -0
+[1/2] bus-occb
+ERROR: sweep did not complete (stdout closed (broken pipe))
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+2 sites not reached. Resume with:
+  find-platform-domains-dns -vc pantheon-sitehealth-emails.toml bus-occb its-wws-test1
+exit=2
+```
+
