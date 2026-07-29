@@ -106,7 +106,15 @@ that trades speed or brevity for completeness is made for that reason.
 | Importing from `psh/` | PROMPT.md: copy, do not modularize, so deletion is a `git rm` of three paths. |
 | A `docs/` usage page | The script's module docstring plus §3 here is the documentation. A doc page for a doomed script is inventory, not value. |
 | Percent-encoding the API-sourced path and query segments. **This list is exhaustive: there are three, not one** (corrected, residual review finding 4 — the row named only the last of them and thereby under-stated its own scope, which PD#9 forbids: "Everything deferred is written down. Vague intentions are lies."). They are, by call site in `find-platform-domains-dns`: (1) the pagination cursor, `path += f"&start={cursor}"` in `org_sites()` — a site id taken from the previous page's `site.id`; (2) `f"/sites/{site_id}/environments"` in `site_environments()`; and (3) `f"/sites/{site['id']}/environments/{env_id}/domains"` in `Sweeper.sweep_env()` | **Accepted residual, still open — nothing in this spec or the code claims it is closed** (whole-branch review m10). Unlike `org_id` (config, operator-typo-controlled, quoted since task 3's fix round) and the `SITE` argv (§3), all three come from the API's own responses, and a value that produces an invalid URL now raises `httpx.InvalidURL` — folded into `ApiSession.get`'s handler in task 5 — so it surfaces as the named `PantheonApiError`, i.e. G4/G5/G6, not as an exit-1 traceback. (1) is the weakest of the three, and is named separately for that reason: it lands in a *query string*, where an `&` or `#` in a cursor would silently change the query rather than raise, so `httpx.InvalidURL` does not backstop it — what does is §4.1's G4a detector, which exits 2 on a page contributing no new ids. There is deliberately **no test** for any of the three: constructing an API response whose ids break a URL would pin a shape Pantheon does not produce. |
-| A G0 check ahead of `argparse` | **Accepted residual.** The closed-stream guard (G0) runs immediately after `parse_args`, so a run that is BOTH invoked with a closed stderr AND has a command-line typo gets argparse's own fallback: the usage message goes to stdout and the process exits 2 (verified live). That is loud, in the §7 taxonomy, and writes no CSV. Moving the check earlier costs `main()` a seventh `return` (ruff `PLR0911`) or a possibly-unbound `options` under pyright, neither of which is worth it for a typo-plus-closed-stderr combination. |
+| A G0 check ahead of `argparse` | **Accepted residual.** The closed-stream guard (G0) runs immediately after `parse_args`, so a run that is BOTH invoked with a closed stderr AND has a command-line typo gets argparse's own fallback: the usage message goes to stdout and the process exits 2 (verified live). That is loud, in the §7 taxonomy, and writes no CSV. Moving the check earlier costs `main()` a seventh `return` (ruff `PLR0911`) or a possibly-unbound `options` under pyright, neither of which is worth it for a typo-plus-closed-stderr combination. **Amended, residual round 2 (N2): that reasoning covers a *closed* stream and not a *full* one, and the full case is worse — argparse writes its usage/help text itself, before `require_usable_streams()` and outside every handler, so the write failure escapes as exit 120 rather than as anything in §7.** Measured on this branch, and **pre-existing** (reproduced identically at `ba6e068` and `1a52429`, i.e. it predates the G19 wave):
+
+```
+$ ./find-platform-domains-dns --bogus 2> /dev/full   -> exit 120
+$ ./find-platform-domains-dns -vz     2> /dev/full   -> exit 120
+$ ./find-platform-domains-dns --help  > /dev/full    -> exit 120
+```
+
+Weighed and **declined** rather than overlooked: closing it means wrapping `parse_args` (argparse exits via `SystemExit`, so the guard is a `try`/`except SystemExit` that must detach the doomed stream and re-raise), which buys `main()` the `PLR0911`/possibly-unbound cost above for a combination — a command-line typo AND a full or unwritable diagnostic stream — in a script due for deletion. The consequence accepted: **`--help` and usage errors are the one region where exit 120 is still reachable**, and §7's taxonomy therefore describes everything the program itself writes, not argparse's own output. |
 
 ## 3. CLI contract
 
@@ -410,7 +418,7 @@ answer for both (`NoAnswer`/`NXDOMAIN`) means dead. Any transient or malformed o
 treated as **alive** — the check MUST NOT cry wolf on a blip, since its only job is to warn.
 
 **G19 detail — why stderr needs a *different* probe from stdout.** Every operator message in
-this program goes to stderr, and until this fix none of those writes was guarded. Three live
+this program goes to stderr, and until this fix none of those writes was guarded. Four live
 reproductions, all exiting **120** — a code §7's taxonomy does not contain, so a `case $?` over
 0/1/2/130 in a cron wrapper falls straight through:
 
@@ -418,6 +426,7 @@ reproductions, all exiting **120** — a code §7's taxonomy does not contain, s
 $ ./find-platform-domains-dns bus-occb    2> /dev/full > /tmp/o3.out   -> exit 120  (complete CSV)
 $ ./find-platform-domains-dns -v bus-occb 2> /dev/full > /tmp/o4.out   -> exit 120  (EMPTY CSV)
 $ ./find-platform-domains-dns -c /dev/null 2> /dev/full                -> exit 120
+$ ./find-platform-domains-dns its-wws-test1 2>&- > /dev/full          -> exit 120
 ```
 
 CPython's `flush_std_files()` at interpreter shutdown flushes **both** std streams and turns a
@@ -444,6 +453,12 @@ Three rules, all measured:
    share, and what is pinned in both directions by
    `test_a_healthy_std{out,err}_is_never_detached_on_an_abort`, is the property that matters:
    **a stream that is working is never detached.**
+4. **`sys.stderr is None` is a live arm of `detach_doomed_stderr()`, not defensive padding.** With
+   fd 2 closed, `print(…, file=None)` falls back to **stdout**, so on `2>&- > /dev/full` it is
+   *stdout* that fails while reporting G0 — and detaching `sys.stderr` there is `None.fileno()`,
+   an `AttributeError` `point_at_devnull`'s suppression deliberately does not catch, so it escapes
+   `main()`. The fourth reproduction above is that case. It had no test until residual round 2:
+   the mutation `point_at_devnull(sys.stderr)` left the whole file green at 138 passed.
 
 **Deliberately unchanged:** a `-v` run whose stderr is doomed still writes no CSV, because the
 sweep really does stop at its first progress line. Continuing with the operator's output silently
@@ -673,11 +688,17 @@ Required coverage — each item is a behavior a defect could silently break:
 18. G6a: a domain entry whose `type` is neither `custom` nor `platform` is reported, counted,
     and does not silently vanish.
 19. **G19 — a failed stderr write never leaves the §7 taxonomy** (added, residual review
-    finding 1). Five behaviors, each a live reproduction turned into a test: a completed sweep
+    finding 1; extended in residual round 2). Seven behaviors, each a live reproduction turned
+    into a test: a completed sweep
     whose summary line cannot be written returns 2 rather than escaping `main()`; each of the four
     abort arms (`OSError`, `KeyboardInterrupt`, `SessionExpiredError`, `BrokenPipeError`) still
-    returns its own code with stderr doomed; a startup failure (G1) does too; the `retrying()`
-    line inside `prepare_sweep()` does too; and — the direction that must be able to go red — **a
+    returns its own code with stderr doomed; **both** of `report_startup_failure()`'s branches
+    do too — the G1 `StartupError` one **and** the `KeyboardInterrupt` one, which must be
+    parametrized separately because a mutation of either leaves the other green (round 2, N3);
+    the `retrying()`
+    line inside `prepare_sweep()` does too; **a closed stderr reporting G0 onto a *full* stdout
+    returns 2**, which pins `detach_doomed_stderr()`'s `sys.stderr is None` fallback arm (round 2,
+    N1 — that arm survived a whole-file run of 138 tests unmutated-detectably before this); and — the direction that must be able to go red — **a
     healthy stderr is never detached**, driven over an abort with a REAL descriptor, because a
     version of that test driven over a *completed* sweep, or over capsys's descriptor-less
     pseudo-stream, stays green against an unconditional detach (PD#14; that first draft was

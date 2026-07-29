@@ -1244,7 +1244,11 @@ class _StubSession:
         self._fpd = fpd
         self._indeterminate = indeterminate
 
-    def get(self, path):
+    def get(self, path) -> object:
+        # `-> object` is not decoration (residual round 2): without it pyright infers a narrow
+        # union from these literals, and every subclass below that returns a different JSON shape
+        # (e.g. `class Named(_StubSession)`) is flagged an incompatible override.  Nothing gates
+        # it -- this file is outside [tool.pyright].include -- but it shows up in editors.
         if "/memberships/sites" in path:
             return [{"id": "mem-1", "site": {"id": "u1", "name": "s1"}}]
         if path.endswith("/environments"):
@@ -2208,7 +2212,12 @@ def test_a_healthy_stderr_is_never_detached_on_an_abort(fpd, monkeypatch, tmp_pa
     assert "Stopped during s1." in (tmp_path / "stderr").read_text()
 
 
-def test_a_startup_failure_survives_a_doomed_stderr(fpd, monkeypatch, tmp_path):
+@pytest.mark.parametrize(("make_argv", "expected_code"), [
+    (lambda tmp_path: ["-c", str(tmp_path / "there-is-no-such-config.toml")], 2),
+    (lambda _tmp_path: ["alpha"], 130),
+])
+def test_a_startup_failure_survives_a_doomed_stderr(fpd, monkeypatch, tmp_path, make_argv,
+                                                     expected_code):
     """Residual review, finding 1, before the sweep begins.  Measured live:
 
         $ ./find-platform-domains-dns -c /dev/null 2> /dev/full; echo "exit=$?"
@@ -2218,14 +2227,64 @@ def test_a_startup_failure_survives_a_doomed_stderr(fpd, monkeypatch, tmp_path):
     so its prints need the same guard.  This is also the case a flush probe cannot detect:
     nothing has been written to stderr yet, so stderr's buffer is empty and flushing it succeeds
     even on a filesystem with no space at all.
+
+    BOTH of report_startup_failure()'s branches are parametrized (residual round 2, N3).  With
+    only the StartupError one, mutating the sibling `report_line("ERROR: interrupted before the
+    sweep began")` back to a bare print left this test GREEN -- half a guard, reported by the
+    round-1 mutation table as a whole one.  The Ctrl-C branch is not decorative: SPEC section
+    4.1's site listing is up to 5 pages plus two 2-second cursor retries, a real Ctrl-C window,
+    and it is reached here by making build_session() raise (the config-missing case never gets
+    that far, so one stub serves both rows).
     """
+    def interrupted(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpd, "build_session", interrupted)
     monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
-    absent = tmp_path / "there-is-no-such-config.toml"
+    argv = make_argv(tmp_path)
 
     def run():
-        assert fpd.main(["-c", str(absent)]) == 2
+        assert fpd.main(argv) == expected_code
 
     assert_dup2_detached_stderr(fpd, monkeypatch, tmp_path, run)
+
+
+def test_a_closed_stderr_reporting_onto_a_full_stdout_returns_2(fpd, monkeypatch, tmp_path):
+    """Residual round 2, N1.  detach_doomed_stderr()'s `sys.stdout if sys.stderr is None` arm had
+    no red-capable instrument: mutating it to a bare `point_at_devnull(sys.stderr)` left the
+    WHOLE file green (138 passed) while the live command exited 120.  Its only evidence was a
+    pasted run -- PD#14 exactly, inside the wave whose whole purpose was closing that class.
+
+        $ ./find-platform-domains-dns its-wws-test1 2>&- > /dev/full; echo "exit=$?"
+        exit=120        (without the arm)
+        exit=2          (with it)
+
+    The mechanism: with fd 2 closed, `sys.stderr is None`, and CPython's `print(..., file=None)`
+    falls back to **sys.stdout** -- so G0's own abort report is written to the full stdout, and
+    THAT is the stream that fails.  Detaching `sys.stderr` there is `None.fileno()`, an
+    AttributeError which point_at_devnull's `contextlib.suppress(OSError, ValueError,
+    io.UnsupportedOperation)` deliberately does not catch, so it escapes main() and the shutdown
+    flush of the still-doomed stdout turns the run into 120.
+
+    Reuses _UndrainableStdout rather than the stderr fake: production's redirected stdout is
+    BLOCK-buffered, so the OSError surfaces from report_line()'s `flush=True`, not from the
+    write -- which is the shape that class already models.
+    """
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+    handle = (tmp_path / "stdout").open("w")
+    expected_fd = handle.fileno()
+    calls = []
+    monkeypatch.setattr(fpd.os, "dup2", lambda fd, target: calls.append((fd, target)))
+    stdout = _UndrainableStdout(handle, OSError(28, "No space left on device"))
+    monkeypatch.setattr(fpd.sys, "stdout", stdout)
+    monkeypatch.setattr(fpd.sys, "stderr", None)          # G0: `2>&-`
+    try:
+        assert fpd.main(["its-wws-test1"]) == 2
+    finally:
+        handle.close()
+    assert stdout.flush_calls >= 1                        # the real flush attempt
+    assert calls, "the doomed fallback stream was never detached"
+    assert {target for _fd, target in calls} == {expected_fd}   # stdout's fd, not stderr's
 
 
 def test_a_failed_retry_line_during_the_site_listing_returns_2(fpd, monkeypatch, tmp_path):

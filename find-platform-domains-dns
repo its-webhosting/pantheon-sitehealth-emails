@@ -980,6 +980,13 @@ def resume_command(argv, original_sites, names):
     `-vc prod.toml s1 s2` rebuilt as `find-platform-domains-dns -vc s2`, which re-parses as
     `--config=s2` with no site names at all -- a whole-organization sweep against a config file
     named `s2`, and the site list this line exists to hand the operator is gone.
+
+    Residual inherited from that model, written down rather than fixed (residual round 2): a
+    value that is the SAME STRING as a site name still confuses it, because the membership test
+    cannot tell the two apart -- `['-vc', 's2', 's1', 's2']` (a config file literally named `s2`)
+    rebuilds as `-vc s2`, the same wrong shape.  psh/lifecycle.py:386-390 has the identical
+    shape and the identical residual; fixing it needs argparse's own token classification rather
+    than a membership test, which is not worth it in a script due for deletion.
     """
     value_options = option_strings_taking_a_value()
     kept = []

@@ -839,3 +839,63 @@ Stopped during bus-occb.
 exit=2
 ```
 
+
+---
+
+## Residual round 2 (2026-07-28)
+
+Re-run of SPEC §13 items 4, 5 and 8 after the round-2 changes (the `sys.stderr is None` arm got
+its test, both `report_startup_failure()` branches are parametrized, and two documentation
+corrections landed) — **no regression**, output identical to the section above:
+
+```
+$ ./find-platform-domains-dns its-wws-test1; echo "exit=$?"
+sites=1 envs=7 custom_domains=2 rows=0 indeterminate=0
+exit=0
+
+$ ./find-platform-domains-dns bus-occb; echo "exit=$?"
+bus-occb,live,occb.bus.umich.edu,occb.bus.umich.edu,live-bus-occb.pantheonsite.io
+sites=1 envs=3 custom_domains=1 rows=1 indeterminate=0
+exit=0
+
+$ ./find-platform-domains-dns bus-occb | head -0; echo "exit=${PIPESTATUS[0]}"
+ERROR: sweep did not complete (stdout closed (broken pipe))
+sites=1 envs=2 custom_domains=1 rows=0 indeterminate=0
+Stopped during bus-occb.
+1 site not reached. Resume with:
+  find-platform-domains-dns bus-occb
+exit=2
+
+$ ./run-tests --fast
+All checks passed!                        (ruff, campaign ratchet)
+0 errors, 0 warnings, 0 informations      (pyright, campaign ratchet)
+... 1196 passed, 3 skipped, 2 deselected, 15 warnings in 28.13s
+```
+
+### The one place exit 120 is still reachable — measured, and deliberately left open
+
+Recorded here so this file is not read as claiming more than it proves. `argparse` writes its own
+usage and `--help` text before `require_usable_streams()` exists and outside every handler, so a
+command-line typo or `--help` aimed at a full stream still escapes SPEC §7's taxonomy:
+
+```
+$ ./find-platform-domains-dns --bogus 2> /dev/full; echo "exit=$?"
+exit=120
+$ ./find-platform-domains-dns -vz     2> /dev/full; echo "exit=$?"
+exit=120
+$ ./find-platform-domains-dns --help  > /dev/full; echo "exit=$?"
+Exception ignored on flushing sys.stdout:
+OSError: [Errno 28] No space left on device
+exit=120
+```
+
+**Pre-existing**, not introduced by the G19 wave — reproduced identically against the parent
+commit:
+
+```
+$ git show ba6e068:find-platform-domains-dns > /tmp/fpd_ba6e068.py
+$ .venv/bin/python /tmp/fpd_ba6e068.py --bogus 2> /dev/full; echo "exit=$?"
+exit=120
+```
+
+Weighed and declined; SPEC §2.2's G0-ordering row carries the reasoning.

@@ -74,14 +74,18 @@ the names are the point, since "137 sites not reached" gives the operator no way
 which 137 they were. Resuming re-sweeps the interrupted site, so appending to the same CSV
 duplicates that site's rows. `-c` is read **only** on the whole-organization path: a
 `SITE`-argument sweep never uses `[Pantheon].org_id` and does not require the file to exist.
-**Those four codes are the whole taxonomy, and holding that line takes explicit work**: CPython's
-shutdown flush covers **both** std streams and turns a failure of either into exit **120**, so a
-run redirected at a full disk (`> /dev/full`, `2>>sweep.log` on a filesystem that fills) escaped
-the taxonomy entirely until each stream got a "detach only a stream a real write/flush has proven
-doomed" guard — never an unconditional one, which discards a buffered CSV row and, under pytest's
-fd-level capture, repoints the session's own stream at `/dev/null`. Guarded by
-`test_a_healthy_stdout_is_never_detached_on_an_abort` /
+**Those four codes cover everything the program itself writes, and holding that line takes
+explicit work**: CPython's shutdown flush covers **both** std streams and turns a failure of
+either into exit **120**, so a run redirected at a full disk (`> /dev/full`, `2>>sweep.log` on a
+filesystem that fills) escaped the taxonomy entirely until each stream got a "detach only a stream
+a real write/flush has proven doomed" guard — never an unconditional one, which discards a
+buffered CSV row and, under pytest's fd-level capture, repoints the session's own stream at
+`/dev/null`. Guarded by `test_a_healthy_stdout_is_never_detached_on_an_abort` /
 `test_a_healthy_stderr_is_never_detached_on_an_abort` and their doomed-stream twins.
+**The stated exception, measured and deliberately left open**: argparse writes its own usage and
+`--help` text before that guard exists and outside every handler, so `--bogus 2>/dev/full` and
+`--help >/dev/full` still exit 120. Pre-existing, and declined rather than overlooked — SPEC
+§2.2's G0-ordering row records why wrapping `parse_args` was judged not worth it here.
 
 ```bash
 ./find-platform-domains-dns its-wws-test1     # one site
