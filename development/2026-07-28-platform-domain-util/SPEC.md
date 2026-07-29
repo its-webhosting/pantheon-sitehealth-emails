@@ -828,6 +828,13 @@ operational data, not evidence of correctness. Run it when you actually want the
 
 ## 15. Closing audit questions (answer after implementation)
 
+> **ANSWERED** — all six, from the first full-organization sweep (409 sites, 1644 environments,
+> 513 custom domains, 31 rows, 0 indeterminates, exit 0). See `CLOSING-AUDIT.md` in this
+> directory. Nothing in the answers changes the design: Q5's cursor model and Q6's page-length
+> assumption both held, so D11 stands. The one finding with downstream consequences is Q1 —
+> 2 of 31 rows share a `dns_record` with another row, so the rewriter MUST de-duplicate on
+> column 4.
+
 1. On the first full-organization sweep: how many rows had `dns_record != custom_domain`
    (G13a), and did any `dns_record` value appear in more than one row? A repeated `dns_record`
    means one rewrite affects two sites, which the CSV cannot show — sampled at 0 of 7 hits
