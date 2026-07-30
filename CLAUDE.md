@@ -109,6 +109,62 @@ a silent failure mode (it can return page 1 again instead of the next page); the
 it and exits 2 rather than sweeping a truncated site list. **Delete this script after Pantheon's
 CDN migration** — checklist in `development/2026-07-28-platform-domain-util/SPEC.md` §14.
 
+### `find-platform-domains-cloudflare` (temporary utility)
+
+A standalone, deletable script — **not** part of the main program and importing nothing from
+`psh/`/`check/`/`plugin/` — that writes every Cloudflare DNS **CNAME whose target ends in
+`.pantheonsite.io`** to `./platform-domains-cloudflare.json`. It is the Cloudflare-side
+counterpart to `find-platform-domains-dns`: that one reads public DNS and is blind to a proxied
+record's target; `fqdns.json` is built with `proxied=True` and is blind to a DNS-only record. This
+considers **all** records in **all** zones of every account the credentials can see. Legacy
+`*.gotpantheon.com` targets are out of scope.
+
+The file is keyed by the **normalized** FQDN with `{zone_id, origins, record_id, proxied, ttl,
+comment, tags, settings}`. **Two traps when comparing it to `fqdns.json`:** that file keys by the
+**raw** `record.name` (normalize both sides, or you invent phantom entries), and its `origins`
+means something **wider** — every proxied record's content at that name, IP addresses included —
+where this file's holds only matching platform-CNAME targets. `settings` is `.model_dump()`ed (it
+is a pydantic model and is otherwise unserializable). Every scalar is **first-record-wins**,
+`origins` accumulates, and **every** duplicate name warns on stderr. The file is **regenerated in
+full on every run**, whatever its age; a run that matches nothing writes `{}` loudly rather than
+leaving a stale file. It drives a *destructive* rewrite, so **regenerate it immediately before any
+rewrite** — its mtime is the only freshness signal it carries.
+
+Exit 0 = written, 2 = could not complete, 130 = interrupted; there is no exit 1 (a doomed stdout
+or stderr can still exit 120, as with the sibling's argparse output). Exit 2 covers an unreadable
+config, a non-string or unresolvable credential, missing credentials, any Cloudflare API error,
+**zero zones** (a missing `Account:Read`/`DNS:Read` scope and a genuinely empty org otherwise
+produce an identical empty file), **a truncated list**, and an `OSError` on the write. All three
+list endpoints paginate, so each one's item count is cross-checked against Cloudflare's own
+`total_count`; a mismatch triggers **one re-read**, because `total_count` is computed for page 1
+and an item changed mid-sweep disagrees for a benign reason — a self-consistent re-read is that
+case and is kept, a second disagreement is truncation and aborts without writing. The run reports
+how many zones it could actually cross-check, since the guard no-ops wherever the API omits
+`total_count`. stdout carries only argparse's usage/`--help`; everything else is stderr, and error
+text **never** includes an API response body.
+
+Credentials come from `[Cloudflare]` in the same TOML the main program reads, via a **copied**
+resolver handling only the `<{env NAME}` / `<{secret env NAME}` forms; any other substitution, and
+any non-string value, is a named error rather than a silent passthrough. `enabled` is not
+consulted. **`build_client()` pins the client against the ambient environment** — four credential
+fields, `base_url`, and `_custom_headers` — because the SDK back-fills unset credentials from six
+environment variables and ambient values reach the wire by four routes, the worst being
+`$CLOUDFLARE_BASE_URL`, which sends the configured token to an arbitrary host. Measured against
+cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and
+`$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is
+configured.
+
+```bash
+./find-platform-domains-cloudflare            # every zone, every account
+./find-platform-domains-cloudflare -v         # ... naming each zone and its record count
+```
+
+`find-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
+as `pantheon-sitehealth-emails.py` and `find-platform-domains-dns.py`: ruff, pyright, and
+CodeGraph key off the `.py` extension and would otherwise be blind to the extension-less real
+file. **Delete this script after Pantheon's CDN migration** — checklist in
+`development/2026-07-30-platform-domain-util2/SPEC.md` §11.
+
 ## Required runtime credentials / external tools
 
 Running against real sites needs, in the environment: `terminus` authenticated with a
