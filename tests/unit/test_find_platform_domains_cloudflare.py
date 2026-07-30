@@ -167,8 +167,14 @@ def test_cloudflare_client_sends_only_the_configured_credential(fpc, tmp_path, m
     assert client.auth_headers == {"Authorization": "Bearer tok-123"}
     request = sent_request(client)
     assert str(request.url).startswith("https://api.cloudflare.com/client/v4/")
-    leaked = set(request.headers.values()) & set(AMBIENT_CLOUDFLARE_VARS.values())
-    assert leaked == set(), f"ambient credentials reached the wire: {leaked}"
+    # Each route named explicitly.  A set-intersection against the env var VALUES cannot see
+    # route 3: $CLOUDFLARE_CUSTOM_HEADERS is "X-Auth-Email: attacker@..." while the header it
+    # injects is just "attacker@...".  Mutation-tested -- the intersection form stayed green
+    # with the _custom_headers clearing deleted.
+    assert request.headers.get("x-auth-email") is None      # routes 1, 2 and 3
+    assert request.headers.get("x-auth-key") is None        # routes 2 and 3
+    assert "evil.example" not in str(request.headers)       # route 3 payload
+    assert "ambient-key" not in str(request.headers)
 
 
 def test_cloudflare_client_ignores_an_ambient_base_url(fpc, tmp_path, monkeypatch):

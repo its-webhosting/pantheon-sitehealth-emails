@@ -570,8 +570,24 @@ Ctrl-C-during-`quit()` duplicate-email window. `main()` keeps calling `smtp_logi
 - **Cloudflare auth + shared client**: the plugin builds **one** `Cloudflare` client from
   `[Cloudflare]` config (no direct-env fallback) — `api_token` if present (preferred), else
   `email` + `api_key`; missing creds while enabled → clear exit. `plugin/cloudflare/client.py`
-  has `build_client()` (auth) and `get_client()` (**lazy** build-or-return, cached in
-  `sc.plugin_context['plugin.cloudflare']['client']`). `__init__.py` stashes a reference to
+  has `build_client()` (auth), **`pinned_client()`** (what makes "no direct-env fallback" *true*),
+  and `get_client()` (**lazy** build-or-return, cached in
+  `sc.plugin_context['plugin.cloudflare']['client']`).
+  **The pin is load-bearing, and the docstring was false before it existed.** Measured on
+  cloudflare 5.4.0: the SDK back-fills every credential left `None` from the environment, and
+  ambient values reach the wire by **four** routes — `auth_headers` returns the *first* of
+  email → key → token → user_service_key (so an ambient `CLOUDFLARE_EMAIL` beats a configured
+  `api_token` and the token is never sent), `default_headers` adds `X-Auth-*` independently,
+  `$CLOUDFLARE_CUSTOM_HEADERS` is merged *last* and overrides both, and **`$CLOUDFLARE_BASE_URL`
+  redirects every request, sending the configured credential to an arbitrary host**. That last
+  one mattered most: this program runs unattended against production monthly. `pinned_client()`
+  closes all four (pin `base_url`, null the unsupplied credential fields, clear
+  `_custom_headers`). **NOT closed, deliberately:** httpx's `trust_env=True` leaves `$HTTPS_PROXY`
+  and `$SSL_CERT_FILE` in play — closing that would break legitimate proxied deployments
+  (`development/2026-07-30-platform-domain-util2/SPEC.md` §8.13). The property is asserted
+  against a **real** built request in `test_plugin_cloudflare_client.py`, not against the
+  attribute assignments that implement it, and each of the three pins is mutation-tested — a
+  set-intersection version of that assertion silently missed the `_custom_headers` route. `__init__.py` stashes a reference to
   `get_client` in the bag (`['get_client']`); `ips.py` and `fqdns.py` call
   `sc.plugin_context['plugin.cloudflare']['get_client']()` — so they import nothing from the
   plugin (stay standalone-loadable by the tests) and there is **no hook-ordering dependency** (the

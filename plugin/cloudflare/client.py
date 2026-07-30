@@ -14,23 +14,65 @@ import script_context as sc
 # hook runs first).
 
 
+API_BASE_URL = 'https://api.cloudflare.com/client/v4'   # pinned; see pinned_client()
+
+
+def pinned_client(**creds) -> Cloudflare:
+    """Build a Cloudflare client that uses EXACTLY the credentials the config supplied.
+
+    build_client's docstring has always promised "no direct-environment fallback".  Measured on
+    cloudflare 5.4.0, that promise was FALSE: the SDK back-fills every credential argument left
+    None from the environment, and ambient values reach the wire by four routes --
+
+      1. `auth_headers` returns the FIRST of email -> key -> token -> user_service_key that is
+         set, and only that one, so an ambient $CLOUDFLARE_EMAIL beats a configured api_token
+         and the token is never sent at all;
+      2. `default_headers` separately adds X-Auth-Key / X-Auth-Email whenever those attributes
+         are not None;
+      3. $CLOUDFLARE_CUSTOM_HEADERS is merged LAST into default_headers, overriding 1 and 2; and
+      4. $CLOUDFLARE_BASE_URL redirects every request, sending the configured credential to an
+         arbitrary host.
+
+    Routes 1 and 2 are closed by nulling the fields the config did not supply (both read these
+    attributes at request-build time), route 3 by clearing _custom_headers, route 4 by pinning
+    base_url.  Route 4 is the serious one: the credential LEAVES THE MACHINE rather than merely
+    failing to authenticate, and this program runs unattended against production every month.
+
+    NOT closed, and deliberately: httpx is constructed with trust_env=True, so $HTTPS_PROXY and
+    $SSL_CERT_FILE still influence transport.  Closing that would break legitimate proxied
+    deployments; it is recorded in development/2026-07-30-platform-domain-util2/SPEC.md §8.13.
+
+    The pin is SDK-version-sensitive (measured against 5.4.0) and pyproject declares `cloudflare`
+    unpinned, which is why the test asserts the headers of a real built request, not these
+    attribute assignments.
+    """
+    client = Cloudflare(**creds, base_url=API_BASE_URL)
+    for field in ('api_token', 'api_key', 'api_email', 'user_service_key'):
+        if field not in creds:
+            setattr(client, field, None)
+    client._custom_headers = {}  # noqa: SLF001 -- route 3 above; the SDK has no public API for
+    # "ignore $CLOUDFLARE_CUSTOM_HEADERS", and it is merged after everything this function pins
+    return client
+
+
 def build_client() -> Cloudflare:
     """Construct the Cloudflare client from the [Cloudflare] config section.
 
-    api_token (preferred) else email + api_key.  There is no direct-environment fallback; the
+    api_token (preferred) else email + api_key.  There is no direct-environment fallback -- the
     operator decides in the config file where those values come from (literals, <{secret env
-    ...}>, <{secret aws ...}>, ...).  Missing credentials while enabled -> clear exit.
+    ...}>, <{secret aws ...}>, ...) -- and pinned_client() is what makes that sentence TRUE
+    rather than merely intended.  Missing credentials while enabled -> clear exit.
     """
     cf = sc.config['Cloudflare']
     api_token = cf.get('api_token')
     if api_token:
-        return Cloudflare(api_token=api_token)
+        return pinned_client(api_token=api_token)
     email = cf.get('email')
     api_key = cf.get('api_key')
     if not email or not api_key:
         sys.exit('ERROR: [Cloudflare] is enabled but needs either api_token, '
                  'or both email and api_key.')
-    return Cloudflare(api_email=email, api_key=api_key)
+    return pinned_client(api_email=email, api_key=api_key)
 
 
 def get_client() -> Cloudflare:
