@@ -10,7 +10,9 @@ full checklist also has three pyproject.toml entries and a ruff-check.sh case ar
 N6: this sentence previously undercounted the same way CLAUDE.md's copy of it did).  The DNS walk
 and the resolver seam are COPIES of check/pantheon_cdn_change/chain.py and psh/dns_classify.py.
 
-Output: CSV on stdout, `site_name,site_env,custom_domain,dns_record,platform_domain`, no header.
+Output: CSV on stdout -- a `site_name,site_env,custom_domain,dns_record,platform_domain` header
+row, written and flushed before the first site so a hit-free sweep still names its columns, then
+one row per hit.
 Operator messages, including every indeterminate lookup, go to stderr.  Exit 0 = clean sweep,
 1 = completed with indeterminates, 2 = could not complete, 130 = interrupted (fix round 2, N7:
 this line omitted 130, which main()'s own docstring and CLAUDE.md both document).
@@ -585,6 +587,9 @@ def platform_domain_is_dead(name):
     return True
 
 
+CSV_COLUMNS = ("site_name", "site_env", "custom_domain", "dns_record", "platform_domain")
+
+
 class Sweeper:
     """Walks sites -> environments -> custom domains, writing CSV rows and counting outcomes.
 
@@ -620,6 +625,15 @@ class Sweeper:
             print(message, file=sys.stderr, flush=True)
 
     def sweep(self, sites):
+        # SPEC section 5 (amended): the header row, written through the same injected writer and
+        # flushed like a row so `tail -f` shows the columns immediately rather than at the first
+        # hit.  Here rather than in main() for two reasons: one place owns the column order (the
+        # writerow in check_domain is its positional twin), and it lands INSIDE main()'s try, so a
+        # doomed stdout becomes an ordinary exit-2 abort with the os.dup2 recipe applied instead
+        # of the exit 120 an unguarded write would produce.  Consequence, deliberate: a stdout
+        # that cannot be flushed now fails at second zero rather than at the first hit.
+        self._writer.writerow(CSV_COLUMNS)
+        self._stream.flush()
         self.remaining = list(sites)
         for number, site in enumerate(sites, start=1):
             self._progress(f"[{number}/{len(sites)}] {site['name']}")

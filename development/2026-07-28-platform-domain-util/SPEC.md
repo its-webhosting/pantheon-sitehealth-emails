@@ -244,6 +244,16 @@ Exactly one CSV row per hit, on **stdout**, five fields, **no header row**, `\n`
 terminator (`csv.writer` defaults to `\r\n` — it MUST be set explicitly), flushed after every
 row so a long sweep can be watched with `tail -f`:
 
+> **Amended, 2026-07-30 (post-delivery request): there IS a header row now.** One header line
+> naming the five columns is written and flushed as `Sweeper.sweep()`'s first act — through the
+> same injected writer/stream as the rows, so one place owns the column order and the write lands
+> inside `main()`'s `try` (a doomed stdout stays an ordinary §7 exit-2 abort with the G16 `os.dup2`
+> recipe applied, rather than the 120 an unguarded write would produce). Two consequences,
+> deliberate: a hit-free sweep now emits a header-only CSV rather than an empty one (empty was
+> indistinguishable from a file the sweep never reached), and a stdout that cannot be flushed
+> fails at second zero rather than at the first hit. Appending a re-run to an existing CSV
+> appends a second header, alongside the interrupted site's duplicate rows §7.3 already documents.
+
 ```
 site_name,site_env,custom_domain,dns_record,platform_domain
 ```

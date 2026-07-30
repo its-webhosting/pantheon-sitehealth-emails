@@ -62,7 +62,11 @@ verbosity (`--create-tables` forces `-vvv`). `--update-cloudflare-fqdns` /
 A standalone, deletable script — **not** part of the main program and importing nothing from
 `psh/`/`check/`/`plugin/` — that lists every custom domain in the organization whose DNS still
 reaches a Pantheon platform domain (`*.pantheonsite.io`) by CNAME, as CSV on stdout:
-`site_name,site_env,custom_domain,dns_record,platform_domain`. `dns_record` is the FQDN owning
+`site_name,site_env,custom_domain,dns_record,platform_domain` — that same line is written as a
+**header row**, flushed before the first site is swept, so a hit-free sweep still names its
+columns and a doomed stdout (`> /dev/full`) aborts at second zero instead of at the first hit;
+appending a re-run to an existing CSV therefore appends a second header along with the interrupted
+site's duplicate rows. `dns_record` is the FQDN owning
 the hitting CNAME record, which is what a downstream rewriter must change. Operator messages and
 a `sites=… indeterminate=…` summary go to stderr; exit 0 = clean sweep, 1 = completed with
 indeterminates, 2 = could not complete, 130 = interrupted. There is no `--resume-from`; instead,

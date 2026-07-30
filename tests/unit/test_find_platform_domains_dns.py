@@ -966,6 +966,44 @@ def test_csv_uses_unix_line_endings(fpd, monkeypatch):
     assert "\r" not in out.getvalue()
 
 
+def test_the_csv_starts_with_a_header_row_even_when_nothing_hits(fpd, monkeypatch):
+    # SPEC section 5, amended: the header names the columns for the downstream rewriter, so it is
+    # written once per sweep whether or not the sweep finds anything -- a hit-free CSV that is
+    # empty rather than header-only is indistinguishable from a file the sweep never wrote to.
+    patch_dns(monkeypatch, fpd, {})
+    sweeper, out = make_sweeper(fpd, get=lambda _path: {})       # no environments -> no rows
+    sweeper.sweep([{"id": "u", "name": "s"}])
+    assert out.getvalue() == "site_name,site_env,custom_domain,dns_record,platform_domain\n"
+    assert sweeper.counters.rows == 0        # the header is not a row
+
+
+def test_the_header_precedes_the_rows_and_is_flushed_as_it_is_written(fpd, monkeypatch):
+    # The header goes through the SAME injected writer/stream as the rows (SPEC section 9), so
+    # `tail -f` shows the columns immediately instead of at the first hit -- which on an org-wide
+    # sweep can be many minutes in, or never.
+    patch_dns(monkeypatch, fpd, {
+        ("a.umich.edu", "CNAME"): ["live-s.pantheonsite.io."],
+        ("live-s.pantheonsite.io", "A"): ["23.185.0.4"],
+    })
+    responses = {
+        "/sites/uuid/environments": {"live": {}},
+        "/sites/uuid/environments/live/domains": [
+            {"id": "live-s.pantheonsite.io", "type": "platform"},
+            {"id": "a.umich.edu", "type": "custom"}],
+    }
+    sweeper, out = make_sweeper(fpd, get=lambda path: responses[path])
+    flushes = []
+    monkeypatch.setattr(out, "flush", lambda: flushes.append(out.getvalue()))
+    sweeper.sweep([{"id": "uuid", "name": "s"}])
+    assert out.getvalue() == (
+        "site_name,site_env,custom_domain,dns_record,platform_domain\n"
+        "s,live,a.umich.edu,a.umich.edu,live-s.pantheonsite.io\n")
+    # Two flushes, each AFTER its own line: the header's, then the row's.
+    assert flushes == [
+        "site_name,site_env,custom_domain,dns_record,platform_domain\n",
+        out.getvalue()]
+
+
 def test_indeterminate_domain_reports_and_counts_but_writes_no_row(fpd, monkeypatch, capsys):
     patch_dns(monkeypatch, fpd, {("a.umich.edu", "CNAME"): dns.resolver.Timeout()})
     sweeper, out = make_sweeper(fpd)
@@ -1439,11 +1477,19 @@ class _UndrainableStdout:
     a real descriptor but flushes perfectly, so it can no longer reach the descriptor-replacement
     branch now that detach_doomed_stdout() only fires when the flush actually fails -- and a test
     that cannot reach the branch it names is PD#14 exactly.
+
+    `fail_after` tolerates that many successful flushes before the failures start, which the
+    header row (SPEC section 5, amended) made necessary: the sweep's very first act is now a
+    header write plus flush, so a stream that is doomed from its first flush aborts before the
+    sweep ever reaches the error a test installed -- every arm of the parametrization below would
+    have collapsed onto the OSError one, silently, while staying green.  `fail_after=1` is also
+    the more realistic shape for those tests: a disk that fills up DURING the sweep.
     """
 
-    def __init__(self, handle, error):
+    def __init__(self, handle, error, *, fail_after=0):
         self._handle = handle
         self._error = error
+        self._fail_after = fail_after
         self.flush_calls = 0
 
     def write(self, text):
@@ -1451,7 +1497,9 @@ class _UndrainableStdout:
 
     def flush(self):
         self.flush_calls += 1
-        raise self._error
+        if self.flush_calls > self._fail_after:
+            raise self._error
+        return self._handle.flush()
 
     def fileno(self):
         return self._handle.fileno()
@@ -1462,6 +1510,9 @@ def assert_dup2_detached_stdout(fpd, monkeypatch, tmp_path, error, run):
 
     Records the os.dup2 call rather than relying on the process exit code, which pytest cannot
     observe in-process.
+
+    `fail_after=1`: every caller drives the abort with an error of its OWN, raised mid-sweep, and
+    the sweep's first act is the header flush -- see _UndrainableStdout.
     """
     handle = (tmp_path / "stdout").open("w")
     expected_fd = handle.fileno()               # captured before dup2 repoints this fd number
@@ -1472,14 +1523,14 @@ def assert_dup2_detached_stdout(fpd, monkeypatch, tmp_path, error, run):
         calls.append((fd, target_fd))
         return real_dup2(fd, target_fd)
 
-    stdout = _UndrainableStdout(handle, error)
+    stdout = _UndrainableStdout(handle, error, fail_after=1)
     monkeypatch.setattr(fpd.sys, "stdout", stdout)
     monkeypatch.setattr(fpd.os, "dup2", recording_dup2)
     try:
         run()
     finally:
         handle.close()
-    assert stdout.flush_calls >= 1               # the real-flush attempt, not a skipped one
+    assert stdout.flush_calls >= 2               # the header's, then the abort's failing one
     assert len(calls) == 1
     assert calls[0][1] == expected_fd            # dup2's target was the real stdout's own fd
 
@@ -1710,7 +1761,8 @@ def test_main_writes_csv_with_unix_line_endings_only(fpd, monkeypatch, tmp_path,
     monkeypatch.setattr(fpd, "build_session", lambda **_kwargs: Hit(fpd, indeterminate=False))
     assert fpd.main(["-c", str(config)]) == 0
     out = capsys.readouterr().out
-    assert out == "s1,live,occb.bus.umich.edu,occb.bus.umich.edu,live-s1.pantheonsite.io\n"
+    assert out == ("site_name,site_env,custom_domain,dns_record,platform_domain\n"
+                   "s1,live,occb.bus.umich.edu,occb.bus.umich.edu,live-s1.pantheonsite.io\n")
     assert "\r" not in out
 
 
@@ -2046,6 +2098,50 @@ def test_every_abort_path_detaches_a_doomed_stdout_from_the_shutdown_flush(
         fpd, monkeypatch, tmp_path, OSError(28, "No space left on device"), run)
 
 
+def test_an_unwritable_stdout_aborts_at_the_header_before_any_site_is_swept(fpd, monkeypatch,
+                                                                           tmp_path):
+    """The production-level cover for the header row's own flush (SPEC section 5, amended).
+
+    `find-platform-domains-dns > /dev/full` used to sweep until the first hit before anything
+    noticed -- on an org whose sites are all migrated, that is 38 minutes of API and DNS traffic
+    for a CSV that was never going to land anywhere.  The header's flush turns the same run into
+    an exit-2 abort at second zero, with the doomed descriptor detached so the shutdown flush
+    cannot convert it into 120.  Deleting the `self._stream.flush()` under the header write leaves
+    BOTH Sweeper-level header tests green (their in-memory StringIO never fails), so this is the
+    test that names the property -- measured: the mutation fails here and in the flush-count
+    assertions of the doomed-stdout tests above, and nowhere else.
+    """
+    config = tmp_path / "c.toml"
+    config.write_text('[Pantheon]\norg_id = "org-uuid"\n')
+    sites_listed = []
+
+    class Counting(_StubSession):
+        def get(self, path) -> object:
+            sites_listed.append(path)
+            return super().get(path)
+
+    monkeypatch.setattr(fpd, "machine_token", lambda: "mt")
+    monkeypatch.setattr(fpd, "build_session",
+                        lambda **_kwargs: Counting(fpd, indeterminate=False))
+    monkeypatch.setattr(fpd.signal, "signal", lambda _sig, _handler: None)
+
+    handle = (tmp_path / "stdout").open("w")
+    expected_fd = handle.fileno()
+    calls = []
+    monkeypatch.setattr(fpd.os, "dup2", lambda fd, target: calls.append((fd, target)))
+    stdout = _UndrainableStdout(handle, OSError(28, "No space left on device"))  # doomed at once
+    monkeypatch.setattr(fpd.sys, "stdout", stdout)
+    try:
+        assert fpd.main(["-c", str(config)]) == 2
+    finally:
+        handle.close()
+    # Two flushes: the header's, which failed, and detach_doomed_stdout()'s own probe.
+    assert stdout.flush_calls == 2
+    assert calls == [(calls[0][0], expected_fd)]
+    # The site LISTING ran (it precedes the sweep); no environment or domain call did.
+    assert all("/memberships/sites" in path for path in sites_listed)
+
+
 # ---------------------------------------------------------------------------------------------
 # Residual review, finding 1: the exit-120 class on STDERR (SPEC G19)
 # ---------------------------------------------------------------------------------------------
@@ -2376,10 +2472,12 @@ def test_main_wires_real_stdout_into_the_sweeper_so_rows_are_flushed(fpd, monkey
     stream = _FlushRecordingStream()
     monkeypatch.setattr(fpd.sys, "stdout", stream)
     assert _main_over_one_hit(fpd, monkeypatch, tmp_path)[0] == 0
+    header = "site_name,site_env,custom_domain,dns_record,platform_domain\n"
     assert stream.getvalue() == (
-        "s1,live,occb.bus.umich.edu,occb.bus.umich.edu,live-s1.pantheonsite.io\n")
-    # Flushed AFTER the row was written, on the stream main() actually writes to.
-    assert stream.flushes == [stream.getvalue()]
+        header + "s1,live,occb.bus.umich.edu,occb.bus.umich.edu,live-s1.pantheonsite.io\n")
+    # Flushed AFTER each line was written, on the stream main() actually writes to: the header's
+    # flush, then the row's.
+    assert stream.flushes == [header, stream.getvalue()]
 
 
 def test_sweep_env_hands_check_domain_the_environments_own_platform_set(fpd, monkeypatch, capsys):
