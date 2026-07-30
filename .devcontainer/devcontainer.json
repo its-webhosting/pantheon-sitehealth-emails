@@ -33,7 +33,7 @@
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "workspaceFolder": "/workspace",
-  "postCreateCommand": "mise install",
+  "postCreateCommand": "/home/node/.local/bin/mise install",
   "postStartCommand": "sudo /usr/local/bin/container-start.sh",
   "waitFor": "postStartCommand"
 }
