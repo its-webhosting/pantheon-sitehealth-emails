@@ -14,6 +14,7 @@ TEMPORARY, deleted with the script after the Pantheon CDN migration -- see
 development/2026-07-30-platform-domain-util2/SPEC.md section 11.
 """
 import importlib.util
+import json
 import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -228,3 +229,104 @@ def test_cloudflare_client_with_a_non_utf8_file_is_a_startup_error(fpc, tmp_path
     with pytest.raises(fpc.StartupError) as caught:
         fpc.cloudflare_client(str(path))
     assert "not valid TOML" in str(caught.value)
+
+
+# --- Task 3: the fold ------------------------------------------------------------------------
+
+def test_collect_entries_builds_the_output_structure(fpc):
+    entries, warnings = fpc.collect_entries([("zone-a", record(ttl=300, comment="migrated",
+                                                               tags=["cdn"]))])
+    assert entries == {
+        "www.example.edu": {
+            "zone_id": "zone-a",
+            "origins": ["live-umich-example1.pantheonsite.io"],
+            "record_id": "rec-1",
+            "proxied": True,
+            "ttl": 300,
+            "comment": "migrated",
+            "tags": ["cdn"],
+            "settings": None,
+        },
+    }
+    assert warnings == []
+
+
+def test_collect_entries_keeps_dns_only_records(fpc):
+    """The whole reason this script exists next to fqdns.json, which is proxied=True only."""
+    entries, _ = fpc.collect_entries([("zone-a", record(proxied=False))])
+    assert entries["www.example.edu"]["proxied"] is False
+
+
+def test_collect_entries_serializes_a_pydantic_settings_model(fpc):
+    """record.settings is a pydantic model; json.dump cannot serialize one."""
+    from cloudflare.types.dns.cname_record import Settings
+    entries, _ = fpc.collect_entries(
+        [("zone-a", record(settings=Settings(flatten_cname=True)))])
+    settings = entries["www.example.edu"]["settings"]
+    assert settings["flatten_cname"] is True
+    # Asserting the whole dict would pin the SDK's model shape (it also carries ipv4_only /
+    # ipv6_only); what matters is the value round-tripping and the entry staying serializable,
+    # which a live pydantic model would not be.
+    json.dumps(entries)
+
+
+def test_collect_entries_tolerates_a_record_missing_the_optional_fields(fpc):
+    bare = types.SimpleNamespace(type="CNAME", name="www.example.edu", id="rec-1",
+                                 content="live-umich-example1.pantheonsite.io")
+    entries, _ = fpc.collect_entries([("zone-a", bare)])
+    entry = entries["www.example.edu"]
+    assert entry["proxied"] is None      # unknown, NOT coerced to False -- see R5
+    assert entry["ttl"] is None
+    assert entry["comment"] is None
+    assert entry["tags"] == []
+    assert entry["settings"] is None
+
+
+@pytest.mark.parametrize("skipped", [
+    {"type": "A", "content": "23.185.0.4"},
+    {"type": "A", "content": "live-umich-example1.pantheonsite.io"},   # not a CNAME
+    {"type": "TXT", "content": "v=spf1 -all"},
+    {"type": "CNAME", "content": "www.example.edu.cdn.cloudflare.net"},  # not a platform domain
+    {"type": "CNAME", "content": "notpantheonsite.io"},
+])
+def test_collect_entries_skips_everything_that_is_not_a_platform_cname(fpc, skipped):
+    entries, warnings = fpc.collect_entries([("zone-a", record(**skipped))])
+    assert entries == {}
+    assert warnings == []
+
+
+def test_collect_entries_normalizes_the_key_and_keeps_origins_raw(fpc):
+    entries, _ = fpc.collect_entries(
+        [("zone-a", record(name="WWW.Example.EDU.",
+                           content="Live-Umich-Example1.PantheonSite.IO"))])
+    assert list(entries) == ["www.example.edu"]
+    assert entries["www.example.edu"]["origins"] == ["Live-Umich-Example1.PantheonSite.IO"]
+
+
+def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
+    entries, warnings = fpc.collect_entries([
+        ("zone-a", record(id="rec-1", content="live-a.pantheonsite.io", proxied=True, ttl=1)),
+        ("zone-b", record(id="rec-2", content="live-b.pantheonsite.io", proxied=False, ttl=300)),
+    ])
+    entry = entries["www.example.edu"]
+    assert entry["zone_id"] == "zone-a"
+    assert entry["record_id"] == "rec-1"
+    assert entry["proxied"] is True
+    assert entry["ttl"] == 1
+    assert entry["origins"] == ["live-a.pantheonsite.io", "live-b.pantheonsite.io"]
+    assert len(warnings) == 1
+    assert "www.example.edu" in warnings[0]
+    assert "zone-a" in warnings[0]
+    assert "zone-b" in warnings[0]
+
+
+def test_collect_entries_warns_for_two_matches_in_one_zone(fpc):
+    """API-unreachable (a name holds at most one CNAME), but the file would keep one record_id
+    of two and feed a destructive rewrite, so silence is the wrong default."""
+    entries, warnings = fpc.collect_entries([
+        ("zone-a", record(id="rec-1", content="live-a.pantheonsite.io")),
+        ("zone-a", record(id="rec-2", content="live-b.pantheonsite.io")),
+    ])
+    assert entries["www.example.edu"]["record_id"] == "rec-1"
+    assert len(warnings) == 1
+    assert "rec-1" in warnings[0]

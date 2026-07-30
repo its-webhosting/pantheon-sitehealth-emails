@@ -196,3 +196,76 @@ def cloudflare_client(config_path):
         raise StartupError(
             f"{config_path} [Cloudflare] needs either api_token, or both email and api_key")
     return build_client(api_email=email, api_key=api_key)
+
+
+def plain(value):
+    """A JSON-serializable copy of an SDK sub-model; anything already plain passes through.
+
+    record.settings is a pydantic model (cloudflare.types.dns.cname_record.Settings), which
+    json.dump cannot serialize.  mode="json" also coerces any nested exotic types.  The
+    getattr guard is what lets the test fakes pass a plain dict or None.
+    """
+    dump = getattr(value, "model_dump", None)
+    if dump is None:
+        return value
+    return dump(mode="json")
+
+
+def collect_entries(zone_records):
+    """Fold (zone_id, record) pairs into the output mapping.  Returns (entries, warnings).
+
+    A record is kept only when it is a CNAME whose content is a *.pantheonsite.io hostname.
+    Proxy status is NOT part of the test -- that is exactly what separates this script from
+    fqdns.json, which is built with proxied=True and therefore cannot see a DNS-only record.
+
+    Every scalar (zone_id, record_id, proxied, ttl, comment, tags, settings) is
+    FIRST-RECORD-WINS, mirroring how fqdns.json already keeps only the first zone_id for a name.
+    `origins` accumulates every match, so a name that matches more than once stays visible in the
+    file and not only in the warning.
+
+    `zone_records` is consumed lazily, so the caller can hand over a generator and the whole
+    organization's record set is never held in memory at once.
+    """
+    entries = {}
+    warnings = []
+    for zone_id, dns_record in zone_records:
+        if getattr(dns_record, "type", None) != "CNAME":
+            continue
+        content = getattr(dns_record, "content", None)
+        if content is None or not is_platform_domain(content):
+            continue
+        name = normalize(dns_record.name)
+        entry = entries.get(name)
+        if entry is None:
+            entries[name] = {
+                "zone_id": zone_id,
+                "origins": [content],
+                "record_id": dns_record.id,
+                # Stored VERBATIM, never coerced.  proxied is Optional[bool] on every record
+                # model, and research.md is explicit that "proxied: true is the load-bearing
+                # field in both directions" -- a None flattened to false would inflate the
+                # DNS-only count AND instruct a rewriter to re-create a proxied hostname
+                # unproxied, taking it out of certificate service.  An unknown stays null and
+                # main() calls it out.
+                "proxied": getattr(dns_record, "proxied", None),
+                "ttl": getattr(dns_record, "ttl", None),
+                "comment": getattr(dns_record, "comment", None),
+                "tags": list(getattr(dns_record, "tags", None) or []),
+                "settings": plain(getattr(dns_record, "settings", None)),
+            }
+            continue
+        entry["origins"].append(content)
+        # Warn on EVERY duplicate, not only a cross-zone one.  The file keeps one record_id of
+        # two and feeds a destructive rewrite, so silence is the wrong default even for the
+        # same-zone case -- which the Cloudflare API should make unreachable (a name may hold at
+        # most one CNAME), making a warning there a signal worth seeing.
+        if entry["zone_id"] == zone_id:
+            warnings.append(
+                f"ATTENTION: {name} has more than one platform-domain CNAME in zone {zone_id}, "
+                f"which the Cloudflare API should not permit; keeping record_id "
+                f"{entry['record_id']}")
+        else:
+            warnings.append(
+                f"ATTENTION: {name} has a platform-domain CNAME in more than one Cloudflare "
+                f"zone ({entry['zone_id']} and {zone_id}); keeping the first zone_id/record_id")
+    return entries, warnings
