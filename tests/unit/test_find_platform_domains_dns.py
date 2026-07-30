@@ -2099,7 +2099,7 @@ def test_every_abort_path_detaches_a_doomed_stdout_from_the_shutdown_flush(
 
 
 def test_an_unwritable_stdout_aborts_at_the_header_before_any_site_is_swept(fpd, monkeypatch,
-                                                                           tmp_path):
+                                                                           tmp_path, capsys):
     """The production-level cover for the header row's own flush (SPEC section 5, amended).
 
     `find-platform-domains-dns > /dev/full` used to sweep until the first hit before anything
@@ -2140,6 +2140,17 @@ def test_an_unwritable_stdout_aborts_at_the_header_before_any_site_is_swept(fpd,
     assert calls == [(calls[0][0], expected_fd)]
     # The site LISTING ran (it precedes the sweep); no environment or domain call did.
     assert all("/memberships/sites" in path for path in sites_listed)
+
+    # What the OPERATOR sees, which nothing asserted until a whole-branch review asked.  The
+    # header write precedes `self.remaining = list(sites)` in sweep(), so a failure here leaves
+    # `remaining` empty and report_stop()'s "N sites not reached. Resume with:" block is skipped.
+    # That is CORRECT here and is pinned deliberately: nothing was swept, so every site remains,
+    # and the resume command would spell out all ~400 names to say what re-running the original
+    # command already says.  "Stopped during startup." is the whole and accurate story.  If the
+    # ordering is ever changed so the resume line appears, this assertion is the one to revisit.
+    report = capsys.readouterr().err
+    assert "Stopped during startup." in report
+    assert "not reached. Resume with:" not in report
 
 
 # ---------------------------------------------------------------------------------------------
