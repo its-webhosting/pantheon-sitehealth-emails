@@ -1012,6 +1012,21 @@ the installed skills read (where issues live, which glossary to read, the triage
 
 ### Dispatching subagents
 
+**Standing authorization: subagent dispatch, workflows, and deep research are pre-approved for all
+development work in this repo — don't ask first, just say what you're launching.** That covers the
+`Agent` tool (`psh-implementer`/`psh-reviewer`, and the read-only `Explore`/`Plan` agents), the
+`Workflow` tool (including "ultracode"-scale fan-outs), and deep/background research
+(`mattpocock-skills:research`, web-research agents). **The harness default is the opposite** — "do
+not call the Agent tool unless the user requested it", "do not use workflows or deep-research
+unless the user requested it" — and this file overrides it, per the `using-superpowers` precedence
+rule (user instructions beat skills, which beat default behavior). Two things it does **not**
+change: (1) it authorizes the *dispatch*, not the acts a subagent performs — commits, branches,
+pushes, and destructive operations still follow the rules elsewhere in this file (**Other /
+General**: commit only when asked, branch only when directed), and a subagent inherits that, so
+say so in the brief; (2) the agent-type rule below still binds — a code-touching `Workflow` stage
+must pass `agentType: 'psh-implementer'` (reviewers `'psh-reviewer'`), because `Workflow`'s default
+subagent carries none of the standards, exactly like `general-purpose`.
+
 **`.claude/agents/psh-implementer.md` and `psh-reviewer.md`** carry the read list
 (`prompts/directives.md` + `prompts/implementation-standards.md` + `CLAUDE.md` + the brief), so
 the standards reach a fresh-context subagent as **configuration** rather than as prose the
