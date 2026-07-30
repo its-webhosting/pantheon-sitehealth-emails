@@ -359,3 +359,314 @@ def test_write_json_atomic_leaves_the_previous_file_intact_when_serialization_fa
         fpc.write_json_atomic(str(target), {"bad": {object()}})
     assert json.loads(target.read_text()) == {"previous": {"zone_id": "kept"}}
     assert [p.name for p in tmp_path.iterdir()] == ["out.json"]
+
+
+# --- Task 5: the walk and the CLI ------------------------------------------------------------
+
+class FakePage:
+    """A stand-in for SyncV4PagePaginationArray.
+
+    Iterating the real page object walks EVERY page (BaseSyncPage.__iter__ -> iter_pages), so
+    this fake yields across chunks: an implementation that read `page.result` instead would see
+    only the first, and this fake has no `result` attribute at all, so it would fail loudly.
+    (test_the_real_page_class_has_a_result_attribute proves that trap is real, not imagined.)
+    """
+
+    def __init__(self, chunks, total_count=None, *, with_result_info=True):
+        self._chunks = chunks
+        self.result_info = types.SimpleNamespace(
+            model_extra={} if total_count is None else {"total_count": total_count},
+        ) if with_result_info else None
+
+    def __iter__(self):
+        for chunk in self._chunks:
+            yield from chunk
+
+
+class FakeCloudflareClient:
+    """The three list() calls fetch_platform_cnames makes, and nothing else.
+
+    `pages_by_zone` maps a zone id to the sequence of pages returned by successive calls (the
+    last repeats), so a re-read can be made to agree or disagree with the first.
+    """
+
+    def __init__(self, accounts, zones, pages_by_zone=None, error=None):
+        self._error = error
+        self._pages_by_zone = pages_by_zone or {}
+        self._calls = {}
+        self.accounts = types.SimpleNamespace(list=lambda: accounts)
+        self.zones = types.SimpleNamespace(list=lambda account: zones)
+        self.dns = types.SimpleNamespace(records=types.SimpleNamespace(list=self._records))
+
+    def _records(self, zone_id):
+        if self._error is not None:
+            raise self._error
+        pages = self._pages_by_zone.get(zone_id) or [FakePage([[]])]
+        index = min(self._calls.get(zone_id, 0), len(pages) - 1)
+        self._calls[zone_id] = index + 1
+        return pages[index]
+
+
+def account(identifier="acct-1"):
+    return types.SimpleNamespace(id=identifier)
+
+
+def zone(identifier, name="example.edu"):
+    return types.SimpleNamespace(id=identifier, name=name)
+
+
+def test_fetch_platform_cnames_walks_every_zone_regardless_of_proxy_status(fpc):
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=[zone("zone-a"), zone("zone-b", "example.org")],
+        pages_by_zone={
+            "zone-a": [FakePage([[record(name="proxied.example.edu", id="rec-1", proxied=True),
+                                  record(name="mail.example.edu", id="rec-2", type="MX",
+                                         content="mx.example.edu")]], total_count=2)],
+            "zone-b": [FakePage([[record(name="dnsonly.example.org", id="rec-3",
+                                         proxied=False)]], total_count=1)],
+        })
+    sweep = fpc.fetch_platform_cnames(client)
+    assert sorted(sweep.entries) == ["dnsonly.example.org", "proxied.example.edu"]
+    assert sweep.entries["dnsonly.example.org"]["proxied"] is False
+    assert sweep.warnings == []
+    assert (sweep.accounts, sweep.zones, sweep.records) == (1, 2, 3)
+    assert sweep.records_checked == 2
+
+
+def test_fetch_platform_cnames_reads_every_page(fpc):
+    """Pagination: a single list() call is N HTTP requests, and a short read would write a
+    silently incomplete file."""
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a")],
+        pages_by_zone={"zone-a": [FakePage(
+            [[record(name="page1.example.edu", id="rec-1")],
+             [record(name="page2.example.edu", id="rec-2")]], total_count=2)]})
+    sweep = fpc.fetch_platform_cnames(client)
+    assert sorted(sweep.entries) == ["page1.example.edu", "page2.example.edu"]
+
+
+def test_fetch_platform_cnames_retries_once_and_continues_when_the_reread_agrees(fpc):
+    """total_count is computed for page 1, so a record changed mid-sweep makes the counts differ
+    for an entirely benign reason.  A re-read that is internally consistent is that case."""
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a")],
+        pages_by_zone={"zone-a": [
+            FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=2),   # disagrees
+            FakePage([[record(name="a.example.edu", id="rec-1"),
+                       record(name="b.example.edu", id="rec-2")]], total_count=2),   # agrees
+        ]})
+    sweep = fpc.fetch_platform_cnames(client)
+    assert sorted(sweep.entries) == ["a.example.edu", "b.example.edu"]
+    assert sweep.records_checked == 1
+
+
+def test_fetch_platform_cnames_aborts_when_the_reread_also_disagrees(fpc):
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a")],
+        pages_by_zone={"zone-a": [FakePage([[record()]], total_count=3)]})
+    with pytest.raises(fpc.StartupError) as caught:
+        fpc.fetch_platform_cnames(client)
+    assert "truncated" in str(caught.value)
+    assert "read 1 of 3" in str(caught.value)
+    assert "record list for zone" in str(caught.value)
+
+
+def test_fetch_platform_cnames_aborts_on_a_truncated_zone_list(fpc):
+    """A short ZONE list silently omits every record in the missing zones -- strictly worse than
+    a short record list, and the zero-zones guard only catches the degenerate case."""
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=FakePage([[zone("zone-a")]], total_count=9))
+    with pytest.raises(fpc.StartupError) as caught:
+        fpc.fetch_platform_cnames(client)
+    assert "truncated" in str(caught.value)
+    assert "zone list for account acct-1" in str(caught.value)
+
+
+def test_fetch_platform_cnames_reports_zones_it_could_not_cross_check(fpc):
+    """The cross-check must no-op wherever Cloudflare omits total_count -- and must SAY it did,
+    because a guard that silently never ran looks exactly like one that found nothing wrong."""
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a"), zone("zone-b", "example.org")],
+        pages_by_zone={"zone-a": [FakePage([[record()]], with_result_info=False)],
+                       "zone-b": [FakePage([[]], total_count=0)]})
+    sweep = fpc.fetch_platform_cnames(client)
+    assert list(sweep.entries) == ["www.example.edu"]
+    assert sweep.records_checked == 1
+    assert sweep.zones == 2
+
+
+def test_fetch_platform_cnames_treats_zero_zones_as_fatal(fpc):
+    """A missing scope and a genuinely empty org produce an identical empty file."""
+    client = FakeCloudflareClient(accounts=[account()], zones=[])
+    with pytest.raises(fpc.StartupError) as caught:
+        fpc.fetch_platform_cnames(client)
+    assert "0 zones" in str(caught.value)
+
+
+def test_fetch_platform_cnames_turns_an_api_error_into_a_startup_error(fpc):
+    import cloudflare
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a")],
+        error=cloudflare.APIConnectionError(request=None))
+    with pytest.raises(fpc.StartupError) as caught:
+        fpc.fetch_platform_cnames(client)
+    assert "DNS records" in str(caught.value)
+
+
+def test_expected_record_count_reads_a_real_result_info(fpc):
+    """Against the SDK's own model, not the fake: total_count survives only because
+    V4PagePaginationArrayResultInfo sets model_config extra="allow".  An SDK that tightened
+    that, or renamed the field, would make the whole truncation guard no-op in production --
+    and every fake-backed test would stay green."""
+    from cloudflare.pagination import V4PagePaginationArrayResultInfo
+    info = V4PagePaginationArrayResultInfo.model_validate(
+        {"page": 1, "per_page": 100, "count": 1, "total_count": 137})
+    assert fpc.expected_record_count(types.SimpleNamespace(result_info=info)) == 137
+
+
+def test_the_real_page_class_has_a_result_attribute(fpc):
+    """FakePage deliberately lacks `result` so an implementation reading page.result (page 1
+    only) fails loudly.  That trap is only meaningful if the real class HAS the attribute."""
+    from cloudflare.pagination import SyncV4PagePaginationArray
+    assert "result" in SyncV4PagePaginationArray.model_fields
+
+
+def test_api_error_text_never_includes_a_real_response_body(fpc):
+    """Against a real SDK exception.  If status_code is ever renamed, api_error_text falls back
+    to str(e) -- which IS "Error code: NNN - {body}", the leak the NEVER-block forbids."""
+    import cloudflare
+    import httpx
+    body = {"errors": [{"code": 10000, "message": "token cf-secret-xyz invalid"}]}
+    request = httpx.Request("GET", "https://api.cloudflare.com/client/v4/zones")
+    error = cloudflare.PermissionDeniedError(
+        f"Error code: 403 - {body}",
+        response=httpx.Response(403, request=request, json=body), body=body)
+    text = fpc.api_error_text(error)
+    assert text == "PermissionDeniedError: HTTP 403"
+    assert "cf-secret-xyz" not in text
+
+
+def test_read_all_does_not_abort_when_the_reread_omits_total_count(fpc):
+    """R3's no-op rule applies to BOTH reads.  Guessing on the second aborted a COMPLETE re-read
+    while reporting "truncated ... of None" (round 3, finding 2)."""
+    pages = iter([FakePage([[record()]], total_count=2),
+                  FakePage([[record(), record(id="rec-2")]], with_result_info=False)])
+    said = []
+    items, checked = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+    assert len(items) == 2
+    assert checked is False              # counted as unchecked, not asserted as verified
+    assert any("cannot cross-check" in m for m in said)
+
+
+def test_a_reread_is_reported_without_v(fpc, capsys):
+    """A re-read means the data moved under the sweep -- an operator wants that on a default run,
+    not only when they happened to pass -v (round 3, finding 3)."""
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a")],
+        pages_by_zone={"zone-a": [
+            FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=2),
+            FakePage([[record(name="a.example.edu", id="rec-1"),
+                       record(name="b.example.edu", id="rec-2")]], total_count=2),
+        ]})
+    fpc.fetch_platform_cnames(client, verbose=False)
+    err = capsys.readouterr().err
+    assert "re-reading to tell a concurrent change apart" in err
+    assert "re-read agrees" in err
+
+
+def test_verbose_reports_each_zone_and_whether_it_was_cross_checked(fpc, capsys):
+    """SPEC section 6's -v contract, which nothing asserted until round 3 finding 5."""
+    client = FakeCloudflareClient(
+        accounts=[account()], zones=[zone("zone-a"), zone("zone-b", "example.org")],
+        pages_by_zone={"zone-a": [FakePage([[record()]], total_count=1)],
+                       "zone-b": [FakePage([[record(name="b.example.org")]],
+                                           with_result_info=False)]})
+    fpc.fetch_platform_cnames(client, verbose=True)
+    err = capsys.readouterr().err
+    assert "[1/2] zone example.edu -- 1 records" in err
+    assert "[2/2] zone example.org -- 1 records (total_count unavailable, not cross-checked)" in err
+
+
+def test_main_writes_the_file_and_reports_the_dns_only_count(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
+    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False: fpc.SweepResult(
+        {"a.example.edu": {"zone_id": "z", "origins": ["live-a.pantheonsite.io"],
+                           "record_id": "r", "proxied": False, "ttl": 1,
+                           "comment": None, "tags": [], "settings": None}},
+        ["ATTENTION: something worth seeing"], 1, 4, 12431, 3, 1, 1))
+    assert fpc.main(["-c", "ignored.toml"]) == 0
+    written = json.loads((tmp_path / fpc.OUTPUT_FILE).read_text())
+    assert list(written) == ["a.example.edu"]
+    captured = capsys.readouterr()
+    err = captured.err
+    assert "ATTENTION: something worth seeing" in err
+    assert "Wrote 1 platform-domain CNAMEs (1 DNS-only" in err
+    assert "from 12431 records in 4 zones in 1 account(s)" in err
+    assert captured.out == "", "stdout carries only argparse output (SPEC R6)"
+    assert ("Truncation cross-check active for 3 of 4 record lists, 1 of 1 zone lists, "
+            "and 1 of 1 account list.") in err
+
+
+def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, monkeypatch,
+                                                                 capsys):
+    """research.md: "proxied: true is the load-bearing field in both directions".  A null
+    flattened to false would inflate the headline count AND tell a rewriter to re-create a
+    proxied hostname unproxied (round 3, finding 4)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
+    entry = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
+             "proxied": None, "ttl": 1, "comment": None, "tags": [], "settings": None}
+    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False:
+                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 1, 1, 1))
+    assert fpc.main([]) == 0
+    err = capsys.readouterr().err
+    assert "(0 DNS-only" in err
+    assert "unknown proxy status" in err
+    assert "a.example.edu" in err
+
+
+def test_main_says_so_when_nothing_matched(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
+    monkeypatch.setattr(fpc, "fetch_platform_cnames",
+                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 4, 900, 4, 1, 1))
+    assert fpc.main([]) == 0
+    assert json.loads((tmp_path / fpc.OUTPUT_FILE).read_text()) == {}
+    assert "no platform-domain CNAMEs found in 4 zones" in capsys.readouterr().err
+
+
+def test_main_reports_a_startup_error_as_exit_2(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert fpc.main(["-c", str(tmp_path / "nope.toml")]) == 2
+    assert "ERROR: cannot read" in capsys.readouterr().err
+
+
+def test_main_reports_an_interrupt_as_exit_130(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    def interrupt(config_path):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "cloudflare_client", interrupt)
+    assert fpc.main([]) == 130
+    assert "INTERRUPTED" in capsys.readouterr().err
+
+
+def test_main_names_an_unwritable_output_file_instead_of_crashing(fpc, tmp_path, monkeypatch,
+                                                                  capsys):
+    """An OSError here lands AFTER the whole multi-minute walk; it escaped as a raw traceback at
+    exit 1 until it was named (adversarial review round 1, finding 3)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
+    monkeypatch.setattr(fpc, "fetch_platform_cnames",
+                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 1, 0, 1, 1, 1))
+
+    def refuse(path, data):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(fpc, "write_json_atomic", refuse)
+    assert fpc.main([]) == 2
+    assert "cannot write" in capsys.readouterr().err

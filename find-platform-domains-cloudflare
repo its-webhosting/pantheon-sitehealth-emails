@@ -23,14 +23,18 @@ Requires: the `cloudflare` SDK (declared under this project's `cloudflare` extra
 documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and Cloudflare
 credentials in the [Cloudflare] section of the config file.
 """
+import argparse
 import json
 import os
 import re
 import shlex
+import sys
 import tempfile
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
+import cloudflare  # for cloudflare.CloudflareError
 from cloudflare import Cloudflare
 
 PLATFORM_SUFFIX = ".pantheonsite.io"   # the leading dot is load-bearing: it rejects
@@ -300,3 +304,254 @@ def write_json_atomic(path, data) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def expected_record_count(page):
+    """Cloudflare's total_count for a paginated response, or None when it is not available.
+
+    V4PagePaginationArrayResultInfo declares only page/per_page, but its model_config is
+    extra="allow", so the API's count/total_count survive as model_extra.  Returning None rather
+    than guessing makes the caller's cross-check a no-op wherever the field is absent, so it can
+    never abort a healthy sweep -- at the cost of the guard silently not running, which is why
+    read_all reports whether it was live.
+    """
+    info = getattr(page, "result_info", None)
+    extra = getattr(info, "model_extra", None) or {}
+    total = extra.get("total_count")
+    return total if isinstance(total, int) else None
+
+
+def read_all(fetch, what, notify):
+    """Read every page of a paginated list, cross-checked against Cloudflare's own total_count.
+
+    Returns (items, checked).  `checked` is False when total_count was unavailable on the read
+    whose items are returned: a guard whose own liveness is invisible is not a guard, so the
+    caller reports the coverage for every list it read.
+
+    `notify` is NOT the -v gate.  It is only ever called on the rare re-read path, and a re-read
+    means the data moved under the sweep -- something an operator wants to see on a default run,
+    not only when they happened to pass -v.
+
+    `fetch` is a zero-argument callable, not a page, so a re-read can repeat the whole request.
+    Iterating the page object walks EVERY page (BaseSyncPage.__iter__ -> iter_pages), so `items`
+    is complete -- reading page.result instead would silently take page 1 only.
+
+    A mismatch has two possible causes, and conflating them misdiagnoses the common one:
+    total_count is computed for the FIRST page, so a record or zone added or deleted between
+    that page and the last makes the counts differ for an entirely benign reason -- likely
+    across a sweep measured in tens of minutes.  One re-read tells them apart.  A second read
+    that agrees with its OWN total_count is a concurrent edit, and is the answer we keep; a
+    second disagreement is a truncated list and is fatal, because writing the file anyway would
+    ship a silently incomplete answer -- the same reasoning that makes zero zones fatal.
+    """
+    page = fetch()
+    items = list(page)
+    expected = expected_record_count(page)
+    if expected is None:
+        return items, False
+    if len(items) == expected:
+        return items, True
+
+    notify(f"{what}: read {len(items)} of {expected}; re-reading to tell a concurrent change "
+           "apart from a truncated list")
+    retry_page = fetch()
+    retry_items = list(retry_page)
+    retry_expected = expected_record_count(retry_page)
+    if retry_expected is None:
+        # Same no-op rule the first read gets: absent total_count means the guard cannot judge,
+        # and guessing here would abort a COMPLETE re-read while reporting "truncated ... of
+        # None".  Report it as unchecked instead.
+        notify(f"{what}: re-read returned {len(retry_items)} with no total_count -- cannot "
+               "cross-check, continuing with the re-read and counting this list as unchecked")
+        return retry_items, False
+    if len(retry_items) == retry_expected:
+        notify(f"{what}: re-read agrees ({len(retry_items)} of {retry_expected}; first read saw "
+               f"{len(items)} of {expected}) -- something changed mid-sweep, continuing with the "
+               "re-read")
+        return retry_items, True
+    raise StartupError(
+        f"{what}: read {len(items)} of {expected}, then {len(retry_items)} of {retry_expected} "
+        "on a re-read -- the list is truncated, so the output would be silently incomplete; "
+        "not writing a partial file")
+
+
+def api_error_text(e):
+    """A message for a Cloudflare API failure that NEVER includes the response body.
+
+    APIStatusError's str() is "Error code: NNN - {body}"; a DNS-record body echoes record
+    contents and an auth-failure body can echo the credential.  The class plus the status code is
+    what an operator needs in order to act.
+    """
+    status = getattr(e, "status_code", None)
+    if status is not None:
+        return f"{type(e).__name__}: HTTP {status}"
+    return f"{type(e).__name__}: {e}"
+
+
+class SweepResult(NamedTuple):
+    """What one sweep found, plus what it can honestly say about its own completeness."""
+
+    entries: dict            # the output mapping, keyed by normalized FQDN
+    warnings: list           # duplicate-name ATTENTION lines, printed before the write
+    accounts: int            # accounts listed
+    zones: int               # zones listed across those accounts
+    records: int             # DNS records actually read and inspected
+    records_checked: int     # of `zones`   -- record lists Cloudflare let us cross-check
+    zone_lists_checked: int  # of `accounts`-- per-account zone lists cross-checked
+    account_list_checked: int  # of 1       -- the account list itself
+
+
+def list_zones(client, warn):
+    """Every zone across every account the credentials can see, cross-checked like the records.
+
+    Returns (accounts, zones, zone_lists_checked, account_list_checked).  Zero zones is fatal,
+    copied from fqdns.py's reasoning: with the scope missing, "no zones" and "no matching
+    records" write an identical empty file, and a silently empty file is the one failure mode
+    this script must not have.  The message names BOTH scopes because an accounts list that comes
+    back empty yields zero zones just as a missing DNS:Read does.
+    """
+    try:
+        accounts, account_checked = read_all(client.accounts.list, "the account list", warn)
+        zones = []
+        zone_lists_checked = 0
+        for account in accounts:
+            # The default argument binds this account's id at definition time; a bare closure
+            # over the loop variable would re-read the LAST account on every retry (ruff B023).
+            got, checked = read_all(
+                lambda account_id=account.id: client.zones.list(account={"id": account_id}),
+                f"the zone list for account {account.id}", warn)
+            zone_lists_checked += 1 if checked else 0
+            zones.extend(got)
+    except cloudflare.CloudflareError as e:
+        raise StartupError(f"listing accounts/zones failed: {api_error_text(e)}") from e
+
+    if not zones:
+        raise StartupError(
+            f"Cloudflare returned {len(accounts)} account(s) but 0 zones -- the credentials "
+            "likely lack Account:Read or DNS:Read (an accounts list that comes back empty "
+            "yields zero zones too).")
+    return accounts, zones, zone_lists_checked, 1 if account_checked else 0
+
+
+def fetch_platform_cnames(client, *, verbose=False):
+    """Walk every account -> zone -> DNS record and collect the platform-domain CNAMEs.
+
+    No `proxied=` filter and no `type=` filter on the record list: every record in every zone is
+    fetched and inspected here.  That is what "consider all DNS records" means, and per the spec
+    no work goes into making it faster.  (If a run ever becomes painful, type="CNAME" on the
+    records list call is the one-word change.)
+
+    `client.dns.records.list()` returns a page-numbered paginator -- iterating it walks every
+    page, stopping when a page comes back empty -- so a single call is N HTTP requests.  A
+    truncated walk would write a silently incomplete file, so every list this function reads goes
+    through read_all's total_count cross-check.
+
+    Records are read one zone at a time rather than one record at a time: a re-read has to be
+    able to replace a whole zone's list, and the largest single zone is a trivial amount of
+    memory next to the whole organization's records.
+    """
+    def note(message):
+        """Per-zone progress: -v only."""
+        if verbose:
+            print(message, file=sys.stderr, flush=True)
+
+    def warn(message):
+        """Re-read notices: ALWAYS printed.  A re-read means the data moved mid-sweep."""
+        print(message, file=sys.stderr, flush=True)
+
+    accounts, zones, zone_lists_checked, account_list_checked = list_zones(client, warn)
+    tally = {"records": 0, "checked": 0}
+
+    def zone_records():
+        """(zone_id, record) pairs, one zone at a time."""
+        for number, zone in enumerate(zones, start=1):
+            records, checked = read_all(
+                lambda zone_id=zone.id: client.dns.records.list(zone_id=zone_id),
+                f"the record list for zone {zone.name}", warn)
+            tally["records"] += len(records)
+            tally["checked"] += 1 if checked else 0
+            note(f"[{number}/{len(zones)}] zone {zone.name} -- {len(records)} records"
+                 f"{'' if checked else ' (total_count unavailable, not cross-checked)'}")
+            for dns_record in records:
+                yield zone.id, dns_record
+
+    try:
+        entries, warnings = collect_entries(zone_records())
+    except cloudflare.CloudflareError as e:
+        raise StartupError(f"listing DNS records failed: {api_error_text(e)}") from e
+
+    return SweepResult(entries, warnings, len(accounts), len(zones), tally["records"],
+                       tally["checked"], zone_lists_checked, account_list_checked)
+
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        allow_abbrev=False,          # house rule: no --for -> --for-real class of foot-gun
+        description="Write every Cloudflare CNAME record pointing at a Pantheon platform "
+                    f"domain to {OUTPUT_FILE}.")
+    parser.add_argument("-c", "--config", default=DEFAULT_CONFIG,
+                        help=f"TOML file to read [Cloudflare] credentials from "
+                             f"(default: {DEFAULT_CONFIG})")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="print each zone to stderr as it is scanned")
+    return parser
+
+
+def main(argv):
+    """Exit 0 = the output file was written, 2 = could not complete, 130 = interrupted.
+
+    There is deliberately no exit 1: the sibling find-platform-domains-dns reserves it for
+    "completed with indeterminates" because a DNS lookup can be indeterminate, whereas a
+    Cloudflare list call either returns or raises.  Holding that line takes the two conversions
+    to StartupError below and the two inside resolve_env_marker/cloudflare_client -- an OSError
+    on the write and a ValueError from shlex both escaped as raw tracebacks at exit 1 until they
+    were named (adversarial review, finding 3).  A doomed stderr can still produce exit 120 from
+    the interpreter's shutdown flush; that is accepted and documented in SPEC section 8, item 4.
+
+    stdout carries only argparse's usage/--help text; every operator message goes to stderr.
+    """
+    options = build_arg_parser().parse_args(argv)
+    try:
+        client = cloudflare_client(options.config)
+        sweep = fetch_platform_cnames(client, verbose=options.verbose)
+        entries = sweep.entries
+        for message in sweep.warnings:
+            print(message, file=sys.stderr, flush=True)
+        try:
+            write_json_atomic(OUTPUT_FILE, entries)
+        except OSError as e:
+            # A full disk or a read-only directory lands here AFTER the whole multi-minute walk.
+            raise StartupError(f"cannot write {OUTPUT_FILE}: {e}") from e
+        # `is False`, not falsy: an unknown proxy status is null and must not be counted as
+        # DNS-only -- that count is the headline number this script exists to produce.
+        dns_only = sum(1 for entry in entries.values() if entry["proxied"] is False)
+        unknown_proxy = sorted(n for n, e in entries.items() if e["proxied"] is None)
+        print(f"Wrote {len(entries)} platform-domain CNAMEs ({dns_only} DNS-only, invisible to "
+              f"fqdns.json) from {sweep.records} records in {sweep.zones} zones in "
+              f"{sweep.accounts} account(s) to {OUTPUT_FILE}.", file=sys.stderr, flush=True)
+        # Report the guard's own coverage: a truncation check that silently never ran looks
+        # exactly like one that ran and found nothing wrong.
+        print(f"Truncation cross-check active for {sweep.records_checked} of {sweep.zones} "
+              f"record lists, {sweep.zone_lists_checked} of {sweep.accounts} zone lists, and "
+              f"{sweep.account_list_checked} of 1 account list.", file=sys.stderr, flush=True)
+        if unknown_proxy:
+            print(f"ATTENTION: {len(unknown_proxy)} entr"
+                  f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "
+                  f"(null, not false): {', '.join(unknown_proxy)} -- a rewriter MUST NOT treat "
+                  "these as DNS-only.", file=sys.stderr, flush=True)
+        if not entries:
+            print(f"ATTENTION: no platform-domain CNAMEs found in {sweep.zones} zones; "
+                  f"{OUTPUT_FILE} was written empty.", file=sys.stderr, flush=True)
+    except StartupError as e:
+        print(f"ERROR: {e}", file=sys.stderr, flush=True)
+        return 2
+    except KeyboardInterrupt:
+        # The write is atomic, so the file is either untouched or complete -- never half-written.
+        print(f"INTERRUPTED: {OUTPUT_FILE} is either unchanged or fully written.",
+              file=sys.stderr, flush=True)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
