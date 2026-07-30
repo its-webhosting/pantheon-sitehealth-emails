@@ -136,13 +136,22 @@ ignore = [
     # lands on the real file, not the symlink), and per-file-ignores is keyed on the path ruff is
     # given, so the .py entry alone leaves the hook's own invocation reporting T201.  Same
     # justification and deletion condition as the .py entry above.
+"find-platform-domains-cloudflare.py" = ["T201"]  # a CLI tool: print IS its operator output
+    # (stderr = warnings, progress, summary; the result is the JSON file).  Temporary, deleted
+    # with the script after the Pantheon CDN migration -- see
+    # development/2026-07-30-platform-domain-util2/SPEC.md section 11.
+"find-platform-domains-cloudflare" = ["T201"]  # the extension-less real file the .py entry
+    # above symlinks to -- .claude/hooks/ruff-check.sh hands ruff THIS path (an edit lands on the
+    # real file, not the symlink), and per-file-ignores is keyed on the path ruff is given, so
+    # the .py entry alone leaves the hook's own invocation reporting T201.  Same justification
+    # and deletion condition as the .py entry above.
 
 [tool.pyright]
 # Campaign ratchet, type half (CAMPAIGN.md section 13).  Standard mode; the whole psh/
 # package is type-checked -- psh/cli.py (the relocated main()) entered the gate at I14a when
 # psh/_legacy.py was deleted, so there is no longer anything to grandfather here.  The
 # strictness ratchets up as later increments tighten typing (ledger tracks).
-include = ["psh", "find-platform-domains-dns.py"]
+include = ["psh", "find-platform-domains-dns.py", "find-platform-domains-cloudflare.py"]
 typeCheckingMode = "standard"
 
 [tool.pytest.ini_options]

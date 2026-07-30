@@ -1,0 +1,51 @@
+#!/usr/bin/env python
+"""Write every Cloudflare CNAME record pointing at a Pantheon platform domain to JSON.
+
+TEMPORARY.  Delete after Pantheon's Fastly -> Pantheon-Cloudflare CDN migration completes; see
+development/2026-07-30-platform-domain-util2/SPEC.md section 11 for the checklist.
+
+Standalone by design: this imports nothing from psh/, check/, plugin/ or script_context, so most
+of removing it is `git rm` of the script, its .py symlink and its test file.  The credential
+read, the account/zone/record walk and the atomic write are COPIES of plugin/cloudflare/fqdns.py
+and plugin/cloudflare/client.py; normalize()/is_platform_domain() are copies of
+find-platform-domains-dns.
+
+Unlike fqdns.json, this considers ALL records in ALL zones -- not just proxied ones -- and keeps
+only CNAMEs whose target ends in .pantheonsite.io.  The output file is regenerated in full on
+every run, whatever its age.
+
+Output: ./platform-domains-cloudflare.json, keyed by FQDN, values {zone_id, origins, record_id,
+proxied, ttl, comment, tags, settings}.  stdout carries ONLY argparse's usage/--help text; every
+operator message -- warnings, progress, the summary, errors -- goes to stderr, and the result is
+the file.  Exit 0 = file written, 2 = could not complete, 130 = interrupted.
+
+Requires: the `cloudflare` SDK (declared under this project's `cloudflare` extra, which the
+documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and Cloudflare
+credentials in the [Cloudflare] section of the config file.
+"""
+import re
+
+PLATFORM_SUFFIX = ".pantheonsite.io"   # the leading dot is load-bearing: it rejects
+                                       # "notpantheonsite.io"
+OUTPUT_FILE = "platform-domains-cloudflare.json"
+DEFAULT_CONFIG = "pantheon-sitehealth-emails.toml"
+API_BASE_URL = "https://api.cloudflare.com/client/v4"   # pinned; see build_client
+
+# Copied verbatim from psh/configuration.py.  A marker is "<{ ... }" -- the trailing ">" that
+# appears in the sample config is decorative and NOT part of the syntax.
+MARKER_RE = re.compile(r"<\{(.*?)(?<!\\)}")
+
+
+class StartupError(Exception):
+    """Anything that stops the sweep from starting or completing (exit 2)."""
+
+
+def normalize(name):
+    """Lowercase, strip whitespace and the trailing root dot.  Copied from
+    find-platform-domains-dns."""
+    return str(name).strip().rstrip(".").lower()
+
+
+def is_platform_domain(name):
+    """True for a Pantheon-provided *.pantheonsite.io hostname."""
+    return normalize(name).endswith(PLATFORM_SUFFIX)
