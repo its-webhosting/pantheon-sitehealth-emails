@@ -43,6 +43,24 @@ from pathlib import Path
 # Best-effort regex redaction; development/README.md documents the manual grep
 # that backs it up.  Each pattern keeps a label so the redaction is auditable.
 _REDACT = "«REDACTED:{}»"
+
+
+def _redact_if_high_entropy(match):
+    """Redact a long bare alphanumeric run only when it looks like a credential.
+
+    Mixed case AND at least one digit.  A git SHA (40 lowercase hex) fails the uppercase test
+    and survives, which matters: a development transcript that redacted every commit hash would
+    be unreadable.  Long lowercase identifiers and all-caps constants survive for the same
+    reason.  This is the LAST line of defence, for a secret that reaches the transcript with no
+    `key:` / `Bearer ` / env-var anchor in front of it at all.
+    """
+    value = match.group(0)
+    if (any(c.islower() for c in value) and any(c.isupper() for c in value)
+            and any(c.isdigit() for c in value)):
+        return _REDACT.format("high-entropy")
+    return value
+
+
 _SECRET_PATTERNS = [
     # KEY=value / KEY: value for the known secret env vars.  No leading \b: a
     # secret rendered right after an escaped newline (\nKEY=... in a JSON-encoded
@@ -52,6 +70,22 @@ _SECRET_PATTERNS = [
      lambda m: m.group(1) + m.group(2) + _REDACT.format(m.group(1))),
     # AWS access key IDs
     (r"\bAKIA[0-9A-Z]{16}\b", lambda _m: _REDACT.format("aws-key-id")),
+    # The SAME secrets under their API field names rather than their env-var names.  The
+    # patterns above key off SMTP_PASSWORD / CLOUDFLARE_API_KEY / ...; an SDK repr or a
+    # diagnostic print emits `api_key: cfk_...`, which matches none of them.  Measured: a
+    # session that printed a live Cloudflare key that way went through the scrubber untouched,
+    # and the manual grep in development/README.md is keyed to the same env-var names, so it
+    # missed it too.  Matched by VALUE SHAPE, with a length floor, so that ordinary source in
+    # the transcript (`api_token = cf.get('api_token')`, `api_key = "k-456"`) stays readable.
+    # No length floor on this one, unlike the generic pattern below: the `cfk_` prefix is
+    # itself the signal, so even an 8-character PREFIX of a key (a truncated quote of a leak,
+    # measured in this very session) is a credential fragment and must not ship.
+    (r"\bcfk_[A-Za-z0-9_-]{4,}", lambda _m: _REDACT.format("cloudflare-api-key")),
+    (r"(?i)\b(api[_-]?key|api[_-]?token|user_service_key|machine[_-]?token)(\s*[=:]\s*)"
+     r"([A-Za-z0-9_\-]{24,})",
+     lambda m: m.group(1) + m.group(2) + _REDACT.format("credential")),
+    (r"(?i)\b(api[_-]?email)(\s*[=:]\s*)([^\s|,;)\"']+@[^\s|,;)\"']+)",
+     lambda m: m.group(1) + m.group(2) + _REDACT.format("credential-email")),
     # Pantheon machine/session tokens in JSON
     (r'(?i)("?(?:machine_token|session)"?\s*[=:]\s*")([^"]{12,})(")',
      lambda m: m.group(1) + _REDACT.format("token") + m.group(3)),
@@ -61,6 +95,13 @@ _SECRET_PATTERNS = [
     # PEM private key blocks
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
      lambda _m: _REDACT.format("private-key")),
+    # Bare high-entropy strings, with NO surrounding field name at all.  The patterns above all
+    # need a `key:`/`KEY=`/`Bearer ` anchor; a secret can reach the transcript with none --
+    # measured in this session, where a grep written to PROVE a key's absence embedded 42
+    # characters of it as a bare literal, and every anchored pattern sailed past.
+    # Mixed case AND a digit is the discriminator: it excludes git SHAs (all-lowercase hex),
+    # which a development transcript must keep readable, while catching base64/token shapes.
+    (r"\b[A-Za-z0-9]{32,}\b", _redact_if_high_entropy),
 ]
 
 
