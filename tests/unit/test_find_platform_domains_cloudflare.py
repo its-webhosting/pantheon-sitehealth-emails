@@ -330,3 +330,32 @@ def test_collect_entries_warns_for_two_matches_in_one_zone(fpc):
     assert entries["www.example.edu"]["record_id"] == "rec-1"
     assert len(warnings) == 1
     assert "rec-1" in warnings[0]
+
+
+# --- Task 4: the atomic write ----------------------------------------------------------------
+
+def test_write_json_atomic_writes_sorted_indented_json_with_a_trailing_newline(fpc, tmp_path):
+    target = tmp_path / "out.json"
+    fpc.write_json_atomic(str(target), {"b": {"zone_id": "z"}, "a": {"zone_id": "y"}})
+    text = target.read_text()
+    assert text.endswith("\n")
+    assert list(json.loads(text)) == ["a", "b"]
+    assert '    "a"' in text          # indent=4
+
+
+def test_write_json_atomic_overwrites_an_existing_file_and_leaves_no_temp_file(fpc, tmp_path):
+    """SPEC: the output file is regenerated in full on every run, whatever its age."""
+    target = tmp_path / "out.json"
+    target.write_text('{"stale": {"zone_id": "old"}}\n')
+    fpc.write_json_atomic(str(target), {})
+    assert json.loads(target.read_text()) == {}
+    assert [p.name for p in tmp_path.iterdir()] == ["out.json"]
+
+
+def test_write_json_atomic_leaves_the_previous_file_intact_when_serialization_fails(fpc, tmp_path):
+    target = tmp_path / "out.json"
+    target.write_text('{"previous": {"zone_id": "kept"}}\n')
+    with pytest.raises(TypeError):
+        fpc.write_json_atomic(str(target), {"bad": {object()}})
+    assert json.loads(target.read_text()) == {"previous": {"zone_id": "kept"}}
+    assert [p.name for p in tmp_path.iterdir()] == ["out.json"]

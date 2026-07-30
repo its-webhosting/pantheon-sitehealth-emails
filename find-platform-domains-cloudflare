@@ -23,9 +23,11 @@ Requires: the `cloudflare` SDK (declared under this project's `cloudflare` extra
 documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and Cloudflare
 credentials in the [Cloudflare] section of the config file.
 """
+import json
 import os
 import re
 import shlex
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -269,3 +271,32 @@ def collect_entries(zone_records):
                 f"ATTENTION: {name} has a platform-domain CNAME in more than one Cloudflare "
                 f"zone ({entry['zone_id']} and {zone_id}); keeping the first zone_id/record_id")
     return entries, warnings
+
+
+def write_json_atomic(path, data) -> None:
+    """Write data as JSON to a temp file in the same directory, then os.replace() it onto `path`.
+
+    Copied from plugin/cloudflare/fqdns.py's write_fqdns_atomic.  Atomic: an interrupted write
+    never leaves a half-written or truncated output file -- the previous one stays byte-intact.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."  # noqa: PTH120, PTH100 --
+    # feeds tempfile.mkstemp's dir=, load-bearing for the atomic-rename-needs-same-filesystem
+    # guarantee this docstring documents; Path.resolve() follows symlinks where
+    # os.path.abspath() does not, a real semantic difference for the symlink case
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".platform-domains-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=4, sort_keys=True)
+            f.write("\n")
+        # mkstemp creates the temp file mode 0600, which os.replace would preserve; restore a
+        # normal umask-based mode (typically 0644) so other readers keep their access.
+        current_umask = os.umask(0)
+        os.umask(current_umask)
+        os.chmod(tmp, 0o666 & ~current_umask)  # noqa: PTH101 -- behavior surface, see above
+        os.replace(tmp, path)  # noqa: PTH105 -- THE atomic-replace call this docstring documents
+    except BaseException:  # incl. KeyboardInterrupt: drop the temp file, leave the old one intact
+        try:  # noqa: SIM105 -- not restructuring the BaseException cleanup handler's flow
+            os.unlink(tmp)  # noqa: PTH108 -- cleanup path of the same behavior surface
+        except FileNotFoundError:
+            pass
+        raise
