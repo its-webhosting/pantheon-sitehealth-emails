@@ -431,7 +431,9 @@ def test_fetch_platform_cnames_walks_every_zone_regardless_of_proxy_status(fpc):
     assert sweep.entries["dnsonly.example.org"]["proxied"] is False
     assert sweep.warnings == []
     assert (sweep.accounts, sweep.zones, sweep.records) == (1, 2, 3)
-    assert sweep.records_checked == 2
+    # both record lists complete; the account and zone list fakes are plain lists
+    # with no result_info, so they are unverifiable rather than complete.
+    assert (sweep.lists_complete, sweep.lists_unverifiable) == (2, 2)
 
 
 def test_fetch_platform_cnames_reads_every_page(fpc):
@@ -446,55 +448,44 @@ def test_fetch_platform_cnames_reads_every_page(fpc):
     assert sorted(sweep.entries) == ["page1.example.edu", "page2.example.edu"]
 
 
-def test_fetch_platform_cnames_retries_once_and_continues_when_the_reread_agrees(fpc):
-    """total_count is computed for page 1, so a record changed mid-sweep makes the counts differ
-    for an entirely benign reason.  A re-read that is internally consistent is that case."""
+def test_fetch_platform_cnames_unions_a_reread_to_close_a_gap(fpc):
+    """A second walk steps over different rows, so the union is more complete than either read
+    alone -- and often closes the gap outright."""
     client = FakeCloudflareClient(
         accounts=[account()], zones=[zone("zone-a")],
         pages_by_zone={"zone-a": [
-            FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=2),   # disagrees
-            FakePage([[record(name="a.example.edu", id="rec-1"),
-                       record(name="b.example.edu", id="rec-2")]], total_count=2),   # agrees
+            FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=2),
+            FakePage([[record(name="b.example.edu", id="rec-2")]], total_count=2),
         ]})
     sweep = fpc.fetch_platform_cnames(client)
     assert sorted(sweep.entries) == ["a.example.edu", "b.example.edu"]
-    assert sweep.records_checked == 1
+    assert sweep.lists_short == 0
 
 
-def test_fetch_platform_cnames_aborts_when_the_reread_also_disagrees(fpc):
+def test_fetch_platform_cnames_reports_a_short_list_without_aborting(fpc, capsys):
+    """The first live sweep aborted an entire 187-zone run over 2 records missed in one
+    18,848-record zone.  A shortfall is now reported and the file is still written."""
     client = FakeCloudflareClient(
         accounts=[account()], zones=[zone("zone-a")],
         pages_by_zone={"zone-a": [FakePage([[record()]], total_count=3)]})
-    with pytest.raises(fpc.StartupError) as caught:
-        fpc.fetch_platform_cnames(client)
-    assert "truncated" in str(caught.value)
-    assert "read 1 of 3" in str(caught.value)
-    assert "record list for zone" in str(caught.value)
+    sweep = fpc.fetch_platform_cnames(client)
+    assert list(sweep.entries) == ["www.example.edu"]
+    assert sweep.lists_short == 1
+    assert "were missed while paging" in capsys.readouterr().err
 
 
-def test_fetch_platform_cnames_aborts_on_a_truncated_zone_list(fpc):
-    """A short ZONE list silently omits every record in the missing zones -- strictly worse than
-    a short record list, and the zero-zones guard only catches the degenerate case."""
-    client = FakeCloudflareClient(
-        accounts=[account()],
-        zones=FakePage([[zone("zone-a")]], total_count=9))
-    with pytest.raises(fpc.StartupError) as caught:
-        fpc.fetch_platform_cnames(client)
-    assert "truncated" in str(caught.value)
-    assert "zone list for account acct-1" in str(caught.value)
-
-
-def test_fetch_platform_cnames_reports_zones_it_could_not_cross_check(fpc):
-    """The cross-check must no-op wherever Cloudflare omits total_count -- and must SAY it did,
-    because a guard that silently never ran looks exactly like one that found nothing wrong."""
+def test_fetch_platform_cnames_counts_every_list_it_reads(fpc):
+    """Completeness is counted over the account list, each zone list, and each record list --
+    reporting only record lists would leave the zone-list check unaccounted for."""
     client = FakeCloudflareClient(
         accounts=[account()], zones=[zone("zone-a"), zone("zone-b", "example.org")],
         pages_by_zone={"zone-a": [FakePage([[record()]], with_result_info=False)],
                        "zone-b": [FakePage([[]], total_count=0)]})
     sweep = fpc.fetch_platform_cnames(client)
     assert list(sweep.entries) == ["www.example.edu"]
-    assert sweep.records_checked == 1
-    assert sweep.zones == 2
+    # account list (no result_info) + zone list (no result_info) + zone-a records = 3
+    # unverifiable; zone-b's empty-but-counted record list = 1 complete.
+    assert (sweep.lists_complete, sweep.lists_short, sweep.lists_unverifiable) == (1, 0, 3)
 
 
 def test_fetch_platform_cnames_treats_zero_zones_as_fatal(fpc):
@@ -548,16 +539,55 @@ def test_api_error_text_never_includes_a_real_response_body(fpc):
     assert "cf-secret-xyz" not in text
 
 
-def test_read_all_does_not_abort_when_the_reread_omits_total_count(fpc):
-    """R3's no-op rule applies to BOTH reads.  Guessing on the second aborted a COMPLETE re-read
-    while reporting "truncated ... of None" (round 3, finding 2)."""
-    pages = iter([FakePage([[record()]], total_count=2),
-                  FakePage([[record(), record(id="rec-2")]], with_result_info=False)])
-    said = []
-    items, checked = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+def test_read_all_reports_a_complete_read(fpc):
+    page = FakePage([[record(id="rec-1"), record(id="rec-2")]], total_count=2)
+    items, shortfall = fpc.read_all(lambda: page, "the record list for zone x", print)
     assert len(items) == 2
-    assert checked is False              # counted as unchecked, not asserted as verified
-    assert any("cannot cross-check" in m for m in said)
+    assert shortfall == 0
+
+
+def test_read_all_deduplicates_records_repeated_across_pages(fpc):
+    """MEASURED on the first live sweep.  The SDK paginates by page NUMBER, so rows shifting
+    between page fetches make one record come back twice while another is stepped over.  Passing
+    the duplicate onward would append one record's origin twice and raise a FALSE "more than one
+    platform-domain CNAME in this zone" warning."""
+    page = FakePage([[record(id="rec-1"), record(id="rec-2")],
+                     [record(id="rec-2"), record(id="rec-3")]], total_count=3)
+    items, shortfall = fpc.read_all(lambda: page, "the record list for zone x", print)
+    assert sorted(i.id for i in items) == ["rec-1", "rec-2", "rec-3"]
+    assert shortfall == 0
+
+
+def test_read_all_cannot_check_without_total_count(fpc):
+    page = FakePage([[record()]], with_result_info=False)
+    items, shortfall = fpc.read_all(lambda: page, "the record list for zone x", print)
+    assert len(items) == 1
+    assert shortfall is None             # unverifiable, NOT asserted as complete
+
+
+def test_read_all_unions_a_reread_to_close_the_gap(fpc):
+    """A second walk usually steps over different rows, so the union is more complete than
+    either read alone."""
+    pages = iter([FakePage([[record(id="rec-1")]], total_count=2),
+                  FakePage([[record(id="rec-2")]], total_count=2)])
+    said = []
+    items, shortfall = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+    assert sorted(i.id for i in items) == ["rec-1", "rec-2"]
+    assert shortfall == 0
+    assert any("re-reading to close the gap" in m for m in said)
+
+
+def test_read_all_warns_but_does_not_abort_when_records_stay_missing(fpc):
+    """A shortfall is a WARNING, never fatal: a paginated walk of a continuously-written zone may
+    never be exactly complete, and aborting would mean never producing output at all."""
+    pages = iter([FakePage([[record(id="rec-1")]], total_count=3),
+                  FakePage([[record(id="rec-2")]], total_count=3)])
+    said = []
+    items, shortfall = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+    assert sorted(i.id for i in items) == ["rec-1", "rec-2"]
+    assert shortfall == 1
+    assert any("1 record(s) were missed" in m for m in said)
+    assert any("NOT in this file" in m for m in said)
 
 
 def test_a_reread_is_reported_without_v(fpc, capsys):
@@ -571,9 +601,7 @@ def test_a_reread_is_reported_without_v(fpc, capsys):
                        record(name="b.example.edu", id="rec-2")]], total_count=2),
         ]})
     fpc.fetch_platform_cnames(client, verbose=False)
-    err = capsys.readouterr().err
-    assert "re-reading to tell a concurrent change apart" in err
-    assert "re-read agrees" in err
+    assert "re-reading to close the gap" in capsys.readouterr().err
 
 
 def test_verbose_reports_each_zone_and_whether_it_was_cross_checked(fpc, capsys):
@@ -596,7 +624,7 @@ def test_main_writes_the_file_and_reports_the_dns_only_count(fpc, tmp_path, monk
         {"a.example.edu": {"zone_id": "z", "origins": ["live-a.pantheonsite.io"],
                            "record_id": "r", "proxied": False, "ttl": 1,
                            "comment": None, "tags": [], "settings": None}},
-        ["ATTENTION: something worth seeing"], 1, 4, 12431, 3, 1, 1))
+        ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2))
     assert fpc.main(["-c", "ignored.toml"]) == 0
     written = json.loads((tmp_path / fpc.OUTPUT_FILE).read_text())
     assert list(written) == ["a.example.edu"]
@@ -606,8 +634,9 @@ def test_main_writes_the_file_and_reports_the_dns_only_count(fpc, tmp_path, monk
     assert "Wrote 1 platform-domain CNAMEs (1 DNS-only" in err
     assert "from 12431 records in 4 zones in 1 account(s)" in err
     assert captured.out == "", "stdout carries only argparse output (SPEC R6)"
-    assert ("Truncation cross-check active for 3 of 4 record lists, 1 of 1 zone lists, "
-            "and 1 of 1 account list.") in err
+    assert ("Completeness cross-check: 40 of 43 paginated lists verified complete, 1 short, "
+            "2 unverifiable.") in err
+    assert "the short lists are named above" in err
 
 
 def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, monkeypatch,
@@ -620,7 +649,7 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
     entry = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
              "proxied": None, "ttl": 1, "comment": None, "tags": [], "settings": None}
     monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False:
-                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 1, 1, 1))
+                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 3, 0, 0))
     assert fpc.main([]) == 0
     err = capsys.readouterr().err
     assert "(0 DNS-only" in err
@@ -632,7 +661,7 @@ def test_main_says_so_when_nothing_matched(fpc, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     monkeypatch.setattr(fpc, "fetch_platform_cnames",
-                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 4, 900, 4, 1, 1))
+                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 4, 900, 6, 0, 0))
     assert fpc.main([]) == 0
     assert json.loads((tmp_path / fpc.OUTPUT_FILE).read_text()) == {}
     assert "no platform-domain CNAMEs found in 4 zones" in capsys.readouterr().err
@@ -662,7 +691,7 @@ def test_main_names_an_unwritable_output_file_instead_of_crashing(fpc, tmp_path,
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     monkeypatch.setattr(fpc, "fetch_platform_cnames",
-                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 1, 0, 1, 1, 1))
+                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 1, 0, 3, 0, 0))
 
     def refuse(path, data):
         raise OSError(28, "No space left on device")

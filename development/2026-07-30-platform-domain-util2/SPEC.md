@@ -35,7 +35,7 @@ module's atomic JSON write. Deletion after Pantheon's CDN migration is `git rm` 
 
 **Tech Stack:** Python 3.12+, the `cloudflare` SDK (already declared under this project's
 `cloudflare` extra), `tomllib`, `argparse`. No new dependencies. Tests: pytest, `unit` tier,
-fully offline, 60 tests.
+fully offline, 63 tests.
 
 ## Global Constraints
 
@@ -293,21 +293,35 @@ another unnamed escape to exit 1, now converted to a `StartupError`. If the oper
   `BaseSyncPage.__iter__` walks **every** page (`_base_client.py:256`). This is page-number
   pagination, **not** the opaque-cursor shape that produced the Pantheon API's silent "returns
   page 1 again" bug (CLAUDE.md records that one), so the SDK's own loop is trusted to terminate.
-- **All three are cross-checked (MUST)** by `read_all` against Cloudflare's own `total_count`.
+- **Every list is de-duplicated by id (MUST).** Measured on the first live sweep: the SDK
+  paginates by page *number*, so when rows shift between page fetches — routine in a zone being
+  actively written — the same record returns on two pages while another is stepped over. On an
+  18,848-record zone this produced 2 duplicates and 2 misses. Duplicates must not reach the fold,
+  where they would append one record's origin twice and raise a **false** R7 duplicate-name
+  warning.
+- **All three are cross-checked (MUST)** by `read_all`, comparing the **unique** item count
+  against Cloudflare's own `total_count`.
   `V4PagePaginationArrayResultInfo` declares only `page`/`per_page`, but its `model_config` is
   `extra="allow"`, so `total_count` survives as `model_extra` (verified). Guarding records alone
   would be incoherent: a short **zone** list silently omits every record in the missing zones —
   strictly worse than a short record list — and the zero-zones rule below only catches the
   degenerate case.
-- **A mismatch triggers exactly one re-read, then decides.** `total_count` is computed for the
-  *first* page, so an item added or removed between that page and the last makes the counts
-  disagree for an entirely benign reason — likely across a sweep measured in tens of minutes at an
-  institution that actively manages this DNS. A second read that agrees with **its own**
-  `total_count` is a concurrent change and is the answer kept; a second disagreement is truncation
-  and is **fatal**, with **no file written**. Conflating the two would misdiagnose the common case
-  and send the operator hunting an API bug. **The notice is printed at default verbosity**, not
-  under `-v`: a re-read means the data moved under the sweep, which an operator wants to see on
-  every run.
+- **A shortfall triggers one re-read, UNIONED with the first, and is then a WARNING — never
+  fatal.** A second walk steps over different rows, so the union is more complete than either read
+  alone and usually closes the gap. If items are still missing, the run says which list and by how
+  many, and **still writes the file**. Aborting was the original design and it was **wrong**: the
+  first live sweep died at exit 2 over 2 records missed in one zone out of 187, and a paginated
+  walk of a continuously-written zone may never be exactly complete, so aborting would mean this
+  utility never produces output at all (§13, live run). **The notice prints at default
+  verbosity**, not under `-v`.
+- **Counting unique ids is what makes the check meaningful.** Raw item count fails in *both*
+  directions, both measured on the same zone: 18840 items vs `total_count` 18838 → a false
+  "truncated" abort; and 18848 items vs `total_count` 18848 → a false *pass*, because 2 duplicates
+  and 2 misses cancelled out exactly. Unique counting removes the false positive and closes the
+  false negative.
+- **Stated residual:** a `total_count` derived from the same incomplete query would agree with a
+  short read and be accepted. The check catches a disagreement between count and content, not a
+  server that is consistently wrong.
 - **When `total_count` is absent the check no-ops** rather than guessing, so it can never abort a
   healthy sweep. **This applies to BOTH reads**: a re-read that comes back complete but without a
   `total_count` returns its items and is counted as *unchecked*. Guessing there aborted a healthy
@@ -417,7 +431,7 @@ departures, all approved by the operator during review on 2026-07-30:
 | Code | Meaning |
 |---|---|
 | 0 | the output file was written (including an empty `{}`) |
-| 2 | could not complete: config unreadable / not TOML **/ not UTF-8**, no `[Cloudflare]` section, a non-`str` credential, an unresolvable / malformed / unsupported substitution, missing credentials, any `cloudflare.CloudflareError`, zero zones, **a truncated list (accounts, zones, or records) confirmed by a re-read**, or an `OSError` writing the output file |
+| 2 | could not complete: config unreadable / not TOML **/ not UTF-8**, no `[Cloudflare]` section, a non-`str` credential, an unresolvable / malformed / unsupported substitution, missing credentials, any `cloudflare.CloudflareError`, zero zones, or an `OSError` writing the output file. **An incomplete list is NOT here** — it warns and the file is still written (R3) |
 | 130 | interrupted (`KeyboardInterrupt`) |
 | 120 | **not produced by this program.** The interpreter's shutdown flush of a doomed **stdout** (argparse's usage / `--help`) *or* **stderr** exits 120 over the return value. Measured. Accepted and not guarded — §8.4. Listed so the table is exhaustive. |
 
@@ -552,11 +566,13 @@ Rules:
 
 - **NEVER** an API response body, at any level (R6).
 - A truncation is a **hard abort naming both counts from both reads**, not a line to notice.
-- **The guard reports its own coverage** at default verbosity, for **all three** list kinds —
-  `Truncation cross-check active for 41 of 43 record lists, 2 of 2 zone lists, and 1 of 1 account
-  list.` Reporting only the record lists would leave the *zone*-list guard — the one R3 calls
-  "strictly worse" to lose — silently unaccounted for. This is what makes §14 Q1 answerable; a
-  guard whose liveness is invisible is not a guard.
+- **The guard reports its own coverage** at default verbosity, over **every** paginated list it
+  read — `Completeness cross-check: 192 of 192 paginated lists verified complete, 0 short, 0
+  unverifiable.` Reporting only the record lists would leave the zone-list check silently
+  unaccounted for. This is what makes §14 Q1 answerable; a guard whose liveness is invisible is
+  not a guard.
+- **A short list is named individually**, with the count and the consequence spelled out —
+  *"Any platform-domain CNAME among them is NOT in this file."*
 - The **runtime is unknown until the first live run**, is recorded in §12, and is then added to
   the CLAUDE.md subsection — the sibling documents "~38 minutes", and an operator starting a long
   quiet run deserves the same here.
@@ -565,7 +581,7 @@ Rules:
 ## 7. Test plan
 
 One file, `tests/unit/test_find_platform_domains_cloudflare.py`, `pytestmark = pytest.mark.unit`,
-fully offline, **60 tests**. Seams per §4.
+fully offline, **63 tests**. Seams per §4.
 
 **These counts and outcomes are measured, not predicted.** The script and test file were built to
 completion in a scratch directory, then **staged back task by task** — each stage linted with the
@@ -576,7 +592,7 @@ Task 1: lint clean    8 passed
 Task 2: lint clean   25 passed
 Task 3: lint clean   37 passed
 Task 4: lint clean   40 passed
-Task 5: lint clean   60 passed
+Task 5: lint clean   63 passed
 ```
 
 and on the finished file: `ruff check` clean; **9 × T201 with the two per-file-ignores entries
@@ -1586,7 +1602,9 @@ def test_fetch_platform_cnames_walks_every_zone_regardless_of_proxy_status(fpc):
     assert sweep.entries["dnsonly.example.org"]["proxied"] is False
     assert sweep.warnings == []
     assert (sweep.accounts, sweep.zones, sweep.records) == (1, 2, 3)
-    assert sweep.records_checked == 2
+    # both record lists complete; the account and zone list fakes are plain lists
+    # with no result_info, so they are unverifiable rather than complete.
+    assert (sweep.lists_complete, sweep.lists_unverifiable) == (2, 2)
 
 
 def test_fetch_platform_cnames_reads_every_page(fpc):
@@ -1601,55 +1619,44 @@ def test_fetch_platform_cnames_reads_every_page(fpc):
     assert sorted(sweep.entries) == ["page1.example.edu", "page2.example.edu"]
 
 
-def test_fetch_platform_cnames_retries_once_and_continues_when_the_reread_agrees(fpc):
-    """total_count is computed for page 1, so a record changed mid-sweep makes the counts differ
-    for an entirely benign reason.  A re-read that is internally consistent is that case."""
+def test_fetch_platform_cnames_unions_a_reread_to_close_a_gap(fpc):
+    """A second walk steps over different rows, so the union is more complete than either read
+    alone -- and often closes the gap outright."""
     client = FakeCloudflareClient(
         accounts=[account()], zones=[zone("zone-a")],
         pages_by_zone={"zone-a": [
-            FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=2),   # disagrees
-            FakePage([[record(name="a.example.edu", id="rec-1"),
-                       record(name="b.example.edu", id="rec-2")]], total_count=2),   # agrees
+            FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=2),
+            FakePage([[record(name="b.example.edu", id="rec-2")]], total_count=2),
         ]})
     sweep = fpc.fetch_platform_cnames(client)
     assert sorted(sweep.entries) == ["a.example.edu", "b.example.edu"]
-    assert sweep.records_checked == 1
+    assert sweep.lists_short == 0
 
 
-def test_fetch_platform_cnames_aborts_when_the_reread_also_disagrees(fpc):
+def test_fetch_platform_cnames_reports_a_short_list_without_aborting(fpc, capsys):
+    """The first live sweep aborted an entire 187-zone run over 2 records missed in one
+    18,848-record zone.  A shortfall is now reported and the file is still written."""
     client = FakeCloudflareClient(
         accounts=[account()], zones=[zone("zone-a")],
         pages_by_zone={"zone-a": [FakePage([[record()]], total_count=3)]})
-    with pytest.raises(fpc.StartupError) as caught:
-        fpc.fetch_platform_cnames(client)
-    assert "truncated" in str(caught.value)
-    assert "read 1 of 3" in str(caught.value)
-    assert "record list for zone" in str(caught.value)
+    sweep = fpc.fetch_platform_cnames(client)
+    assert list(sweep.entries) == ["www.example.edu"]
+    assert sweep.lists_short == 1
+    assert "were missed while paging" in capsys.readouterr().err
 
 
-def test_fetch_platform_cnames_aborts_on_a_truncated_zone_list(fpc):
-    """A short ZONE list silently omits every record in the missing zones -- strictly worse than
-    a short record list, and the zero-zones guard only catches the degenerate case."""
-    client = FakeCloudflareClient(
-        accounts=[account()],
-        zones=FakePage([[zone("zone-a")]], total_count=9))
-    with pytest.raises(fpc.StartupError) as caught:
-        fpc.fetch_platform_cnames(client)
-    assert "truncated" in str(caught.value)
-    assert "zone list for account acct-1" in str(caught.value)
-
-
-def test_fetch_platform_cnames_reports_zones_it_could_not_cross_check(fpc):
-    """The cross-check must no-op wherever Cloudflare omits total_count -- and must SAY it did,
-    because a guard that silently never ran looks exactly like one that found nothing wrong."""
+def test_fetch_platform_cnames_counts_every_list_it_reads(fpc):
+    """Completeness is counted over the account list, each zone list, and each record list --
+    reporting only record lists would leave the zone-list check unaccounted for."""
     client = FakeCloudflareClient(
         accounts=[account()], zones=[zone("zone-a"), zone("zone-b", "example.org")],
         pages_by_zone={"zone-a": [FakePage([[record()]], with_result_info=False)],
                        "zone-b": [FakePage([[]], total_count=0)]})
     sweep = fpc.fetch_platform_cnames(client)
     assert list(sweep.entries) == ["www.example.edu"]
-    assert sweep.records_checked == 1
-    assert sweep.zones == 2
+    # account list (no result_info) + zone list (no result_info) + zone-a records = 3
+    # unverifiable; zone-b's empty-but-counted record list = 1 complete.
+    assert (sweep.lists_complete, sweep.lists_short, sweep.lists_unverifiable) == (1, 0, 3)
 
 
 def test_fetch_platform_cnames_treats_zero_zones_as_fatal(fpc):
@@ -1703,16 +1710,55 @@ def test_api_error_text_never_includes_a_real_response_body(fpc):
     assert "cf-secret-xyz" not in text
 
 
-def test_read_all_does_not_abort_when_the_reread_omits_total_count(fpc):
-    """R3's no-op rule applies to BOTH reads.  Guessing on the second aborted a COMPLETE re-read
-    while reporting "truncated ... of None" (round 3, finding 2)."""
-    pages = iter([FakePage([[record()]], total_count=2),
-                  FakePage([[record(), record(id="rec-2")]], with_result_info=False)])
-    said = []
-    items, checked = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+def test_read_all_reports_a_complete_read(fpc):
+    page = FakePage([[record(id="rec-1"), record(id="rec-2")]], total_count=2)
+    items, shortfall = fpc.read_all(lambda: page, "the record list for zone x", print)
     assert len(items) == 2
-    assert checked is False              # counted as unchecked, not asserted as verified
-    assert any("cannot cross-check" in m for m in said)
+    assert shortfall == 0
+
+
+def test_read_all_deduplicates_records_repeated_across_pages(fpc):
+    """MEASURED on the first live sweep.  The SDK paginates by page NUMBER, so rows shifting
+    between page fetches make one record come back twice while another is stepped over.  Passing
+    the duplicate onward would append one record's origin twice and raise a FALSE "more than one
+    platform-domain CNAME in this zone" warning."""
+    page = FakePage([[record(id="rec-1"), record(id="rec-2")],
+                     [record(id="rec-2"), record(id="rec-3")]], total_count=3)
+    items, shortfall = fpc.read_all(lambda: page, "the record list for zone x", print)
+    assert sorted(i.id for i in items) == ["rec-1", "rec-2", "rec-3"]
+    assert shortfall == 0
+
+
+def test_read_all_cannot_check_without_total_count(fpc):
+    page = FakePage([[record()]], with_result_info=False)
+    items, shortfall = fpc.read_all(lambda: page, "the record list for zone x", print)
+    assert len(items) == 1
+    assert shortfall is None             # unverifiable, NOT asserted as complete
+
+
+def test_read_all_unions_a_reread_to_close_the_gap(fpc):
+    """A second walk usually steps over different rows, so the union is more complete than
+    either read alone."""
+    pages = iter([FakePage([[record(id="rec-1")]], total_count=2),
+                  FakePage([[record(id="rec-2")]], total_count=2)])
+    said = []
+    items, shortfall = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+    assert sorted(i.id for i in items) == ["rec-1", "rec-2"]
+    assert shortfall == 0
+    assert any("re-reading to close the gap" in m for m in said)
+
+
+def test_read_all_warns_but_does_not_abort_when_records_stay_missing(fpc):
+    """A shortfall is a WARNING, never fatal: a paginated walk of a continuously-written zone may
+    never be exactly complete, and aborting would mean never producing output at all."""
+    pages = iter([FakePage([[record(id="rec-1")]], total_count=3),
+                  FakePage([[record(id="rec-2")]], total_count=3)])
+    said = []
+    items, shortfall = fpc.read_all(lambda: next(pages), "the record list for zone x", said.append)
+    assert sorted(i.id for i in items) == ["rec-1", "rec-2"]
+    assert shortfall == 1
+    assert any("1 record(s) were missed" in m for m in said)
+    assert any("NOT in this file" in m for m in said)
 
 
 def test_a_reread_is_reported_without_v(fpc, capsys):
@@ -1726,9 +1772,7 @@ def test_a_reread_is_reported_without_v(fpc, capsys):
                        record(name="b.example.edu", id="rec-2")]], total_count=2),
         ]})
     fpc.fetch_platform_cnames(client, verbose=False)
-    err = capsys.readouterr().err
-    assert "re-reading to tell a concurrent change apart" in err
-    assert "re-read agrees" in err
+    assert "re-reading to close the gap" in capsys.readouterr().err
 
 
 def test_verbose_reports_each_zone_and_whether_it_was_cross_checked(fpc, capsys):
@@ -1751,7 +1795,7 @@ def test_main_writes_the_file_and_reports_the_dns_only_count(fpc, tmp_path, monk
         {"a.example.edu": {"zone_id": "z", "origins": ["live-a.pantheonsite.io"],
                            "record_id": "r", "proxied": False, "ttl": 1,
                            "comment": None, "tags": [], "settings": None}},
-        ["ATTENTION: something worth seeing"], 1, 4, 12431, 3, 1, 1))
+        ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2))
     assert fpc.main(["-c", "ignored.toml"]) == 0
     written = json.loads((tmp_path / fpc.OUTPUT_FILE).read_text())
     assert list(written) == ["a.example.edu"]
@@ -1761,8 +1805,9 @@ def test_main_writes_the_file_and_reports_the_dns_only_count(fpc, tmp_path, monk
     assert "Wrote 1 platform-domain CNAMEs (1 DNS-only" in err
     assert "from 12431 records in 4 zones in 1 account(s)" in err
     assert captured.out == "", "stdout carries only argparse output (SPEC R6)"
-    assert ("Truncation cross-check active for 3 of 4 record lists, 1 of 1 zone lists, "
-            "and 1 of 1 account list.") in err
+    assert ("Completeness cross-check: 40 of 43 paginated lists verified complete, 1 short, "
+            "2 unverifiable.") in err
+    assert "the short lists are named above" in err
 
 
 def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, monkeypatch,
@@ -1775,7 +1820,7 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
     entry = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
              "proxied": None, "ttl": 1, "comment": None, "tags": [], "settings": None}
     monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False:
-                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 1, 1, 1))
+                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 3, 0, 0))
     assert fpc.main([]) == 0
     err = capsys.readouterr().err
     assert "(0 DNS-only" in err
@@ -1787,7 +1832,7 @@ def test_main_says_so_when_nothing_matched(fpc, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     monkeypatch.setattr(fpc, "fetch_platform_cnames",
-                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 4, 900, 4, 1, 1))
+                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 4, 900, 6, 0, 0))
     assert fpc.main([]) == 0
     assert json.loads((tmp_path / fpc.OUTPUT_FILE).read_text()) == {}
     assert "no platform-domain CNAMEs found in 4 zones" in capsys.readouterr().err
@@ -1817,7 +1862,7 @@ def test_main_names_an_unwritable_output_file_instead_of_crashing(fpc, tmp_path,
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     monkeypatch.setattr(fpc, "fetch_platform_cnames",
-                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 1, 0, 1, 1, 1))
+                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 1, 0, 3, 0, 0))
 
     def refuse(path, data):
         raise OSError(28, "No space left on device")
@@ -1858,58 +1903,62 @@ def expected_record_count(page):
     return total if isinstance(total, int) else None
 
 
-def read_all(fetch, what, notify):
-    """Read every page of a paginated list, cross-checked against Cloudflare's own total_count.
+def read_page_once(fetch):
+    """One full walk of a paginated endpoint: ({id: item}, total_count or None).
 
-    Returns (items, checked).  `checked` is False when total_count was unavailable on the read
-    whose items are returned: a guard whose own liveness is invisible is not a guard, so the
-    caller reports the coverage for every list it read.
-
-    `notify` is NOT the -v gate.  It is only ever called on the rare re-read path, and a re-read
-    means the data moved under the sweep -- something an operator wants to see on a default run,
-    not only when they happened to pass -v.
-
-    `fetch` is a zero-argument callable, not a page, so a re-read can repeat the whole request.
-    Iterating the page object walks EVERY page (BaseSyncPage.__iter__ -> iter_pages), so `items`
-    is complete -- reading page.result instead would silently take page 1 only.
-
-    A mismatch has two possible causes, and conflating them misdiagnoses the common one:
-    total_count is computed for the FIRST page, so a record or zone added or deleted between
-    that page and the last makes the counts differ for an entirely benign reason -- likely
-    across a sweep measured in tens of minutes.  One re-read tells them apart.  A second read
-    that agrees with its OWN total_count is a concurrent edit, and is the answer we keep; a
-    second disagreement is a truncated list and is fatal, because writing the file anyway would
-    ship a silently incomplete answer -- the same reasoning that makes zero zones fatal.
+    De-duplicated by id, which is NOT belt-and-braces.  Measured on the first live sweep: the
+    SDK paginates by page NUMBER, so when rows shift between page fetches -- routine in a zone
+    being actively written -- the same record comes back on two pages while another is stepped
+    over.  Feeding those duplicates onward would append one record's origin twice and raise a
+    FALSE "more than one platform-domain CNAME in this zone" warning, which R7 defines as a
+    signal worth acting on.
     """
     page = fetch()
-    items = list(page)
-    expected = expected_record_count(page)
-    if expected is None:
-        return items, False
-    if len(items) == expected:
-        return items, True
+    by_id = {}
+    for item in page:
+        by_id.setdefault(item.id, item)
+    return by_id, expected_record_count(page)
 
-    notify(f"{what}: read {len(items)} of {expected}; re-reading to tell a concurrent change "
-           "apart from a truncated list")
-    retry_page = fetch()
-    retry_items = list(retry_page)
-    retry_expected = expected_record_count(retry_page)
-    if retry_expected is None:
-        # Same no-op rule the first read gets: absent total_count means the guard cannot judge,
-        # and guessing here would abort a COMPLETE re-read while reporting "truncated ... of
-        # None".  Report it as unchecked instead.
-        notify(f"{what}: re-read returned {len(retry_items)} with no total_count -- cannot "
-               "cross-check, continuing with the re-read and counting this list as unchecked")
-        return retry_items, False
-    if len(retry_items) == retry_expected:
-        notify(f"{what}: re-read agrees ({len(retry_items)} of {retry_expected}; first read saw "
-               f"{len(items)} of {expected}) -- something changed mid-sweep, continuing with the "
-               "re-read")
-        return retry_items, True
-    raise StartupError(
-        f"{what}: read {len(items)} of {expected}, then {len(retry_items)} of {retry_expected} "
-        "on a re-read -- the list is truncated, so the output would be silently incomplete; "
-        "not writing a partial file")
+
+def read_all(fetch, what, notify):
+    """Every item of a paginated endpoint, de-duplicated, checked against Cloudflare's own count.
+
+    Returns (items, shortfall).  `shortfall` is None when Cloudflare supplied no total_count (the
+    check could not run), else how many items total_count says we never saw -- 0 for a verified
+    complete read.
+
+    `fetch` is a zero-argument callable, not a page, so the re-read can repeat the whole request.
+    Iterating the page object walks EVERY page (BaseSyncPage.__iter__ -> iter_pages); reading
+    page.result instead would silently take page 1 only.
+
+    A shortfall is a WARNING, never fatal.  The first live sweep is why: on an 18,848-record zone
+    this walk both repeated 2 records and missed 2, and on one read those two errors cancelled so
+    that raw item count matched total_count exactly -- the check passing while the data was
+    incomplete.  Counting unique ids removes that blind spot, but it cannot make a paginated walk
+    of a continuously-written zone complete, and aborting on one would mean this utility never
+    produces output at all.  So the run says loudly which lists are short and by how much, and
+    still writes the file.
+
+    `notify` is NOT the -v gate: a short read is rare and an operator wants it on every run.
+    """
+    by_id, expected = read_page_once(fetch)
+    if expected is None:
+        return list(by_id.values()), None
+    if len(by_id) >= expected:
+        return list(by_id.values()), 0
+
+    # One re-read, UNIONED with the first: a second walk usually steps over different rows, so
+    # the union is more complete than either read alone and often closes the gap entirely.
+    notify(f"{what}: read {len(by_id)} unique of {expected} -- re-reading to close the gap")
+    more, expected_again = read_page_once(fetch)
+    by_id.update(more)
+    expected = max(expected, expected_again or 0)
+    shortfall = max(0, expected - len(by_id))
+    if shortfall:
+        notify(f"ATTENTION: {what} -- read {len(by_id)} unique records but Cloudflare reported "
+               f"{expected}; {shortfall} record(s) were missed while paging a list that is being "
+               "actively written.  Any platform-domain CNAME among them is NOT in this file.")
+    return list(by_id.values()), shortfall
 
 
 def api_error_text(e):
@@ -1925,39 +1974,60 @@ def api_error_text(e):
     return f"{type(e).__name__}: {e}"
 
 
+class ListTally:
+    """How many paginated lists came back complete, short, or unverifiable."""
+
+    def __init__(self):
+        self.complete = self.short = self.unverifiable = 0
+
+    def count(self, shortfall):
+        """Record one list read.  `shortfall` is read_all's second return value."""
+        if shortfall is None:
+            self.unverifiable += 1
+        elif shortfall:
+            self.short += 1
+        else:
+            self.complete += 1
+
+
 class SweepResult(NamedTuple):
     """What one sweep found, plus what it can honestly say about its own completeness."""
 
-    entries: dict            # the output mapping, keyed by normalized FQDN
-    warnings: list           # duplicate-name ATTENTION lines, printed before the write
-    accounts: int            # accounts listed
-    zones: int               # zones listed across those accounts
-    records: int             # DNS records actually read and inspected
-    records_checked: int     # of `zones`   -- record lists Cloudflare let us cross-check
-    zone_lists_checked: int  # of `accounts`-- per-account zone lists cross-checked
-    account_list_checked: int  # of 1       -- the account list itself
+    entries: dict          # the output mapping, keyed by normalized FQDN
+    warnings: list         # duplicate-name ATTENTION lines, printed before the write
+    accounts: int          # accounts listed
+    zones: int             # zones listed across those accounts
+    records: int           # unique DNS records actually read and inspected
+    # Completeness, counted over EVERY paginated list read -- the account list, one zone list
+    # per account, and one record list per zone.  Reporting only the record lists would leave
+    # the zone-list check, the one whose loss is worse, silently unaccounted for.
+    lists_complete: int    # unique count reached Cloudflare's total_count
+    lists_short: int       # total_count says items were missed (each named in an ATTENTION)
+    lists_unverifiable: int  # Cloudflare supplied no total_count, so nothing could be checked
 
 
 def list_zones(client, warn):
     """Every zone across every account the credentials can see, cross-checked like the records.
 
-    Returns (accounts, zones, zone_lists_checked, account_list_checked).  Zero zones is fatal,
+    Returns (accounts, zones, tally) where tally counts this function's own list reads.  Zero
+    zones is fatal,
     copied from fqdns.py's reasoning: with the scope missing, "no zones" and "no matching
     records" write an identical empty file, and a silently empty file is the one failure mode
     this script must not have.  The message names BOTH scopes because an accounts list that comes
     back empty yields zero zones just as a missing DNS:Read does.
     """
+    tally = ListTally()
     try:
-        accounts, account_checked = read_all(client.accounts.list, "the account list", warn)
+        accounts, shortfall = read_all(client.accounts.list, "the account list", warn)
+        tally.count(shortfall)
         zones = []
-        zone_lists_checked = 0
         for account in accounts:
             # The default argument binds this account's id at definition time; a bare closure
             # over the loop variable would re-read the LAST account on every retry (ruff B023).
-            got, checked = read_all(
+            got, shortfall = read_all(
                 lambda account_id=account.id: client.zones.list(account={"id": account_id}),
                 f"the zone list for account {account.id}", warn)
-            zone_lists_checked += 1 if checked else 0
+            tally.count(shortfall)
             zones.extend(got)
     except cloudflare.CloudflareError as e:
         raise StartupError(f"listing accounts/zones failed: {api_error_text(e)}") from e
@@ -1967,7 +2037,7 @@ def list_zones(client, warn):
             f"Cloudflare returned {len(accounts)} account(s) but 0 zones -- the credentials "
             "likely lack Account:Read or DNS:Read (an accounts list that comes back empty "
             "yields zero zones too).")
-    return accounts, zones, zone_lists_checked, 1 if account_checked else 0
+    return accounts, zones, tally
 
 
 def fetch_platform_cnames(client, *, verbose=False):
@@ -1996,19 +2066,20 @@ def fetch_platform_cnames(client, *, verbose=False):
         """Re-read notices: ALWAYS printed.  A re-read means the data moved mid-sweep."""
         print(message, file=sys.stderr, flush=True)
 
-    accounts, zones, zone_lists_checked, account_list_checked = list_zones(client, warn)
-    tally = {"records": 0, "checked": 0}
+    accounts, zones, tally = list_zones(client, warn)
+    seen = {"records": 0}
 
     def zone_records():
         """(zone_id, record) pairs, one zone at a time."""
         for number, zone in enumerate(zones, start=1):
-            records, checked = read_all(
+            records, shortfall = read_all(
                 lambda zone_id=zone.id: client.dns.records.list(zone_id=zone_id),
                 f"the record list for zone {zone.name}", warn)
-            tally["records"] += len(records)
-            tally["checked"] += 1 if checked else 0
-            note(f"[{number}/{len(zones)}] zone {zone.name} -- {len(records)} records"
-                 f"{'' if checked else ' (total_count unavailable, not cross-checked)'}")
+            tally.count(shortfall)
+            seen["records"] += len(records)
+            marker = {None: " (total_count unavailable, not cross-checked)",
+                      0: ""}.get(shortfall, f" ({shortfall} missed)")
+            note(f"[{number}/{len(zones)}] zone {zone.name} -- {len(records)} records{marker}")
             for dns_record in records:
                 yield zone.id, dns_record
 
@@ -2017,8 +2088,8 @@ def fetch_platform_cnames(client, *, verbose=False):
     except cloudflare.CloudflareError as e:
         raise StartupError(f"listing DNS records failed: {api_error_text(e)}") from e
 
-    return SweepResult(entries, warnings, len(accounts), len(zones), tally["records"],
-                       tally["checked"], zone_lists_checked, account_list_checked)
+    return SweepResult(entries, warnings, len(accounts), len(zones), seen["records"],
+                       tally.complete, tally.short, tally.unverifiable)
 
 
 def build_arg_parser():
@@ -2068,9 +2139,13 @@ def main(argv):
               f"{sweep.accounts} account(s) to {OUTPUT_FILE}.", file=sys.stderr, flush=True)
         # Report the guard's own coverage: a truncation check that silently never ran looks
         # exactly like one that ran and found nothing wrong.
-        print(f"Truncation cross-check active for {sweep.records_checked} of {sweep.zones} "
-              f"record lists, {sweep.zone_lists_checked} of {sweep.accounts} zone lists, and "
-              f"{sweep.account_list_checked} of 1 account list.", file=sys.stderr, flush=True)
+        lists = sweep.lists_complete + sweep.lists_short + sweep.lists_unverifiable
+        print(f"Completeness cross-check: {sweep.lists_complete} of {lists} paginated lists "
+              f"verified complete, {sweep.lists_short} short, {sweep.lists_unverifiable} "
+              "unverifiable.", file=sys.stderr, flush=True)
+        if sweep.lists_short:
+            print("ATTENTION: the short lists are named above; records missed while paging them "
+                  "are NOT in this file.", file=sys.stderr, flush=True)
         if unknown_proxy:
             print(f"ATTENTION: {len(unknown_proxy)} entr"
                   f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "
@@ -2096,7 +2171,7 @@ if __name__ == "__main__":
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Expected: **60 passed** (40 + 20 here).
+Expected: **63 passed** (40 + 23 here).
 
 - [ ] **Step 5: Run the whole gate**
 
@@ -2364,8 +2439,8 @@ Recorded with the reasoning so a later session does not re-litigate them.
 
 ## 10. Verification
 
-- `./run-tests --fast` — ruff, pyright, and the offline suite green; 60 new tests. Measured clean
-  at **every** per-task checkpoint (8 / 25 / 37 / 40 / 60), not only at the end.
+- `./run-tests --fast` — ruff, pyright, and the offline suite green; 63 new tests. Measured clean
+  at **every** per-task checkpoint (8 / 25 / 37 / 40 / 63), not only at the end.
 - Task 5 Step 6 — the per-file-ignores entries proven load-bearing (9 × T201 without them).
 - `./find-platform-domains-cloudflare --help` — usage renders on stdout.
 - `./find-platform-domains-cloudflare -c /nonexistent.toml` — exit 2, named error on stderr.
@@ -2387,19 +2462,33 @@ This folder stays — it is the historical record.
 
 ## 12. First live run
 
-*Recorded in Task 7, Step 4. Leave this section as-is until then.*
+Run on **2026-07-30**, behind Task 7's STOP, with the operator's exact-phrase approval.
 
-- Date:
-- Command:
-- Exit code:
-- Wall-clock runtime:
-- Accounts / zones scanned / records read:
-- Truncation cross-check coverage (record lists `N of M`, zone lists `N of M`, account list):
-- Any re-reads triggered, and how each resolved:
-- Entries with an unknown (`null`) proxy status:
-- Entries written, of which DNS-only:
-- Entries with multiple origins (duplicate-name warnings):
-- `fqdns.json` cross-check result:
+**The first attempt failed** — `exit=2`, no file written, aborted on one zone out of 187 after
+3m09s. That failure is the most valuable thing this section records; see §13's live-run table.
+The design was corrected (unique-id de-duplication; a shortfall warns instead of aborting) and
+re-run.
+
+| | |
+|---|---|
+| Command | `time ./find-platform-domains-cloudflare -v` |
+| Exit code | **0** |
+| Wall-clock runtime | **2m 17s** (the failed first attempt: 3m 09s) |
+| Accounts / zones / records | 4 accounts, 187 zones, **22,911 unique records** read and inspected |
+| Completeness cross-check | **192 of 192 paginated lists verified complete, 0 short, 0 unverifiable** |
+| Re-reads triggered | none on the successful run (de-duplication alone closed the gap that had aborted the first) |
+| Entries written | **218**, of which **5 DNS-only** — invisible to `fqdns.json` by construction |
+| Unknown (`null`) proxy status | 0 |
+| Entries with multiple origins | 0 (no duplicate-name warnings) |
+| Output contract | all 218 entries carry exactly the eight keys; every origin ends `.pantheonsite.io`; every key normalized |
+| `fqdns.json` cross-check | **0 discrepancies**, with `fqdns.json` 50.3 hours stale — every proxied platform CNAME this run found is also in that file |
+
+**The runtime is ~2 minutes, not the sibling's ~38.** §8.3's "if a run ever becomes painful"
+trigger for server-side `type="CNAME"` filtering is therefore moot, and §8.12's no-resume
+decision is comfortably justified: a re-run costs two minutes.
+
+**Cloudflare supplies `total_count` on every list** (§14 Q1 answered: 192 of 192), so the
+completeness check is live rather than silently no-opping.
 
 ## 13. Claims this spec had to correct
 
@@ -2469,34 +2558,44 @@ and calling the class fixed** (3.1, 3.3, 3.6 are all re-instances of classes the
 record as closed). When a finding names a defect, the next step is to grep for every other
 instance of that defect *class* before declaring it done.
 
+### The first live run — a design defect no offline test could have found
+
+The sweep aborted at exit 2 on its first real execution. Both rounds of the reviewer had examined
+this guard; neither could have caught it, because it only appears against a zone large enough to
+paginate deeply *while being written*.
+
+| # | Claim | Reality | Caught by |
+|---|---|---|---|
+| L.1 | R3: a count mismatch means truncation or a concurrent change, and a re-read tells them apart | **A third cause dominates:** page-number pagination over an actively-written zone returns the *same record twice* while stepping over another. Measured on `umflint.edu` (18,848 records, 189 pages): 2 duplicates and 2 misses in a single walk. The re-read could not help — the artifact is systematic, not transient, so both reads disagreed and the guard escalated to fatal | The live run |
+| L.2 | Comparing item count to `total_count` detects truncation | It fails in **both** directions on the same zone, minutes apart: `18840 items vs 18838` → false "truncated" abort; `18848 items vs 18848` → false **pass**, the duplicates and misses having cancelled exactly. The check blessed an incomplete read | Live probe of the zone |
+| L.3 | A confirmed shortfall should be fatal ("writing the file anyway would ship a silently incomplete answer") | Correct in principle, unusable in practice: it discarded a 187-zone sweep over 2 records missed in one zone, and a paginated walk of a continuously-written zone may *never* be exactly complete. Now a loud per-list warning naming the count and the consequence, with the file still written — the operator's decision | The live run |
+| L.4 | Duplicates were a counting nuisance | They are a **correctness** bug independent of the guard: a duplicate reaching the fold appends one record's origin twice and raises a *false* R7 duplicate-name warning, which R7 defines as a signal worth acting on | Follow-through from L.1 |
+
+**Why this matters beyond this script:** every one of the 42 findings from the three review rounds
+was found by reading or by running the code against *fakes*. This one needed production data with
+a property no fixture had — scale plus concurrent writes. The offline suite now encodes it
+(`test_read_all_deduplicates_records_repeated_across_pages`), but only because the live run
+happened first. A spec that had shipped straight from review would have shipped a utility that
+aborts on this organization every time.
+
 ## 14. Closing audit questions
 
-To answer after implementation and the live run, not before.
+Answered from the 2026-07-30 live run (§12) except where noted.
 
-1. Did Cloudflare supply `total_count` on record pages? The run prints
-   `Truncation cross-check active for N of M zones` — record N/M in §12. If N was 0, the guard
-   never ran in production and §7's real-SDK tests are the only thing holding it up.
-2. How long did the sweep take, and how many records were read? If materially slower than the
-   sibling's ~38 minutes, revisit §8.3 (server-side `type="CNAME"`).
-3. Were any re-reads triggered, and did each resolve as a concurrent change or as truncation? A
-   truncation on the first real run would mean the mechanism is load-bearing sooner than expected.
-4. Did any name produce a duplicate warning? A same-zone one would mean the Cloudflare API permits
-   something R7 assumes it does not.
-5. Did the `fqdns.json` cross-check surface anything not explained by staleness?
-6. Does the downstream rewriter actually consume `ttl`/`comment`/`tags`/`settings`? If it ignores
-   them, §8.2's reasoning should be revisited before the next such file is designed.
-7. Does any custom domain still CNAME to a legacy `*.gotpantheon.com` hostname? If so, R4's
-   scoping assumption needs revisiting and this sweep under-reports.
-8. What is the rewriter's staleness policy for this file (R5)? It drives deletions and the file
-   carries no capture timestamp.
-9. Has `plugin/cloudflare/client.py`'s R2a defect been filed or fixed in the main program?
-   `$CLOUDFLARE_BASE_URL` is exploitable against it today.
-10. Did any entry come back with a `null` proxy status? If so, the rewriter needs an explicit
-    rule before it touches those hostnames — `null` is not `false` (R5).
-11. Should the client be built with `trust_env=False` (R2a's stated residual)? That is an
-    operator decision about proxied deployments, deferred rather than taken here.
-12. Was a re-run ever needed after a partial failure? If the measured runtime makes that
-    expensive, §8.12's no-resume decision should be revisited.
+| # | Question | Answer |
+|---|---|---|
+| 1 | Did Cloudflare supply `total_count`? | **Yes, on every list** — 192 of 192 verified complete, 0 unverifiable. The check is live, not silently no-opping. |
+| 2 | Runtime, and does §8.3 need revisiting? | **2m 17s** for 187 zones / 22,911 records. Server-side `type="CNAME"` filtering is unnecessary; §8.3 stands. |
+| 3 | Were re-reads triggered, and how did each resolve? | **None on the successful run.** On the failed first attempt one fired and could not resolve — which is what exposed the design defect (§13, L.1–L.3). |
+| 4 | Any duplicate-name warnings? | **None** — 0 entries with multiple origins. |
+| 5 | Did the `fqdns.json` cross-check surface anything? | **No** — 0 discrepancies, with that file 50.3 hours stale. |
+| 6 | Does the rewriter consume `ttl`/`comment`/`tags`/`settings`? | **Open** — the rewriter does not exist yet. Revisit §8.2 before the next such file is designed. |
+| 7 | Any legacy `*.gotpantheon.com` targets? | **Not measured** — this sweep matches `.pantheonsite.io` only, per PROMPT line 7, so it cannot answer its own question. A one-line change to `PLATFORM_SUFFIX` would test it. **Worth doing once** before relying on the file for completeness. |
+| 8 | The rewriter's staleness policy for this file? | **Open.** The file drives deletions and carries no capture timestamp; R5's rule is "regenerate immediately before any rewrite". At 2m 17s that is cheap. |
+| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **Open, and live.** `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is configured. |
+| 10 | Any `null` proxy status? | **None** — 0 of 218. |
+| 11 | Should the client use `trust_env=False`? | **Open** — operator decision (§8.13); the proxy/trust-store residual is unclosed. |
+| 12 | Was a re-run needed after a partial failure? | **Yes, once** — the first attempt aborted and was re-run after the fix. At two minutes the no-resume decision (§8.12) held up. |
 
 ## 15. Reviewer Concerns (open after the 3-round review cap)
 

@@ -321,58 +321,62 @@ def expected_record_count(page):
     return total if isinstance(total, int) else None
 
 
-def read_all(fetch, what, notify):
-    """Read every page of a paginated list, cross-checked against Cloudflare's own total_count.
+def read_page_once(fetch):
+    """One full walk of a paginated endpoint: ({id: item}, total_count or None).
 
-    Returns (items, checked).  `checked` is False when total_count was unavailable on the read
-    whose items are returned: a guard whose own liveness is invisible is not a guard, so the
-    caller reports the coverage for every list it read.
-
-    `notify` is NOT the -v gate.  It is only ever called on the rare re-read path, and a re-read
-    means the data moved under the sweep -- something an operator wants to see on a default run,
-    not only when they happened to pass -v.
-
-    `fetch` is a zero-argument callable, not a page, so a re-read can repeat the whole request.
-    Iterating the page object walks EVERY page (BaseSyncPage.__iter__ -> iter_pages), so `items`
-    is complete -- reading page.result instead would silently take page 1 only.
-
-    A mismatch has two possible causes, and conflating them misdiagnoses the common one:
-    total_count is computed for the FIRST page, so a record or zone added or deleted between
-    that page and the last makes the counts differ for an entirely benign reason -- likely
-    across a sweep measured in tens of minutes.  One re-read tells them apart.  A second read
-    that agrees with its OWN total_count is a concurrent edit, and is the answer we keep; a
-    second disagreement is a truncated list and is fatal, because writing the file anyway would
-    ship a silently incomplete answer -- the same reasoning that makes zero zones fatal.
+    De-duplicated by id, which is NOT belt-and-braces.  Measured on the first live sweep: the
+    SDK paginates by page NUMBER, so when rows shift between page fetches -- routine in a zone
+    being actively written -- the same record comes back on two pages while another is stepped
+    over.  Feeding those duplicates onward would append one record's origin twice and raise a
+    FALSE "more than one platform-domain CNAME in this zone" warning, which R7 defines as a
+    signal worth acting on.
     """
     page = fetch()
-    items = list(page)
-    expected = expected_record_count(page)
-    if expected is None:
-        return items, False
-    if len(items) == expected:
-        return items, True
+    by_id = {}
+    for item in page:
+        by_id.setdefault(item.id, item)
+    return by_id, expected_record_count(page)
 
-    notify(f"{what}: read {len(items)} of {expected}; re-reading to tell a concurrent change "
-           "apart from a truncated list")
-    retry_page = fetch()
-    retry_items = list(retry_page)
-    retry_expected = expected_record_count(retry_page)
-    if retry_expected is None:
-        # Same no-op rule the first read gets: absent total_count means the guard cannot judge,
-        # and guessing here would abort a COMPLETE re-read while reporting "truncated ... of
-        # None".  Report it as unchecked instead.
-        notify(f"{what}: re-read returned {len(retry_items)} with no total_count -- cannot "
-               "cross-check, continuing with the re-read and counting this list as unchecked")
-        return retry_items, False
-    if len(retry_items) == retry_expected:
-        notify(f"{what}: re-read agrees ({len(retry_items)} of {retry_expected}; first read saw "
-               f"{len(items)} of {expected}) -- something changed mid-sweep, continuing with the "
-               "re-read")
-        return retry_items, True
-    raise StartupError(
-        f"{what}: read {len(items)} of {expected}, then {len(retry_items)} of {retry_expected} "
-        "on a re-read -- the list is truncated, so the output would be silently incomplete; "
-        "not writing a partial file")
+
+def read_all(fetch, what, notify):
+    """Every item of a paginated endpoint, de-duplicated, checked against Cloudflare's own count.
+
+    Returns (items, shortfall).  `shortfall` is None when Cloudflare supplied no total_count (the
+    check could not run), else how many items total_count says we never saw -- 0 for a verified
+    complete read.
+
+    `fetch` is a zero-argument callable, not a page, so the re-read can repeat the whole request.
+    Iterating the page object walks EVERY page (BaseSyncPage.__iter__ -> iter_pages); reading
+    page.result instead would silently take page 1 only.
+
+    A shortfall is a WARNING, never fatal.  The first live sweep is why: on an 18,848-record zone
+    this walk both repeated 2 records and missed 2, and on one read those two errors cancelled so
+    that raw item count matched total_count exactly -- the check passing while the data was
+    incomplete.  Counting unique ids removes that blind spot, but it cannot make a paginated walk
+    of a continuously-written zone complete, and aborting on one would mean this utility never
+    produces output at all.  So the run says loudly which lists are short and by how much, and
+    still writes the file.
+
+    `notify` is NOT the -v gate: a short read is rare and an operator wants it on every run.
+    """
+    by_id, expected = read_page_once(fetch)
+    if expected is None:
+        return list(by_id.values()), None
+    if len(by_id) >= expected:
+        return list(by_id.values()), 0
+
+    # One re-read, UNIONED with the first: a second walk usually steps over different rows, so
+    # the union is more complete than either read alone and often closes the gap entirely.
+    notify(f"{what}: read {len(by_id)} unique of {expected} -- re-reading to close the gap")
+    more, expected_again = read_page_once(fetch)
+    by_id.update(more)
+    expected = max(expected, expected_again or 0)
+    shortfall = max(0, expected - len(by_id))
+    if shortfall:
+        notify(f"ATTENTION: {what} -- read {len(by_id)} unique records but Cloudflare reported "
+               f"{expected}; {shortfall} record(s) were missed while paging a list that is being "
+               "actively written.  Any platform-domain CNAME among them is NOT in this file.")
+    return list(by_id.values()), shortfall
 
 
 def api_error_text(e):
@@ -388,39 +392,60 @@ def api_error_text(e):
     return f"{type(e).__name__}: {e}"
 
 
+class ListTally:
+    """How many paginated lists came back complete, short, or unverifiable."""
+
+    def __init__(self):
+        self.complete = self.short = self.unverifiable = 0
+
+    def count(self, shortfall):
+        """Record one list read.  `shortfall` is read_all's second return value."""
+        if shortfall is None:
+            self.unverifiable += 1
+        elif shortfall:
+            self.short += 1
+        else:
+            self.complete += 1
+
+
 class SweepResult(NamedTuple):
     """What one sweep found, plus what it can honestly say about its own completeness."""
 
-    entries: dict            # the output mapping, keyed by normalized FQDN
-    warnings: list           # duplicate-name ATTENTION lines, printed before the write
-    accounts: int            # accounts listed
-    zones: int               # zones listed across those accounts
-    records: int             # DNS records actually read and inspected
-    records_checked: int     # of `zones`   -- record lists Cloudflare let us cross-check
-    zone_lists_checked: int  # of `accounts`-- per-account zone lists cross-checked
-    account_list_checked: int  # of 1       -- the account list itself
+    entries: dict          # the output mapping, keyed by normalized FQDN
+    warnings: list         # duplicate-name ATTENTION lines, printed before the write
+    accounts: int          # accounts listed
+    zones: int             # zones listed across those accounts
+    records: int           # unique DNS records actually read and inspected
+    # Completeness, counted over EVERY paginated list read -- the account list, one zone list
+    # per account, and one record list per zone.  Reporting only the record lists would leave
+    # the zone-list check, the one whose loss is worse, silently unaccounted for.
+    lists_complete: int    # unique count reached Cloudflare's total_count
+    lists_short: int       # total_count says items were missed (each named in an ATTENTION)
+    lists_unverifiable: int  # Cloudflare supplied no total_count, so nothing could be checked
 
 
 def list_zones(client, warn):
     """Every zone across every account the credentials can see, cross-checked like the records.
 
-    Returns (accounts, zones, zone_lists_checked, account_list_checked).  Zero zones is fatal,
+    Returns (accounts, zones, tally) where tally counts this function's own list reads.  Zero
+    zones is fatal,
     copied from fqdns.py's reasoning: with the scope missing, "no zones" and "no matching
     records" write an identical empty file, and a silently empty file is the one failure mode
     this script must not have.  The message names BOTH scopes because an accounts list that comes
     back empty yields zero zones just as a missing DNS:Read does.
     """
+    tally = ListTally()
     try:
-        accounts, account_checked = read_all(client.accounts.list, "the account list", warn)
+        accounts, shortfall = read_all(client.accounts.list, "the account list", warn)
+        tally.count(shortfall)
         zones = []
-        zone_lists_checked = 0
         for account in accounts:
             # The default argument binds this account's id at definition time; a bare closure
             # over the loop variable would re-read the LAST account on every retry (ruff B023).
-            got, checked = read_all(
+            got, shortfall = read_all(
                 lambda account_id=account.id: client.zones.list(account={"id": account_id}),
                 f"the zone list for account {account.id}", warn)
-            zone_lists_checked += 1 if checked else 0
+            tally.count(shortfall)
             zones.extend(got)
     except cloudflare.CloudflareError as e:
         raise StartupError(f"listing accounts/zones failed: {api_error_text(e)}") from e
@@ -430,7 +455,7 @@ def list_zones(client, warn):
             f"Cloudflare returned {len(accounts)} account(s) but 0 zones -- the credentials "
             "likely lack Account:Read or DNS:Read (an accounts list that comes back empty "
             "yields zero zones too).")
-    return accounts, zones, zone_lists_checked, 1 if account_checked else 0
+    return accounts, zones, tally
 
 
 def fetch_platform_cnames(client, *, verbose=False):
@@ -459,19 +484,20 @@ def fetch_platform_cnames(client, *, verbose=False):
         """Re-read notices: ALWAYS printed.  A re-read means the data moved mid-sweep."""
         print(message, file=sys.stderr, flush=True)
 
-    accounts, zones, zone_lists_checked, account_list_checked = list_zones(client, warn)
-    tally = {"records": 0, "checked": 0}
+    accounts, zones, tally = list_zones(client, warn)
+    seen = {"records": 0}
 
     def zone_records():
         """(zone_id, record) pairs, one zone at a time."""
         for number, zone in enumerate(zones, start=1):
-            records, checked = read_all(
+            records, shortfall = read_all(
                 lambda zone_id=zone.id: client.dns.records.list(zone_id=zone_id),
                 f"the record list for zone {zone.name}", warn)
-            tally["records"] += len(records)
-            tally["checked"] += 1 if checked else 0
-            note(f"[{number}/{len(zones)}] zone {zone.name} -- {len(records)} records"
-                 f"{'' if checked else ' (total_count unavailable, not cross-checked)'}")
+            tally.count(shortfall)
+            seen["records"] += len(records)
+            marker = {None: " (total_count unavailable, not cross-checked)",
+                      0: ""}.get(shortfall, f" ({shortfall} missed)")
+            note(f"[{number}/{len(zones)}] zone {zone.name} -- {len(records)} records{marker}")
             for dns_record in records:
                 yield zone.id, dns_record
 
@@ -480,8 +506,8 @@ def fetch_platform_cnames(client, *, verbose=False):
     except cloudflare.CloudflareError as e:
         raise StartupError(f"listing DNS records failed: {api_error_text(e)}") from e
 
-    return SweepResult(entries, warnings, len(accounts), len(zones), tally["records"],
-                       tally["checked"], zone_lists_checked, account_list_checked)
+    return SweepResult(entries, warnings, len(accounts), len(zones), seen["records"],
+                       tally.complete, tally.short, tally.unverifiable)
 
 
 def build_arg_parser():
@@ -531,9 +557,13 @@ def main(argv):
               f"{sweep.accounts} account(s) to {OUTPUT_FILE}.", file=sys.stderr, flush=True)
         # Report the guard's own coverage: a truncation check that silently never ran looks
         # exactly like one that ran and found nothing wrong.
-        print(f"Truncation cross-check active for {sweep.records_checked} of {sweep.zones} "
-              f"record lists, {sweep.zone_lists_checked} of {sweep.accounts} zone lists, and "
-              f"{sweep.account_list_checked} of 1 account list.", file=sys.stderr, flush=True)
+        lists = sweep.lists_complete + sweep.lists_short + sweep.lists_unverifiable
+        print(f"Completeness cross-check: {sweep.lists_complete} of {lists} paginated lists "
+              f"verified complete, {sweep.lists_short} short, {sweep.lists_unverifiable} "
+              "unverifiable.", file=sys.stderr, flush=True)
+        if sweep.lists_short:
+            print("ATTENTION: the short lists are named above; records missed while paging them "
+                  "are NOT in this file.", file=sys.stderr, flush=True)
         if unknown_proxy:
             print(f"ATTENTION: {len(unknown_proxy)} entr"
                   f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "

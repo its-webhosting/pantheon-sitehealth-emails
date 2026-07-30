@@ -134,14 +134,22 @@ Exit 0 = written, 2 = could not complete, 130 = interrupted; there is no exit 1 
 or stderr can still exit 120, as with the sibling's argparse output). Exit 2 covers an unreadable
 config, a non-string or unresolvable credential, missing credentials, any Cloudflare API error,
 **zero zones** (a missing `Account:Read`/`DNS:Read` scope and a genuinely empty org otherwise
-produce an identical empty file), **a truncated list**, and an `OSError` on the write. All three
-list endpoints paginate, so each one's item count is cross-checked against Cloudflare's own
-`total_count`; a mismatch triggers **one re-read**, because `total_count` is computed for page 1
-and an item changed mid-sweep disagrees for a benign reason — a self-consistent re-read is that
-case and is kept, a second disagreement is truncation and aborts without writing. The run reports
-how many zones it could actually cross-check, since the guard no-ops wherever the API omits
-`total_count`. stdout carries only argparse's usage/`--help`; everything else is stderr, and error
-text **never** includes an API response body.
+produce an identical empty file), and an `OSError` on the write.
+
+**Pagination is the subtle part, and the first live sweep is why.** All three list endpoints
+paginate by page *number*, so when rows shift between page fetches — routine in a zone being
+actively written — the same record comes back on two pages while another is stepped over.
+Measured on an 18,848-record zone: 2 duplicates and 2 misses in one walk. So every list is
+**de-duplicated by record id** (a duplicate reaching the fold would append one origin twice and
+raise a *false* duplicate-name warning), and the completeness check compares the **unique** count
+against Cloudflare's `total_count`. Raw item count fails both ways — it produced a false
+"truncated" abort on one read and a false *pass* on another, where the duplicates and misses
+cancelled exactly. A shortfall triggers one re-read unioned with the first, and is then a **loud
+warning, not an abort**: a paginated walk of a continuously-written zone may never be exactly
+complete, and aborting meant the utility produced nothing at all. The run reports
+`Completeness cross-check: N of M paginated lists verified complete, X short, Y unverifiable`.
+stdout carries only argparse's usage/`--help`; everything else is stderr, and error text
+**never** includes an API response body.
 
 Credentials come from `[Cloudflare]` in the same TOML the main program reads, via a **copied**
 resolver handling only the `<{env NAME}` / `<{secret env NAME}` forms; any other substitution, and
@@ -155,9 +163,13 @@ cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, an
 configured.
 
 ```bash
-./find-platform-domains-cloudflare            # every zone, every account
+./find-platform-domains-cloudflare            # every zone, every account, ~2 minutes
 ./find-platform-domains-cloudflare -v         # ... naming each zone and its record count
 ```
+
+First live run (2026-07-30): 4 accounts, 187 zones, 22,911 records, 218 platform-domain CNAMEs of
+which 5 DNS-only, in 2m 17s — 192 of 192 lists verified complete, and 0 discrepancies against a
+50-hour-old `fqdns.json`.
 
 `find-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
 as `pantheon-sitehealth-emails.py` and `find-platform-domains-dns.py`: ruff, pyright, and
