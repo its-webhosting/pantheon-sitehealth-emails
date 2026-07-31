@@ -1012,12 +1012,14 @@ def expected_record_count(page):
 def read_page_once(fetch):
     """One full walk of a paginated endpoint: ({id: item}, total_count or None).
 
-    De-duplicated by id, which is NOT belt-and-braces.  Measured on the first live sweep: the
-    SDK paginates by page NUMBER, so when rows shift between page fetches -- routine in a zone
-    being actively written -- the same record comes back on two pages while another is stepped
-    over.  Feeding those duplicates onward would append one record's origin twice and raise a
-    FALSE "more than one platform-domain CNAME in this zone" warning, which R7 defines as a
-    signal worth acting on.
+    De-duplicated by id, which is NOT belt-and-braces, and the consequence GREW in this
+    increment.  Measured on the first live sweep: the SDK paginates by page NUMBER, so when rows
+    shift between page fetches -- routine in a zone being actively written -- the same record
+    comes back on two pages while another is stepped over.  Feeding those duplicates onward would
+    append one record's origin twice, and collect_entries reads a second origin as AMBIGUITY: the
+    FQDN is now EXCLUDED (SPEC R4.1) -- dropped from the inventory, the plan and the revert, and
+    the run exits 1 -- where it used to merely raise a false warning.  A pagination artifact would
+    therefore silently remove a real, rewritable hostname from a destructive rewrite's input.
     """
     page = fetch()
     by_id = {}
@@ -1163,7 +1165,9 @@ def select_zones(zones, requested):
     silently: unlike a duplicate record (R7), a repeated argument has no consequence.
 
     One name MAY match more than one zone (the same name in two accounts); all matches are kept,
-    so collect_entries can still raise its cross-zone duplicate warning.
+    so collect_entries can still see the cross-zone duplicate and exclude the FQDN as
+    `ambiguous-multiple-zones`.  (It used to raise a warning instead; task 6 controller decision
+    A retired that in favour of main()'s uniform per-exclusion ATTENTION.)
 
     KNOWN LIMIT of any subset run, stated because it is invisible in the output: collect_entries
     excludes an FQDN as ambiguous only when it can see the platform CNAME in more than one zone
@@ -1360,7 +1364,10 @@ def build_arg_parser():
     parser = argparse.ArgumentParser(
         allow_abbrev=False,          # house rule: no --for -> --for-real class of foot-gun
         description="Write every Cloudflare CNAME record pointing at a Pantheon platform domain "
-                    "as JSON, to standard output unless -o names a file.",
+                    "as JSON, with the Cloudflare batch calls that would rewrite it to the "
+                    "addresses its target resolves to, and the calls that would undo that.  "
+                    "With -o/--output-basename: four files.  Without it: the inventory alone, "
+                    "on standard output.",
         epilog=f"With no ZONE, every zone in every visible account is swept.  To refresh the "
                f"organization-wide baseline before a rewrite, use -o rather than a redirect: "
                f"`-o {OUTPUT_BASENAME}` replaces each file atomically and only on success, where "

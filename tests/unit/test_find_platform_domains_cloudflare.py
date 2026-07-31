@@ -342,7 +342,7 @@ def test_collect_entries_normalizes_the_key_and_keeps_origins_raw(fpc):
     assert entries["www.example.edu"]["origins"] == ["Live-Umich-Example1.PantheonSite.IO"]
 
 
-def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
+def test_collect_entries_excludes_a_cross_zone_duplicate_and_appends_no_warning(fpc):
     """SPEC R4.1: this used to be the first-record-wins case (entry kept, origins accumulated).
     A cross-zone duplicate is now ambiguous and is REMOVED from `entries` -- kept in `excluded`
     instead -- because the kept record_id was never safe to act on.
@@ -367,7 +367,7 @@ def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
     assert warnings == []
 
 
-def test_collect_entries_warns_for_two_matches_in_one_zone(fpc):
+def test_collect_entries_excludes_two_matches_in_one_zone_and_appends_no_warning(fpc):
     """API-unreachable (a name holds at most one CNAME), but the file would keep one record_id
     of two and feed a destructive rewrite, so silence is the wrong default -- the `excluded`
     entry (asserted below) is that non-silence, not a printed warning (see the docstring on the
@@ -2214,11 +2214,11 @@ def test_an_ambiguous_exclusion_produces_exactly_one_operator_line(fpc, tmp_path
 
     This drives the REAL fetch_platform_cnames()/collect_entries() path (not a canned
     SweepResult, whose `warnings` field would just echo back whatever the test hardcoded and so
-    could never prove collect_entries()'s own behavior).  Rewritten from
-    test_collect_entries_is_first_record_wins_across_zones_and_warns and
-    test_collect_entries_warns_for_two_matches_in_one_zone, which asserted the retired
+    could never prove collect_entries()'s own behavior).  Rewritten from the two
+    test_collect_entries_excludes_*_and_appends_no_warning tests, which asserted the retired
     per-fact warning text directly at the collect_entries() seam; those now assert
-    `warnings == []` and point here.
+    `warnings == []` and point here.  Their names said `_and_warns` until the whole-branch review
+    (finding 6) -- a name promising a warning over a body asserting there is none.
     """
     monkeypatch.chdir(tmp_path)
     client = FakeCloudflareClient(
