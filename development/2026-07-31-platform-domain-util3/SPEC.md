@@ -531,8 +531,13 @@ The single canonical table. No negation chains anywhere else in this document.
 | 7 | `platform-aaaa-out-of-range` | ≥1 AAAA record, but **not every** AAAA is in `2620:12a::/32` | resolution | yes | 1 |
 | 8 | `resolution-failed` | Timeout / NoNameservers / `MalformedNameError`, after one retry | resolution | yes | 1 |
 
-This list is **exhaustive**. Conditions are evaluated in this order; the first match wins, so an
-FQDN carries exactly one reason code.
+This list is **exhaustive**, and each FQDN carries exactly one reason code. **Evaluation order is
+1, 2, 3, 8, 4, 5, 6, 7** — not the table's row order, which is grouped for reading.
+
+*Intent:* `resolution-failed` (8) MUST be tested **before** `no-a` (4). R4.4 makes `resolved_a`
+`null` on an indeterminate lookup, and a `not resolved_a` test treats `null` and `[]` alike — so
+checking 4 first would report a timeout as "the target definitively has no A records", which is
+precisely the definitive-vs-indeterminate confusion R4.4 exists to prevent.
 
 **Codes 1 and 2** are the only ones detectable without DNS. Conditions 3–8 require resolution,
 which R3.2 makes unconditional, so **all eight apply in both modes**.
@@ -575,11 +580,14 @@ module attributes safe and leak-free.
 | `check_basename(value)` | the validated basename; raises `StartupError` (R2.2, R2.4) |
 | `output_paths(basename)` | a `NamedTuple` of the four paths |
 | `sorted_addresses(values)` | addresses sorted by `ipaddress.ip_address()` value (§5.2) |
-| `resolve_target(target)` | a `Resolution` NamedTuple `(a, aaaa, failure)` |
-| `classify(entry, resolution)` | a §6 reason code, or `None` |
-| `record_body(...)` | one `posts` item, applying every R6 rule |
-| `plan_entry(fqdn, entry, resolution)` | the §5.3 entry |
-| `revert_entry(fqdn, entry, resolution)` | the §5.4 entry |
+| `resolve_one_rrset(target, rrtype)` | `(addresses, problem)` for one rrset |
+| `resolve_target(target)` | a `Resolution` NamedTuple `(a, aaaa, problem)` |
+| `classify(entry, resolution)` | `(reason_code, detail)`; `(None, "")` when the entry qualifies |
+| `clean_settings(settings, *, drop_cname_only)` | the `settings` value for a body, or `None` |
+| `record_body(entry, rtype, content, settings)` | one `posts` item, applying every R6 rule |
+| `proxied_ttl_anomaly(entry)` | `True` when a proxied record's swept TTL is not 1 |
+| `plan_entry(entry, resolution)` | the §5.3 entry. **No `fqdn` parameter** — `entry["name"]` carries it |
+| `revert_entry(entry, resolution)` | the §5.4 entry |
 | `provenance(argv, sweep, direction, count)` | the §5.5 header |
 
 `write_outputs(paths, …)` is **not** a pure helper — it does I/O and is specified in §9.3. It is
