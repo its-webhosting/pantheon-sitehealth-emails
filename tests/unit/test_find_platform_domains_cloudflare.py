@@ -58,17 +58,30 @@ def _refuse_real_dns(fpc, monkeypatch):
     needs an answer opts in via fake_dns(fpc, monkeypatch, ...), which monkeypatches over this
     default the same way any other override would.
 
-    READING THE FAILURE: since the whole-branch review added main()'s last line of defence
-    (finding 2), a test driving main() no longer sees this AssertionError propagate -- main()
-    catches it, names it on stderr and returns 2.  So the top-line failure is an unexpected
-    `2` from main(), and the sentence naming the missing fake_dns is in pytest's "Captured
-    stderr call" section.  Verified after that change: the message still reaches the report.
+    THE ASSERTION LIVES AT TEARDOWN, NOT INSIDE `refuse` (re-review after the whole-branch fix,
+    finding 1).  main()'s last line of defence (finding 2) now catches BaseException -- including
+    this fixture's own AssertionError -- and converts it into `report_line(...)` + `return 2`.  A
+    test driving main() that asserts only the exit code (e.g. `main([...]) == 2`) therefore
+    PASSED GREEN while this guard fired, with the missing-fake_dns message sitting unread in
+    "Captured stderr call": measured directly by writing exactly that probe against the
+    `raise`-inside-`refuse` version of this fixture, which is what the ASSERTION USED TO BE.  That
+    is an instrument that can pass by accident (PD#14), so the check cannot depend on what the
+    code under test does with the exception it is handed: `refuse` now only RECORDS the call, and
+    the raise plus the real assertion happen at teardown, unconditionally, whatever main() (or any
+    other caller) did with the AssertionError in between.
     """
+    reached = []
+
     def refuse(hostname, rrtype):
+        reached.append((hostname, rrtype))
         raise AssertionError(
             f"real DNS seam reached for ({hostname!r}, {rrtype!r}) -- this test is missing "
             "fake_dns(fpc, monkeypatch, ...) (SPEC section 7 forbids touching real DNS)")
     monkeypatch.setattr(fpc, "resolve", refuse)
+    yield
+    assert not reached, (
+        f"real DNS seam reached: {reached} -- this test is missing fake_dns(fpc, monkeypatch, "
+        "...) (SPEC section 7 forbids touching real DNS)")
 
 
 def record(**overrides):
