@@ -343,7 +343,14 @@ def test_collect_entries_normalizes_the_key_and_keeps_origins_raw(fpc):
 def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
     """SPEC R4.1: this used to be the first-record-wins case (entry kept, origins accumulated).
     A cross-zone duplicate is now ambiguous and is REMOVED from `entries` -- kept in `excluded`
-    instead -- because the kept record_id was never safe to act on.  The warning is unchanged."""
+    instead -- because the kept record_id was never safe to act on.
+
+    `warnings` is now asserted EMPTY, not the old per-fact ATTENTION text: controller decision
+    (task 6 report, decision A) retired collect_entries()'s own warning because it duplicated
+    main()'s uniform R7.1 exclusion line for the very same fact -- two stderr lines reporting
+    one exclusion.  test_an_ambiguous_exclusion_produces_exactly_one_operator_line (Task 6
+    section) now covers the single, real operator-facing line, driven through the actual
+    fetch_platform_cnames()/main() path rather than a canned SweepResult."""
     entries, warnings, excluded = fpc.collect_entries([
         ("zone-a", "example.edu",
          record(id="rec-1", content="live-a.pantheonsite.io", proxied=True, ttl=1)),
@@ -355,29 +362,25 @@ def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
     assert excluded["www.example.edu"]["origins"] == ["live-a.pantheonsite.io",
                                                       "live-b.pantheonsite.io"]
     assert excluded["www.example.edu"]["zone_ids"] == ["zone-a", "zone-b"]
-    assert len(warnings) == 1
-    assert "www.example.edu" in warnings[0]
-    assert "zone-a" in warnings[0]
-    assert "zone-b" in warnings[0]
+    assert warnings == []
 
 
 def test_collect_entries_warns_for_two_matches_in_one_zone(fpc):
     """API-unreachable (a name holds at most one CNAME), but the file would keep one record_id
-    of two and feed a destructive rewrite, so silence is the wrong default.
+    of two and feed a destructive rewrite, so silence is the wrong default -- the `excluded`
+    entry (asserted below) is that non-silence, not a printed warning (see the docstring on the
+    cross-zone sibling test above for why `warnings` is now empty).
 
     SPEC R4.1: this used to be the first-record-wins case (entry kept with record_id "rec-1").
     A same-zone duplicate is now ambiguous and is REMOVED from `entries` -- kept in `excluded`
-    instead.  The warning is unchanged."""
+    instead."""
     entries, warnings, excluded = fpc.collect_entries([
         ("zone-a", "example.edu", record(id="rec-1", content="live-a.pantheonsite.io")),
         ("zone-a", "example.edu", record(id="rec-2", content="live-b.pantheonsite.io")),
     ])
     assert entries == {}
     assert excluded["www.example.edu"]["reason"] == "ambiguous-multiple-origins"
-    assert len(warnings) == 1
-    assert "www.example.edu" in warnings[0]
-    assert "zone-a" in warnings[0]
-    assert "omitted from the inventory" in warnings[0]   # new wording; no kept record_id (R4.1)
+    assert warnings == []
 
 
 # --- Task 4: the atomic write ----------------------------------------------------------------
@@ -1035,8 +1038,9 @@ spec = importlib.util.spec_from_loader("fpc", loader)
 m = importlib.util.module_from_spec(spec)
 sys.modules["fpc"] = m
 loader.exec_module(m)
-entry = {{"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
-         "proxied": False, "ttl": 1, "comment": None, "tags": [], "settings": None}}
+entry = {{"name": "a.example.edu", "zone_id": "z", "origins": ["live-a.pantheonsite.io"],
+         "record_id": "r", "proxied": False, "ttl": 1, "comment": None, "tags": [],
+         "settings": None}}
 entries = {{"a.example.edu": entry}} if {sweep!r} == "canned" else {{}}
 m.cloudflare_client = lambda path: object()
 m.fetch_platform_cnames = (
@@ -1183,7 +1187,11 @@ def test_an_interrupt_with_output_after_the_write_says_the_file_was_fully_writte
 
     monkeypatch.setattr(fpc, "summarize", interrupt)
     assert fpc.main(["-o", "out"]) == 130
-    assert "out.json was fully written." in capsys.readouterr().err
+    err = capsys.readouterr().err
+    # Task 6: interrupt_message() now describes all FOUR files, not just the inventory --
+    # main() writes the plan/revert/excluded files too under -o (SPEC 9.4).
+    assert "out.json" in err
+    assert "were fully written." in err
     assert list(json.loads((tmp_path / "out.json").read_text())) == ["a.example.edu"]
 
 
@@ -1485,7 +1493,11 @@ def test_collect_entries_records_the_raw_name_and_the_zone_name(fpc):
 
 
 def test_collect_entries_excludes_a_name_with_two_platform_cnames_in_one_zone(fpc):
-    """R4.1: the entry would keep the FIRST record_id of two and present it as actionable."""
+    """R4.1: the entry would keep the FIRST record_id of two and present it as actionable.
+
+    `warnings == []`: the operator-facing line for this exclusion is now main()'s uniform R7.1
+    ATTENTION, not a second one collect_entries() used to append (task 6 report, decision A) --
+    see test_an_ambiguous_exclusion_produces_exactly_one_operator_line (Task 6 section)."""
     entries, warnings, excluded = fpc.collect_entries([
         ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1",
                                          content="live-one.pantheonsite.io")),
@@ -1497,7 +1509,7 @@ def test_collect_entries_excludes_a_name_with_two_platform_cnames_in_one_zone(fp
     assert excluded["a.example.edu"]["origins"] == ["live-one.pantheonsite.io",
                                                    "live-two.pantheonsite.io"]
     assert excluded["a.example.edu"]["zone_ids"] == ["zone-a"]
-    assert warnings, "the operator must still get the ATTENTION line"
+    assert warnings == []
 
 
 def test_collect_entries_excludes_a_name_present_in_two_zones(fpc):
@@ -2006,3 +2018,211 @@ def test_the_revert_reproduces_every_writable_field_of_the_swept_cname(fpc):
                     "content": "live-a.pantheonsite.io", "proxied": False, "ttl": 300,
                     "settings": {"flatten_cname": True, "ipv4_only": False, "ipv6_only": False},
                     "comment": "owned by ITS", "tags": ["team:wws"]}
+
+
+# --- Task 6: the four files ------------------------------------------------------------------
+
+def freeze_clock(fpc, monkeypatch, stamp="2026-07-31T14:02:11Z"):
+    """Pin the ONE clock seam, so all three headed files are byte-deterministic (SPEC 5.5)."""
+    monkeypatch.setattr(fpc, "now_utc", lambda: stamp)
+    return stamp
+
+
+def planned_run(fpc, monkeypatch, tmp_path):
+    """A one-entry sweep that resolves cleanly, plus a frozen clock."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch,
+               fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 187))
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4", "2620:12a:8001::4"],
+    })
+    return freeze_clock(fpc, monkeypatch)
+
+
+def test_basename_mode_writes_all_four_files(fpc, tmp_path, monkeypatch, capsys):
+    planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "engin-zone-excluded.json", "engin-zone-plan.json",
+        "engin-zone-revert.json", "engin-zone.json"]
+
+
+def test_stdout_mode_writes_no_other_file(fpc, tmp_path, monkeypatch, capsys):
+    planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main([]) == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_inventory_is_byte_identical_between_the_two_modes(fpc, tmp_path, monkeypatch,
+                                                               capsys):
+    """R3.2's whole point: `-o x` and `> x.json` must not diverge for the same sweep."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main([]) == 0
+    from_stdout = capsys.readouterr().out
+    planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    assert (tmp_path / "engin-zone.json").read_text() == from_stdout
+
+
+def test_all_three_headed_files_share_one_generated_at(fpc, tmp_path, monkeypatch, capsys):
+    """SPEC 9.3: os.replace is atomic per file, not across four.  A shared timestamp is what
+    makes a mixed set detectable."""
+    stamp = planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    for suffix, direction in (("plan", "plan"), ("revert", "revert"), ("excluded", "excluded")):
+        header = json.loads((tmp_path / f"engin-zone-{suffix}.json").read_text())["generated"]
+        assert header["at"] == stamp
+        assert header["direction"] == direction
+        assert header["zones_swept"] == 2
+        assert header["zones_total"] == 187
+        assert header["required_a_range"] == "23.185.0.0/24"
+        assert header["required_aaaa_range"] == "2620:12a::/32"
+
+
+def test_the_header_entry_count_is_per_file(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(), "b.example.edu": swept(name="b.example.edu",
+                                                          origins=["live-b.pantheonsite.io"])},
+        [], 1, 2, 5, 1, 0, 0, 187))
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+        ("live-b.pantheonsite.io", "A"): ["104.18.2.7"],
+        ("live-b.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+    })
+    freeze_clock(fpc, monkeypatch)
+    assert fpc.main(["-o", "engin-zone"]) == 1
+    plan = json.loads((tmp_path / "engin-zone-plan.json").read_text())
+    excluded = json.loads((tmp_path / "engin-zone-excluded.json").read_text())
+    assert plan["generated"]["entries"] == 1
+    assert excluded["generated"]["entries"] == 1
+    assert list(plan["entries"]) == ["a.example.edu"]
+    assert excluded["entries"]["b.example.edu"]["reason"] == "platform-a-out-of-range"
+
+
+def test_the_plan_and_revert_hold_the_same_fqdns(fpc, tmp_path, monkeypatch, capsys):
+    planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    plan = json.loads((tmp_path / "engin-zone-plan.json").read_text())["entries"]
+    revert = json.loads((tmp_path / "engin-zone-revert.json").read_text())["entries"]
+    assert list(plan) == list(revert) == ["a.example.edu"]
+
+
+def test_an_excluded_fqdn_gets_no_plan_or_revert_entry(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch,
+               fpc.SweepResult({"a.example.edu": swept(proxied=None)}, [], 1, 2, 5, 1, 0, 0, 187))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+                                ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]})
+    freeze_clock(fpc, monkeypatch)
+    assert fpc.main(["-o", "engin-zone"]) == 1
+    assert json.loads((tmp_path / "engin-zone-plan.json").read_text())["entries"] == {}
+    assert json.loads((tmp_path / "engin-zone-revert.json").read_text())["entries"] == {}
+    assert "unknown-proxy-status" in (tmp_path / "engin-zone-excluded.json").read_text()
+
+
+def test_a_construction_failure_writes_nothing(fpc, tmp_path, monkeypatch, capsys):
+    """SPEC 9.3: all four documents are built in memory BEFORE any of them is written."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    monkeypatch.setattr(fpc, "plan_entry",
+                        lambda entry, resolution: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        fpc.main(["-o", "engin-zone"])
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_subset_warning_names_all_four_files(fpc, tmp_path, monkeypatch, capsys):
+    """SPEC 9.5: a subset sweep cannot see a cross-zone duplicate, so it can emit a PLAN entry
+    for an FQDN a full sweep would have excluded as ambiguous."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    assert fpc.main(["-o", "engin-zone", "example.edu"]) in (0, 1)
+    err = capsys.readouterr().err
+    assert "2 of 187 zones" in err
+    assert "engin-zone-plan.json" in err
+    assert "MUST NOT be used as the baseline" in err
+
+
+def test_the_summary_counts_exclusions_by_reason(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch,
+               fpc.SweepResult({"a.example.edu": swept(proxied=None)}, [], 1, 2, 5, 1, 0, 0, 187))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+                                ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]})
+    freeze_clock(fpc, monkeypatch)
+    assert fpc.main([]) == 1
+    assert "1 unknown-proxy-status" in capsys.readouterr().err
+
+
+# --- Task 6: controller decisions (task-6-report.md) -----------------------------------------
+
+def test_an_ambiguous_exclusion_produces_exactly_one_operator_line(fpc, tmp_path, monkeypatch,
+                                                                    capsys):
+    """Controller decision (A): collect_entries() used to append its OWN ATTENTION line for an
+    ambiguous FQDN (printed via sweep.warnings, in main()'s `for message in sweep.warnings`
+    loop) ON TOP OF main()'s uniform R7.1 exclusion ATTENTION -- two stderr lines reporting one
+    fact.  collect_entries() no longer appends that warning; the uniform line -- which carries
+    the reason code and is identical in shape across all eight reason codes (SPEC R7.1) -- is
+    now the ONLY operator-facing report of this exclusion.
+
+    This drives the REAL fetch_platform_cnames()/collect_entries() path (not a canned
+    SweepResult, whose `warnings` field would just echo back whatever the test hardcoded and so
+    could never prove collect_entries()'s own behavior).  Rewritten from
+    test_collect_entries_is_first_record_wins_across_zones_and_warns and
+    test_collect_entries_warns_for_two_matches_in_one_zone, which asserted the retired
+    per-fact warning text directly at the collect_entries() seam; those now assert
+    `warnings == []` and point here.
+    """
+    monkeypatch.chdir(tmp_path)
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=[zone("zone-a"), zone("zone-b", "example.org")],
+        pages_by_zone={
+            "zone-a": [FakePage([[record(name="a.example.edu", id="rec-1",
+                                         content="live-a.pantheonsite.io")]], total_count=1)],
+            "zone-b": [FakePage([[record(name="a.example.edu", id="rec-2",
+                                         content="live-b.pantheonsite.io")]], total_count=1)],
+        })
+    monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: client)
+    assert fpc.main([]) == 1
+    err = capsys.readouterr().err
+    assert err.count("a.example.edu") == 1
+    assert "ATTENTION: a.example.edu excluded (ambiguous-multiple-zones):" in err
+
+
+def test_summarize_distinguishes_all_excluded_from_none_found(fpc, tmp_path, monkeypatch,
+                                                               capsys):
+    """Controller decision (B): summarize()'s zero-entry message said 'no platform-domain
+    CNAMEs found' even when the sweep found some and excluded every one as ambiguous -- false
+    and misleading on a sweep that found something and correctly refused to act on it.
+    test_main_says_so_when_nothing_matched (Task 4 section) covers the genuine
+    found-nothing-at-all case and is unaffected."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {}, [], 1, 2, 5, 1, 0, 0, 187,
+        {"a.example.edu": {"reason": "ambiguous-multiple-zones", "detail": "two zones",
+                           "zone_ids": ["z1", "z2"], "origins": ["live-a.pantheonsite.io"]}}))
+    assert fpc.main([]) == 1
+    err = capsys.readouterr().err
+    assert "no platform-domain CNAMEs found" not in err
+    assert "every platform-domain CNAME found in 2 zones was excluded" in err
+
+
+def test_main_warns_on_a_proxied_entry_with_a_non_one_ttl(fpc, tmp_path, monkeypatch, capsys):
+    """Controller decision (C): proxied_ttl_anomaly (built in Task 5) had no emission site until
+    now -- wire it into main()'s per-entry loop.  The anomaly is a warning, not an exclusion: the
+    entry still gets a plan/revert entry, with ttl forced to 1 regardless (R6)."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(ttl=300)}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+    })
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    err = capsys.readouterr().err
+    assert ("ATTENTION: a.example.edu is proxied but its stored ttl is 300, not 1; the rewrite "
+            "bodies use 1, which is what Cloudflare enforces anyway") in err
+    plan = json.loads((tmp_path / "engin-zone-plan.json").read_text())["entries"]
+    assert plan["a.example.edu"]["body"]["posts"][0]["ttl"] == 1

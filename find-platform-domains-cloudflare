@@ -39,6 +39,7 @@ credentials in the [Cloudflare] section of the config file.
 import argparse
 import collections
 import contextlib
+import datetime
 import io
 import ipaddress
 import json
@@ -719,7 +720,11 @@ def plain(value):
 def collect_entries(zone_records):
     """Fold (zone_id, zone_name, record) triples into the inventory.
 
-    Returns (entries, warnings, excluded).
+    Returns (entries, warnings, excluded).  `warnings` is now ALWAYS [] (task 6 controller
+    decision A retired its one producer -- the ambiguity case below -- because it duplicated
+    main()'s uniform R7.1 exclusion ATTENTION for the same fact).  Kept in the return shape and
+    on SweepResult rather than removed: retiring the field outright is a refactor and belongs to
+    review, not to the task that stopped populating it.
 
     A record is kept only when it is a CNAME whose content is a *.pantheonsite.io hostname.
     Proxy status is NOT part of the test -- that is exactly what separates this script from
@@ -782,21 +787,17 @@ def collect_entries(zone_records):
         if zone_id not in zone_ids[name]:
             zone_ids[name].append(zone_id)
         record_ids[name].append(dns_record.id)
-        # Warn on EVERY duplicate, not only a cross-zone one.  The same-zone case is one the
-        # Cloudflare API should make unreachable (a name may hold at most one CNAME), which makes
-        # a warning there a signal worth seeing rather than noise.
+        # Record the reason but DO NOT warn here (task 6 controller decision A): this used to
+        # append its own ATTENTION line, printed by main() via `for message in sweep.warnings`,
+        # ON TOP OF main()'s uniform R7.1 exclusion ATTENTION for the very same fact -- two
+        # stderr lines for one exclusion.  The uniform line already carries the reason code and
+        # is identical in shape across all eight reason codes; the `excluded` entry built below
+        # carries everything this warning used to say, so main() is the ONLY place this fact is
+        # reported now.
         if entry["zone_id"] == zone_id:
             reasons.setdefault(name, "ambiguous-multiple-origins")
-            warnings.append(
-                f"ATTENTION: {name} has more than one platform-domain CNAME in zone {zone_id}, "
-                "which the Cloudflare API should not permit; it is omitted from the inventory "
-                "and gets no rewrite plan")
         else:
             reasons[name] = "ambiguous-multiple-zones"   # NOT setdefault: cross-zone outranks
-            warnings.append(
-                f"ATTENTION: {name} has a platform-domain CNAME in more than one Cloudflare "
-                f"zone ({entry['zone_id']} and {zone_id}); it is omitted from the inventory and "
-                "gets no rewrite plan")
 
     excluded = {}
     for name, reason in reasons.items():
@@ -826,6 +827,39 @@ def dump_json(data, stream) -> None:
     stream.write("\n")
 
 
+def now_utc():
+    """The one clock seam, as an ISO-8601 Z-suffixed string; tests monkeypatch it (SPEC 7).
+
+    A seam rather than a post-hoc normalization: a golden that strips the timestamp before
+    comparing is no longer comparing the bytes the program wrote (PD#14).
+    """
+    return datetime.datetime.now(tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def provenance(argv, sweep, direction, count):
+    """The `generated` header (SPEC 5.5).
+
+    The plan pins addresses resolved at SWEEP time.  If Pantheon migrates a site between the
+    sweep and the rewrite those addresses are wrong, and the file's mtime -- the only freshness
+    signal it used to carry -- survives neither a copy nor a `git add`.  The ranges and the
+    suffix are recorded so an applier can verify the assumptions the file was built under, and
+    `direction` so it can refuse the wrong file outright.
+
+    zones_swept/zones_total are two integers rather than a "1 of 187" string: a machine reads
+    this.
+    """
+    return {"at": now_utc(),
+            "tool": "find-platform-domains-cloudflare",
+            "direction": direction,
+            "argv": list(argv),
+            "zones_swept": sweep.zones,
+            "zones_total": sweep.zones_total,
+            "entries": count,
+            "platform_suffix": PLATFORM_SUFFIX,
+            "required_a_range": str(PLATFORM_A_RANGE),
+            "required_aaaa_range": str(PLATFORM_AAAA_RANGE)}
+
+
 def write_json_stdout(data) -> None:
     """Write the output mapping to stdout, converting a doomed stream into a named exit 2.
 
@@ -844,12 +878,12 @@ def write_json_stdout(data) -> None:
         raise StartupError(f"cannot write the JSON to standard output: {e}") from e
 
 
-def emit(entries, paths) -> None:
-    """Send the inventory to its destination: the basename file, or stdout when there is none."""
+def emit(inventory, paths, plan, revert, excluded) -> None:
+    """Send the results to their destination: four files, or the inventory alone on stdout."""
     if paths is None:
-        write_json_stdout(entries)
+        write_json_stdout(inventory)
     else:
-        write_json_atomic(paths.inventory, entries)
+        write_outputs(paths, inventory, plan, revert, excluded)
 
 
 def write_json_atomic(path, data) -> None:
@@ -878,6 +912,22 @@ def write_json_atomic(path, data) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def write_outputs(paths, inventory, plan, revert, excluded) -> None:
+    """Write the four files, each atomically (SPEC 9.3).
+
+    Every document is fully built by the caller before this is entered, so a construction error
+    writes nothing at all.
+
+    ACCEPTED RESIDUAL: os.replace is atomic per file, not across four, so a crash between
+    replaces leaves a mixed set.  All three headed files share one generated.at, which makes such
+    a set detectable.  A single container file would close it and is ruled out by the four-file
+    requirement.
+    """
+    for path, data in ((paths.inventory, inventory), (paths.plan, plan),
+                       (paths.revert, revert), (paths.excluded, excluded)):
+        write_json_atomic(path, data)
 
 
 def expected_record_count(page):
@@ -986,7 +1036,9 @@ class SweepResult(NamedTuple):
     """What one sweep found, plus what it can honestly say about its own completeness."""
 
     entries: dict          # the output mapping, keyed by normalized FQDN
-    warnings: list         # duplicate-name ATTENTION lines, printed before the write
+    warnings: list         # ALWAYS [] since task 6 (collect_entries no longer appends its own
+                           # ambiguity warning; the field stays for now -- see collect_entries'
+                           # docstring -- and main() still prints anything found here)
     accounts: int          # accounts listed
     zones: int             # zones actually SWEPT (== zones_total unless ZONE args narrowed it)
     records: int           # unique DNS records actually read and inspected
@@ -1146,24 +1198,18 @@ def destination_name(paths):
 def interrupt_message(*, wrote, paths):
     """What a Ctrl-C actually left behind -- reported as a fact, never as an assumption.
 
-    The -o write is atomic (temp file + os.replace), so that file is either untouched or
-    complete.  stdout has no such guarantee: an interrupt BEFORE the write leaves nothing usable,
-    one AFTER it leaves a complete document already on the stream.  A categorical "nothing was
-    produced" would tell an operator to discard a good result, which is why this branches on
-    whether emit() actually returned rather than on the destination alone.
-
-    `wrote` is set in main() AFTER emit() returns, so it is a reliable YES and an unreliable NO:
-    a SIGINT landing between os.replace() and that assignment leaves wrote=False with the file
-    already replaced.  The not-wrote branch therefore states only what is ALWAYS true -- the write
-    is atomic, so the file is never partial -- rather than asserting "unchanged", which that race
-    can make affirmatively false.  (Verification review, finding 4: the pre-change wording could
-    not be wrong, and a narrower version of the very defect this helper was added to fix.)
+    Each -o write is atomic (temp file + os.replace), so no single file is ever partial.  stdout
+    has no such guarantee.  `wrote` is set AFTER emit() returns, so it is a reliable YES and an
+    unreliable NO: a SIGINT landing between the last os.replace() and that assignment leaves
+    wrote=False with the files already in place.  The not-wrote branch therefore states only what
+    is ALWAYS true.
     """
     if paths is not None:
-        output = paths.inventory
-        return (f"INTERRUPTED: {output} was fully written." if wrote else
-                f"INTERRUPTED: {output} is unchanged or fully written, never partial -- the write "
-                "is atomic.")
+        return (f"INTERRUPTED: all four files ({paths.inventory} and its -plan/-revert/-excluded "
+                "siblings) were fully written." if wrote else
+                "INTERRUPTED: each of the four output files is unchanged or fully written, never "
+                "partial -- every write is atomic.  A mixed set is possible; the three headed "
+                "files share one generated.at, so compare them.")
     return ("INTERRUPTED: a complete JSON document was already written to standard output."
             if wrote else "INTERRUPTED: no complete JSON document was produced.")
 
@@ -1208,17 +1254,30 @@ def summarize(sweep, excluded, paths) -> None:
               + ", ".join(f"{count} {reason}" for reason, count in sorted(by_reason.items())),
               file=sys.stderr, flush=True)
     if not entries:
-        print(f"ATTENTION: no platform-domain CNAMEs found in {sweep.zones} zones; "
-              f"an empty result ({{}}) was written to {destination}.",
-              file=sys.stderr, flush=True)
+        # Distinguish "found none" from "found some, excluded every one" (controller decision,
+        # task 6 report): the old unconditional wording said "no platform-domain CNAMEs found"
+        # even when the sweep found N and every one was excluded as ambiguous (R4.1 removes an
+        # ambiguous entry from `entries` entirely) -- a false claim on a sweep that found
+        # something and correctly refused to act on it.
+        if excluded:
+            print(f"ATTENTION: every platform-domain CNAME found in {sweep.zones} zones was "
+                  "excluded from the rewrite plan (see the counts above); an empty result "
+                  f"({{}}) was written to {destination}.", file=sys.stderr, flush=True)
+        else:
+            print(f"ATTENTION: no platform-domain CNAMEs found in {sweep.zones} zones; "
+                  f"an empty result ({{}}) was written to {destination}.",
+                  file=sys.stderr, flush=True)
     # A subset written to a FILE is byte-shape-identical to a full sweep and carries no in-band
     # marker of its scope, so this line is the only thing standing between it and a rewriter that
     # treats it as the organization-wide baseline.  A subset on stdout is a stream, not an
     # artifact, and the "N of M zones" above already says so.
     if paths is not None and sweep.zones != sweep.zones_total:
-        print(f"ATTENTION: {paths.inventory} covers {sweep.zones} of {sweep.zones_total} zones "
-              "-- it is NOT an organization-wide sweep and MUST NOT be used as the baseline for "
-              "a rewrite.", file=sys.stderr, flush=True)
+        print(f"ATTENTION: {paths.inventory}, {paths.plan}, {paths.revert} and {paths.excluded} "
+              f"cover {sweep.zones} of {sweep.zones_total} zones -- this is NOT an "
+              "organization-wide sweep and MUST NOT be used as the baseline for a rewrite.  A "
+              "subset cannot see a platform CNAME for the same FQDN in an UNSELECTED zone, so "
+              f"{paths.plan} may contain an entry a full sweep would have excluded as ambiguous.",
+              file=sys.stderr, flush=True)
 
 
 def build_arg_parser():
@@ -1247,6 +1306,41 @@ def build_arg_parser():
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="print each zone to stderr as it is scanned")
     return parser
+
+
+def process_one_entry(fqdn, entry, *, verbose, excluded):
+    """Resolve, classify and build ONE FQDN's plan/revert entry, or exclude it.
+
+    Extracted out of main()'s per-entry loop SOLELY to hold main() under the ruff mccabe
+    complexity ratchet (C901) once this task added the plan/revert build and the TTL-anomaly
+    ATTENTION -- not a SPEC section 7 seam (classify/plan_entry/revert_entry/
+    proxied_ttl_anomaly already are, and stay monkeypatchable here: this function calls them
+    as plain module globals, the same lookup-at-call-time the removed inline code used).
+
+    Mutates `entry` in place with resolved_a/resolved_aaaa (SPEC R4.2, so the inventory carries
+    them regardless of the outcome here) and `excluded` in place on exclusion.  Returns
+    (plan_item, revert_item), both None when the entry was excluded.
+    """
+    target = entry["origins"][0]
+    resolution = resolve_target(target)
+    entry["resolved_a"] = resolution.a
+    entry["resolved_aaaa"] = resolution.aaaa
+    if verbose:
+        # SPEC section 10's exact documented format -- target only, no fqdn prefix (a target
+        # may be shared by more than one FQDN; the per-target answer is the same either way,
+        # and SPEC's own worked example has no fqdn in it).
+        print(f"{target} -> A {render_rrset(resolution.a)} | "
+              f"AAAA {render_rrset(resolution.aaaa)}", file=sys.stderr, flush=True)
+    reason, detail = classify(entry, resolution)
+    if reason is not None:
+        excluded[fqdn] = {"reason": reason, "detail": detail,
+                          "resolved_a": resolution.a, "resolved_aaaa": resolution.aaaa}
+        return None, None
+    if proxied_ttl_anomaly(entry):
+        print(f"ATTENTION: {fqdn} is proxied but its stored ttl is {entry['ttl']}, not "
+              "1; the rewrite bodies use 1, which is what Cloudflare enforces anyway",
+              file=sys.stderr, flush=True)
+    return plan_entry(entry, resolution), revert_entry(entry, resolution)
 
 
 def main(argv):
@@ -1287,28 +1381,28 @@ def main(argv):
         for message in sweep.warnings:
             print(message, file=sys.stderr, flush=True)
         excluded = dict(sweep.excluded)
+        plan, revert = {}, {}
         for fqdn, entry in sorted(sweep.entries.items()):
-            target = entry["origins"][0]
-            resolution = resolve_target(target)
-            entry["resolved_a"] = resolution.a
-            entry["resolved_aaaa"] = resolution.aaaa
-            if options.verbose:
-                # SPEC section 10's exact documented format -- target only, no fqdn prefix (a
-                # target may be shared by more than one FQDN; the per-target answer is the same
-                # either way, and SPEC's own worked example has no fqdn in it).
-                print(f"{target} -> A {render_rrset(resolution.a)} | "
-                      f"AAAA {render_rrset(resolution.aaaa)}", file=sys.stderr, flush=True)
-            reason, detail = classify(entry, resolution)
-            if reason is not None:
-                excluded[fqdn] = {"reason": reason, "detail": detail,
-                                  "resolved_a": resolution.a, "resolved_aaaa": resolution.aaaa}
+            plan_item, revert_item = process_one_entry(
+                fqdn, entry, verbose=options.verbose, excluded=excluded)
+            if plan_item is not None:
+                plan[fqdn] = plan_item
+                revert[fqdn] = revert_item
         for fqdn, item in sorted(excluded.items()):
             # NEVER -v-gated (SPEC R7.3): these are the only signal that the result is narrower
             # than it looks, and this run's exit code is the only other one.
             print(f"ATTENTION: {fqdn} excluded ({item['reason']}): {item['detail']}",
                   file=sys.stderr, flush=True)
+        documents = None
+        if paths is not None:
+            documents = (
+                {"generated": provenance(argv, sweep, "plan", len(plan)), "entries": plan},
+                {"generated": provenance(argv, sweep, "revert", len(revert)), "entries": revert},
+                {"generated": provenance(argv, sweep, "excluded", len(excluded)),
+                 "entries": excluded},
+            )
         try:
-            emit(sweep.entries, paths)
+            emit(sweep.entries, paths, *(documents or (None, None, None)))
         except OSError as e:
             # A full disk or a read-only directory lands here AFTER the whole multi-minute walk.
             # (The stdout path raises StartupError itself, from inside write_json_stdout.)
