@@ -876,7 +876,7 @@ def main(argv):
     try:
         require_usable_streams(options.output_basename)
         paths = (output_paths(check_basename(options.output_basename))
-                 if options.output_basename else None)
+                 if options.output_basename is not None else None)
         client = cloudflare_client(options.config)
         sweep = fetch_platform_cnames(client, verbose=options.verbose,
                                       zone_names=options.zones)

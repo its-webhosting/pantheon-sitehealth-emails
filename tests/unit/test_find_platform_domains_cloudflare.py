@@ -1207,3 +1207,39 @@ def test_bare_double_dash_output_is_not_accepted(fpc, capsys):
     """allow_abbrev=False, so no prefix match rescues the removed spelling."""
     with pytest.raises(SystemExit):
         fpc.build_arg_parser().parse_args(["--output", "engin-zone"])
+
+
+# --- Task 1 review fixes ----------------------------------------------------------------------
+
+def test_a_blank_output_basename_is_rejected_not_treated_as_stdout_mode(fpc, tmp_path, monkeypatch,
+                                                                        capsys):
+    """R2.2: `-o ""` must fail through check_basename's "no filename component" rule.  A
+    truthiness test (`if options.output_basename else None`) would treat "" the same as no -o
+    at all and silently fall back to stdout mode -- a real regression from the pre-Task-1
+    behavior, where an empty PATH was a real destination attempt that failed loudly via the
+    existing OSError -> StartupError path (task review, finding 1)."""
+    monkeypatch.chdir(tmp_path)
+
+    def explode(config_path):
+        raise AssertionError("cloudflare_client must not be reached")
+
+    monkeypatch.setattr(fpc, "cloudflare_client", explode)
+    assert fpc.main(["-o", ""]) == 2
+    assert "no filename component" in capsys.readouterr().err
+
+
+def test_an_interrupt_before_paths_is_assigned_does_not_crash_with_unboundlocalerror(
+        fpc, tmp_path, monkeypatch, capsys):
+    """A KeyboardInterrupt landing before `paths` is assigned -- e.g. inside
+    require_usable_streams, which runs first in main()'s try block -- must still report the
+    interrupt normally.  Without `paths = None` initialized ahead of the try, the except
+    KeyboardInterrupt clause's `paths=paths` read raises UnboundLocalError instead (task review,
+    finding 2)."""
+    monkeypatch.chdir(tmp_path)
+
+    def interrupt(output):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "require_usable_streams", interrupt)
+    assert fpc.main(["-o", "engin-zone"]) == 130
+    assert "no complete JSON document was produced" in capsys.readouterr().err
