@@ -121,7 +121,14 @@ class OutputWriteError(StartupError):
     Its message is the partial-set report, built by write_outputs and relayed VERBATIM by main()
     -- never with destination_name(paths) prepended, which always names the inventory whichever
     of the four actually failed.  This is what makes main()'s stdout-vs-basename write paths
-    symmetric: write_json_stdout already converts its own OSError into a StartupError.
+    symmetric: write_json_stdout converts the SAME two failure shapes into a StartupError -- an
+    OSError, and json.dump's own TypeError/ValueError on an unserializable value.  The claim was
+    true for OSError only until a regression-fix re-review of this whole-branch fix caught the
+    gap (defect 2): write_json_stdout originally caught just OSError, so a TypeError from
+    dump_json in stdout mode bypassed it entirely, landed in main()'s UNRELATED `except
+    BaseException` last line of defence as "ERROR: unexpected TypeError: ...", and left a
+    truncated JSON document already written to stdout with no named cause -- see
+    write_json_stdout's own docstring for why that arm still does not call point_at_devnull.
     """
 
 
@@ -896,21 +903,39 @@ def provenance(argv, sweep, direction, count, at):
 
 
 def write_json_stdout(data) -> None:
-    """Write the output mapping to stdout, converting a doomed stream into a named exit 2.
+    """Write the output mapping to stdout, converting a doomed OR unserializable write into a
+    named exit 2.
 
-    Without this the interpreter's shutdown flush of the same doomed stdout raises and overrides
-    the exit code with 120 -- a code SPEC R6's taxonomy does not contain, so a `case $?` over
-    0/2/130 in a wrapper falls through.  The stream is detached only from the except arm, i.e.
-    only after a REAL write has proven it doomed: an unconditional detach silences a healthy
-    stdout for the rest of the process, which under pytest's fd-level capture repoints the
-    session's own captured stdout at /dev/null (the sibling measured 19 cascading errors).
+    Without the OSError arm, the interpreter's shutdown flush of the same doomed stdout raises and
+    overrides the exit code with 120 -- a code SPEC R6's taxonomy does not contain, so a `case $?`
+    over 0/2/130 in a wrapper falls through.  The stream is detached only from that arm, i.e. only
+    after a REAL write has proven it doomed: an unconditional detach silences a healthy stdout for
+    the rest of the process, which under pytest's fd-level capture repoints the session's own
+    captured stdout at /dev/null (the sibling measured 19 cascading errors).
+
+    json.dump also raises TypeError/ValueError on an unserializable value -- the SAME serializer
+    failure class write_outputs already names for the basename path (whole-branch review, finding
+    3).  Caught in a SEPARATE arm from OSError, not folded into it, because that failure says
+    nothing about the STREAM: dump_json has already written however many key/value pairs preceded
+    the bad one, so stdout is not "doomed" the way an OSError proves it is, and calling
+    point_at_devnull here would detach a perfectly healthy fd -- the exact unconditional-detach bug
+    this function's OSError arm exists to avoid on the other side.  Before this arm existed
+    (regression-fix re-review of the whole-branch fix, defect 2), a TypeError from dump_json in
+    stdout mode escaped this function entirely, was caught only by main()'s UNRELATED `except
+    BaseException` last line of defence, and was reported as "unexpected" instead of as a named
+    output-write problem -- see OutputWriteError's docstring for the write_outputs half of this
+    same failure class.
     """
     try:
         dump_json(data, sys.stdout)
         sys.stdout.flush()
     except OSError as e:
         point_at_devnull(sys.stdout)
-        raise StartupError(f"cannot write the JSON to standard output: {e}") from e
+        raise StartupError(
+            f"cannot write the JSON to standard output: {type(e).__name__}: {e}") from e
+    except (TypeError, ValueError) as e:
+        raise StartupError(
+            f"cannot write the JSON to standard output: {type(e).__name__}: {e}") from e
 
 
 def emit(inventory, paths, plan, revert, excluded) -> None:

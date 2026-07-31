@@ -2497,6 +2497,34 @@ def test_a_serialization_failure_is_a_named_startup_error_at_exit_2(fpc, tmp_pat
     assert "Already replaced before this failure (fresh): engin-zone.json" in err
 
 
+def test_write_json_stdout_names_a_serializer_failure_not_just_an_os_error(fpc):
+    """Regression-fix re-review, defect 2. write_json_stdout caught only OSError, so json.dump's
+    own TypeError/ValueError on an unserializable value bypassed it entirely -- the SAME
+    serializer-failure class write_outputs (finding 3) already names for the basename path.
+    OutputWriteError's docstring claimed the two write paths were symmetric on this point; they
+    were not, until now.  Driven with a REAL json.dump failure, not a monkeypatched dump_json, so
+    the assertion covers the actual serializer."""
+    with pytest.raises(fpc.StartupError, match="cannot write the JSON to standard output"):
+        fpc.write_json_stdout({"a.example.edu": {"settings": object()}})
+
+
+def test_a_stdout_serialization_failure_is_a_named_startup_error_not_unexpected(
+        fpc, tmp_path, monkeypatch, capsys):
+    """The main() half of the stdout-mode gap: before this fix, a TypeError from dump_json in
+    stdout mode escaped write_json_stdout entirely and was caught only by main()'s UNRELATED
+    `except BaseException` last line of defence, reporting "ERROR: unexpected TypeError: ..."
+    instead of naming it as an output-write problem, and leaving a truncated JSON document
+    already written to stdout with no named cause."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(settings=object())}, [], 1, 1, 1, 1, 0, 0, 1))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
+    assert fpc.main([]) == 2
+    err = capsys.readouterr().err
+    assert "ERROR: cannot write the JSON to standard output: TypeError:" in err
+    assert "unexpected" not in err
+
+
 def test_now_utc_is_utc_with_a_z_suffix(fpc, monkeypatch):
     """Whole-branch review, finding 7 (PD#14).  now_utc() is the ONE clock seam and every other
     test in this file replaces it (freeze_clock, or the ticking stub), so its real body -- the
