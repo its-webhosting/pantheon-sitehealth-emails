@@ -160,6 +160,14 @@ not make a late `ENOSPC` impossible — it makes the common case fail at second 
 R3.1 Every non-ambiguous entry's **target** MUST be resolved for both A and AAAA, through the
 single seam `resolve(hostname, rrtype)` (§7). CNAME chains are followed by the resolver.
 
+R3.1a **One exception, exhaustive:** when the **A** lookup is indeterminate, the AAAA lookup is
+skipped and both halves are `None`.
+
+*Intent:* the entry is already excluded as `resolution-failed` (§6 row 8) whatever AAAA returns,
+so the second lookup buys nothing and costs a resolver timeout on a target that is already not
+answering. This is **not** listed in §11, which records changes to *shipped behavior*; no prior
+version of this utility resolved anything.
+
 R3.2 Resolution MUST happen in **both modes**, not only basename mode.
 
 *Intent:* the inventory carries `resolved_a`/`resolved_aaaa` (R4.2). If resolution were

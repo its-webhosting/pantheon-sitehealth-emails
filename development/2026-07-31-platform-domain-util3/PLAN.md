@@ -331,8 +331,18 @@ immediately after the stream check:
 ```python
         require_usable_streams(options.output_basename)
         paths = (output_paths(check_basename(options.output_basename))
-                 if options.output_basename else None)
+                 if options.output_basename is not None else None)
 ```
+
+**`is not None`, NOT truthiness.** `-o ""` is a destination the operator asked for and got wrong;
+under a truthy test it silently reverts to stdout mode, which is PD#1's "a failure that can happen
+silently is a critical defect". Routed through `check_basename`, an empty basename fails loudly on
+the existing "no filename component" rule (R2.2) — no second rule needed.
+
+`paths` MUST be initialized to `None` **before** the `try`, not inside it: the
+`except KeyboardInterrupt:` handler reads it, so a Ctrl-C landing inside
+`require_usable_streams` would otherwise raise `UnboundLocalError` instead of reporting the
+interrupt. Same pattern as the existing `wrote = False`.
 
 `emit`, `destination_name`, `interrupt_message` and `summarize` now take `paths` (an
 `OutputPaths` or `None`) instead of a path string. For this task, minimally:
