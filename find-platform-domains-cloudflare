@@ -519,6 +519,10 @@ def collect_entries(zone_records):
     warnings = []
     reasons = {}            # fqdn -> reason code; the detail is built from `entries` below
     zone_ids = {}           # fqdn -> [zone_id, ...] in first-seen order
+    record_ids = {}         # fqdn -> [record_id, ...] in first-seen order.  SPEC section 5.6's
+                            # own worked example puts the KEPT record_id in `detail`; without
+                            # this, an operator handed -excluded.json cannot act on it (which
+                            # record is which) without re-sweeping Cloudflare.
     for zone_id, zone_name, dns_record in zone_records:
         if getattr(dns_record, "type", None) != "CNAME":
             continue
@@ -549,10 +553,12 @@ def collect_entries(zone_records):
                 "settings": plain(getattr(dns_record, "settings", None)),
             }
             zone_ids[name] = [zone_id]
+            record_ids[name] = [dns_record.id]
             continue
         entry["origins"].append(content)
         if zone_id not in zone_ids[name]:
             zone_ids[name].append(zone_id)
+        record_ids[name].append(dns_record.id)
         # Warn on EVERY duplicate, not only a cross-zone one.  The same-zone case is one the
         # Cloudflare API should make unreachable (a name may hold at most one CNAME), which makes
         # a warning there a signal worth seeing rather than noise.
@@ -575,10 +581,17 @@ def collect_entries(zone_records):
         excluded[name] = {
             "reason": reason,
             "detail": (f"{len(entry['origins'])} platform-domain CNAMEs in zone(s) "
-                       f"{', '.join(zone_ids[name])}; the record to rewrite is ambiguous, so "
-                       "this FQDN is omitted from the inventory, the plan and the revert"),
+                       f"{', '.join(zone_ids[name])}; kept record_id {entry['record_id']}; the "
+                       "record to rewrite is ambiguous, so this FQDN is omitted from the "
+                       "inventory, the plan and the revert"),
             "zone_ids": zone_ids[name],
             "origins": entry["origins"],
+            # The kept id, named separately from `detail`'s prose so a consumer does not have to
+            # parse it back out, plus every duplicate's id in the order the sweep saw them --
+            # the record identity SPEC section 5.6's worked example puts in `detail` and this
+            # task's first pass discarded entirely (task 3 review, finding 3).
+            "record_id": entry["record_id"],
+            "record_ids": record_ids[name],
         }
     return entries, warnings, excluded
 
@@ -814,11 +827,12 @@ def select_zones(zones, requested):
     so collect_entries can still raise its cross-zone duplicate warning.
 
     KNOWN LIMIT of any subset run, stated because it is invisible in the output: collect_entries
-    warns when one FQDN holds a platform CNAME in two zones, and the entry keeps the FIRST zone's
-    zone_id/record_id.  A duplicate living in a zone that was NOT selected cannot be seen, so the
-    entry looks unambiguous and a rewriter is pointed at one of two records with no warning.  Only
-    a full sweep can rule that out -- which is one more reason the organization-wide baseline is
-    what a rewrite must be driven from (SPEC A1.3).
+    excludes an FQDN as ambiguous only when it can see the platform CNAME in more than one zone
+    (SPEC R4.1).  A duplicate living in a zone that was NOT selected cannot be seen, so the entry
+    looks unambiguous, stays in the inventory, and a rewriter is pointed at a record whose sibling
+    in the unswept zone was never known to exist.  Only a full sweep can rule that out -- which is
+    one more reason the organization-wide baseline is what a rewrite must be driven from
+    (SPEC A1.3).
 
     Any unmatched name is fatal and the message names EVERY miss, not the first -- an operator
     with three typos fixes three in one round trip.  Fatal rather than skipped because a typo

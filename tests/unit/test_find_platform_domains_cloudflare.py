@@ -645,7 +645,8 @@ def test_verbose_reports_each_zone_and_whether_it_was_cross_checked(fpc, capsys)
     assert "[2/2] zone example.org -- 1 records (total_count unavailable, not cross-checked)" in err
 
 
-ENTRY = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
+ENTRY = {"name": "a.example.edu", "zone_id": "z", "zone_name": "example.edu",
+         "origins": ["live-a.pantheonsite.io"], "record_id": "r",
          "proxied": False, "ttl": 1, "comment": None, "tags": [], "settings": None}
 
 
@@ -1474,3 +1475,70 @@ def test_the_sweep_result_excluded_default_cannot_be_mutated(fpc):
     sweep = fpc.SweepResult({}, [], 1, 2, 5, 1, 0, 0, 187)
     with pytest.raises(TypeError):
         sweep.excluded["oops"] = {}
+
+
+# --- Task 3 review fixes ----------------------------------------------------------------------
+
+def test_fetch_platform_cnames_wires_the_real_zone_name_not_the_zone_id(fpc):
+    """FINDING 1 (task 3 review): zone.name reaches collect_entries through exactly one place --
+    the `yield zone.id, zone.name, dns_record` line in fetch_platform_cnames's zone_records()
+    generator.  Every other test either calls collect_entries directly (bypassing that line) or
+    uses a zone id/name pair that happen to differ only coincidentally.  Here the zone id
+    ("zone-a") and zone name ("engin.umich.edu") are deliberately distinct and neither looks like
+    the other, so a regression that yields zone.id twice (`zone.id, zone.id, dns_record`) is
+    caught: `zone_name` would read back "zone-a", not "engin.umich.edu"."""
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=[zone("zone-a", "engin.umich.edu")],
+        pages_by_zone={"zone-a": [FakePage([[record(name="a.engin.umich.edu")]],
+                                           total_count=1)]})
+    sweep = fpc.fetch_platform_cnames(client)
+    assert sweep.entries["a.engin.umich.edu"]["zone_name"] == "engin.umich.edu"
+
+
+def test_collect_entries_excluded_entry_carries_the_kept_record_id(fpc):
+    """FINDING 3 (task 3 review): SPEC section 5.6's own worked example puts the kept record_id
+    in `detail` ("kept record_id 9f1c...") -- discarding it left an operator unable to act on
+    -excluded.json without re-sweeping Cloudflare.  The kept id (the first one seen) is asserted
+    both as its own field and inside `detail`'s text."""
+    entries, _warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1",
+                                         content="live-one.pantheonsite.io")),
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-2",
+                                         content="live-two.pantheonsite.io")),
+    ])
+    assert entries == {}
+    excluded_entry = excluded["a.example.edu"]
+    assert excluded_entry["record_id"] == "rec-1"
+    assert "rec-1" in excluded_entry["detail"]
+
+
+def test_collect_entries_excluded_entry_carries_every_duplicates_record_id(fpc):
+    """FINDING 3 (task 3 review), the "later duplicates' ids too" half: the second (and any
+    further) record's id is never captured anywhere today -- not even in a local variable --
+    so it is unrecoverable once the sweep ends.  `record_ids` preserves all of them, in the
+    order the sweep saw them, across all zones a cross-zone duplicate spans."""
+    entries, _warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1")),
+        ("zone-b", "example.org", record(name="a.example.edu", id="rec-2")),
+    ])
+    assert entries == {}
+    assert excluded["a.example.edu"]["record_ids"] == ["rec-1", "rec-2"]
+
+
+def test_collect_entries_excluded_entry_detail_is_never_blank(fpc):
+    """FINDING 5 (task 3 review): SPEC section 5.6 makes `detail` one of the two keys every
+    exclusion entry MUST carry.  Nothing previously asserted its content, so blanking it to ""
+    left the whole suite green.  Pin real content: the CNAME count, the zone(s), and the kept
+    record_id -- not merely "truthy"."""
+    entries, _warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1",
+                                         content="live-one.pantheonsite.io")),
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-2",
+                                         content="live-two.pantheonsite.io")),
+    ])
+    assert entries == {}
+    detail = excluded["a.example.edu"]["detail"]
+    assert "2 platform-domain CNAMEs" in detail
+    assert "zone-a" in detail
+    assert "rec-1" in detail
