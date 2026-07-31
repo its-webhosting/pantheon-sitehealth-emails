@@ -5432,3 +5432,1913 @@ The file /workspace/development/finalize-session.py has been updated successfull
 }
 ```
 
+### ↳ Tool result
+
+```
+-rwxr-xr-x 1
+source JSONL: /home/node/.claude/projects/-workspace/3e2e6236-70c8-4f7c-be79-a864d2444e41.jsonl
+wrote development/2026-07-30-platform-domain-util2/transcript-02.md (scrubbed) and development/2026-07-30-platform-domain-util2/transcript-02.raw.md (raw, gitignored)
+wrote development/2026-07-30-platform-domain-util2/statistics-02.md
+
+=== re-verify: standard value-shaped scan ===
+clean
+=== re-verify: cookie + live credential values ===
+clean
+cf-cookie redactions: 4
+
+=== lint the tool I just changed ===
+All checks passed!
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "D=development/2026-07-30-platform-domain-util2\necho \"=== is the raw transcript gitignored? ===\"; git check-ignore -v $D/transcript-02.raw.md || echo \"!!! NOT IGNORED\"\necho \"=== usage.raw.txt ignored? ===\"; git check-ignore -v $D/usage.raw.txt >/dev/null && echo \"yes\"\necho; echo \"=== everything git will commit ===\"; git status --short\necho; echo \"=== final full gate ===\"; ./run-tests -q 2>&1 | tail -4",
+  "description": "Confirm ignores and run the final gate"
+}
+```
+
+### ↳ Tool result
+
+```
+=== is the raw transcript gitignored? ===
+.gitignore:24:/development/**/*.raw.md	development/2026-07-30-platform-domain-util2/transcript-02.raw.md
+=== usage.raw.txt ignored? ===
+yes
+
+=== everything git will commit ===
+ M CLAUDE.md
+ M development/2026-07-30-platform-domain-util2/SPEC.md
+ M development/finalize-session.py
+ M find-platform-domains-cloudflare
+ M tests/unit/test_find_platform_domains_cloudflare.py
+?? development/2026-07-30-platform-domain-util2/02-zone-filter.prompt.md
+?? development/2026-07-30-platform-domain-util2/statistics-02.md
+?? development/2026-07-30-platform-domain-util2/transcript-02.md
+
+=== final full gate ===
+107 snapshots passed.
+1301 passed, 3 skipped, 15 warnings in 31.91s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+## Assistant
+
+Everything verified. Committing:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git add -A && git commit -q -F - <<'MSG'\nfeat(find-platform-domains-cloudflare): sweep named zones; stdout as the result stream\n\nTwo operator requests, settled as one design pass and recorded as Amendment A1\nin development/2026-07-30-platform-domain-util2/SPEC.md.\n\n1. Optional positional ZONE arguments narrow the DNS-record sweep to those zones.\n   Names are matched exactly on the existing normalize() (case and a trailing dot\n   ignored), de-duplicated, order preserved.  An unmatched name is fatal at exit 2\n   and EVERY miss is named, before a single record is read -- a typo yielding a\n   short sweep is the under-reporting failure SPEC section 8 item 12 is organized\n   against.  Resolution is client-side against the zone list list_zones() already\n   builds, NOT server-side per name: the listing is the cheap half (187 zones vs.\n   22,632 records) and keeping it preserves read_all's completeness cross-check,\n   the \"0 zones means a missing Account:Read/DNS:Read scope\" guard, and the\n   account count.  Measured live: 8.0s for two zones against 2m45s for all 187.\n\n2. -o/--output writes the JSON atomically; without it the JSON goes to stdout.\n   One dump_json() serves both, so the two are byte-identical.  This is what makes\n   (1) safe: the organization-wide baseline is now only ever produced deliberately,\n   so a subset run cannot silently overwrite it.  The hazard is narrowed, not\n   closed -- `-o platform-domains-cloudflare.json engin.umich.edu` still writes a\n   subset under the canonical name, so a narrowed sweep written to a file emits a\n   loud ATTENTION.  The redirect form is invisible to the program; stated, not\n   papered over.\n\nBecause stdout became a result stream, SPEC section 8 item 4's \"accept exit 120\"\ncall no longer holds and the sibling's doomed-stream machinery is ported:\nrequire_usable_streams (a closed stderr would fall back to stdout and corrupt the\nJSON there -- measured), point_at_devnull, report_line, and a write_json_stdout\nthat detaches only a stream a REAL write has proven doomed.  main() also gained an\nexcept OSError arm: the guards initially covered only error paths, so an ENOSPC on\na SUCCESS-path stderr write escaped main() entirely and the interpreter's shutdown\nflush turned a completed sweep into exit 120 with valid JSON already on stdout.\nMeasured 120 without the arm, 2 with it; catching alone is insufficient, the\nbuffered write is retried at shutdown, so the report must go through report_line's\ndetach.  The only 120 left is argparse's own output, which is documented.\n\nAlso: finalize-session.py now scrubs __cf_bm / cf_clearance edge cookies.  A raw\ncurl -D - against api.cloudflare.com put one in this session's transcript, and the\nvalue carries ./-/_ so the bare high-entropy pattern walked straight past it.\n\nVerified live after Cloudflare's 2026-07-31 API incident cleared (SPEC A1.9): full\nsweep 218 CNAMEs / 5 DNS-only / 187 zones / 192-of-192 lists complete, matching the\n2026-07-30 baseline; and the two-zone subset output is BYTE-FOR-BYTE IDENTICAL to\nthe full sweep's slice for those zones.  Offline suite 1301 passed, 3 skipped.\n\nTwo adversarial review rounds (psh-reviewer): 11 findings then 8, all fixed, with\nround 2 proving each round-1 fix goes red under mutation.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\nMSG\ngit --no-pager log --stat -1 | head -25",
+  "description": "Commit the feature and its development record"
+}
+```
+
+### ↳ Tool result
+
+```
+commit 148d83cffda89b7289df031d16dc60a8e6d9a082
+Author: Mark Montague <markmont@umich.edu>
+Date:   Fri Jul 31 09:40:56 2026 -0400
+
+    feat(find-platform-domains-cloudflare): sweep named zones; stdout as the result stream
+    
+    Two operator requests, settled as one design pass and recorded as Amendment A1
+    in development/2026-07-30-platform-domain-util2/SPEC.md.
+    
+    1. Optional positional ZONE arguments narrow the DNS-record sweep to those zones.
+       Names are matched exactly on the existing normalize() (case and a trailing dot
+       ignored), de-duplicated, order preserved.  An unmatched name is fatal at exit 2
+       and EVERY miss is named, before a single record is read -- a typo yielding a
+       short sweep is the under-reporting failure SPEC section 8 item 12 is organized
+       against.  Resolution is client-side against the zone list list_zones() already
+       builds, NOT server-side per name: the listing is the cheap half (187 zones vs.
+       22,632 records) and keeping it preserves read_all's completeness cross-check,
+       the "0 zones means a missing Account:Read/DNS:Read scope" guard, and the
+       account count.  Measured live: 8.0s for two zones against 2m45s for all 187.
+    
+    2. -o/--output writes the JSON atomically; without it the JSON goes to stdout.
+       One dump_json() serves both, so the two are byte-identical.  This is what makes
+       (1) safe: the organization-wide baseline is now only ever produced deliberately,
+       so a subset run cannot silently overwrite it.  The hazard is narrowed, not
+       closed -- `-o platform-domains-cloudflare.json engin.umich.edu` still writes a
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git status --short; echo \"--- clean? ---\"; [ -z \"$(git status --porcelain)\" ] && echo \"working tree clean\" || echo \"residue above\"\necho; git --no-pager show --stat --oneline -1 | tail -10",
+  "description": "Confirm the tree is clean"
+}
+```
+
+### ↳ Tool result
+
+```
+--- clean? ---
+working tree clean
+
+148d83c feat(find-platform-domains-cloudflare): sweep named zones; stdout as the result stream
+ CLAUDE.md                                          |   69 +-
+ .../02-zone-filter.prompt.md                       |   64 +
+ .../2026-07-30-platform-domain-util2/SPEC.md       |  281 +-
+ .../statistics-02.md                               |   29 +
+ .../transcript-02.md                               | 5434 ++++++++++++++++++++
+ development/finalize-session.py                    |    6 +
+ find-platform-domains-cloudflare                   |  371 +-
+ .../unit/test_find_platform_domains_cloudflare.py  |  458 +-
+ 8 files changed, 6615 insertions(+), 97 deletions(-)
+```
+
+## Assistant
+
+## Session closed out
+
+Committed as `148d83c` on `main`, working tree clean. Code and the `development/` record went in one commit, per the repo convention.
+
+**What shipped**
+- `ZONE ...` positionals narrowing the record sweep; `-o/--output` with stdout as the default result stream; the sibling's doomed-stream guards ported, plus the `except OSError` arm that the port initially omitted.
+- 96 tests in the utility's suite (up from 56). Final gate: **1301 passed, 3 skipped**, ruff and pyright green.
+- SPEC Amendment A1 with §A1.9 recording the completed live verification; `R1`, `§8.1`, `§8.4` and Task 7 now carry inline superseded banners so the correction sits where it gets read.
+
+**One thing I changed beyond the feature, and why:** my pre-commit secret scan caught a `__cf_bm` Cloudflare edge cookie in the session transcript — from my own `curl -D -` probe during the outage diagnosis. Its value contains `.`/`-`/`_`, so the scrubber's high-entropy pattern (`[A-Za-z0-9]{32,}`) walked straight past it. I fixed the scrubber rather than hand-editing the transcript, then regenerated and re-verified: 4 redactions, both scans clean, and none of your actual credentials were ever present.
+
+**Three things I'd flag rather than leave implied:**
+
+1. **`/usage` wasn't captured**, so `statistics-02.md` has no dollar-cost figure — I can't invoke that command. If you want the record complete, paste `/usage` output and I'll regenerate and amend.
+2. **`development/finalize-session.py` has no test module.** Pre-existing (the prior scrubber commit `24fd9dd` had none either), but I just changed security-relevant code in it and verified only empirically against this transcript. Worth a real test home; I didn't invent one during close-out.
+3. **`plugin/cloudflare/client.py` still has all four ambient-credential routes open**, and `$CLOUDFLARE_BASE_URL` remains exploitable against the *main program* today — it will send the configured token to an arbitrary host. That's SPEC §8.7, untouched by this work and still outstanding. It's the highest-value follow-up I know of in this area.
+
+`platform-domains-cloudflare.json` is untouched, as you asked — still the 2026-07-30 baseline. When you next need it: `./find-platform-domains-cloudflare -o platform-domains-cloudflare.json`.
+
+## User
+
+What do you recommend (and why do you recommend it above other alternatives) to address issue 3, the `plugin/cloudflare/client.py` problems and `$CLOUDFLARE_BASE_URL` exploitability?  Do not make any changes yet.
+
+## Assistant
+
+Before recommending anything, I need to check a contradiction: CLAUDE.md asserts `plugin/cloudflare/client.py` "has all four routes open," but it *also* documents a `pinned_client()` there, and `befb913 fix(cloudflare): pin the shared client against the ambient environment` is in the recent log. Let me verify against the code rather than the docs.
+
+### ⚙ Tool call: `Read`
+
+```json
+{
+  "file_path": "/workspace/plugin/cloudflare/client.py"
+}
+```
+
+### ↳ Tool result
+
+```
+1	
+2	import sys
+3	
+4	from cloudflare import Cloudflare
+5	
+6	import script_context as sc
+7	
+8	# The whole Cloudflare plugin shares ONE Cloudflare client instance (one auth, one HTTP
+9	# session).  It is built lazily on first use by get_client() and cached in
+10	# sc.plugin_context['plugin.cloudflare']['client'].  __init__ stores a reference to get_client in
+11	# the same bag so the other parts of the plugin (ips.py, fqdns.py) can reach it WITHOUT importing
+12	# this module -- keeping them free of relative imports and standalone-loadable by the tests, and
+13	# removing any hook-registration-order dependency (the client is built on first access, whichever
+14	# hook runs first).
+15	
+16	
+17	API_BASE_URL = 'https://api.cloudflare.com/client/v4'   # pinned; see pinned_client()
+18	
+19	
+20	def pinned_client(**creds) -> Cloudflare:
+21	    """Build a Cloudflare client that uses EXACTLY the credentials the config supplied.
+22	
+23	    build_client's docstring has always promised "no direct-environment fallback".  Measured on
+24	    cloudflare 5.4.0, that promise was FALSE: the SDK back-fills every credential argument left
+25	    None from the environment, and ambient values reach the wire by four routes --
+26	
+27	      1. `auth_headers` returns the FIRST of email -> key -> token -> user_service_key that is
+28	         set, and only that one, so an ambient $CLOUDFLARE_EMAIL beats a configured api_token
+29	         and the token is never sent at all;
+30	      2. `default_headers` separately adds X-Auth-Key / X-Auth-Email whenever those attributes
+31	         are not None;
+32	      3. $CLOUDFLARE_CUSTOM_HEADERS is merged LAST into default_headers, overriding 1 and 2; and
+33	      4. $CLOUDFLARE_BASE_URL redirects every request, sending the configured credential to an
+34	         arbitrary host.
+35	
+36	    Routes 1 and 2 are closed by nulling the fields the config did not supply (both read these
+37	    attributes at request-build time), route 3 by clearing _custom_headers, route 4 by pinning
+38	    base_url.  Route 4 is the serious one: the credential LEAVES THE MACHINE rather than merely
+39	    failing to authenticate, and this program runs unattended against production every month.
+40	
+41	    NOT closed, and deliberately: httpx is constructed with trust_env=True, so $HTTPS_PROXY and
+42	    $SSL_CERT_FILE still influence transport.  Closing that would break legitimate proxied
+43	    deployments; it is recorded in development/2026-07-30-platform-domain-util2/SPEC.md §8.13.
+44	
+45	    The pin is SDK-version-sensitive (measured against 5.4.0) and pyproject declares `cloudflare`
+46	    unpinned, which is why the test asserts the headers of a real built request, not these
+47	    attribute assignments.
+48	    """
+49	    client = Cloudflare(**creds, base_url=API_BASE_URL)
+50	    for field in ('api_token', 'api_key', 'api_email', 'user_service_key'):
+51	        if field not in creds:
+52	            setattr(client, field, None)
+53	    client._custom_headers = {}  # noqa: SLF001 -- route 3 above; the SDK has no public API for
+54	    # "ignore $CLOUDFLARE_CUSTOM_HEADERS", and it is merged after everything this function pins
+55	    return client
+56	
+57	
+58	def build_client() -> Cloudflare:
+59	    """Construct the Cloudflare client from the [Cloudflare] config section.
+60	
+61	    api_token (preferred) else email + api_key.  There is no direct-environment fallback -- the
+62	    operator decides in the config file where those values come from (literals, <{secret env
+63	    ...}>, <{secret aws ...}>, ...) -- and pinned_client() is what makes that sentence TRUE
+64	    rather than merely intended.  Missing credentials while enabled -> clear exit.
+65	    """
+66	    cf = sc.config['Cloudflare']
+67	    api_token = cf.get('api_token')
+68	    if api_token:
+69	        return pinned_client(api_token=api_token)
+70	    email = cf.get('email')
+71	    api_key = cf.get('api_key')
+72	    if not email or not api_key:
+73	        sys.exit('ERROR: [Cloudflare] is enabled but needs either api_token, '
+74	                 'or both email and api_key.')
+75	    return pinned_client(api_email=email, api_key=api_key)
+76	
+77	
+78	def get_client() -> Cloudflare:
+79	    """Return the shared Cloudflare client, building it on first use.
+80	
+81	    Runs at the setup-hook stage (via the first consumer), AFTER the pre-setup config-substitution
+82	    pass -- so credentials are resolved (not still <{...}> placeholders).  The client's creds must
+83	    be pass-1-resolvable (nothing today defers Cloudflare creds; only plugin.umich returns
+84	    sc.DEFER).
+85	    """
+86	    ctx = sc.plugin_context.setdefault('plugin.cloudflare', {})
+87	    if ctx.get('client') is None:
+88	        ctx['client'] = build_client()
+89	    return ctx['client']
+90
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git --no-pager log --oneline -3 befb913; echo \"=== files in that commit ===\"; git --no-pager show --stat --oneline befb913 | tail -8",
+  "description": "Check the pin commit"
+}
+```
+
+### ↳ Tool result
+
+```
+befb913 fix(cloudflare): pin the shared client against the ambient environment
+4e472b3 fix(find-platform-domains-cloudflare): de-duplicate paginated reads; warn, don't abort
+bff8e96 docs(find-platform-domains-cloudflare): document the temporary utility
+=== files in that commit ===
+befb913 fix(cloudflare): pin the shared client against the ambient environment
+ CLAUDE.md                                          | 20 ++++-
+ plugin/cloudflare/client.py                        | 50 ++++++++++-
+ tests/integration/test_plugin_cloudflare_client.py | 97 +++++++++++++++++++++-
+ .../unit/test_find_platform_domains_cloudflare.py  | 10 ++-
+ 4 files changed, 166 insertions(+), 11 deletions(-)
+```
+
+## Assistant
+
+`pinned_client()` is already there and closes all four routes. Let me verify empirically rather than trust another docstring:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python - <<'EOF'\nimport os, sys\n# Hostile ambient environment: every one of the six SDK-read variables.\nos.environ.update({\n    \"CLOUDFLARE_API_TOKEN\": \"ambient-token\",\n    \"CLOUDFLARE_API_KEY\": \"ambient-key\",\n    \"CLOUDFLARE_EMAIL\": \"ambient@evil.example\",\n    \"CLOUDFLARE_API_USER_SERVICE_KEY\": \"ambient-usk\",\n    \"CLOUDFLARE_BASE_URL\": \"https://evil.example/v4\",\n    \"CLOUDFLARE_CUSTOM_HEADERS\": \"X-Auth-Email: attacker@evil.example\\nX-Auth-Key: evil-key\",\n})\nsys.path.insert(0, \".\")\nimport script_context as sc\nfrom cloudflare._models import FinalRequestOptions\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"cfclient\", \"plugin/cloudflare/client.py\")\nm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n\nsc.config = {\"Cloudflare\": {\"enabled\": True, \"api_token\": \"REAL-CONFIGURED-TOKEN\"}}\nclient = m.build_client()\nreq = client._build_request(FinalRequestOptions(method=\"get\", url=\"/zones\"))\nprint(\"URL the request actually goes to :\", str(req.url))\nhdrs = {k.lower(): v for k, v in req.headers.items()}\nprint(\"Authorization                    :\", hdrs.get(\"authorization\"))\nprint(\"X-Auth-Email present             :\", \"x-auth-email\" in hdrs, hdrs.get(\"x-auth-email\"))\nprint(\"X-Auth-Key present               :\", \"x-auth-key\" in hdrs, hdrs.get(\"x-auth-key\"))\nprint()\nprint(\"VERDICT: token leaves machine?   :\", not str(req.url).startswith(\"https://api.cloudflare.com/\"))\nprint(\"VERDICT: ambient creds on wire?  :\", any(\"evil\" in str(v) or \"ambient\" in str(v) for v in hdrs.values()))\nEOF\necho \"=== the existing test for this ===\"; ./run-tests --fast tests/integration/test_plugin_cloudflare_client.py -q 2>&1 | tail -5",
+  "description": "Empirically test the pin against a hostile environment"
+}
+```
+
+### ↳ Tool result
+
+```
+URL the request actually goes to : https://api.cloudflare.com/client/v4/zones
+Authorization                    : Bearer «REDACTED:bearer»
+X-Auth-Email present             : False None
+X-Auth-Key present               : False None
+
+VERDICT: token leaves machine?   : False
+VERDICT: ambient creds on wire?  : False
+=== the existing test for this ===
+0 errors, 0 warnings, 0 informations
+.........                                                                [100%]
+9 passed in 0.59s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+## Assistant
+
+Confirmed empirically against a hostile environment with all six SDK variables set: the request goes to `api.cloudflare.com`, carries only the configured token, and no ambient value reaches the wire.
+
+**I need to correct myself: the `$CLOUDFLARE_BASE_URL` exploit is already fixed.** It was closed on 2026-07-30 in `befb913`, before this session started. My "still exploitable today" claim was wrong — I took it from CLAUDE.md and SPEC §8.7 without checking the code, which is the same mistake I flagged the reviewer for catching earlier.
+
+Let me scope what's actually left.
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "echo \"=== stale claim 1: CLAUDE.md contradicts itself ===\"\ngrep -n \"has all four routes open\\|pinned_client\\|closes all four\" CLAUDE.md\necho; echo \"=== stale claim 2: SPEC 8.7 ===\"\ngrep -n \"not merely latent\" development/2026-07-30-platform-domain-util2/SPEC.md\necho; echo \"=== stale claim 3: the utility's own docstring ===\"\ngrep -n \"has all four; fixing it is a separate change\" find-platform-domains-cloudflare\necho; echo \"=== is the SDK version pinned? ===\"\ngrep -n \"cloudflare\" pyproject.toml | head\necho; echo \"=== how many copies of the pin exist? ===\"\ngrep -ln \"_custom_headers = {}\" --include=*.py -r . 2>/dev/null; grep -l \"_custom_headers = {}\" find-platform-domains-cloudflare\necho; echo \"=== installed SDK vs what the pin was measured against ===\"\npython -c \"import cloudflare;print('installed:', cloudflare.__version__, '| pin measured against: 5.4.0')\"",
+  "description": "Scope the actual remaining work"
+}
+```
+
+### ↳ Tool result
+
+```
+=== stale claim 1: CLAUDE.md contradicts itself ===
+185:cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and
+604:  has `build_client()` (auth), **`pinned_client()`** (what makes "no direct-env fallback" *true*),
+614:  one mattered most: this program runs unattended against production monthly. `pinned_client()`
+615:  closes all four (pin `base_url`, null the unsupplied credential fields, clear
+
+=== stale claim 2: SPEC 8.7 ===
+2411:   to the main program with its own test surface. **It is not merely latent:**
+
+=== stale claim 3: the utility's own docstring ===
+225:    plugin/cloudflare/client.py has all four; fixing it is a separate change.)
+
+=== is the SDK version pinned? ===
+26:cloudflare = [
+27:    "cloudflare",
+28:    # For the [Cloudflare.cachecheck] site cache checks (check/cloudflare/).  httpx was
+29:    # already a transitive dep of the cloudflare SDK; it and beautifulsoup4 are direct
+40:    # The check/cloudflare integration tests parse canned HTML with real bs4 and build
+139:"find-platform-domains-cloudflare.py" = ["T201"]  # a CLI tool: print IS its operator output
+143:"find-platform-domains-cloudflare" = ["T201"]  # the extension-less real file the .py entry
+154:include = ["psh", "find-platform-domains-dns.py", "find-platform-domains-cloudflare.py"]
+
+=== how many copies of the pin exist? ===
+tests/integration/test_plugin_cloudflare_client.py
+plugin/cloudflare/client.py
+find-platform-domains-cloudflare
+
+=== installed SDK vs what the pin was measured against ===
+installed: 5.4.0 | pin measured against: 5.4.0
+```
+
+## Assistant
+
+## First, a correction
+
+**The vulnerability is already fixed.** `befb913` (2026-07-30) added `pinned_client()` to `plugin/cloudflare/client.py`, and I verified it empirically just now against a hostile environment with all six SDK variables set — including `CLOUDFLARE_BASE_URL=https://evil.example/v4` and a `CLOUDFLARE_CUSTOM_HEADERS` injecting `X-Auth-*`:
+
+```
+URL the request actually goes to : https://api.cloudflare.com/client/v4/zones
+Authorization                    : Bearer «REDACTED:bearer»
+X-Auth-Email / X-Auth-Key        : absent
+```
+
+All four routes closed, guarded by 9 passing tests that assert a **real built request**, not the attribute assignments. My "still exploitable today" claim in the previous message was wrong — I took it from CLAUDE.md and SPEC §8.7 without reading the code, which is precisely the failure mode I'd flagged twice earlier in this session.
+
+## What is actually left
+
+**A live documentation defect, and CLAUDE.md contradicts itself about it:**
+
+| Location | Says |
+|---|---|
+| `CLAUDE.md:185` | "**`plugin/cloudflare/client.py` has all four routes open**… exploitable against the main program today" |
+| `CLAUDE.md:604–615` | "`pinned_client()` … **closes all four**" |
+| `SPEC.md:2411` (§8.7) | "**It is not merely latent:** `$CLOUDFLARE_BASE_URL` is exploitable … today" |
+| `find-platform-domains-cloudflare:225` | "(The main program's `plugin/cloudflare/client.py` has all four; fixing it is a separate change.)" |
+
+Three false statements, one of them inside the file that is the authority for fresh sessions.
+
+**Two genuine residuals, both lower-severity than the doc defect:**
+- `cloudflare` is declared **unpinned** in `pyproject.toml`, and the pin reads SDK internals (`_custom_headers`, request-build-time attribute back-fill, `auth_headers` precedence). Installed is 5.4.0 — exactly what it was measured against — so there's no drift today.
+- The pin exists in **two independently maintained copies** (plugin + utility), both measured against 5.4.0.
+
+## Recommendation: fix the docs, and make line 185 a cross-reference rather than a restatement
+
+**Why this first, above everything else:** it's the only defect that is live, and its failure mode is *measured, not hypothetical* — it fired today, on me. I read line 185, believed it, and handed you a phantom vulnerability as a closing recommendation. The next session reading it will either re-do a completed fix, waste a cycle chasing it, or — worst case — conclude the pin doesn't work and remove it. A doc that makes a reader *less* accurate than no doc is worse than a gap.
+
+The specific fix matters more than the correction: **line 185 should point at the canonical statement, not repeat it.** The root cause is that CLAUDE.md states the same fact in two places, which is exactly what CLAUDE.md warns about in its own `prompts/` section ("they used to live in two files and **drifted**"), and what the Spine's quality bar requires ("Each rule stated once and cross-referenced elsewhere (DRY)"). Correcting the wording alone leaves two copies free to drift again on the next SDK change.
+
+**Optionally, and as your call rather than mine: pin the SDK to a compatible range** (`cloudflare>=5.4,<6`). SPEC §8.10 explicitly *rejected* pinning, reasoning that it "affects every consumer and is a main-program decision" and that three real-SDK tests would go red on a change. That mitigation exists and works — so this is defense in depth, not a hole. But the calculus shifted: when §8.10 was written the pin lived only in a temporary utility; it now also guards the main program's monthly unattended production run. I'd raise it as a decision, not slip it in.
+
+## What I would not do, and why
+
+- **De-duplicate the two pins** (have the utility import from `plugin/`) — no. Standalone-by-design is load-bearing: SPEC §14's deletion checklist is `git rm` of three files, and importing from `plugin/` would couple the utility's removal to the main program.
+- **Add a cross-check test asserting both implementations agree** — marginal. Each already has its own red-capable real-request test, and a shared test becomes one more thing to delete with the utility.
+- **Close `trust_env=True`** — no. It's a recorded operator decision (§8.13), and the risk shape is genuinely weaker than `$CLOUDFLARE_BASE_URL` was: `$HTTPS_PROXY` alone leaks only the `CONNECT` hostname, which is `api.cloudflare.com` and not a secret. Reading the token requires `$HTTPS_PROXY` **and** a poisoned `$SSL_CERT_FILE` — two variables plus trust-store control, versus the one variable and no trust manipulation the old hole needed. Closing it breaks legitimate corporate-proxy deployments for a materially smaller gain.
+
+Estimated effort for the recommended work: docs correction ~15 minutes including a grep for other instances of the same claim; the SDK pin is a one-line `pyproject` change plus a decision.
+
+No changes made. Want me to proceed with the docs correction, and separately, do you want the SDK range pin?
+
+## User
+
+Fix the docs but do not pin the SDK compatible range (we're going to update all dependencies to the latest versions a few days from now).
+
+## Assistant
+
+Let me find every instance of the claim, not just the three I already know about.
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "echo \"=== every place claiming the plugin is unfixed / exploitable ===\"\ngrep -rn \"all four routes open\\|has all four\\|exploitable against the main program\\|not merely latent\\|R2a defect\" \\\n  --include=\"*.md\" --include=\"*.py\" --include=\"*.toml\" . 2>/dev/null \\\n  | grep -v \"transcript\" | grep -v \"\\.git/\"\necho\necho \"=== also: any 'fixing it is a separate change' / TODO-style references ===\"\ngrep -rn \"separate change\" CLAUDE.md docs/ psh/ plugin/ check/ find-platform-domains-cloudflare find-platform-domains-dns 2>/dev/null\necho\necho \"=== does docs/ mention it at all? ===\"\ngrep -rln \"CLOUDFLARE_BASE_URL\" docs/ 2>/dev/null || echo \"(no docs/ hits)\"",
+  "description": "Find every instance of the stale claim"
+}
+```
+
+### ↳ Tool result
+
+```
+=== every place claiming the plugin is unfixed / exploitable ===
+CLAUDE.md:185:cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and
+CLAUDE.md:186:`$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is
+development/2026-07-30-platform-domain-util2/SPEC.md:279:> exploitable against the main program today**, regardless of which credential form is
+development/2026-07-30-platform-domain-util2/SPEC.md:1102:    plugin/cloudflare/client.py has all four; fixing it is a separate change.)
+development/2026-07-30-platform-domain-util2/SPEC.md:2272:cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and
+development/2026-07-30-platform-domain-util2/SPEC.md:2273:`$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is
+development/2026-07-30-platform-domain-util2/SPEC.md:2410:7. **Fixing `plugin/cloudflare/client.py`'s R2a defect.** Real, measured, reported — but a change
+development/2026-07-30-platform-domain-util2/SPEC.md:2411:   to the main program with its own test surface. **It is not merely latent:**
+development/2026-07-30-platform-domain-util2/SPEC.md:2412:   `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form
+development/2026-07-30-platform-domain-util2/SPEC.md:2610:| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **Open, and live.** `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is configured. |
+
+=== also: any 'fixing it is a separate change' / TODO-style references ===
+find-platform-domains-cloudflare:225:    plugin/cloudflare/client.py has all four; fixing it is a separate change.)
+
+=== does docs/ mention it at all? ===
+(no docs/ hits)
+```
+
+## Assistant
+
+Six locations across three files. Let me see the CLAUDE.md context before restructuring it.
+
+### ⚙ Tool call: `Read`
+
+```json
+{
+  "file_path": "/workspace/CLAUDE.md",
+  "offset": 176,
+  "limit": 14
+}
+```
+
+### ↳ Tool result
+
+```
+176	error text **never** includes an API response body.
+177	
+178	Credentials come from `[Cloudflare]` in the same TOML the main program reads, via a **copied**
+179	resolver handling only the `<{env NAME}` / `<{secret env NAME}` forms; any other substitution, and
+180	any non-string value, is a named error rather than a silent passthrough. `enabled` is not
+181	consulted. **`build_client()` pins the client against the ambient environment** — four credential
+182	fields, `base_url`, and `_custom_headers` — because the SDK back-fills unset credentials from six
+183	environment variables and ambient values reach the wire by four routes, the worst being
+184	`$CLOUDFLARE_BASE_URL`, which sends the configured token to an arbitrary host. Measured against
+185	cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and
+186	`$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is
+187	configured.
+188	
+189	```bash
+```
+
+### ⚙ Tool call: `Read`
+
+```json
+{
+  "file_path": "/workspace/find-platform-domains-cloudflare",
+  "offset": 214,
+  "limit": 16
+}
+```
+
+### ↳ Tool result
+
+```
+214	         are not None;
+215	      3. $CLOUDFLARE_CUSTOM_HEADERS is merged LAST into default_headers, overriding 1 and 2; and
+216	      4. $CLOUDFLARE_BASE_URL redirects every request, sending the configured credential to an
+217	         arbitrary host.
+218	
+219	    Routes 1 and 2 are closed by nulling the fields the config did not supply (both read these
+220	    attributes at request-build time); route 3 by clearing _custom_headers; route 4 by pinning
+221	    base_url.  Routes 3 and 4 were missed on the first pass -- and 4 is worse than the defect
+222	    this function was written for, because the credential LEAVES THE MACHINE rather than merely
+223	    failing to authenticate.  This pin is SDK-version-sensitive: measured against cloudflare
+224	    5.4.0, and pyproject declares the dependency unpinned as "cloudflare".  (The main program's
+225	    plugin/cloudflare/client.py has all four; fixing it is a separate change.)
+226	    """
+227	    try:
+228	        client = Cloudflare(**creds, base_url=API_BASE_URL)
+229	    except OSError as e:
+```
+
+## Assistant
+
+Now the fixes. CLAUDE.md first — cross-reference instead of restating, so the two copies can't drift again:
+
+### ⚙ Tool call: `Edit`
+
+```json
+{
+  "replace_all": false,
+  "file_path": "/workspace/CLAUDE.md",
+  "old_string": "consulted. **`build_client()` pins the client against the ambient environment** — four credential\nfields, `base_url`, and `_custom_headers` — because the SDK back-fills unset credentials from six\nenvironment variables and ambient values reach the wire by four routes, the worst being\n`$CLOUDFLARE_BASE_URL`, which sends the configured token to an arbitrary host. Measured against\ncloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and\n`$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is\nconfigured.",
+  "new_string": "consulted. **`build_client()` pins the client against the ambient environment**, closing the same\nfour routes, by the same mechanism, as the main program's `pinned_client()` — see **Cloudflare\nauth + shared client** under *Architecture* for the one full description of what those routes are\nand why the pin is load-bearing. This is a **second, independent copy** of that pin (the utility\nimports nothing from `plugin/`, so it can be deleted with `git rm`), and both are measured against\ncloudflare 5.4.0 while `pyproject` declares the dependency unpinned — so an SDK upgrade has **two**\nplaces to check, each with its own real-built-request test."
+}
+```
+
+### ↳ Tool result
+
+```
+The file /workspace/CLAUDE.md has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+### ⚙ Tool call: `Edit`
+
+```json
+{
+  "replace_all": false,
+  "file_path": "/workspace/find-platform-domains-cloudflare",
+  "old_string": "    base_url.  Routes 3 and 4 were missed on the first pass -- and 4 is worse than the defect\n    this function was written for, because the credential LEAVES THE MACHINE rather than merely\n    failing to authenticate.  This pin is SDK-version-sensitive: measured against cloudflare\n    5.4.0, and pyproject declares the dependency unpinned as \"cloudflare\".  (The main program's\n    plugin/cloudflare/client.py has all four; fixing it is a separate change.)\n    \"\"\"",
+  "new_string": "    base_url.  Routes 3 and 4 were missed on the first pass -- and 4 is worse than the defect\n    this function was written for, because the credential LEAVES THE MACHINE rather than merely\n    failing to authenticate.  This pin is SDK-version-sensitive: measured against cloudflare\n    5.4.0, and pyproject declares the dependency unpinned as \"cloudflare\".\n\n    The main program carries the SAME pin, by the same mechanism, in\n    plugin/cloudflare/client.py's pinned_client() (added 2026-07-30, commit befb913).  This is a\n    deliberate SECOND COPY, not a fork: the utility imports nothing from plugin/ so that deleting\n    it stays `git rm` of three files.  An SDK upgrade must re-verify BOTH -- each has its own test\n    asserting a REAL built request rather than these attribute assignments, so a change that\n    breaks either goes red rather than silently reopening the route.\n    \"\"\""
+}
+```
+
+### ↳ Tool result
+
+```
+The file /workspace/find-platform-domains-cloudflare has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+## Assistant
+
+Now the SPEC — an Amendment A2 recording the resolution, plus banners at the three *status* claims (leaving verbatim code/doc listings as the historical record they are):
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python - <<'PY'\nfrom pathlib import Path\np = Path(\"development/2026-07-30-platform-domain-util2/SPEC.md\")\ns = p.read_text()\nbefore = s\n\n# (a) R2a's normative blockquote at ~279\nold279 = s[s.index(\"> exploitable against the main program today**, regardless of which credential form is\")-400:]\nidx = s.index(\"> exploitable against the main program today**, regardless of which credential form is\")\nline_start = s.rindex(\"\\n\", 0, idx) + 1\nline_end = s.index(\"\\n\", idx)\n# insert a resolved banner after that blockquote paragraph's end\npara_end = s.index(\"\\n\\n\", line_end)\ns = s[:para_end] + (\"\\n>\\n> ⚠️ **RESOLVED 2026-07-30 by commit `befb913`, after this was written** — \"\n                    \"`plugin/cloudflare/client.py` now has `pinned_client()`, closing all four \"\n                    \"routes. See Amendment A2.\") + s[para_end:]\n\n# (b) section 8 item 7\ns = s.replace('''7. **Fixing `plugin/cloudflare/client.py`'s R2a defect.** Real, measured, reported — but a change\n   to the main program with its own test surface. **It is not merely latent:**''',\n'''7. ~~**Fixing `plugin/cloudflare/client.py`'s R2a defect.**~~ **DONE 2026-07-30, commit\n   `befb913`** — out of scope for this utility as written below, but fixed separately the same day;\n   see Amendment A2. Original reasoning retained: real, measured, reported — but a change\n   to the main program with its own test surface. **It was not merely latent:**''')\n\n# (c) section 14 closing question 9\ns = s.replace('''| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **Open, and live.** `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is configured. |''',\n'''| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **FIXED 2026-07-30, commit `befb913`** (`pinned_client()`; see Amendment A2). Was \"open, and live\" when this row was written, hours earlier. |''')\n\ns += '''\n\n---\n\n# Amendment A2 — the R2a defect in the main program is fixed (2026-07-31)\n\n## A2.1 — What changed\n\n`§8` item 7 and `§14` Q9 recorded `plugin/cloudflare/client.py`'s ambient-environment defect as\n**open and live**, and `R2a`'s blockquote said `$CLOUDFLARE_BASE_URL` was \"exploitable against the\nmain program today\". All three were true **when written**. They stopped being true hours later, on\nthe same day: commit **`befb913` (2026-07-30), \"fix(cloudflare): pin the shared client against the\nambient environment\"**, added `pinned_client()` to `plugin/cloudflare/client.py` and 97 lines of\ntest to `tests/integration/test_plugin_cloudflare_client.py`.\n\nVerified 2026-07-31 by building a real request with **all six** SDK-read variables set hostile —\n`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL`,\n`CLOUDFLARE_API_USER_SERVICE_KEY`, `CLOUDFLARE_BASE_URL=https://evil.example/v4`, and a\n`CLOUDFLARE_CUSTOM_HEADERS` injecting `X-Auth-Email`/`X-Auth-Key` — against a config supplying only\n`api_token`:\n\n```\nURL the request actually goes to : https://api.cloudflare.com/client/v4/zones\nAuthorization                    : Bearer «REDACTED:bearer»\nX-Auth-Email present             : False\nX-Auth-Key present               : False\n```\n\nAll four routes closed. `tests/integration/test_plugin_cloudflare_client.py`: 9 passed.\n\n## A2.2 — Why this amendment exists at all\n\nThe stale claims were not harmless. `CLAUDE.md` had **contradicted itself** since 2026-07-30 —\n`§Cloudflare auth + shared client` said `pinned_client()` \"closes all four\", while the\n`find-platform-domains-cloudflare` subsection said the plugin \"has all four routes open … exploitable\nagainst the main program today\". A session on 2026-07-31 read the second, believed it, and reported\na **phantom vulnerability** to the operator as a closing recommendation. That is the measured cost:\na document that makes its reader *less* accurate than no document.\n\nRoot cause, and the reason the fix is structural rather than a wording correction: **the same fact\nwas stated in full in two places.** `CLAUDE.md`'s utility subsection now **cross-references** the\ncanonical description instead of restating it — the Spine's own rule, *\"Each rule stated once and\ncross-referenced elsewhere (DRY)\"*, and exactly the drift `CLAUDE.md` already warns about for\n`prompts/`. The utility's `build_client()` docstring likewise now points at `pinned_client()` and\nstates the two-copy relationship, rather than asserting the plugin's status.\n\n## A2.3 — What is deliberately NOT changed here\n\n`Task 2`'s code listing (`~:1102`) and `Task 6`'s CLAUDE.md text block (`~:2272`) still contain the\nold wording. They are **verbatim records of what was authored at the time**, in an implementation\nplan that was already executed; rewriting them would falsify the archive rather than correct it.\nOnly the *normative* and *status* statements — `R2a`'s blockquote, `§8` item 7, `§14` Q9 — carry\nresolution banners, because those are the ones a reader consults to answer \"is this open?\".\n\n## A2.4 — Residual, unchanged\n\n- **Two independent copies of the pin** (`pinned_client()` and the utility's `build_client()`),\n  both measured against cloudflare 5.4.0. Deliberate: the utility imports nothing from `plugin/` so\n  its deletion stays `git rm` of three files (`§14`). An SDK upgrade must re-verify **both**; each\n  has its own test asserting a **real built request**, so either breaking goes red.\n- **`cloudflare` is declared unpinned** in `pyproject.toml`. `§8` item 10's rejection of pinning\n  stands, and the operator declined a compatible-range pin on 2026-07-31 with a stated reason: all\n  dependencies are being updated to latest within days, so a range pin would be immediately\n  re-litigated. The real-request tests are the mitigation, as `§8` item 10 always intended.\n- **`trust_env=True`** (`§8.13`) — `$HTTPS_PROXY` / `$SSL_CERT_FILE` still influence transport.\n  Unchanged operator decision. Note the risk shape is weaker than the closed route: `$HTTPS_PROXY`\n  alone leaks only the `CONNECT` hostname (`api.cloudflare.com`, not a secret); reading the token\n  needs a poisoned `$SSL_CERT_FILE` as well.\n'''\nassert s != before\np.write_text(s)\nprint(\"spec updated\")\nPY\necho \"=== residual stale status claims? ===\"\ngrep -rn \"all four routes open\\|not merely latent\\|Open, and live\" CLAUDE.md find-platform-domains-cloudflare development/2026-07-30-platform-domain-util2/SPEC.md | grep -v \"^development.*:1102:\\|^development.*:227[0-9]:\"",
+  "description": "Add Amendment A2 and resolution banners"
+}
+```
+
+### ↳ Tool result
+
+```
+spec updated
+=== residual stale status claims? ===
+development/2026-07-30-platform-domain-util2/SPEC.md:2415:   to the main program with its own test surface. **It was not merely latent:**
+development/2026-07-30-platform-domain-util2/SPEC.md:2942:`find-platform-domains-cloudflare` subsection said the plugin "has all four routes open … exploitable
+```
+
+## Assistant
+
+Both remaining hits are intentional (a struck-through item now in past tense, and A2.2 quoting the old text to explain the contradiction). Verifying the banner landed correctly and CLAUDE.md is now self-consistent:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "echo \"=== R2a banner ===\"; sed -n '272,286p' development/2026-07-30-platform-domain-util2/SPEC.md\necho; echo \"=== section 8 item 7 ===\"; sed -n '2410,2418p' development/2026-07-30-platform-domain-util2/SPEC.md\necho; echo \"=== section 14 Q9 ===\"; grep -n \"R2a defect — filed or fixed\" development/2026-07-30-platform-domain-util2/SPEC.md | cut -c1-200\necho; echo \"=== CLAUDE.md: does it still contradict itself? ===\"\ngrep -n \"closes all four\\|second, independent copy\\|pinned_client\" CLAUDE.md",
+  "description": "Verify the doc corrections"
+}
+```
+
+### ↳ Tool result
+
+```
+=== R2a banner ===
+another unnamed escape to exit 1, now converted to a `StartupError`. If the operator wants
+`trust_env=False`, it is a one-line change and a one-line test.
+
+> **Out of scope, report to the operator:** `plugin/cloudflare/client.py`'s `build_client()` has
+> **all four** routes open — `Cloudflare(api_token=api_token)` with no pinning of any kind.
+> Routes 1–2 are not live today only because U-M's config leaves `api_token` commented out and
+> passes `api_email` + `api_key` explicitly, which happens to win route 1. **Route 4 is
+> exploitable against the main program today**, regardless of which credential form is
+> configured. Fixing it is a separate change with its own test surface (§8.7).
+>
+> ⚠️ **RESOLVED 2026-07-30 by commit `befb913`, after this was written** — `plugin/cloudflare/client.py` now has `pinned_client()`, closing all four routes. See Amendment A2.
+
+### R3 — The walk, and the truncation guard
+
+`client.accounts.list()` → per account `client.zones.list(account={"id": account.id})` → per zone
+
+=== section 8 item 7 ===
+6. **Progress bars (`rich.progress`).** Rejected: `-v` stderr lines carry the same information
+   with none of the copied machinery.
+7. ~~**Fixing `plugin/cloudflare/client.py`'s R2a defect.**~~ **DONE 2026-07-30, commit
+   `befb913`** — out of scope for this utility as written below, but fixed separately the same day;
+   see Amendment A2. Original reasoning retained: real, measured, reported — but a change
+   to the main program with its own test surface. **It was not merely latent:**
+   `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form
+   is configured.
+8. **A `docs/` page.** The CLAUDE.md subsection is the documentation; a temporary utility does not
+
+=== section 14 Q9 ===
+2614:| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **FIXED 2026-07-30, commit `befb913`** (`pinned_client()`; see Amendment A2). Was "open, and live" when this row was written
+
+=== CLAUDE.md: does it still contradict itself? ===
+182:four routes, by the same mechanism, as the main program's `pinned_client()` — see **Cloudflare
+184:and why the pin is load-bearing. This is a **second, independent copy** of that pin (the utility
+604:  has `build_client()` (auth), **`pinned_client()`** (what makes "no direct-env fallback" *true*),
+614:  one mattered most: this program runs unattended against production monthly. `pinned_client()`
+615:  closes all four (pin `base_url`, null the unsupplied credential fields, clear
+```
+
+## Assistant
+
+Two wording residues to tidy — a present-tense clause left inside the now-past-tense item 7, and an over-long banner line:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python - <<'PY'\nfrom pathlib import Path\np = Path(\"development/2026-07-30-platform-domain-util2/SPEC.md\")\ns = p.read_text()\ns = s.replace('''   Original reasoning retained: real, measured, reported — but a change\n   to the main program with its own test surface. **It was not merely latent:**\n   `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form\n   is configured.''',\n'''   Original reasoning retained: real, measured, reported — but a change\n   to the main program with its own test surface. **It was not merely latent:** at the time this\n   was written, `$CLOUDFLARE_BASE_URL` was exploitable against the main program, whichever\n   credential form was configured.''')\ns = s.replace('''> ⚠️ **RESOLVED 2026-07-30 by commit `befb913`, after this was written** — `plugin/cloudflare/client.py` now has `pinned_client()`, closing all four routes. See Amendment A2.''',\n'''> ⚠️ **RESOLVED 2026-07-30 by commit `befb913`, after this was written** —\n> `plugin/cloudflare/client.py` now has `pinned_client()`, closing all four routes, verified\n> against a real built request with all six ambient variables set hostile. See Amendment A2.''')\np.write_text(s)\nPY\necho \"=== full gate ===\"; ./run-tests -q 2>&1 | tail -4\necho; echo \"=== changed files ===\"; git status --short",
+  "description": "Tidy wording and run the full gate"
+}
+```
+
+### ↳ Tool result
+
+```
+=== full gate ===
+107 snapshots passed.
+1301 passed, 3 skipped, 15 warnings in 33.22s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+
+=== changed files ===
+ M CLAUDE.md
+ M development/2026-07-30-platform-domain-util2/SPEC.md
+ M find-platform-domains-cloudflare
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git --no-pager diff --stat && git add -A && git commit -q -F - <<'MSG'\ndocs(cloudflare): correct the stale \"plugin client is unpinned\" claim\n\nplugin/cloudflare/client.py's ambient-environment defect was fixed on\n2026-07-30 by befb913 (pinned_client()), but three places still said it was\nopen, and CLAUDE.md CONTRADICTED ITSELF about it: the \"Cloudflare auth + shared\nclient\" section said pinned_client() \"closes all four\" while the\nfind-platform-domains-cloudflare subsection said the plugin \"has all four routes\nopen ... exploitable against the main program today\".\n\nThat is not a harmless stale doc.  A session on 2026-07-31 read the second,\nbelieved it, and reported a PHANTOM VULNERABILITY to the operator as a closing\nrecommendation -- a document that made its reader less accurate than no document\nwould have.\n\nVerified fixed before correcting anything, by building a REAL request with all\nsix SDK-read variables set hostile (CLOUDFLARE_API_TOKEN / _API_KEY / _EMAIL /\n_API_USER_SERVICE_KEY / _BASE_URL=https://evil.example/v4 / _CUSTOM_HEADERS\ninjecting X-Auth-*) against a config supplying only api_token:\n\n    URL   -> https://api.cloudflare.com/client/v4/zones\n    Auth  -> Bearer «REDACTED:bearer»\n    X-Auth-Email / X-Auth-Key -> absent\n\nThe structural fix, not just the wording: the same fact was stated IN FULL in two\nplaces, so correcting the words would leave both copies free to drift again on\nthe next SDK change.  CLAUDE.md's utility subsection now CROSS-REFERENCES the\ncanonical description instead of restating it -- the Spine's \"each rule stated\nonce and cross-referenced elsewhere (DRY)\", and exactly the drift CLAUDE.md\nalready warns about for prompts/.  The utility's build_client() docstring\nlikewise now points at pinned_client() and states the two-copy relationship\nrather than asserting the plugin's status.\n\nSPEC gets Amendment A2 recording the resolution and the residuals, plus\nresolution banners on the three STATUS claims (R2a's blockquote, section 8 item\n7, section 14 Q9).  Task 2's code listing and Task 6's CLAUDE.md text block are\ndeliberately left alone: they are verbatim records of what was authored at the\ntime, and rewriting them would falsify the archive rather than correct it.\n\nNo compatible-range SDK pin: the operator declined it on 2026-07-31, since all\ndependencies are being updated to latest within days.  Recorded in A2.4 with\nthat reasoning, so it is not re-litigated.\n\nDocs only; no behavior change.  1301 passed, 3 skipped.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\nMSG\necho \"--- committed ---\"; git --no-pager log --oneline -2; git status --short; [ -z \"$(git status --porcelain)\" ] && echo \"working tree clean\"",
+  "description": "Commit the documentation correction"
+}
+```
+
+### ↳ Tool result
+
+```
+ CLAUDE.md                                          | 14 ++--
+ .../2026-07-30-platform-domain-util2/SPEC.md       | 80 +++++++++++++++++++++-
+ find-platform-domains-cloudflare                   | 10 ++-
+ 3 files changed, 92 insertions(+), 12 deletions(-)
+--- committed ---
+f9d9d5b docs(cloudflare): correct the stale "plugin client is unpinned" claim
+148d83c feat(find-platform-domains-cloudflare): sweep named zones; stdout as the result stream
+working tree clean
+```
+
+## Assistant
+
+## Done — `f9d9d5b`, working tree clean
+
+**What I corrected, and where:**
+
+| Location | Before | After |
+|---|---|---|
+| `CLAUDE.md:181–187` | Restated the four routes, then asserted the plugin "has all four routes open… exploitable today" | **Cross-references** the canonical description; states the two-copy relationship instead of the plugin's status |
+| `find-platform-domains-cloudflare:224` | "(The main program's `plugin/cloudflare/client.py` has all four; fixing it is a separate change.)" | Points at `pinned_client()` with the commit, and says an SDK upgrade must re-verify **both** copies |
+| `SPEC.md` R2a blockquote | "Route 4 is exploitable against the main program today" | ⚠️ resolution banner |
+| `SPEC.md` §8 item 7 | "NOT in scope… not merely latent" | Struck through, marked **DONE `befb913`**, original reasoning kept in past tense |
+| `SPEC.md` §14 Q9 | "**Open, and live.**" | **FIXED**, with a note that it was true when written hours earlier |
+| `SPEC.md` (new) | — | **Amendment A2**: the verification, the root cause, what's deliberately unchanged, and the residuals |
+
+**The structural part is the point.** Correcting the wording alone would have left the same fact stated in full in two places, free to drift again at the next SDK change. CLAUDE.md now has one description and one pointer — the Spine's own "each rule stated once and cross-referenced elsewhere," and precisely the drift CLAUDE.md already warns about for `prompts/`.
+
+**I verified before correcting.** Having just been burned taking CLAUDE.md at its word, I built a real request with all six SDK variables set hostile before touching anything. Token stayed on `api.cloudflare.com`, no ambient value on the wire, 9 tests green.
+
+**Two things I deliberately did not change:**
+- `Task 2`'s code listing and `Task 6`'s CLAUDE.md text block in the SPEC still carry the old wording. They're verbatim records of what was authored at the time in an already-executed plan; rewriting them would falsify the archive rather than correct it. Only the three *status* claims — the ones a reader consults to answer "is this open?" — got banners. A2.3 says so explicitly.
+- **No SDK range pin**, per your call. A2.4 records it *with your reasoning* (all deps going to latest within days), so a future session doesn't re-open it as an oversight.
+
+**Recorded as still-open residuals in A2.4:** the two independent copies of the pin (deliberate — keeps the utility deletable by `git rm`), the unpinned `cloudflare` dependency, and `trust_env=True`. On that last one, worth carrying into your dependency update: both pins are measured against **cloudflare 5.4.0** and read SDK internals (`_custom_headers`, request-build-time attribute back-fill, `auth_headers` precedence). When you upgrade, `tests/integration/test_plugin_cloudflare_client.py` and the utility's credential tests are the ones to watch — they assert real built requests, so a fifth route or a renamed internal will go red rather than silently reopening the hole.
+
+## User
+
+Add appropriate tests for `development/finalize-session.py`.
+
+## Assistant
+
+This is test-backfill, which CLAUDE.md routes to a specific prompt. Let me read it and the full script.
+
+### ⚙ Tool call: `Read`
+
+```json
+{
+  "file_path": "/workspace/prompts/add-tests-for-change.prompt.md"
+}
+```
+
+### ↳ Tool result
+
+```
+1	# Prompt: backfill tests for existing untested code
+2	
+3	Reusable prompt for **covering code that has no tests** — code written before this project
+4	adopted test-first development, or otherwise inherited. CodeGraph reports "no covering tests
+5	found" across much of the core program; this prompt is how that debt gets paid down.
+6	
+7	**This is NOT the path for new work.** New work is test-first at the seams the spec declares
+8	(`mattpocock-skills:tdd`, see `prompts/implementation-standards.md`) — tests that "didn't get
+9	added during development" are a mandate violation to fix at the source, not to launder through
+10	this prompt. Writing tests in bulk against code that already exists is
+11	[horizontal slicing](../prompts/implementation-standards.md): the tests verify what the code
+12	*does* rather than what it *should* do, and they never had a chance to catch the bug. That is
+13	an acceptable price for covering untested legacy code, and not for anything else.
+14	
+15	Because these tests cannot go red first, be adversarial in the one way that's still available:
+16	for every assertion, ask whether it would **fail** if the behavior were wrong, and derive the
+17	expected value from an independent source of truth — the spec, a worked example, a known-good
+18	literal — never by rerunning the code and pasting what it printed.
+19	
+20	---
+21	
+22	I want to backfill tests for `<name the untested function/module/path>`.
+23	
+24	Design and implement the appropriate tests for it, following the existing harness in `tests/`
+25	(see `tests/README.md` and `development/2026-07-04-test-harness/SPEC.md`):
+26	
+27	1. Pick the right tier(s) by what changed:
+28	   - pure/in-process logic → `tests/unit/` (add a Hypothesis property test if the function is
+29	     pure and has an invariant worth fuzzing);
+30	   - anything going through `run_terminus`/WP/Drush, the DB, or a check hook → `tests/integration/`
+31	     (monkeypatch `run_terminus`, use `temp_db`);
+32	   - a change visible in the rendered report or the full pipeline → extend the `e2e` run and the
+33	     `golden` snapshot; if it changes real Pantheon interaction, add/adjust a `live` case;
+34	   - a rendering/CSS/template change → the `render` tier.
+35	2. Reuse the existing fixtures (`psh`, `reset_sc`, `temp_db`, `program_runner`, `rendered_report`,
+36	   `minimal_config`). Never invoke the program except via `run_program` (the `--all`/`--for-real`
+37	   interlock), and never run `--create-tables` or `--import-older-metrics` against the live
+38	   database.
+39	3. If the change alters Pantheon responses the offline e2e depends on, refresh fixtures with
+40	   `./run-tests --record` and review the diff. If it intentionally changes rendered output, run
+41	   `./run-tests --update-goldens` and review the snapshot diff.
+42	4. Run `./run-tests --fast` (and the relevant `live` cases) and confirm green. Show the output.
+43	
+44	Keep any institution-specific logic behind config flags / the `umich` plugin+check packages so the
+45	non-UMich path keeps working.
+46
+```
+
+### ⚙ Tool call: `Read`
+
+```json
+{
+  "file_path": "/workspace/development/finalize-session.py"
+}
+```
+
+### ↳ Tool result
+
+```
+1	#!/usr/bin/env python
+2	"""Finalize a Claude session for archiving under development/<date-slug>/.
+3	
+4	Two deterministic jobs (kept in code, not left to LLM judgment):
+5	
+6	  A. Render + scrub the transcript.  Read a Claude Code session JSONL, render it
+7	     to readable markdown (development/<dir>/transcript.raw.md, gitignored), then
+8	     write a secret-scrubbed copy (transcript.md, committed).
+9	
+10	  B. Assemble statistics.md from the same JSONL (metadata, token usage, context)
+11	     plus the one capture only the /archive-session skill can gather in a live
+12	     session (/usage, for the dollar cost — Claude Code estimates cost locally, so
+13	     we embed its /usage output instead of pricing here).
+14	
+15	Standalone and testable: run it by hand against any session JSONL, or let the
+16	/archive-session skill drive it.  Stdlib only, no third-party deps.
+17	
+18	Usage:
+19	  finalize-session.py --dir development/2026-07-03-daily-traffic-alerts \
+20	      [--jsonl ~/.claude/projects/-workspace/<id>.jsonl] [--usage-capture <file>] \
+21	      [--transcript-input <export.txt>] [--label "01"]
+22	
+23	--jsonl defaults to the newest *.jsonl under ~/.claude/projects/-workspace/.
+24	--label suffixes the outputs (transcript-01.md / statistics-01.md) for
+25	multi-session features; omit it for a single-session feature.
+26	"""
+27	
+28	import argparse
+29	import contextlib
+30	import json
+31	import re
+32	from datetime import datetime
+33	from pathlib import Path
+34	
+35	# Dollar cost is NOT computed here.  The session JSONL records no cost field, and
+36	# there's no programmatic price source (the Models API returns capabilities, not
+37	# prices).  Claude Code's own `/usage` already estimates cost locally from token
+38	# counts — so rather than maintain a duplicate price table that goes stale, the
+39	# /archive-session skill pastes `/usage` output in and this script embeds it
+40	# verbatim (see --usage-capture).  Token counts below come straight from the JSONL.
+41	
+42	# --- Secret scrubbing -------------------------------------------------------
+43	# Best-effort regex redaction; development/README.md documents the manual grep
+44	# that backs it up.  Each pattern keeps a label so the redaction is auditable.
+45	_REDACT = "«REDACTED:{}»"
+46	
+47	
+48	def _redact_if_high_entropy(match):
+49	    """Redact a long bare alphanumeric run only when it looks like a credential.
+50	
+51	    Mixed case AND at least one digit.  A git SHA (40 lowercase hex) fails the uppercase test
+52	    and survives, which matters: a development transcript that redacted every commit hash would
+53	    be unreadable.  Long lowercase identifiers and all-caps constants survive for the same
+54	    reason.  This is the LAST line of defence, for a secret that reaches the transcript with no
+55	    `key:` / `Bearer ` / env-var anchor in front of it at all.
+56	    """
+57	    value = match.group(0)
+58	    if (any(c.islower() for c in value) and any(c.isupper() for c in value)
+59	            and any(c.isdigit() for c in value)):
+60	        return _REDACT.format("high-entropy")
+61	    return value
+62	
+63	
+64	_SECRET_PATTERNS = [
+65	    # KEY=value / KEY: value for the known secret env vars.  No leading \b: a
+66	    # secret rendered right after an escaped newline (\nKEY=... in a JSON-encoded
+67	    # command input) glues an `n` before the key and would defeat \b.
+68	    (r"(?i)(SMTP_PASSWORD|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|"
+69	     r"CLOUDFLARE_API_KEY|CLOUDFLARE_EMAIL|ANTHROPIC_API_KEY)(\s*[=:]\s*)(\S+)",
+70	     lambda m: m.group(1) + m.group(2) + _REDACT.format(m.group(1))),
+71	    # AWS access key IDs
+72	    (r"\bAKIA[0-9A-Z]{16}\b", lambda _m: _REDACT.format("aws-key-id")),
+73	    # The SAME secrets under their API field names rather than their env-var names.  The
+74	    # patterns above key off SMTP_PASSWORD / CLOUDFLARE_API_KEY / ...; an SDK repr or a
+75	    # diagnostic print emits `api_key: cfk_...`, which matches none of them.  Measured: a
+76	    # session that printed a live Cloudflare key that way went through the scrubber untouched,
+77	    # and the manual grep in development/README.md is keyed to the same env-var names, so it
+78	    # missed it too.  Matched by VALUE SHAPE, with a length floor, so that ordinary source in
+79	    # the transcript (`api_token = cf.get('api_token')`, `api_key = "k-456"`) stays readable.
+80	    # No length floor on this one, unlike the generic pattern below: the `cfk_` prefix is
+81	    # itself the signal, so even an 8-character PREFIX of a key (a truncated quote of a leak,
+82	    # measured in this very session) is a credential fragment and must not ship.
+83	    (r"\bcfk_[A-Za-z0-9_-]{4,}", lambda _m: _REDACT.format("cloudflare-api-key")),
+84	    (r"(?i)\b(api[_-]?key|api[_-]?token|user_service_key|machine[_-]?token)(\s*[=:]\s*)"
+85	     r"([A-Za-z0-9_\-]{24,})",
+86	     lambda m: m.group(1) + m.group(2) + _REDACT.format("credential")),
+87	    (r"(?i)\b(api[_-]?email)(\s*[=:]\s*)([^\s|,;)\"']+@[^\s|,;)\"']+)",
+88	     lambda m: m.group(1) + m.group(2) + _REDACT.format("credential-email")),
+89	    # Pantheon machine/session tokens in JSON
+90	    (r'(?i)("?(?:machine_token|session)"?\s*[=:]\s*")([^"]{12,})(")',
+91	     lambda m: m.group(1) + _REDACT.format("token") + m.group(3)),
+92	    # Bearer / Authorization headers
+93	    (r"(?i)(Authorization:\s*Bearer\s+|Bearer\s+)([A-Za-z0-9._\-]{12,})",
+94	     lambda m: m.group(1) + _REDACT.format("bearer")),
+95	    # Cloudflare edge cookies from a raw `curl -D -` against api.cloudflare.com.  Session-scoped
+96	    # and short-lived, but token-shaped and of no value in a committed record -- and the value
+97	    # carries `.`/`-`/`_`, so the bare high-entropy pattern below (which is \b[A-Za-z0-9]{32,}\b)
+98	    # walks straight past it.  Measured: a `__cf_bm=` cookie survived every other pattern here.
+99	    (r"(?i)\b(__cf[a-z_]*|cf_clearance)(=)([A-Za-z0-9._\-]{12,})",
+100	     lambda m: m.group(1) + m.group(2) + _REDACT.format("cf-cookie")),
+101	    # PEM private key blocks
+102	    (r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+103	     lambda _m: _REDACT.format("private-key")),
+104	    # Bare high-entropy strings, with NO surrounding field name at all.  The patterns above all
+105	    # need a `key:`/`KEY=`/`Bearer ` anchor; a secret can reach the transcript with none --
+106	    # measured in this session, where a grep written to PROVE a key's absence embedded 42
+107	    # characters of it as a bare literal, and every anchored pattern sailed past.
+108	    # Mixed case AND a digit is the discriminator: it excludes git SHAs (all-lowercase hex),
+109	    # which a development transcript must keep readable, while catching base64/token shapes.
+110	    (r"\b[A-Za-z0-9]{32,}\b", _redact_if_high_entropy),
+111	]
+112	
+113	
+114	def scrub(text):
+115	    for pattern, repl in _SECRET_PATTERNS:
+116	        text = re.sub(pattern, repl, text, flags=re.DOTALL)
+117	    return text
+118	
+119	
+120	# --- JSONL loading ----------------------------------------------------------
+121	def newest_jsonl():
+122	    d = Path("~/.claude/projects/-workspace").expanduser()
+123	    files = list(d.glob("*.jsonl"))
+124	    if not files:
+125	        raise SystemExit(f"no session JSONL found under {d}; pass --jsonl")
+126	    return max(files, key=lambda p: p.stat().st_mtime)
+127	
+128	
+129	def load(path):
+130	    rows = []
+131	    with Path(path).open(encoding="utf-8") as fh:
+132	        for line in fh:
+133	            stripped = line.strip()
+134	            if stripped:
+135	                with contextlib.suppress(json.JSONDecodeError):
+136	                    rows.append(json.loads(stripped))
+137	    return rows
+138	
+139	
+140	def _blocks(msg):
+141	    c = msg.get("content")
+142	    if isinstance(c, str):
+143	        return [{"type": "text", "text": c}]
+144	    return c if isinstance(c, list) else []
+145	
+146	
+147	# --- Job A: render transcript ----------------------------------------------
+148	def render_transcript(rows):
+149	    out = ["# Session transcript\n"]
+150	    for row in rows:
+151	        rtype = row.get("type")
+152	        if rtype not in ("user", "assistant"):
+153	            continue
+154	        msg = row.get("message")
+155	        if not isinstance(msg, dict):
+156	            continue
+157	        tag = " _(subagent)_" if row.get("isSidechain") else ""
+158	        for b in _blocks(msg):
+159	            if not isinstance(b, dict):
+160	                continue
+161	            bt = b.get("type")
+162	            if bt == "text" and b.get("text", "").strip():
+163	                who = "User" if rtype == "user" else "Assistant"
+164	                out.append(f"## {who}{tag}\n\n{b['text'].rstrip()}\n")
+165	            elif bt == "thinking" and b.get("thinking", "").strip():
+166	                out.append(f"## Assistant thinking{tag}\n\n{b['thinking'].rstrip()}\n")
+167	            elif bt == "tool_use":
+168	                inp = json.dumps(b.get("input", {}), indent=2, ensure_ascii=False)
+169	                out.append(f"### ⚙ Tool call: `{b.get('name')}`{tag}\n\n"
+170	                           f"```json\n{inp}\n```\n")
+171	            elif bt == "tool_result":
+172	                out.append(f"### ↳ Tool result{tag}\n\n```\n"
+173	                           f"{_result_text(b.get('content'))}\n```\n")
+174	    return "\n".join(out) + "\n"
+175	
+176	
+177	def _result_text(content):
+178	    if isinstance(content, str):
+179	        return content.rstrip()
+180	    if isinstance(content, list):
+181	        parts = [x.get("text", "") for x in content
+182	                 if isinstance(x, dict) and x.get("type") == "text"]
+183	        return "\n".join(parts).rstrip()
+184	    return ""
+185	
+186	
+187	# --- Job B: statistics ------------------------------------------------------
+188	def _ts(row):
+189	    t = row.get("timestamp")
+190	    if not t:
+191	        return None
+192	    try:
+193	        return datetime.fromisoformat(t)
+194	    except ValueError:
+195	        return None
+196	
+197	
+198	def collect_stats(rows):
+199	    # Claude Code writes ONE JSONL row per content block, so a single assistant
+200	    # request spans several rows that all repeat the same `usage` block.  Summing
+201	    # per-row would multiply tokens (~3x here) and turns.  So: dedupe usage per
+202	    # request (keyed by requestId, falling back to message.id), but count tool_use
+203	    # blocks per unique block id (each block appears on exactly one row).
+204	    per_model = {}
+205	    tools = {}
+206	    seen_tool_ids = set()
+207	    req_usage = {}   # request key -> (model, usage) — keep the row with max output
+208	    first = last = None
+209	    for row in rows:
+210	        ts = _ts(row)
+211	        if ts:
+212	            first = first or ts
+213	            last = ts
+214	        if row.get("type") != "assistant":
+215	            continue
+216	        msg = row.get("message")
+217	        if not isinstance(msg, dict):
+218	            continue
+219	        key = row.get("requestId") or msg.get("id") or id(row)
+220	        u = msg.get("usage") or {}
+221	        prev = req_usage.get(key)
+222	        if prev is None or u.get("output_tokens", 0) > prev[1].get("output_tokens", 0):
+223	            req_usage[key] = (msg.get("model", "unknown"), u)
+224	        for b in _blocks(msg):
+225	            if isinstance(b, dict) and b.get("type") == "tool_use":
+226	                tid = b.get("id")
+227	                if tid in seen_tool_ids:
+228	                    continue
+229	                seen_tool_ids.add(tid)
+230	                tools[b.get("name", "?")] = tools.get(b.get("name", "?"), 0) + 1
+231	
+232	    max_ctx = 0
+233	    for model, u in req_usage.values():
+234	        creation = u.get("cache_creation") or {}
+235	        acc = per_model.setdefault(model, {"inp": 0, "out": 0, "read": 0, "w5": 0, "w1": 0})
+236	        acc["inp"] += u.get("input_tokens", 0)
+237	        acc["out"] += u.get("output_tokens", 0)
+238	        acc["read"] += u.get("cache_read_input_tokens", 0)
+239	        acc["w5"] += creation.get("ephemeral_5m_input_tokens", 0)
+240	        acc["w1"] += creation.get("ephemeral_1h_input_tokens", 0)
+241	        # Context approximation: the largest single prompt sent this session.
+242	        prompt = (u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+243	                  + u.get("cache_creation_input_tokens", 0))
+244	        max_ctx = max(max_ctx, prompt)
+245	
+246	    return {"per_model": per_model, "tools": tools, "turns": len(req_usage),
+247	            "max_ctx": max_ctx, "first": first, "last": last}
+248	
+249	
+250	def render_stats(s, usage_text):
+251	    lines = ["# Session statistics\n"]
+252	
+253	    # Session metadata
+254	    lines.append("## Session metadata\n")
+255	    if s["first"] and s["last"]:
+256	        dur = s["last"] - s["first"]
+257	        mins = int(dur.total_seconds() // 60)
+258	        lines.append(f"- **Started:** {s['first'].isoformat()}")
+259	        lines.append(f"- **Ended:** {s['last'].isoformat()}")
+260	        lines.append(f"- **Duration:** {mins} min")
+261	    lines.append(f"- **Model(s):** {', '.join(sorted(s['per_model'])) or 'unknown'}")
+262	    lines.append(f"- **Assistant turns:** {s['turns']}")
+263	    if s["tools"]:
+264	        counts = ", ".join(f"{k} × {v}" for k, v in  # noqa: RUF001 -- deliberate MULTIPLICATION SIGN glyph in the tool-count summary, not an ASCII x
+265	                           sorted(s["tools"].items(), key=lambda kv: -kv[1]))
+266	        lines.append(f"- **Tool calls:** {counts}")
+267	    lines.append("")
+268	
+269	    # Token usage (from the JSONL)
+270	    lines.append("## Token usage\n")
+271	    lines.append("_Per-model totals from the session JSONL, deduped per request. "
+272	             "**Approximate** — the JSONL is Claude Code's internal format; the "
+273	             "embedded `/usage` below is authoritative for tokens and cost._\n")
+274	    lines.append("| Model | Input | Output | Cache read | Cache write |")
+275	    lines.append("|---|--:|--:|--:|--:|")
+276	    for model, a in sorted(s["per_model"].items()):
+277	        lines.append(f"| {model} | {a['inp']:,} | {a['out']:,} | {a['read']:,} "
+278	                 f"| {a['w5'] + a['w1']:,} |")
+279	    lines.append("")
+280	
+281	    # Cost — pasted verbatim from Claude Code's /usage (no local price table)
+282	    lines.append("## Cost — Claude Code `/usage`\n")
+283	    if usage_text and usage_text.strip():
+284	        lines.append("_Captured from Claude Code's `/usage` at archive time; Claude Code "
+285	                 "estimates cost locally from token counts._\n")
+286	        lines.append("```\n" + usage_text.rstrip() + "\n```\n")
+287	    else:
+288	        lines.append("_Run `/usage` in-session for the estimated cost — not captured "
+289	                 "for this session._\n")
+290	
+291	    # Context window (like /context) — approximation
+292	    lines.append("## Context window (approximate)\n")
+293	    lines.append(f"- **Largest prompt sent:** ~{s['max_ctx']:,} tokens "
+294	             "(input + cache read + cache write on the biggest single turn)")
+295	    lines.append("\n_Approximate: reconstructed from the JSONL after the fact. The "
+296	             "exact live `/context` breakdown by component can't be reproduced "
+297	             "post-hoc._\n")
+298	
+299	    return "\n".join(lines) + "\n"
+300	
+301	
+302	# --- main -------------------------------------------------------------------
+303	def _read(path):
+304	    if path and Path(path).exists():
+305	        with Path(path).open(encoding="utf-8") as fh:
+306	            return fh.read()
+307	    return None
+308	
+309	
+310	def main():
+311	    ap = argparse.ArgumentParser(description=__doc__,
+312	                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+313	    ap.add_argument("--dir", required=True,
+314	                    help="feature folder to write outputs into")
+315	    ap.add_argument("--jsonl", help="session JSONL (default: newest)")
+316	    ap.add_argument("--usage-capture", help="file with `/usage` output")
+317	    ap.add_argument("--transcript-input",
+318	                    help="pre-run /export text to scrub instead of rendering JSONL")
+319	    ap.add_argument("--label", default="",
+320	                    help="suffix for multi-session features, e.g. 01")
+321	    args = ap.parse_args()
+322	
+323	    out_dir = Path(args.dir)
+324	    out_dir.mkdir(parents=True, exist_ok=True)
+325	    sfx = f"-{args.label}" if args.label else ""
+326	
+327	    jsonl = args.jsonl or newest_jsonl()
+328	    rows = load(jsonl)
+329	
+330	    # Job A: transcript
+331	    override = _read(args.transcript_input)
+332	    raw = override if override is not None else render_transcript(rows)
+333	    raw_path = out_dir / f"transcript{sfx}.raw.md"
+334	    with raw_path.open("w", encoding="utf-8") as fh:
+335	        fh.write(raw)
+336	    scrubbed_path = out_dir / f"transcript{sfx}.md"
+337	    with scrubbed_path.open("w", encoding="utf-8") as fh:
+338	        fh.write(scrub(raw))
+339	
+340	    # Job B: statistics
+341	    stats = collect_stats(rows)
+342	    stats_md = render_stats(stats, _read(args.usage_capture))
+343	    stats_path = out_dir / f"statistics{sfx}.md"
+344	    with stats_path.open("w", encoding="utf-8") as fh:
+345	        fh.write(scrub(stats_md))
+346	
+347	    print(f"source JSONL: {jsonl}")
+348	    print(f"wrote {scrubbed_path} (scrubbed) and {raw_path} (raw, gitignored)")
+349	    print(f"wrote {stats_path}")
+350	
+351	
+352	if __name__ == "__main__":
+353	    main()
+354
+```
+
+## Assistant
+
+Now let me write the tests. Being adversarial where I can: expected values derived from each pattern's stated intent, not from running the code.
+
+### ⚙ Tool call: `Write`
+
+```json
+{
+  "file_path": "/workspace/tests/unit/test_finalize_session.py",
+  "content": "\"\"\"Offline tests for development/finalize-session.py (the /archive-session workhorse).\n\nBACKFILL, per prompts/add-tests-for-change.prompt.md: this code shipped untested, so these tests\ncould not go red first and they verify what the code DOES.  The one adversarial move still\navailable is used throughout -- every expected value is derived from the behavior each pattern's\nown comment CLAIMS, or from a hand-built worked example, never by running the script and pasting\nwhat it printed.\n\nWhy this module earns tests at all, being a dev tool rather than program code: `scrub()` is the\nonly thing standing between a session transcript and a committed secret, and\ndevelopment/README.md's manual grep is explicitly described as a backstop to it, not a substitute.\nA silent regression here is a credential in git history.\n\nThe script has no importable module name (a dash, and it lives outside any package), so it is\nloaded with the SourceFileLoader idiom the suite already uses for the standalone utilities.\n\"\"\"\nimport importlib.util\nimport json\nimport re\nimport sys\nimport types\nfrom importlib.machinery import SourceFileLoader\nfrom pathlib import Path\n\nimport pytest\nfrom hypothesis import given\nfrom hypothesis import strategies as st\n\npytestmark = pytest.mark.unit\n\nSCRIPT = Path(__file__).resolve().parent.parent.parent / \"development\" / \"finalize-session.py\"\n\n\n@pytest.fixture\ndef fs():\n    \"\"\"The script, loaded fresh.  Its entry point is __main__-guarded, so import runs nothing.\"\"\"\n    loader = SourceFileLoader(\"finalize_session_probe\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    assert spec is not None\n    module = importlib.util.module_from_spec(spec)\n    loader.exec_module(module)\n    return module\n\n\n# --- scrub(): the security-critical surface ---------------------------------------------------\n#\n# Positive cases.  `secret` is the substring that MUST NOT survive; `label` is the redaction tag\n# the pattern's own comment says it applies, so a pattern silently rewired to a different tag\n# (or caught by the generic high-entropy fallback instead of its specific rule) goes red.\n\n@pytest.mark.parametrize((\"text\", \"secret\", \"label\"), [\n    # KEY=value / KEY: value for the named env vars\n    (\"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» \"hunter2-correct-horse\", \"SMTP_PASSWORD\"),\n    (\"AWS_SECRET_ACCESS_KEY: «REDACTED:AWS_SECRET_ACCESS_KEY»     \"«REDACTED:high-entropy»\", \"AWS_SECRET_ACCESS_KEY\"),\n    (\"CLOUDFLARE_EMAIL=«REDACTED:CLOUDFLARE_EMAIL» \"person@example.edu\", \"CLOUDFLARE_EMAIL\"),\n    # Lowercased env-var name: the pattern is (?i)\n    (\"smtp_password=«REDACTED:smtp_password» \"lower-case-name-still-caught\", \"smtp_password\"),\n    # AWS access key ID, bare\n    (\"the id «REDACTED:aws-key-id» appears\", \"«REDACTED:aws-key-id»\", \"aws-key-id\"),\n    # Cloudflare key by VALUE SHAPE, with no field name at all, and no length floor --\n    # the comment is explicit that even a truncated 8-char prefix must not ship.\n    (\"token is «REDACTED:cloudflare-api-key»\", \"«REDACTED:cloudflare-api-key»\", \"cloudflare-api-key\"),\n    # API field names rather than env-var names, 24+ chars\n    (\"api_token: «REDACTED:credential»\", \"abcdefghijklmnopqrstuvwxyz012345\",\n     \"credential\"),\n    (\"machine-token = «REDACTED:credential»\", \"ABCDEFGHIJKLMNOPQRSTUVWX\", \"credential\"),\n    (\"api_email: «REDACTED:credential-email»", \"someone@umich.edu\", \"credential-email\"),\n    # Pantheon tokens in JSON\n    ('{\"machine_token\": \"mt-abcdefghijklmnop\"}', \"mt-abcdefghijklmnop\", \"token\"),\n    ('{\"session\": \"sess-abcdefghijklmnop\"}', \"sess-abcdefghijklmnop\", \"token\"),\n    # Authorization header\n    (\"Authorization: Bearer «REDACTED:bearer»\", \"abcdefghijklmnop\", \"bearer\"),\n    # Cloudflare edge cookies (added after a real `curl -D -` put one in a transcript)\n    (\"set-cookie: __cf_bm=«REDACTED:cf-cookie»; HttpOnly\",\n     \"C46vVhbEXxxVjf.Nny7h-7BKHdt4v\", \"cf-cookie\"),\n    (\"cf_clearance=«REDACTED:cf-cookie»\", \"Ab3.def-ghi_jklmnop\", \"cf-cookie\"),\n    # Bare high-entropy run: mixed case AND a digit, 32+ chars, no anchor of any kind\n    (\"leaked \" + \"aB3\" * 12, \"aB3\" * 12, \"high-entropy\"),\n])\ndef test_scrub_redacts(fs, text, secret, label):\n    out = fs.scrub(text)\n    assert secret not in out, f\"{label}: the secret survived scrubbing\"\n    assert f\"«REDACTED:{label}»\" in out, f\"{label}: redacted, but not by the expected rule\"\n\n\ndef test_scrub_redacts_a_pem_private_key_block_including_its_body(fs):\n    body = \"«REDACTED:high-entropy»\\«REDACTED:high-entropy»\"\n    text = f\"«REDACTED:private-key»\"\n    out = fs.scrub(text)\n    assert \"«REDACTED:private-key»\" in out\n    assert \"«REDACTED:high-entropy»\" not in out\n    assert \"BEGIN RSA PRIVATE KEY\" not in out, \"the whole block goes, not just the body\"\n\n\n# Negative cases.  These MUST survive: a scrubber that redacted them would make development\n# transcripts unreadable, which is the stated reason the high-entropy rule is narrow.\n\n@pytest.mark.parametrize((\"text\", \"why\"), [\n    (\"commit 6389e08a1b2c3d4e5f60718293a4b5c6d7e8f9a0 fixed it\",\n     \"a 40-char git SHA is all-lowercase hex -- no uppercase, so it is not high-entropy\"),\n    (\"ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJ\", \"an all-caps constant has no lowercase\"),\n    (\"averylongallslowercaseidentifiernameheretoo\", \"a long lowercase identifier has no uppercase\"),\n    (\"MixedCaseButNoDigitsAtAllInThisLongRun\", \"mixed case WITHOUT a digit is not a token shape\"),\n    ('api_key = \"k-456\"', \"short values keep ordinary source readable (24-char floor)\"),\n    (\"api_token = cf.get('api_token')\", \"source code referencing the field name is not a value\"),\n    (\"the SMTP_PASSWORD variable is documented in docs/env-and-smtp-configuration.md\",\n     \"a prose mention with no = or : separator carries no value\"),\n])\ndef test_scrub_leaves_readable_text_alone(fs, text, why):\n    assert fs.scrub(text) == text, why\n\n\ndef test_scrub_is_idempotent(fs):\n    \"\"\"Re-scrubbing must not chew through its own markers -- finalize-session scrubs the stats\n    document that may already quote scrubbed transcript text.\"\"\"\n    text = (\"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» and «REDACTED:aws-key-id» and Bearer «REDACTED:bearer» \"\n            \"and \" + \"aB3\" * 12)\n    once = fs.scrub(text)\n    assert fs.scrub(once) == once\n\n\ndef test_scrub_redacts_every_occurrence_not_just_the_first(fs):\n    out = fs.scrub(\"«REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE\")\n    assert \"AKIA\" not in out\n    assert out.count(\"«REDACTED:aws-key-id»\") == 2\n\n\ndef test_scrub_handles_a_secret_glued_to_an_escaped_newline(fs):\n    \"\"\"The env-var pattern deliberately has NO leading \\\\b: a secret rendered right after an\n    escaped newline in a JSON-encoded command input glues an `n` onto the key name.\"\"\"\n    out = fs.scrub(r\"{\\\"command\\\": \\\"export FOO=1\\nSMTP_PASSWORD=«REDACTED:SMTP_PASSWORD»    assert \"hunter2-secret\" not in out\n\n\n@given(st.text(alphabet=\"«REDACTED:high-entropy»\",\n               min_size=32, max_size=80))\ndef test_scrub_never_leaves_a_token_shaped_secret_behind_an_env_var_name(secret):\n    \"\"\"Property: whatever the value looks like, `SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» must not survive.\n\n    Loaded per-call rather than via the fixture: Hypothesis test functions cannot take\n    function-scoped fixtures.\n    \"\"\"\n    loader = SourceFileLoader(\"finalize_session_prop\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    module = importlib.util.module_from_spec(spec)\n    loader.exec_module(module)\n    assert secret not in module.scrub(f\"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» --- load(): JSONL reading --------------------------------------------------------------------\n\ndef test_load_reads_one_object_per_line_and_skips_blanks(fs, tmp_path):\n    path = tmp_path / \"s.jsonl\"\n    path.write_text('{\"a\": 1}\\n\\n   \\n{\"a\": 2}\\n', encoding=\"utf-8\")\n    assert fs.load(path) == [{\"a\": 1}, {\"a\": 2}]\n\n\ndef test_load_silently_drops_a_malformed_line(fs, tmp_path):\n    \"\"\"Documented behavior, and a sharp edge worth pinning: a truncated JSONL row (a session\n    killed mid-write) is dropped with NO warning, so the transcript is quietly short.\"\"\"\n    path = tmp_path / \"s.jsonl\"\n    path.write_text('{\"a\": 1}\\n{\"a\": 2\\n{\"a\": 3}\\n', encoding=\"utf-8\")\n    assert fs.load(path) == [{\"a\": 1}, {\"a\": 3}]\n\n\n# --- render_transcript() ----------------------------------------------------------------------\n\ndef row(rtype, blocks, **extra):\n    \"\"\"One JSONL row carrying a message with the given content blocks.\"\"\"\n    return {\"type\": rtype, \"message\": {\"content\": blocks}, **extra}\n\n\ndef test_render_transcript_renders_each_block_kind_under_its_own_heading(fs):\n    out = fs.render_transcript([\n        row(\"user\", [{\"type\": \"text\", \"text\": \"do the thing\"}]),\n        row(\"assistant\", [{\"type\": \"thinking\", \"thinking\": \"considering\"},\n                          {\"type\": \"text\", \"text\": \"done\"},\n                          {\"type\": \"tool_use\", \"name\": \"Bash\", \"id\": \"t1\",\n                           \"input\": {\"command\": \"ls\"}}]),\n        row(\"user\", [{\"type\": \"tool_result\", \"content\": \"file.txt\"}]),\n    ])\n    assert \"## User\\n\\ndo the thing\" in out\n    assert \"## Assistant thinking\\n\\nconsidering\" in out\n    assert \"## Assistant\\n\\ndone\" in out\n    assert \"### ⚙ Tool call: `Bash`\" in out\n    assert '\"command\": \"ls\"' in out\n    assert \"### ↳ Tool result\" in out\n    assert \"file.txt\" in out\n\n\ndef test_render_transcript_tags_subagent_rows(fs):\n    out = fs.render_transcript([\n        row(\"assistant\", [{\"type\": \"text\", \"text\": \"sub work\"}], isSidechain=True)])\n    assert \"## Assistant _(subagent)_\" in out\n\n\ndef test_render_transcript_accepts_string_content_as_one_text_block(fs):\n    assert \"hello there\" in fs.render_transcript([{\"type\": \"user\",\n                                                   \"message\": {\"content\": \"hello there\"}}])\n\n\n@pytest.mark.parametrize(\"skipped\", [\n    {\"type\": \"summary\", \"message\": {\"content\": [{\"type\": \"text\", \"text\": \"SHOULD NOT APPEAR\"}]}},\n    {\"type\": \"user\", \"message\": \"not-a-dict\"},\n    {\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"text\", \"text\": \"   \"}]}},\n])\ndef test_render_transcript_skips_what_it_cannot_or_should_not_render(fs, skipped):\n    out = fs.render_transcript([skipped])\n    assert out.strip() == \"# Session transcript\", \"only the header should remain\"\n\n\ndef test_result_text_joins_only_the_text_parts_of_a_block_list(fs):\n    assert fs._result_text([{\"type\": \"text\", \"text\": \"one\"},\n                            {\"type\": \"image\", \"source\": \"...\"},\n                            {\"type\": \"text\", \"text\": \"two\"}]) == \"one\\ntwo\"\n    assert fs._result_text(\"plain string  \") == \"plain string\"\n    assert fs._result_text(None) == \"\"\n\n\n# --- collect_stats(): the dedup logic that a naive version gets ~3x wrong ---------------------\n\ndef assistant_row(request_id, out_tokens, *, blocks=(), model=\"claude-opus-5\", **usage):\n    return {\"type\": \"assistant\", \"requestId\": request_id,\n            \"message\": {\"id\": f\"msg_{request_id}\", \"model\": model,\n                        \"content\": list(blocks),\n                        \"usage\": {\"output_tokens\": out_tokens, **usage}}}\n\n\ndef test_collect_stats_counts_one_request_once_even_though_it_spans_many_rows(fs):\n    \"\"\"Claude Code writes one row per content block, each repeating the SAME usage block.\n    Summing per row would triple the tokens and the turn count -- the defect the dedupe exists\n    for, and the reason these numbers are hand-derived: 3 rows x 100 output tokens is ONE\n    request of 100, not 300.\"\"\"\n    rows = [assistant_row(\"req-1\", 100, input_tokens=50, cache_read_input_tokens=7)\n            for _ in range(3)]\n    s = fs.collect_stats(rows)\n    assert s[\"turns\"] == 1\n    assert s[\"per_model\"][\"claude-opus-5\"][\"out\"] == 100\n    assert s[\"per_model\"][\"claude-opus-5\"][\"inp\"] == 50\n    assert s[\"per_model\"][\"claude-opus-5\"][\"read\"] == 7\n\n\ndef test_collect_stats_keeps_the_row_with_the_largest_output_for_a_request(fs):\n    \"\"\"Rows for one request are written as output accumulates, so the LAST/largest is the\n    complete one; keeping a smaller one would under-report.\"\"\"\n    s = fs.collect_stats([assistant_row(\"req-1\", 10), assistant_row(\"req-1\", 250),\n                          assistant_row(\"req-1\", 90)])\n    assert s[\"per_model\"][\"claude-opus-5\"][\"out\"] == 250\n\n\ndef test_collect_stats_falls_back_to_the_message_id_when_there_is_no_request_id(fs):\n    a = {\"type\": \"assistant\",\n         \"message\": {\"id\": \"msg_A\", \"model\": \"m\", \"content\": [], \"usage\": {\"output_tokens\": 5}}}\n    b = {\"type\": \"assistant\",\n         \"message\": {\"id\": \"msg_B\", \"model\": \"m\", \"content\": [], \"usage\": {\"output_tokens\": 6}}}\n    s = fs.collect_stats([a, dict(a), b])\n    assert s[\"turns\"] == 2, \"two distinct message ids are two requests\"\n    assert s[\"per_model\"][\"m\"][\"out\"] == 11\n\n\ndef test_collect_stats_separates_models(fs):\n    s = fs.collect_stats([assistant_row(\"r1\", 10, model=\"claude-opus-5\"),\n                          assistant_row(\"r2\", 20, model=\"claude-haiku-4-5\")])\n    assert s[\"per_model\"][\"claude-opus-5\"][\"out\"] == 10\n    assert s[\"per_model\"][\"claude-haiku-4-5\"][\"out\"] == 20\n\n\ndef test_collect_stats_counts_each_tool_use_block_once_by_id(fs):\n    \"\"\"Tool blocks are deduped by BLOCK id, not request id: one request can legitimately hold\n    several tool calls, but the same block repeated across rows must count once.\"\"\"\n    call = {\"type\": \"tool_use\", \"id\": \"toolu_1\", \"name\": \"Bash\"}\n    other = {\"type\": \"tool_use\", \"id\": \"toolu_2\", \"name\": \"Read\"}\n    s = fs.collect_stats([assistant_row(\"r1\", 1, blocks=[call, other]),\n                          assistant_row(\"r1\", 2, blocks=[call])])\n    assert s[\"tools\"] == {\"Bash\": 1, \"Read\": 1}\n\n\ndef test_collect_stats_reports_the_largest_single_prompt_as_the_context_high_water_mark(fs):\n    \"\"\"max_ctx is input + cache read + cache write on ONE turn -- 1+2+3 and 10+20+30 give 60,\n    not the 66 a sum-of-all-turns version would report.\"\"\"\n    s = fs.collect_stats([\n        assistant_row(\"r1\", 1, input_tokens=1, cache_read_input_tokens=2,\n                      cache_creation_input_tokens=3),\n        assistant_row(\"r2\", 1, input_tokens=10, cache_read_input_tokens=20,\n                      cache_creation_input_tokens=30),\n    ])\n    assert s[\"max_ctx\"] == 60\n\n\ndef test_collect_stats_splits_cache_creation_by_ttl(fs):\n    s = fs.collect_stats([assistant_row(\n        \"r1\", 1, cache_creation={\"ephemeral_5m_input_tokens\": 4, \"ephemeral_1h_input_tokens\": 9})])\n    assert (s[\"per_model\"][\"claude-opus-5\"][\"w5\"], s[\"per_model\"][\"claude-opus-5\"][\"w1\"]) == (4, 9)\n\n\ndef test_collect_stats_takes_first_and_last_timestamps_from_any_row_type(fs):\n    s = fs.collect_stats([{\"type\": \"user\", \"timestamp\": \"2026-07-31T10:00:00\"},\n                          {\"type\": \"assistant\", \"timestamp\": \"2026-07-31T10:30:00\",\n                           \"message\": {\"id\": \"m\", \"model\": \"m\", \"content\": [], \"usage\": {}}},\n                          {\"type\": \"summary\", \"timestamp\": \"2026-07-31T11:00:00\"}])\n    assert s[\"first\"].isoformat() == \"2026-07-31T10:00:00\"\n    assert s[\"last\"].isoformat() == \"2026-07-31T11:00:00\"\n\n\ndef test_collect_stats_tolerates_unparseable_and_absent_timestamps(fs):\n    s = fs.collect_stats([{\"type\": \"user\", \"timestamp\": \"not-a-timestamp\"}, {\"type\": \"user\"}])\n    assert (s[\"first\"], s[\"last\"]) == (None, None)\n\n\n# --- render_stats() ---------------------------------------------------------------------------\n\ndef stats(**overrides):\n    base = {\"per_model\": {\"claude-opus-5\": {\"inp\": 1000, \"out\": 2000, \"read\": 3000,\n                                            \"w5\": 40, \"w1\": 5}},\n            \"tools\": {\"Bash\": 7, \"Read\": 2}, \"turns\": 12, \"max_ctx\": 123456,\n            \"first\": None, \"last\": None}\n    base.update(overrides)\n    return base\n\n\ndef test_render_stats_formats_numbers_with_thousands_separators_and_sums_cache_writes(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"| claude-opus-5 | 1,000 | 2,000 | 3,000 | 45 |\" in out, \"w5 + w1 = 45\"\n    assert \"~123,456 tokens\" in out\n\n\ndef test_render_stats_orders_tool_counts_by_descending_frequency(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"Bash × 7, Read × 2\" in out\n\n\ndef test_render_stats_says_so_when_usage_was_not_captured(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"not captured\" in out\n    assert \"```\" not in out.split(\"## Cost\")[1].split(\"## Context\")[0]\n\n\ndef test_render_stats_embeds_the_usage_capture_verbatim_in_a_fence(fs):\n    out = fs.render_stats(stats(), \"Current session: $1.23\\nWeekly limit: 40%\")\n    assert \"```\\nCurrent session: $1.23\\nWeekly limit: 40%\\n```\" in out\n    assert \"not captured\" not in out\n\n\n@pytest.mark.parametrize(\"blank\", [\"\", \"   \\n  \"])\ndef test_render_stats_treats_a_blank_usage_capture_as_not_captured(fs, blank):\n    assert \"not captured\" in fs.render_stats(stats(), blank)\n\n\ndef test_render_stats_reports_duration_in_whole_minutes(fs):\n    from datetime import datetime as dt\n    out = fs.render_stats(stats(first=dt(2026, 7, 31, 10, 0, 0),\n                                last=dt(2026, 7, 31, 12, 34, 30)), None)\n    assert \"**Duration:** 154 min\" in out, \"2h34m30s truncates to 154, not 155\"\n\n\ndef test_render_stats_omits_the_time_block_when_no_timestamps_were_found(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"**Started:**\" not in out\n    assert \"**Model(s):**\" in out, \"the rest of the metadata still renders\"\n\n\ndef test_render_stats_says_unknown_when_no_model_was_seen(fs):\n    assert \"**Model(s):** unknown\" in fs.render_stats(stats(per_model={}), None)\n\n\n# --- newest_jsonl() ---------------------------------------------------------------------------\n\ndef test_newest_jsonl_picks_the_most_recently_modified(fs, tmp_path, monkeypatch):\n    home = tmp_path / \"home\"\n    sessions = home / \".claude\" / \"projects\" / \"-workspace\"\n    sessions.mkdir(parents=True)\n    old, new = sessions / \"old.jsonl\", sessions / \"new.jsonl\"\n    old.write_text(\"{}\\n\", encoding=\"utf-8\")\n    new.write_text(\"{}\\n\", encoding=\"utf-8\")\n    import os\n    os.utime(old, (1_000_000, 1_000_000))\n    os.utime(new, (2_000_000, 2_000_000))\n    monkeypatch.setenv(\"HOME\", str(home))\n    assert fs.newest_jsonl() == new\n\n\ndef test_newest_jsonl_exits_with_a_named_message_when_there_is_nothing_to_find(fs, tmp_path,\n                                                                              monkeypatch):\n    (tmp_path / \".claude\" / \"projects\" / \"-workspace\").mkdir(parents=True)\n    monkeypatch.setenv(\"HOME\", str(tmp_path))\n    with pytest.raises(SystemExit, match=\"no session JSONL found\"):\n        fs.newest_jsonl()\n\n\n# --- main(): the end-to-end contract ----------------------------------------------------------\n\ndef write_session(tmp_path, rows):\n    path = tmp_path / \"session.jsonl\"\n    path.write_text(\"\".join(json.dumps(r) + \"\\n\" for r in rows), encoding=\"utf-8\")\n    return path\n\n\ndef run_main(fs, monkeypatch, argv):\n    monkeypatch.setattr(sys, \"argv\", [\"finalize-session.py\", *argv])\n    fs.main()\n\n\ndef test_main_writes_the_three_documents_and_scrubs_only_the_committed_ones(\n        fs, tmp_path, monkeypatch, capsys):\n    \"\"\"The .raw.md is gitignored ON PURPOSE and keeps the unscrubbed text; transcript.md and\n    statistics.md are the committed pair and must both be scrubbed.  A regression that scrubbed\n    the raw file would be harmless; one that stopped scrubbing either committed file is a\n    credential in git history.\"\"\"\n    jsonl = write_session(tmp_path, [\n        {\"type\": \"user\", \"message\": {\"content\": \"run it\"}},\n        {\"type\": \"assistant\", \"requestId\": \"r1\",\n         \"message\": {\"id\": \"m1\", \"model\": \"claude-opus-5\", \"usage\": {\"output_tokens\": 3},\n                     \"content\": [{\"type\": \"text\", \"text\": \"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD»    ])\n    out_dir = tmp_path / \"development\" / \"2026-07-31-thing\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl)])\n\n    scrubbed = (out_dir / \"transcript.md\").read_text(encoding=\"utf-8\")\n    raw = (out_dir / \"transcript.raw.md\").read_text(encoding=\"utf-8\")\n    statistics = (out_dir / \"statistics.md\").read_text(encoding=\"utf-8\")\n    assert \"hunter2-secret\" not in scrubbed\n    assert \"«REDACTED:SMTP_PASSWORD»\" in scrubbed\n    assert \"hunter2-secret\" in raw, \"the raw copy is the gitignored unscrubbed one\"\n    assert \"run it\" in scrubbed\n    assert \"# Session statistics\" in statistics\n    printed = capsys.readouterr().out\n    assert str(jsonl) in printed\n\n\ndef test_main_scrubs_the_statistics_document_too(fs, tmp_path, monkeypatch):\n    \"\"\"statistics.md embeds the /usage capture verbatim; if that paste carried a secret it must\n    not reach the committed file.\"\"\"\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"hi\"}}])\n    capture = tmp_path / \"usage.raw.txt\"\n    capture.write_text(\"cost $1.00\\nAKIAIOSFODNN7EXAMPLE\\n\", encoding=\"utf-8\")\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl),\n                               \"--usage-capture\", str(capture)])\n    statistics = (out_dir / \"statistics.md\").read_text(encoding=\"utf-8\")\n    assert \"«REDACTED:aws-key-id»\" not in statistics\n    assert \"cost $1.00\" in statistics\n\n\ndef test_main_suffixes_every_output_with_the_label(fs, tmp_path, monkeypatch):\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"hi\"}}])\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl), \"--label\", \"02\"])\n    assert (out_dir / \"transcript-02.md\").exists()\n    assert (out_dir / \"transcript-02.raw.md\").exists()\n    assert (out_dir / \"statistics-02.md\").exists()\n    assert not (out_dir / \"transcript.md\").exists(), \"the unlabelled name must not also appear\"\n\n\ndef test_main_creates_the_output_directory_including_parents(fs, tmp_path, monkeypatch):\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"hi\"}}])\n    out_dir = tmp_path / \"a\" / \"b\" / \"c\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl)])\n    assert (out_dir / \"transcript.md\").exists()\n\n\ndef test_main_uses_a_transcript_input_instead_of_rendering_the_jsonl_but_still_scrubs_it(\n        fs, tmp_path, monkeypatch):\n    jsonl = write_session(tmp_path, [\n        {\"type\": \"user\", \"message\": {\"content\": \"FROM THE JSONL\"}}])\n    export = tmp_path / \"export.txt\"\n    export.write_text(\"FROM THE EXPORT\\nSMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» encoding=\"utf-8\")\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl),\n                               \"--transcript-input\", str(export)])\n    scrubbed = (out_dir / \"transcript.md\").read_text(encoding=\"utf-8\")\n    assert \"FROM THE EXPORT\" in scrubbed\n    assert \"FROM THE JSONL\" not in scrubbed\n    assert \"hunter2-secret\" not in scrubbed\n\n\ndef test_main_falls_back_to_rendering_when_the_transcript_input_does_not_exist(\n        fs, tmp_path, monkeypatch):\n    \"\"\"_read() returns None for a missing path, and the fallback is `is not None` -- so a typo'd\n    --transcript-input silently renders the JSONL instead of failing.\"\"\"\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"FROM THE JSONL\"}}])\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl),\n                               \"--transcript-input\", str(tmp_path / \"nope.txt\")])\n    assert \"FROM THE JSONL\" in (out_dir / \"transcript.md\").read_text(encoding=\"utf-8\")\n\n\ndef test_main_requires_dir(fs, monkeypatch):\n    monkeypatch.setattr(sys, \"argv\", [\"finalize-session.py\"])\n    with pytest.raises(SystemExit):\n        fs.main()\n\n\n# --- the module's own shape -------------------------------------------------------------------\n\ndef test_every_secret_pattern_compiles_and_carries_a_replacement(fs):\n    \"\"\"A malformed pattern would raise only when a matching line appeared, i.e. possibly never\n    until the one session that carried a secret.\"\"\"\n    assert fs._SECRET_PATTERNS, \"the scrubber must not be empty\"\n    for pattern, repl in fs._SECRET_PATTERNS:\n        re.compile(pattern)\n        assert callable(repl)\n\n\ndef test_the_script_imports_only_the_standard_library(fs):\n    \"\"\"Documented as 'stdlib only, no third-party deps' so /archive-session works in any\n    environment -- including one where the project venv is not active.\"\"\"\n    third_party = {name for name in sys.modules\n                   if isinstance(sys.modules.get(name), types.ModuleType)}\n    source = SCRIPT.read_text(encoding=\"utf-8\")\n    imported = set(re.findall(r\"^(?:import|from)\\s+([a-zA-Z_][\\w.]*)\", source, re.MULTILINE))\n    allowed = {\"argparse\", \"contextlib\", \"json\", \"re\", \"datetime\", \"pathlib\"}\n    assert imported <= allowed, f\"non-stdlib import: {imported - allowed}\"\n    assert third_party, \"sanity: sys.modules is populated\"\n"
+}
+```
+
+### ↳ Tool result
+
+```
+File created successfully at: /workspace/tests/unit/test_finalize_session.py (file state is current in your context — no need to Read it back)
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/unit/test_finalize_session.py\")\ns = p.read_text()\ns = s.replace('''    assert \"Bash × 7, Read × 2\" in out''',\n'''    assert \"Bash \\\\u00d7 7, Read \\\\u00d7 2\" in out   # MULTIPLICATION SIGN, as the script emits''')\ns = s.replace('''def test_render_stats_reports_duration_in_whole_minutes(fs):\n    from datetime import datetime as dt\n    out = fs.render_stats(stats(first=dt(2026, 7, 31, 10, 0, 0),\n                                last=dt(2026, 7, 31, 12, 34, 30)), None)''',\n'''def test_render_stats_reports_duration_in_whole_minutes(fs):\n    # fromisoformat, matching what the script's own _ts() produces: naive datetimes, because\n    # Claude Code's JSONL timestamps carry no offset.\n    out = fs.render_stats(stats(first=datetime.fromisoformat(\"2026-07-31T10:00:00\"),\n                                last=datetime.fromisoformat(\"2026-07-31T12:34:30\")), None)''')\ns = s.replace(\"import re\\nimport sys\\nimport types\\n\", \"import re\\nimport sys\\nfrom datetime import datetime\\n\")\ns = s.replace('''    third_party = {name for name in sys.modules\n                   if isinstance(sys.modules.get(name), types.ModuleType)}\n    source = SCRIPT.read_text(encoding=\"utf-8\")\n    imported = set(re.findall(r\"^(?:import|from)\\\\s+([a-zA-Z_][\\\\w.]*)\", source, re.MULTILINE))\n    allowed = {\"argparse\", \"contextlib\", \"json\", \"re\", \"datetime\", \"pathlib\"}\n    assert imported <= allowed, f\"non-stdlib import: {imported - allowed}\"\n    assert third_party, \"sanity: sys.modules is populated\"''',\n'''    source = SCRIPT.read_text(encoding=\"utf-8\")\n    imported = set(re.findall(r\"^(?:import|from)\\\\s+([a-zA-Z_][\\\\w.]*)\", source, re.MULTILINE))\n    allowed = {\"argparse\", \"contextlib\", \"json\", \"re\", \"datetime\", \"pathlib\"}\n    assert imported, \"sanity: the regex found the import block at all\"\n    assert imported <= allowed, f\"non-stdlib import: {imported - allowed}\"''')\n# `import os` inside a test body -> move to the top block (E402 is not ignored in tests/**)\ns = s.replace(\"import re\\nimport sys\\nfrom datetime import datetime\\n\",\n              \"import os\\nimport re\\nimport sys\\nfrom datetime import datetime\\n\")\ns = s.replace(\"    import os\\n    os.utime(old,\", \"    os.utime(old,\")\np.write_text(s)\nPY\n./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | tail -20",
+  "description": "Fix lint findings and run the new tests"
+}
+```
+
+### ↳ Tool result
+
+```
+=================================== FAILURES ===================================
+____________ test_scrub_redacts_every_occurrence_not_just_the_first ____________
+
+fs = <module 'finalize_session_probe' from '/workspace/development/finalize-session.py'>
+
+    def test_scrub_redacts_every_occurrence_not_just_the_first(fs):
+        out = fs.scrub("«REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE")
+>       assert "AKIA" not in out
+E       AssertionError: assert 'AKIA' not in '«REDACTED:a...OPQR7EXAMPLE'
+E         
+E         'AKIA' is contained here:
+E           «REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE
+E         ?                            ++++
+
+tests/unit/test_finalize_session.py:126: AssertionError
+=========================== short test summary info ============================
+FAILED tests/unit/test_finalize_session.py::test_scrub_redacts_every_occurrence_not_just_the_first
+1 failed, 64 passed in 0.67s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+## Assistant
+
+The test caught my own error, not the code's: `AKIAJKLMNOPQR7EXAMPLE` is `AKIA` + **17** chars, so `\bAKIA[0-9A-Z]{16}\b` correctly declines it. Fixing my fixture:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/unit/test_finalize_session.py\")\ns = p.read_text()\ns = s.replace('''def test_scrub_redacts_every_occurrence_not_just_the_first(fs):\n    out = fs.scrub(\"«REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE\")\n    assert \"AKIA\" not in out\n    assert out.count(\"«REDACTED:aws-key-id»\") == 2''',\n'''def test_scrub_redacts_every_occurrence_not_just_the_first(fs):\n    # Both IDs are AKIA + exactly 16 chars: the pattern is \\\\bAKIA[0-9A-Z]{16}\\\\b, so a 17-char\n    # tail fails the trailing \\\\b and is (correctly) left alone.\n    out = fs.scrub(\"«REDACTED:aws-key-id» then «REDACTED:aws-key-id»\")\n    assert \"AKIA\" not in out\n    assert out.count(\"«REDACTED:aws-key-id»\") == 2\n\n\ndef test_scrub_declines_an_aws_key_id_of_the_wrong_length(fs):\n    \"\"\"The trailing \\\\b is load-bearing: AKIA + 17 chars is not an access key ID, and widening\n    the pattern to catch it would start eating ordinary uppercase identifiers.\"\"\"\n    text = \"AKIAJKLMNOPQR7EXAMPLE is one character too long\"\n    assert fs.scrub(text) == text''')\ns = s.replace('''    loader = SourceFileLoader(\"finalize_session_prop\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    module = importlib.util.module_from_spec(spec)''',\n'''    loader = SourceFileLoader(\"finalize_session_prop\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    assert spec is not None\n    module = importlib.util.module_from_spec(spec)''')\np.write_text(s)\nPY\n./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | tail -12",
+  "description": "Fix the fixture and re-run"
+}
+```
+
+### ↳ Tool result
+
+```
+All checks passed!
+0 errors, 0 warnings, 0 informations
+..................................................................       [100%]
+66 passed in 0.67s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+## Assistant
+
+66 pass. Now the check the backfill prompt demands — these tests never went red first, so let me prove each can:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "cd /workspace\nS=development/finalize-session.py; cp $S /tmp/claude-501/-workspace/3e2e6236-70c8-4f7c-be79-a864d2444e41/scratchpad/fs.bak\nmutate () {  # name, python-replace-expr\n  python - \"$2\" \"$3\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(\"development/finalize-session.py\")\ns = p.read_text()\nold, new = sys.argv[1], sys.argv[2]\nassert old in s, \"mutation target not found\"\np.write_text(s.replace(old, new, 1))\nPY\n  R=$(./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | grep -E \"^[0-9]+ (passed|failed)|failed,\" | tail -1)\n  printf \"  %-46s %s\\n\" \"$1\" \"$R\"\n  cp /tmp/claude-501/-workspace/3e2e6236-70c8-4f7c-be79-a864d2444e41/scratchpad/fs.bak $S\n}\necho \"MUTATION SWEEP (each must produce failures):\"\nmutate \"drop the cf-cookie pattern\" '(r\"(?i)\\b(__cf[a-z_]*|cf_clearance)(=)([A-Za-z0-9._\\-]{12,})\",' '(r\"(?i)\\b(NEVERMATCHTHIS)(=)([A-Za-z0-9._\\-]{12,})\",'\nmutate \"drop the high-entropy fallback\" '(r\"\\b[A-Za-z0-9]{32,}\\b\", _redact_if_high_entropy),' ''\nmutate \"high-entropy redacts EVERYTHING (eats SHAs)\" '    if (any(c.islower() for c in value) and any(c.isupper() for c in value)' '    if True or (any(c.islower() for c in value) and any(c.isupper() for c in value)'\nmutate \"sum usage per ROW (the ~3x bug)\" 'if prev is None or u.get(\"output_tokens\", 0) > prev[1].get(\"output_tokens\", 0):' 'if True:'\nmutate \"count tool blocks without id dedup\" '                if tid in seen_tool_ids:' '                if False:'\nmutate \"stop scrubbing statistics.md\" 'fh.write(scrub(stats_md))' 'fh.write(stats_md)'\nmutate \"stop scrubbing transcript.md\" 'fh.write(scrub(raw))' 'fh.write(raw)'\nmutate \"ignore --label\" 'sfx = f\"-{args.label}\" if args.label else \"\"' 'sfx = \"\"'\nmutate \"max_ctx sums across turns\" 'max_ctx = max(max_ctx, prompt)' 'max_ctx = max_ctx + prompt'\nmutate \"drop the cfk_ no-floor rule\" '(r\"\\bcfk_[A-Za-z0-9_-]{4,}\", lambda _m: _REDACT.format(\"cloudflare-api-key\")),' ''\necho\necho \"restored? \"; git diff --stat $S | tail -1 || true; git diff --quiet $S && echo \"  yes, script byte-identical to HEAD\"",
+  "description": "Mutation sweep to prove the tests can go red"
+}
+```
+
+### ↳ Tool result
+
+```
+MUTATION SWEEP (each must produce failures):
+  drop the cf-cookie pattern                     2 failed, 64 passed in 0.68s
+  drop the high-entropy fallback                 
+  high-entropy redacts EVERYTHING (eats SHAs)    
+  sum usage per ROW (the ~3x bug)                
+  count tool blocks without id dedup             1 failed, 65 passed in 0.66s
+  stop scrubbing statistics.md                   1 failed, 65 passed in 0.65s
+  stop scrubbing transcript.md                   2 failed, 64 passed in 0.66s
+  ignore --label                                 1 failed, 65 passed in 0.65s
+  max_ctx sums across turns                      1 failed, 65 passed in 0.68s
+  drop the cfk_ no-floor rule                    
+
+restored? 
+  yes, script byte-identical to HEAD
+```
+
+## Assistant
+
+Four rows came back blank — the lint gate aborted before pytest ran (mutations like `if True:` trip ruff). Re-running those directly against pytest:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "cd /workspace\nS=development/finalize-session.py; B=/tmp/claude-501/-workspace/3e2e6236-70c8-4f7c-be79-a864d2444e41/scratchpad/fs.bak\nmutate () {\n  python - \"$2\" \"$3\" <<'PY'\nimport sys, pathlib\np = pathlib.Path(\"development/finalize-session.py\")\ns = p.read_text(); old, new = sys.argv[1], sys.argv[2]\nassert old in s, \"mutation target not found\"\np.write_text(s.replace(old, new, 1))\nPY\n  R=$(python -m pytest tests/unit/test_finalize_session.py -q 2>&1 | tail -3 | grep -E \"passed|failed\" | tail -1)\n  printf \"  %-46s %s\\n\" \"$1\" \"$R\"\n  cp $B $S\n}\necho \"RE-RUN of the four blank rows, straight through pytest (no lint gate):\"\nmutate \"drop the high-entropy fallback\" '(r\"\\b[A-Za-z0-9]{32,}\\b\", _redact_if_high_entropy),' ''\nmutate \"high-entropy redacts EVERYTHING (eats SHAs)\" 'if (any(c.islower() for c in value) and any(c.isupper() for c in value)' 'if (True or any(c.islower() for c in value) and any(c.isupper() for c in value)'\nmutate \"sum usage per ROW (the ~3x bug)\" 'if prev is None or u.get(\"output_tokens\", 0) > prev[1].get(\"output_tokens\", 0):' 'if prev is None or True:'\nmutate \"drop the cfk_ no-floor rule\" '(r\"\\bcfk_[A-Za-z0-9_-]{4,}\", lambda _m: _REDACT.format(\"cloudflare-api-key\")),' ''\necho; git diff --quiet $S && echo \"script restored, byte-identical to HEAD\"\necho; echo \"=== baseline again ===\"; ./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | tail -4",
+  "description": "Re-run the four mutations bypassing the lint gate"
+}
+```
+
+### ↳ Tool result
+
+```
+RE-RUN of the four blank rows, straight through pytest (no lint gate):
+  drop the high-entropy fallback                 1 failed, 65 passed in 0.74s
+  high-entropy redacts EVERYTHING (eats SHAs)    4 failed, 62 passed in 0.74s
+  sum usage per ROW (the ~3x bug)                1 failed, 65 passed in 0.74s
+  drop the cfk_ no-floor rule                    1 failed, 65 passed in 0.74s
+
+script restored, byte-identical to HEAD
+
+=== baseline again ===
+..................................................................       [100%]
+66 passed in 0.77s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+## Assistant
+
+All ten mutations go red, and the script is restored byte-identical. Final gate and commit:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "./run-tests -q 2>&1 | tail -4; echo \"=== git ===\"; git status --short",
+  "description": "Full suite"
+}
+```
+
+### ↳ Tool result
+
+```
+107 snapshots passed.
+1367 passed, 3 skipped, 15 warnings in 31.41s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+=== git ===
+?? tests/unit/test_finalize_session.py
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "git add -A && git commit -q -F - <<'MSG'\ntest(finalize-session): backfill coverage for the archive scrubber and stats\n\ndevelopment/finalize-session.py shipped untested, which was flagged as a gap at\nthe end of the 2026-07-31 session.  scrub() is the only thing between a session\ntranscript and a committed secret -- development/README.md's manual grep is\ndescribed as a BACKSTOP to it, not a substitute -- so a silent regression here\nputs a credential in git history.\n\n66 tests in tests/unit/test_finalize_session.py, loaded with the SourceFileLoader\nidiom the suite already uses for the dash-named standalone utilities:\n\n  scrub()            14 redaction cases (one per pattern, asserting the specific\n                     redaction LABEL so a rule silently demoted to the generic\n                     high-entropy fallback goes red) + 7 must-survive negatives\n                     (git SHAs, all-caps constants, `api_key = \"k-456\"`, prose\n                     mentions) + idempotence + a Hypothesis property.\n  collect_stats()    the per-request dedup, which a naive per-row sum gets ~3x\n                     wrong; largest-output-wins; message.id fallback; tool blocks\n                     deduped by BLOCK id; max_ctx as a high-water mark, not a sum.\n  render_transcript  every block kind, subagent tagging, string-vs-list content,\n                     and the rows it must skip.\n  load()             blank lines, and the silent drop of a malformed line (pinned\n                     as documented behavior AND as a sharp edge: a truncated JSONL\n                     row makes the transcript quietly short, with no warning).\n  render_stats()     number formatting, tool ordering, captured vs uncaptured\n                     /usage, duration truncation, the no-timestamps path.\n  newest_jsonl()     newest-by-mtime, and the named SystemExit when none exists.\n  main()             the three documents; --label suffixing; parent creation;\n                     --transcript-input override AND its silent fall-back when the\n                     path does not exist; and that BOTH committed files are\n                     scrubbed while transcript.raw.md deliberately is not.\n\nPer prompts/add-tests-for-change.prompt.md these are backfill: they could not go\nred first, so every expected value is derived from what each pattern's own comment\nCLAIMS, or from a hand-built worked example -- never by running the script and\npasting its output.  That paid off immediately: the multi-occurrence AWS test\nfailed on my fixture, not the code, because AKIA+17 chars correctly fails the\npattern's trailing \\b.  Kept as its own negative test.\n\nVerified the suite can go red, since it never did: ten mutations of the script\n(drop each of the cf-cookie / high-entropy / cfk_ rules, make high-entropy redact\neverything, sum usage per row, drop the tool-id dedup, stop scrubbing either\ncommitted file, ignore --label, sum max_ctx) each produce failures.  Script\nrestored byte-identical afterwards.\n\nTests only; no behavior change.  1367 passed, 3 skipped.\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\nMSG\ngit --no-pager log --oneline -3; git status --short; [ -z \"$(git status --porcelain)\" ] && echo \"working tree clean\"",
+  "description": "Commit the backfilled tests"
+}
+```
+
+### ↳ Tool result
+
+```
+93cbb45 test(finalize-session): backfill coverage for the archive scrubber and stats
+f9d9d5b docs(cloudflare): correct the stale "plugin client is unpinned" claim
+148d83c feat(find-platform-domains-cloudflare): sweep named zones; stdout as the result stream
+working tree clean
+```
+
+## Assistant
+
+## Done — `93cbb45`, 66 tests, suite at **1367 passed, 3 skipped**
+
+Followed `prompts/add-tests-for-change.prompt.md`, which is where CLAUDE.md routes test-backfill (distinct from test-first for new work).
+
+**Coverage by surface:**
+
+| Surface | What's pinned |
+|---|---|
+| `scrub()` | 14 redaction cases — one per pattern, asserting the *specific* label so a rule silently demoted to the generic fallback goes red — plus 7 must-survive negatives, idempotence, and a Hypothesis property |
+| `collect_stats()` | The per-request dedup a naive per-row sum gets ~3× wrong; largest-output-wins; `message.id` fallback; tool blocks deduped by *block* id; `max_ctx` as high-water mark, not a sum |
+| `render_transcript()` | Every block kind, subagent tagging, string-vs-list content, rows it must skip |
+| `load()` | Blank lines, and the silent drop of a malformed line |
+| `render_stats()` | Formatting, tool ordering, captured vs uncaptured `/usage`, duration truncation, no-timestamps path |
+| `newest_jsonl()` | Newest-by-mtime; named `SystemExit` when none exists |
+| `main()` | Three documents, `--label`, parent creation, `--transcript-input` override, and that **both** committed files are scrubbed while `transcript.raw.md` deliberately isn't |
+
+**Because these could never go red first, I did two things instead.**
+
+Every expected value comes from what each pattern's own comment *claims*, or a hand-built example — never from running the script and pasting output. That caught something immediately: my multi-occurrence AWS test failed, and **the fixture was wrong, not the code** — `AKIAJKLMNOPQR7EXAMPLE` is `AKIA` + 17 chars, which correctly fails the pattern's trailing `\b`. I kept it as its own negative test, since that boundary is load-bearing.
+
+Then I ran a **ten-mutation sweep** to prove the suite is capable of failing:
+
+```
+drop the cf-cookie pattern                     2 failed
+drop the high-entropy fallback                 1 failed
+high-entropy redacts EVERYTHING (eats SHAs)    4 failed
+sum usage per ROW (the ~3x bug)                1 failed
+count tool blocks without id dedup             1 failed
+stop scrubbing statistics.md                   1 failed
+stop scrubbing transcript.md                   2 failed
+ignore --label                                 1 failed
+max_ctx sums across turns                      1 failed
+drop the cfk_ no-floor rule                    1 failed
+```
+
+Script restored byte-identical to HEAD afterwards, verified with `git diff --quiet`.
+
+One methodology note worth recording: four of those mutations initially reported *nothing*, because `./run-tests` gates on ruff first and constructs like `if True:` trip the linter before pytest runs. Had I not re-run them straight through pytest, I'd have read four blanks as four passes — a mutation sweep that silently tests nothing is exactly the instrument failure this repo keeps hitting.
+
+**Two behaviors I pinned as documented-but-sharp rather than fixed**, since you asked for tests, not changes:
+- `load()` drops a malformed JSONL line with **no warning** — a session killed mid-write yields a quietly short transcript.
+- A typo'd `--transcript-input` path doesn't fail; `_read()` returns `None` and it silently renders the JSONL instead.
+
+Both are one-line fixes if you want them.
+
+## User
+
+## Context Usage
+
+**Model:** claude-opus-5[1m]  
+**Tokens:** 373.6k / 1m (37%)
+
+### Estimated usage by category
+
+| Category | Tokens | Percentage |
+|----------|--------|------------|
+| System prompt | 3.9k | 0.4% |
+| System tools | 16.4k | 1.6% |
+| MCP tools (deferred) | 11.5k | 1.1% |
+| System tools (deferred) | 17.4k | 1.7% |
+| Custom agents | 147 | 0.0% |
+| Memory files | 44.2k | 4.4% |
+| Skills | 3.7k | 0.4% |
+| Messages | 305.1k | 30.5% |
+| Free space | 626.4k | 62.6% |
+
+### MCP Tools
+
+| Tool | Server | Tokens |
+|------|--------|--------|
+| mcp__chrome-devtools__click | chrome-devtools | 217 |
+| mcp__chrome-devtools__close_page | chrome-devtools | 150 |
+| mcp__chrome-devtools__drag | chrome-devtools | 206 |
+| mcp__chrome-devtools__emulate | chrome-devtools | 627 |
+| mcp__chrome-devtools__evaluate_script | chrome-devtools | 463 |
+| mcp__chrome-devtools__fill | chrome-devtools | 257 |
+| mcp__chrome-devtools__fill_form | chrome-devtools | 411 |
+| mcp__chrome-devtools__get_console_message | chrome-devtools | 169 |
+| mcp__chrome-devtools__get_network_request | chrome-devtools | 331 |
+| mcp__chrome-devtools__handle_dialog | chrome-devtools | 189 |
+| mcp__chrome-devtools__hover | chrome-devtools | 180 |
+| mcp__chrome-devtools__lighthouse_audit | chrome-devtools | 296 |
+| mcp__chrome-devtools__list_console_messages | chrome-devtools | 477 |
+| mcp__chrome-devtools__list_network_requests | chrome-devtools | 433 |
+| mcp__chrome-devtools__list_pages | chrome-devtools | 90 |
+| mcp__chrome-devtools__navigate_page | chrome-devtools | 407 |
+| mcp__chrome-devtools__new_page | chrome-devtools | 348 |
+| mcp__chrome-devtools__performance_analyze_insight | chrome-devtools | 274 |
+| mcp__chrome-devtools__performance_start_trace | chrome-devtools | 392 |
+| mcp__chrome-devtools__performance_stop_trace | chrome-devtools | 194 |
+| mcp__chrome-devtools__press_key | chrome-devtools | 260 |
+| mcp__chrome-devtools__resize_page | chrome-devtools | 159 |
+| mcp__chrome-devtools__select_page | chrome-devtools | 188 |
+| mcp__chrome-devtools__take_heapsnapshot | chrome-devtools | 183 |
+| mcp__chrome-devtools__take_screenshot | chrome-devtools | 425 |
+| mcp__chrome-devtools__take_snapshot | chrome-devtools | 326 |
+| mcp__chrome-devtools__type_text | chrome-devtools | 173 |
+| mcp__chrome-devtools__upload_file | chrome-devtools | 244 |
+| mcp__chrome-devtools__wait_for | chrome-devtools | 213 |
+| mcp__cloudflare-api__docs | cloudflare-api | 326 |
+| mcp__cloudflare-api__execute | cloudflare-api | 1k |
+| mcp__cloudflare-api__search | cloudflare-api | 824 |
+| mcp__cloudflare-docs__migrate_pages_to_workers_guide | cloudflare-docs | 99 |
+| mcp__cloudflare-docs__search_cloudflare_documentation | cloudflare-docs | 314 |
+| mcp__codegraph__codegraph_explore | codegraph | 630 |
+
+### Custom Agents
+
+| Agent Type | Source | Tokens |
+|------------|--------|--------|
+| psh-implementer | Project | 74 |
+| psh-reviewer | Project | 73 |
+
+### Memory Files
+
+| Type | Path | Tokens |
+|------|------|--------|
+| Project | /workspace/CLAUDE.md | 42.1k |
+| Project | /workspace/.claude/CLAUDE.md | 263 |
+| AutoMem | /home/node/.claude/projects/-workspace/memory/MEMORY.md | 1.9k |
+
+### Skills
+
+| Skill | Source | Tokens |
+|-------|--------|--------|
+| claude-md-management:revise-claude-md | Plugin (claude-md-management) | ~30 |
+| andrej-karpathy-skills:karpathy-guidelines | Plugin (andrej-karpathy-skills) | ~90 |
+| superpowers:brainstorming | Plugin (superpowers) | ~80 |
+| superpowers:dispatching-parallel-agents | Plugin (superpowers) | ~50 |
+| superpowers:executing-plans | Plugin (superpowers) | ~50 |
+| superpowers:finishing-a-development-branch | Plugin (superpowers) | ~50 |
+| superpowers:receiving-code-review | Plugin (superpowers) | ~90 |
+| superpowers:requesting-code-review | Plugin (superpowers) | ~50 |
+| superpowers:subagent-driven-development | Plugin (superpowers) | ~40 |
+| superpowers:systematic-debugging | Plugin (superpowers) | ~40 |
+| superpowers:test-driven-development | Plugin (superpowers) | ~40 |
+| superpowers:using-git-worktrees | Plugin (superpowers) | ~80 |
+| superpowers:using-superpowers | Plugin (superpowers) | ~60 |
+| superpowers:verification-before-completion | Plugin (superpowers) | ~90 |
+| superpowers:writing-plans | Plugin (superpowers) | ~40 |
+| superpowers:writing-skills | Plugin (superpowers) | ~40 |
+| claude-md-management:claude-md-improver | Plugin (claude-md-management) | ~130 |
+| mattpocock-skills:diagnosing-bugs | Plugin (mattpocock-skills) | ~60 |
+| mattpocock-skills:tdd | Plugin (mattpocock-skills) | ~60 |
+| mattpocock-skills:prototype | Plugin (mattpocock-skills) | ~70 |
+| mattpocock-skills:research | Plugin (mattpocock-skills) | ~90 |
+| mattpocock-skills:domain-modeling | Plugin (mattpocock-skills) | ~80 |
+| mattpocock-skills:codebase-design | Plugin (mattpocock-skills) | ~100 |
+| mattpocock-skills:code-review | Plugin (mattpocock-skills) | ~150 |
+| mattpocock-skills:resolving-merge-conflicts | Plugin (mattpocock-skills) | ~40 |
+| mattpocock-skills:grilling | Plugin (mattpocock-skills) | ~60 |
+| dataviz | Built-in | ~380 |
+| artifact-design | Built-in | ~20 |
+| artifact-capabilities | Built-in | ~140 |
+| update-config | Built-in | ~240 |
+| keybindings-help | Built-in | ~80 |
+| simplify | Built-in | ~60 |
+| fewer-permission-prompts | Built-in | ~60 |
+| loop | Built-in | ~120 |
+| schedule | Built-in | ~130 |
+| claude-api | Built-in | ~360 |
+| claude-in-chrome | Built-in | ~180 |
+| run | Built-in | ~120 |
+| init | Built-in | ~20 |
+| review | Built-in | ~30 |
+| security-review | Built-in | ~30 |
+
+## Assistant
+
+No response requested.
+
+## User
+
+We're going back now and completing the `/archive-session` work. Let me know if anything needs to be re-done or updated there.  Otherwise, here is the output of `/usage`:
+```
+   Session
+
+   Total cost:            $0.0000
+   Total duration (API):  0s
+   Total duration (wall): 26s
+   Total code changes:    0 lines added, 0 lines removed
+   Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+
+   Current session
+   ████████                                           16% used
+   Resets 1:10pm (America/Detroit)
+
+   Current week (all models)
+   ████████████████▌                                  33% used
+   Resets Aug 4, 7pm (America/Detroit)
+   +50% weekly limits promo through Aug 19 · clau.de/cc-50-promo
+
+   Current week (Fable)
+   ██████████████████████▌                            45% used
+   Resets Aug 4, 7pm (America/Detroit)
+
+   What's contributing to your limits usage?
+   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+
+   Last 24h · these are independent characteristics of your usage, not a breakdown
+
+   100% of your usage came from subagent-heavy sessions
+    Each subagent runs its own requests. Be deliberate about spawning them — and
+    consider configuring a cheaper model for simpler subagents.
+
+   83% of your usage was at >150k context
+    Longer sessions are more expensive even when cached. /compact mid-task, /clear
+    when switching to new tasks.
+
+   15% of your usage came from subagents under "psh-reviewer"
+    If this runs frequently, consider configuring its subagents with a cheaper
+    model or tightening their prompts.
+
+   Skills                  % of usage
+   /mattpocock-skills:tdd          4%
+   /archive-session                4%
+   /code-review                    3%
+   /andrej-karpathy-skills:kar…    3%
+   /superpowers:writing-plans      2%
+   /superpowers:brainstorming      2%
+   /mattpocock-skills:grilling     1%
+   /mattpocock-skills:diagnosi…    1%
+
+   Subagents               % of usage
+   psh-reviewer                   15%
+   mattpocock-skills:tdd           3%
+
+   Plugins                 % of usage
+   mattpocock-skills               9%
+   superpowers                     4%
+   andrej-karpathy-skills          3%
+
+
+```
+
+## Assistant
+
+Yes — the archive needs re-doing. I generated it at commit `148d83c`, but three more commits and a substantial amount of work happened after that, so `transcript-02.md` and `statistics-02.md` are stale. Let me check the ignore rules first.
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "D=development/2026-07-30-platform-domain-util2\necho \"=== what .gitignore says about raw captures ===\"; grep -n \"raw\" .gitignore\necho; echo \"=== current archive files (mtime vs. now) ===\"; ls -la --time-style=+%H:%M $D/*.md $D/*.txt 2>/dev/null | awk '{print $6, $7}'\necho; echo \"=== commits since the archive was generated ===\"; git --no-pager log --oneline 148d83c..HEAD\necho; echo \"=== is usage.raw.txt ignored? ===\"; git check-ignore -v $D/usage-02.raw.txt || echo \"  NOT ignored — need to check the pattern\"",
+  "description": "Check ignore rules and staleness"
+}
+```
+
+### ↳ Tool result
+
+```
+=== what .gitignore says about raw captures ===
+22:# Claude development archive: keep scrubbed artifacts, never raw exports or logs
+23:/development/**/*.raw.txt
+24:/development/**/*.raw.md
+
+=== current archive files (mtime vs. now) ===
+09:38 development/2026-07-30-platform-domain-util2/02-zone-filter.prompt.md
+13:12 development/2026-07-30-platform-domain-util2/PROMPT.md
+09:52 development/2026-07-30-platform-domain-util2/SPEC.md
+16:38 development/2026-07-30-platform-domain-util2/analytics.md
+09:17 development/2026-07-30-platform-domain-util2/research.md
+09:39 development/2026-07-30-platform-domain-util2/statistics-02.md
+16:42 development/2026-07-30-platform-domain-util2/statistics.md
+09:39 development/2026-07-30-platform-domain-util2/transcript-02.md
+09:39 development/2026-07-30-platform-domain-util2/transcript-02.raw.md
+16:42 development/2026-07-30-platform-domain-util2/transcript.md
+16:42 development/2026-07-30-platform-domain-util2/transcript.raw.md
+16:41 development/2026-07-30-platform-domain-util2/usage.raw.txt
+
+=== commits since the archive was generated ===
+93cbb45 test(finalize-session): backfill coverage for the archive scrubber and stats
+f9d9d5b docs(cloudflare): correct the stale "plugin client is unpinned" claim
+
+=== is usage.raw.txt ignored? ===
+.gitignore:23:/development/**/*.raw.txt	development/2026-07-30-platform-domain-util2/usage-02.raw.txt
+```
+
+## Assistant
+
+`*.raw.txt` is ignored, so the capture is safe to write. Saving it verbatim:
+
+### ⚙ Tool call: `Write`
+
+```json
+{
+  "file_path": "/workspace/development/2026-07-30-platform-domain-util2/usage-02.raw.txt",
+  "content": "   Session\n\n   Total cost:            $0.0000\n   Total duration (API):  0s\n   Total duration (wall): 26s\n   Total code changes:    0 lines added, 0 lines removed\n   Usage:                 0 input, 0 output, 0 cache read, 0 cache write\n\n   Current session\n   ████████                                           16% used\n   Resets 1:10pm (America/Detroit)\n\n   Current week (all models)\n   ████████████████▌                                  33% used\n   Resets Aug 4, 7pm (America/Detroit)\n   +50% weekly limits promo through Aug 19 · clau.de/cc-50-promo\n\n   Current week (Fable)\n   ██████████████████████▌                            45% used\n   Resets Aug 4, 7pm (America/Detroit)\n\n   What's contributing to your limits usage?\n   Approximate, based on local sessions on this machine — does not include other devices or claude.ai\n\n   Last 24h · these are independent characteristics of your usage, not a breakdown\n\n   100% of your usage came from subagent-heavy sessions\n    Each subagent runs its own requests. Be deliberate about spawning them — and\n    consider configuring a cheaper model for simpler subagents.\n\n   83% of your usage was at >150k context\n    Longer sessions are more expensive even when cached. /compact mid-task, /clear\n    when switching to new tasks.\n\n   15% of your usage came from subagents under \"psh-reviewer\"\n    If this runs frequently, consider configuring its subagents with a cheaper\n    model or tightening their prompts.\n\n   Skills                  % of usage\n   /mattpocock-skills:tdd          4%\n   /archive-session                4%\n   /code-review                    3%\n   /andrej-karpathy-skills:kar…    3%\n   /superpowers:writing-plans      2%\n   /superpowers:brainstorming      2%\n   /mattpocock-skills:grilling     1%\n   /mattpocock-skills:diagnosi…    1%\n\n   Subagents               % of usage\n   psh-reviewer                   15%\n   mattpocock-skills:tdd           3%\n\n   Plugins                 % of usage\n   mattpocock-skills               9%\n   superpowers                     4%\n   andrej-karpathy-skills          3%\n"
+}
+```
+
+### ↳ Tool result
+
+```
+File created successfully at: /workspace/development/2026-07-30-platform-domain-util2/usage-02.raw.txt (file state is current in your context — no need to Read it back)
+```
+
+## Assistant
+
+The prompt file also only covers work through the first commit. Extending it to the session's full scope:
+
+### ⚙ Tool call: `Edit`
+
+```json
+{
+  "replace_all": false,
+  "file_path": "/workspace/development/2026-07-30-platform-domain-util2/02-zone-filter.prompt.md",
+  "old_string": "## 4 — close-out\n\n> Commit everything and close out this Claude feature implementation session. There is no need to\n> re-run the script / no need to update `platform-domains-cloudflare.json`.\n\n---",
+  "new_string": "## 4 — close-out\n\n> Commit everything and close out this Claude feature implementation session. There is no need to\n> re-run the script / no need to update `platform-domains-cloudflare.json`.\n\nCommitted as **`148d83c`**. The session then continued with two follow-ons.\n\n## 5 — the `$CLOUDFLARE_BASE_URL` question\n\n> What do you recommend (and why do you recommend it above other alternatives) to address issue 3,\n> the `plugin/cloudflare/client.py` problems and `$CLOUDFLARE_BASE_URL` exploitability? Do not make\n> any changes yet.\n\n**The premise was mine, and it was wrong.** The close-out message in step 4 had listed the\n`plugin/cloudflare/client.py` ambient-environment defect as still open — taken from `CLAUDE.md` and\n`§8.7` without reading the code. Verifying before recommending showed it had been fixed on\n2026-07-30 by `befb913`. What remained was a **documentation** defect: `CLAUDE.md` contradicted\nitself, and a reader (me) had already been made less accurate by it.\n\nThen, on the answer:\n\n> Fix the docs but do not pin the SDK compatible range (we're going to update all dependencies to\n> the latest versions a few days from now).\n\nCommitted as **`f9d9d5b`**; recorded as **Amendment A2**, including the declined SDK pin *with the\noperator's reasoning* so it is not re-litigated as an oversight.\n\n## 6 — the test gap named at close-out\n\n> Add appropriate tests for `development/finalize-session.py`.\n\nThe close-out message had flagged that the archive scrubber had no test module — a pre-existing\ngap, made sharper by this session having just changed its patterns. Backfilled per\n`prompts/add-tests-for-change.prompt.md`: 66 tests in `tests/unit/test_finalize_session.py`,\nverified capable of failing by a **ten-mutation sweep** (the tests could not go red first, so this\nwas the only adversarial move left). Committed as **`93cbb45`**.\n\nTwo methodology notes worth keeping:\n\n- The backfill rule \"derive every expected value from an independent source of truth, never by\n  running the code\" paid off immediately: the multi-occurrence AWS-key test failed on **my\n  fixture**, not the code — `AKIA` + 17 characters correctly fails the pattern's trailing `\\b`.\n- Four of the ten mutations first reported *nothing*, because `./run-tests` gates on ruff before\n  pytest and constructs like `if True:` trip the linter. Read as-is, four blanks would have looked\n  like four passes. Mutation sweeps in this repo must bypass the lint gate.\n\n---"
+}
+```
+
+### ↳ Tool result
+
+```
+The file /workspace/development/2026-07-30-platform-domain-util2/02-zone-filter.prompt.md has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "D=development/2026-07-30-platform-domain-util2\npython development/finalize-session.py --dir $D --label 02 --usage-capture $D/usage-02.raw.txt 2>&1 | tail -4\necho; echo \"=== growth vs the stale version ===\"\ngit --no-pager show HEAD:$D/transcript-02.md 2>/dev/null | wc -l | sed 's/^/  old transcript lines: /'\nwc -l < $D/transcript-02.md | sed 's/^/  new transcript lines: /'\necho; echo \"=== cost section now present? ===\"; sed -n '/## Cost/,/## Context/p' $D/statistics-02.md | head -12",
+  "description": "Regenerate the archive with the usage capture"
+}
+```
+
+### ↳ Tool result
+
+```
+source JSONL: /home/node/.claude/projects/-workspace/3e2e6236-70c8-4f7c-be79-a864d2444e41.jsonl
+wrote development/2026-07-30-platform-domain-util2/transcript-02.md (scrubbed) and development/2026-07-30-platform-domain-util2/transcript-02.raw.md (raw, gitignored)
+wrote development/2026-07-30-platform-domain-util2/statistics-02.md
+
+=== growth vs the stale version ===
+  old transcript lines: 5434
+  new transcript lines: 7072
+
+=== cost section now present? ===
+## Cost — Claude Code `/usage`
+
+_Captured from Claude Code's `/usage` at archive time; Claude Code estimates cost locally from token counts._
+
+```
+   Session
+
+   Total cost:            $0.0000
+   Total duration (API):  0s
+   Total duration (wall): 26s
+   Total code changes:    0 lines added, 0 lines removed
+   Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+```
+
+### ⚙ Tool call: `Read`
+
+```json
+{
+  "file_path": "/workspace/development/2026-07-30-platform-domain-util2/statistics-02.md"
+}
+```
+
+### ↳ Tool result
+
+```
+1	# Session statistics
+2	
+3	## Session metadata
+4	
+5	- **Started:** 2026-07-31T12:16:22.662000+00:00
+6	- **Ended:** 2026-07-31T14:20:04.429000+00:00
+7	- **Duration:** 123 min
+8	- **Model(s):** <synthetic>, claude-opus-5
+9	- **Assistant turns:** 147
+10	- **Tool calls:** Bash × 88, Edit × 31, Read × 21, Skill × 4, Write × 3, AskUserQuestion × 2, Agent × 2
+11	
+12	## Token usage
+13	
+14	_Per-model totals from the session JSONL, deduped per request. **Approximate** — the JSONL is Claude Code's internal format; the embedded `/usage` below is authoritative for tokens and cost._
+15	
+16	| Model | Input | Output | Cache read | Cache write |
+17	|---|--:|--:|--:|--:|
+18	| <synthetic> | 0 | 0 | 0 | 0 |
+19	| claude-opus-5 | 273 | 171,245 | 32,330,164 | 1,126,243 |
+20	
+21	## Cost — Claude Code `/usage`
+22	
+23	_Captured from Claude Code's `/usage` at archive time; Claude Code estimates cost locally from token counts._
+24	
+25	```
+26	   Session
+27	
+28	   Total cost:            $0.0000
+29	   Total duration (API):  0s
+30	   Total duration (wall): 26s
+31	   Total code changes:    0 lines added, 0 lines removed
+32	   Usage:                 0 input, 0 output, 0 cache read, 0 cache write
+33	
+34	   Current session
+35	   ████████                                           16% used
+36	   Resets 1:10pm (America/Detroit)
+37	
+38	   Current week (all models)
+39	   ████████████████▌                                  33% used
+40	   Resets Aug 4, 7pm (America/Detroit)
+41	   +50% weekly limits promo through Aug 19 · clau.de/cc-50-promo
+42	
+43	   Current week (Fable)
+44	   ██████████████████████▌                            45% used
+45	   Resets Aug 4, 7pm (America/Detroit)
+46	
+47	   What's contributing to your limits usage?
+48	   Approximate, based on local sessions on this machine — does not include other devices or claude.ai
+49	
+50	   Last 24h · these are independent characteristics of your usage, not a breakdown
+51	
+52	   100% of your usage came from subagent-heavy sessions
+53	    Each subagent runs its own requests. Be deliberate about spawning them — and
+54	    consider configuring a cheaper model for simpler subagents.
+55	
+56	   83% of your usage was at >150k context
+57	    Longer sessions are more expensive even when cached. /compact mid-task, /clear
+58	    when switching to new tasks.
+59	
+60	   15% of your usage came from subagents under "psh-reviewer"
+61	    If this runs frequently, consider configuring its subagents with a cheaper
+62	    model or tightening their prompts.
+63	
+64	   Skills                  % of usage
+65	   /mattpocock-skills:tdd          4%
+66	   /archive-session                4%
+67	   /code-review                    3%
+68	   /andrej-karpathy-skills:kar…    3%
+69	   /superpowers:writing-plans      2%
+70	   /superpowers:brainstorming      2%
+71	   /mattpocock-skills:grilling     1%
+72	   /mattpocock-skills:diagnosi…    1%
+73	
+74	   Subagents               % of usage
+75	   psh-reviewer                   15%
+76	   mattpocock-skills:tdd           3%
+77	
+78	   Plugins                 % of usage
+79	   mattpocock-skills               9%
+80	   superpowers                     4%
+81	   andrej-karpathy-skills          3%
+82	```
+83	
+84	## Context window (approximate)
+85	
+86	- **Largest prompt sent:** ~388,714 tokens (input + cache read + cache write on the biggest single turn)
+87	
+88	_Approximate: reconstructed from the JSONL after the fact. The exact live `/context` breakdown by component can't be reproduced post-hoc._
+89	
+90
+```
+
+## Assistant
+
+Statistics are complete now. But line 14 has a problem I should not let ship — it's the same defect class I spent this session fixing:
+
+> _"the embedded `/usage` below is **authoritative** for tokens and cost"_
+
+That claim is **false for this session**. The pasted `/usage` Session block reports `$0.0000` and `0 input, 0 output`, while the JSONL shows 171k output and 32.3M cache read across 147 turns. The `Total duration (wall): 26s` suggests `/usage` measured a fresh 26-second window rather than this 123-minute session, so its per-session block reads zero — which will recur, not a one-off.
+
+Fixing the caption rather than shipping a document that ranks a zeroed source above a populated one:
+
+### ⚙ Tool call: `Edit`
+
+```json
+{
+  "replace_all": false,
+  "file_path": "/workspace/development/finalize-session.py",
+  "old_string": "    lines.append(\"_Per-model totals from the session JSONL, deduped per request. \"\n             \"**Approximate** — the JSONL is Claude Code's internal format; the \"\n             \"embedded `/usage` below is authoritative for tokens and cost._\\n\")",
+  "new_string": "    lines.append(\"_Per-model totals from the session JSONL, deduped per request. \"\n             \"**Approximate** — the JSONL is Claude Code's internal format. Compare against \"\n             \"the embedded `/usage` below, but do not assume it wins: its per-session block \"\n             \"reports the window `/usage` itself ran in, so a capture taken after a resumed or \"\n             \"re-entered session can read `$0.00 / 0 tokens` while this table is populated. \"\n             \"Where they disagree, the larger non-zero source is the session._\\n\")"
+}
+```
+
+### ↳ Tool result
+
+```
+The file /workspace/development/finalize-session.py has been updated successfully. (note: the file had been modified on disk since you last read it — the edit applied cleanly, but the file contains other changes not in your context. Read it before edits that depend on surrounding content.)
+```
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "ls -la development/finalize-session.py | cut -c1-11\npython - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/unit/test_finalize_session.py\")\ns = p.read_text()\nanchor = '''def test_render_stats_says_so_when_usage_was_not_captured(fs):'''\nnew = '''def test_render_stats_does_not_claim_the_usage_capture_outranks_the_jsonl(fs):\n    \"\"\"/usage's per-session block reports the window /usage itself ran in, so a capture taken\n    after a resumed or re-entered session reads `$0.00 / 0 tokens` while the JSONL table is\n    populated.  Measured on the 2026-07-31 session: $0.0000 and 0 tokens against 171k output and\n    32.3M cache read.  A caption calling the capture \"authoritative\" would tell a reader to\n    believe the zeros -- a document making its reader less accurate than no document.\"\"\"\n    out = fs.render_stats(stats(), \"Total cost: $0.0000\\\\nUsage: 0 input, 0 output\")\n    assert \"authoritative\" not in out\n    assert \"do not assume it wins\" in out\n    assert \"| claude-opus-5 | 1,000 | 2,000 |\" in out, \"the populated table still renders\"\n\n\ndef test_render_stats_says_so_when_usage_was_not_captured(fs):'''\nassert anchor in s\np.write_text(s.replace(anchor, new, 1))\nPY\nD=development/2026-07-30-platform-domain-util2\npython development/finalize-session.py --dir $D --label 02 --usage-capture $D/usage-02.raw.txt >/dev/null 2>&1\necho \"=== regenerated; caption now reads ===\"; sed -n '14p' $D/statistics-02.md | fold -w 96 | head -6\necho; echo \"=== tests ===\"; ./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | tail -4",
+  "description": "Add the caption test and regenerate"
+}
+```
+
+### ↳ Tool result
+
+```
+-rwxr-xr-x 
+=== regenerated; caption now reads ===
+_Per-model totals from the session JSONL, deduped per request. **Approximate** — the JSONL is 
+Claude Code's internal format. Compare against the embedded `/usage` below, but do not assume it
+ wins: its per-session block reports the window `/usage` itself ran in, so a capture taken after
+ a resumed or re-entered session can read `$0.00 / 0 tokens` while this table is populated. Wher
+e they disagree, the larger non-zero source is the session._
+
+=== tests ===
+...................................................................      [100%]
+67 passed in 0.75s
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+```
+
+## Assistant
+
+Now the mandatory scrub verification on the regenerated transcript — the standard scan plus my extended sweep for live values:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "D=development/2026-07-30-platform-domain-util2\necho \"=== skill's value-shaped scan (must return nothing) ===\"\ngrep -nE '(SMTP_PASSWORD|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|CLOUDFLARE_API_KEY|CLOUDFLARE_EMAIL)[[:space:]]*[=:][[:space:]]*[^[:space:]«]|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|Bearer [A-Za-z0-9._-]{12,}' $D/transcript-02.md $D/statistics-02.md && echo \"!!! HITS — DO NOT COMMIT\" || echo \"clean\"\necho; echo \"=== extended sweep: live credential values + edge cookies ===\"\npython - <<'PY'\nimport os, re, pathlib\nhits = []\nfor name in (\"transcript-02.md\", \"statistics-02.md\", \"02-zone-filter.prompt.md\"):\n    t = pathlib.Path(\"development/2026-07-30-platform-domain-util2\", name).read_text()\n    for var in (\"CLOUDFLARE_EMAIL\",\"CLOUDFLARE_API_KEY\",\"CLOUDFLARE_API_TOKEN\",\"SMTP_PASSWORD\"):\n        v = os.environ.get(var)\n        if v and len(v) > 6 and v in t:\n            hits.append(f\"{name}:{var}\")\n    for pat in (r\"__cf_bm=[A-Za-z0-9._-]{20,}\", r\"cf_clearance=[A-Za-z0-9._-]{12,}\"):\n        if re.search(pat, t):\n            hits.append(f\"{name}:{pat}\")\nprint(\"LEAKED:\", hits) if hits else print(\"clean\")\nPY\necho; echo \"=== raw (gitignored) still holds the unscrubbed text? ===\"\ngrep -c \"REDACTED\" $D/transcript-02.raw.md 2>/dev/null | sed 's/^/  redactions in raw: /'\necho; echo \"=== git sees ===\"; git status --short",
+  "description": "Verify the regenerated archive scrubbed cleanly"
+}
+```
+
+### ↳ Tool result
+
+```
+=== skill's value-shaped scan (must return nothing) ===
+development/2026-07-30-platform-domain-util2/transcript-02.md:6580:  "content": "\"\"\"Offline tests for development/finalize-session.py (the /archive-session workhorse).\n\nBACKFILL, per prompts/add-tests-for-change.prompt.md: this code shipped untested, so these tests\ncould not go red first and they verify what the code DOES.  The one adversarial move still\navailable is used throughout -- every expected value is derived from the behavior each pattern's\nown comment CLAIMS, or from a hand-built worked example, never by running the script and pasting\nwhat it printed.\n\nWhy this module earns tests at all, being a dev tool rather than program code: `scrub()` is the\nonly thing standing between a session transcript and a committed secret, and\ndevelopment/README.md's manual grep is explicitly described as a backstop to it, not a substitute.\nA silent regression here is a credential in git history.\n\nThe script has no importable module name (a dash, and it lives outside any package), so it is\nloaded with the SourceFileLoader idiom the suite already uses for the standalone utilities.\n\"\"\"\nimport importlib.util\nimport json\nimport re\nimport sys\nimport types\nfrom importlib.machinery import SourceFileLoader\nfrom pathlib import Path\n\nimport pytest\nfrom hypothesis import given\nfrom hypothesis import strategies as st\n\npytestmark = pytest.mark.unit\n\nSCRIPT = Path(__file__).resolve().parent.parent.parent / \"development\" / \"finalize-session.py\"\n\n\n@pytest.fixture\ndef fs():\n    \"\"\"The script, loaded fresh.  Its entry point is __main__-guarded, so import runs nothing.\"\"\"\n    loader = SourceFileLoader(\"finalize_session_probe\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    assert spec is not None\n    module = importlib.util.module_from_spec(spec)\n    loader.exec_module(module)\n    return module\n\n\n# --- scrub(): the security-critical surface ---------------------------------------------------\n#\n# Positive cases.  `secret` is the substring that MUST NOT survive; `label` is the redaction tag\n# the pattern's own comment says it applies, so a pattern silently rewired to a different tag\n# (or caught by the generic high-entropy fallback instead of its specific rule) goes red.\n\n@pytest.mark.parametrize((\"text\", \"secret\", \"label\"), [\n    # KEY=value / KEY: value for the named env vars\n    (\"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» \"hunter2-correct-horse\", \"SMTP_PASSWORD\"),\n    (\"AWS_SECRET_ACCESS_KEY: «REDACTED:AWS_SECRET_ACCESS_KEY»     \"«REDACTED:high-entropy»\", \"AWS_SECRET_ACCESS_KEY\"),\n    (\"CLOUDFLARE_EMAIL=«REDACTED:CLOUDFLARE_EMAIL» \"person@example.edu\", \"CLOUDFLARE_EMAIL\"),\n    # Lowercased env-var name: the pattern is (?i)\n    (\"smtp_password=«REDACTED:smtp_password» \"lower-case-name-still-caught\", \"smtp_password\"),\n    # AWS access key ID, bare\n    (\"the id «REDACTED:aws-key-id» appears\", \"«REDACTED:aws-key-id»\", \"aws-key-id\"),\n    # Cloudflare key by VALUE SHAPE, with no field name at all, and no length floor --\n    # the comment is explicit that even a truncated 8-char prefix must not ship.\n    (\"token is «REDACTED:cloudflare-api-key»\", \"«REDACTED:cloudflare-api-key»\", \"cloudflare-api-key\"),\n    # API field names rather than env-var names, 24+ chars\n    (\"api_token: «REDACTED:credential»\", \"abcdefghijklmnopqrstuvwxyz012345\",\n     \"credential\"),\n    (\"machine-token = «REDACTED:credential»\", \"ABCDEFGHIJKLMNOPQRSTUVWX\", \"credential\"),\n    (\"api_email: «REDACTED:credential-email»", \"someone@umich.edu\", \"credential-email\"),\n    # Pantheon tokens in JSON\n    ('{\"machine_token\": \"mt-abcdefghijklmnop\"}', \"mt-abcdefghijklmnop\", \"token\"),\n    ('{\"session\": \"sess-abcdefghijklmnop\"}', \"sess-abcdefghijklmnop\", \"token\"),\n    # Authorization header\n    (\"Authorization: Bearer «REDACTED:bearer»\", \"abcdefghijklmnop\", \"bearer\"),\n    # Cloudflare edge cookies (added after a real `curl -D -` put one in a transcript)\n    (\"set-cookie: __cf_bm=«REDACTED:cf-cookie»; HttpOnly\",\n     \"C46vVhbEXxxVjf.Nny7h-7BKHdt4v\", \"cf-cookie\"),\n    (\"cf_clearance=«REDACTED:cf-cookie»\", \"Ab3.def-ghi_jklmnop\", \"cf-cookie\"),\n    # Bare high-entropy run: mixed case AND a digit, 32+ chars, no anchor of any kind\n    (\"leaked \" + \"aB3\" * 12, \"aB3\" * 12, \"high-entropy\"),\n])\ndef test_scrub_redacts(fs, text, secret, label):\n    out = fs.scrub(text)\n    assert secret not in out, f\"{label}: the secret survived scrubbing\"\n    assert f\"«REDACTED:{label}»\" in out, f\"{label}: redacted, but not by the expected rule\"\n\n\ndef test_scrub_redacts_a_pem_private_key_block_including_its_body(fs):\n    body = \"«REDACTED:high-entropy»\\«REDACTED:high-entropy»\"\n    text = f\"«REDACTED:private-key»\"\n    out = fs.scrub(text)\n    assert \"«REDACTED:private-key»\" in out\n    assert \"«REDACTED:high-entropy»\" not in out\n    assert \"BEGIN RSA PRIVATE KEY\" not in out, \"the whole block goes, not just the body\"\n\n\n# Negative cases.  These MUST survive: a scrubber that redacted them would make development\n# transcripts unreadable, which is the stated reason the high-entropy rule is narrow.\n\n@pytest.mark.parametrize((\"text\", \"why\"), [\n    (\"commit 6389e08a1b2c3d4e5f60718293a4b5c6d7e8f9a0 fixed it\",\n     \"a 40-char git SHA is all-lowercase hex -- no uppercase, so it is not high-entropy\"),\n    (\"ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJ\", \"an all-caps constant has no lowercase\"),\n    (\"averylongallslowercaseidentifiernameheretoo\", \"a long lowercase identifier has no uppercase\"),\n    (\"MixedCaseButNoDigitsAtAllInThisLongRun\", \"mixed case WITHOUT a digit is not a token shape\"),\n    ('api_key = \"k-456\"', \"short values keep ordinary source readable (24-char floor)\"),\n    (\"api_token = cf.get('api_token')\", \"source code referencing the field name is not a value\"),\n    (\"the SMTP_PASSWORD variable is documented in docs/env-and-smtp-configuration.md\",\n     \"a prose mention with no = or : separator carries no value\"),\n])\ndef test_scrub_leaves_readable_text_alone(fs, text, why):\n    assert fs.scrub(text) == text, why\n\n\ndef test_scrub_is_idempotent(fs):\n    \"\"\"Re-scrubbing must not chew through its own markers -- finalize-session scrubs the stats\n    document that may already quote scrubbed transcript text.\"\"\"\n    text = (\"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» and «REDACTED:aws-key-id» and Bearer «REDACTED:bearer» \"\n            \"and \" + \"aB3\" * 12)\n    once = fs.scrub(text)\n    assert fs.scrub(once) == once\n\n\ndef test_scrub_redacts_every_occurrence_not_just_the_first(fs):\n    out = fs.scrub(\"«REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE\")\n    assert \"AKIA\" not in out\n    assert out.count(\"«REDACTED:aws-key-id»\") == 2\n\n\ndef test_scrub_handles_a_secret_glued_to_an_escaped_newline(fs):\n    \"\"\"The env-var pattern deliberately has NO leading \\\\b: a secret rendered right after an\n    escaped newline in a JSON-encoded command input glues an `n` onto the key name.\"\"\"\n    out = fs.scrub(r\"{\\\"command\\\": \\\"export FOO=1\\nSMTP_PASSWORD=«REDACTED:SMTP_PASSWORD»    assert \"hunter2-secret\" not in out\n\n\n@given(st.text(alphabet=\"«REDACTED:high-entropy»\",\n               min_size=32, max_size=80))\ndef test_scrub_never_leaves_a_token_shaped_secret_behind_an_env_var_name(secret):\n    \"\"\"Property: whatever the value looks like, `SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» must not survive.\n\n    Loaded per-call rather than via the fixture: Hypothesis test functions cannot take\n    function-scoped fixtures.\n    \"\"\"\n    loader = SourceFileLoader(\"finalize_session_prop\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    module = importlib.util.module_from_spec(spec)\n    loader.exec_module(module)\n    assert secret not in module.scrub(f\"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» --- load(): JSONL reading --------------------------------------------------------------------\n\ndef test_load_reads_one_object_per_line_and_skips_blanks(fs, tmp_path):\n    path = tmp_path / \"s.jsonl\"\n    path.write_text('{\"a\": 1}\\n\\n   \\n{\"a\": 2}\\n', encoding=\"utf-8\")\n    assert fs.load(path) == [{\"a\": 1}, {\"a\": 2}]\n\n\ndef test_load_silently_drops_a_malformed_line(fs, tmp_path):\n    \"\"\"Documented behavior, and a sharp edge worth pinning: a truncated JSONL row (a session\n    killed mid-write) is dropped with NO warning, so the transcript is quietly short.\"\"\"\n    path = tmp_path / \"s.jsonl\"\n    path.write_text('{\"a\": 1}\\n{\"a\": 2\\n{\"a\": 3}\\n', encoding=\"utf-8\")\n    assert fs.load(path) == [{\"a\": 1}, {\"a\": 3}]\n\n\n# --- render_transcript() ----------------------------------------------------------------------\n\ndef row(rtype, blocks, **extra):\n    \"\"\"One JSONL row carrying a message with the given content blocks.\"\"\"\n    return {\"type\": rtype, \"message\": {\"content\": blocks}, **extra}\n\n\ndef test_render_transcript_renders_each_block_kind_under_its_own_heading(fs):\n    out = fs.render_transcript([\n        row(\"user\", [{\"type\": \"text\", \"text\": \"do the thing\"}]),\n        row(\"assistant\", [{\"type\": \"thinking\", \"thinking\": \"considering\"},\n                          {\"type\": \"text\", \"text\": \"done\"},\n                          {\"type\": \"tool_use\", \"name\": \"Bash\", \"id\": \"t1\",\n                           \"input\": {\"command\": \"ls\"}}]),\n        row(\"user\", [{\"type\": \"tool_result\", \"content\": \"file.txt\"}]),\n    ])\n    assert \"## User\\n\\ndo the thing\" in out\n    assert \"## Assistant thinking\\n\\nconsidering\" in out\n    assert \"## Assistant\\n\\ndone\" in out\n    assert \"### ⚙ Tool call: `Bash`\" in out\n    assert '\"command\": \"ls\"' in out\n    assert \"### ↳ Tool result\" in out\n    assert \"file.txt\" in out\n\n\ndef test_render_transcript_tags_subagent_rows(fs):\n    out = fs.render_transcript([\n        row(\"assistant\", [{\"type\": \"text\", \"text\": \"sub work\"}], isSidechain=True)])\n    assert \"## Assistant _(subagent)_\" in out\n\n\ndef test_render_transcript_accepts_string_content_as_one_text_block(fs):\n    assert \"hello there\" in fs.render_transcript([{\"type\": \"user\",\n                                                   \"message\": {\"content\": \"hello there\"}}])\n\n\n@pytest.mark.parametrize(\"skipped\", [\n    {\"type\": \"summary\", \"message\": {\"content\": [{\"type\": \"text\", \"text\": \"SHOULD NOT APPEAR\"}]}},\n    {\"type\": \"user\", \"message\": \"not-a-dict\"},\n    {\"type\": \"user\", \"message\": {\"content\": [{\"type\": \"text\", \"text\": \"   \"}]}},\n])\ndef test_render_transcript_skips_what_it_cannot_or_should_not_render(fs, skipped):\n    out = fs.render_transcript([skipped])\n    assert out.strip() == \"# Session transcript\", \"only the header should remain\"\n\n\ndef test_result_text_joins_only_the_text_parts_of_a_block_list(fs):\n    assert fs._result_text([{\"type\": \"text\", \"text\": \"one\"},\n                            {\"type\": \"image\", \"source\": \"...\"},\n                            {\"type\": \"text\", \"text\": \"two\"}]) == \"one\\ntwo\"\n    assert fs._result_text(\"plain string  \") == \"plain string\"\n    assert fs._result_text(None) == \"\"\n\n\n# --- collect_stats(): the dedup logic that a naive version gets ~3x wrong ---------------------\n\ndef assistant_row(request_id, out_tokens, *, blocks=(), model=\"claude-opus-5\", **usage):\n    return {\"type\": \"assistant\", \"requestId\": request_id,\n            \"message\": {\"id\": f\"msg_{request_id}\", \"model\": model,\n                        \"content\": list(blocks),\n                        \"usage\": {\"output_tokens\": out_tokens, **usage}}}\n\n\ndef test_collect_stats_counts_one_request_once_even_though_it_spans_many_rows(fs):\n    \"\"\"Claude Code writes one row per content block, each repeating the SAME usage block.\n    Summing per row would triple the tokens and the turn count -- the defect the dedupe exists\n    for, and the reason these numbers are hand-derived: 3 rows x 100 output tokens is ONE\n    request of 100, not 300.\"\"\"\n    rows = [assistant_row(\"req-1\", 100, input_tokens=50, cache_read_input_tokens=7)\n            for _ in range(3)]\n    s = fs.collect_stats(rows)\n    assert s[\"turns\"] == 1\n    assert s[\"per_model\"][\"claude-opus-5\"][\"out\"] == 100\n    assert s[\"per_model\"][\"claude-opus-5\"][\"inp\"] == 50\n    assert s[\"per_model\"][\"claude-opus-5\"][\"read\"] == 7\n\n\ndef test_collect_stats_keeps_the_row_with_the_largest_output_for_a_request(fs):\n    \"\"\"Rows for one request are written as output accumulates, so the LAST/largest is the\n    complete one; keeping a smaller one would under-report.\"\"\"\n    s = fs.collect_stats([assistant_row(\"req-1\", 10), assistant_row(\"req-1\", 250),\n                          assistant_row(\"req-1\", 90)])\n    assert s[\"per_model\"][\"claude-opus-5\"][\"out\"] == 250\n\n\ndef test_collect_stats_falls_back_to_the_message_id_when_there_is_no_request_id(fs):\n    a = {\"type\": \"assistant\",\n         \"message\": {\"id\": \"msg_A\", \"model\": \"m\", \"content\": [], \"usage\": {\"output_tokens\": 5}}}\n    b = {\"type\": \"assistant\",\n         \"message\": {\"id\": \"msg_B\", \"model\": \"m\", \"content\": [], \"usage\": {\"output_tokens\": 6}}}\n    s = fs.collect_stats([a, dict(a), b])\n    assert s[\"turns\"] == 2, \"two distinct message ids are two requests\"\n    assert s[\"per_model\"][\"m\"][\"out\"] == 11\n\n\ndef test_collect_stats_separates_models(fs):\n    s = fs.collect_stats([assistant_row(\"r1\", 10, model=\"claude-opus-5\"),\n                          assistant_row(\"r2\", 20, model=\"claude-haiku-4-5\")])\n    assert s[\"per_model\"][\"claude-opus-5\"][\"out\"] == 10\n    assert s[\"per_model\"][\"claude-haiku-4-5\"][\"out\"] == 20\n\n\ndef test_collect_stats_counts_each_tool_use_block_once_by_id(fs):\n    \"\"\"Tool blocks are deduped by BLOCK id, not request id: one request can legitimately hold\n    several tool calls, but the same block repeated across rows must count once.\"\"\"\n    call = {\"type\": \"tool_use\", \"id\": \"toolu_1\", \"name\": \"Bash\"}\n    other = {\"type\": \"tool_use\", \"id\": \"toolu_2\", \"name\": \"Read\"}\n    s = fs.collect_stats([assistant_row(\"r1\", 1, blocks=[call, other]),\n                          assistant_row(\"r1\", 2, blocks=[call])])\n    assert s[\"tools\"] == {\"Bash\": 1, \"Read\": 1}\n\n\ndef test_collect_stats_reports_the_largest_single_prompt_as_the_context_high_water_mark(fs):\n    \"\"\"max_ctx is input + cache read + cache write on ONE turn -- 1+2+3 and 10+20+30 give 60,\n    not the 66 a sum-of-all-turns version would report.\"\"\"\n    s = fs.collect_stats([\n        assistant_row(\"r1\", 1, input_tokens=1, cache_read_input_tokens=2,\n                      cache_creation_input_tokens=3),\n        assistant_row(\"r2\", 1, input_tokens=10, cache_read_input_tokens=20,\n                      cache_creation_input_tokens=30),\n    ])\n    assert s[\"max_ctx\"] == 60\n\n\ndef test_collect_stats_splits_cache_creation_by_ttl(fs):\n    s = fs.collect_stats([assistant_row(\n        \"r1\", 1, cache_creation={\"ephemeral_5m_input_tokens\": 4, \"ephemeral_1h_input_tokens\": 9})])\n    assert (s[\"per_model\"][\"claude-opus-5\"][\"w5\"], s[\"per_model\"][\"claude-opus-5\"][\"w1\"]) == (4, 9)\n\n\ndef test_collect_stats_takes_first_and_last_timestamps_from_any_row_type(fs):\n    s = fs.collect_stats([{\"type\": \"user\", \"timestamp\": \"2026-07-31T10:00:00\"},\n                          {\"type\": \"assistant\", \"timestamp\": \"2026-07-31T10:30:00\",\n                           \"message\": {\"id\": \"m\", \"model\": \"m\", \"content\": [], \"usage\": {}}},\n                          {\"type\": \"summary\", \"timestamp\": \"2026-07-31T11:00:00\"}])\n    assert s[\"first\"].isoformat() == \"2026-07-31T10:00:00\"\n    assert s[\"last\"].isoformat() == \"2026-07-31T11:00:00\"\n\n\ndef test_collect_stats_tolerates_unparseable_and_absent_timestamps(fs):\n    s = fs.collect_stats([{\"type\": \"user\", \"timestamp\": \"not-a-timestamp\"}, {\"type\": \"user\"}])\n    assert (s[\"first\"], s[\"last\"]) == (None, None)\n\n\n# --- render_stats() ---------------------------------------------------------------------------\n\ndef stats(**overrides):\n    base = {\"per_model\": {\"claude-opus-5\": {\"inp\": 1000, \"out\": 2000, \"read\": 3000,\n                                            \"w5\": 40, \"w1\": 5}},\n            \"tools\": {\"Bash\": 7, \"Read\": 2}, \"turns\": 12, \"max_ctx\": 123456,\n            \"first\": None, \"last\": None}\n    base.update(overrides)\n    return base\n\n\ndef test_render_stats_formats_numbers_with_thousands_separators_and_sums_cache_writes(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"| claude-opus-5 | 1,000 | 2,000 | 3,000 | 45 |\" in out, \"w5 + w1 = 45\"\n    assert \"~123,456 tokens\" in out\n\n\ndef test_render_stats_orders_tool_counts_by_descending_frequency(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"Bash × 7, Read × 2\" in out\n\n\ndef test_render_stats_says_so_when_usage_was_not_captured(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"not captured\" in out\n    assert \"```\" not in out.split(\"## Cost\")[1].split(\"## Context\")[0]\n\n\ndef test_render_stats_embeds_the_usage_capture_verbatim_in_a_fence(fs):\n    out = fs.render_stats(stats(), \"Current session: $1.23\\nWeekly limit: 40%\")\n    assert \"```\\nCurrent session: $1.23\\nWeekly limit: 40%\\n```\" in out\n    assert \"not captured\" not in out\n\n\n@pytest.mark.parametrize(\"blank\", [\"\", \"   \\n  \"])\ndef test_render_stats_treats_a_blank_usage_capture_as_not_captured(fs, blank):\n    assert \"not captured\" in fs.render_stats(stats(), blank)\n\n\ndef test_render_stats_reports_duration_in_whole_minutes(fs):\n    from datetime import datetime as dt\n    out = fs.render_stats(stats(first=dt(2026, 7, 31, 10, 0, 0),\n                                last=dt(2026, 7, 31, 12, 34, 30)), None)\n    assert \"**Duration:** 154 min\" in out, \"2h34m30s truncates to 154, not 155\"\n\n\ndef test_render_stats_omits_the_time_block_when_no_timestamps_were_found(fs):\n    out = fs.render_stats(stats(), None)\n    assert \"**Started:**\" not in out\n    assert \"**Model(s):**\" in out, \"the rest of the metadata still renders\"\n\n\ndef test_render_stats_says_unknown_when_no_model_was_seen(fs):\n    assert \"**Model(s):** unknown\" in fs.render_stats(stats(per_model={}), None)\n\n\n# --- newest_jsonl() ---------------------------------------------------------------------------\n\ndef test_newest_jsonl_picks_the_most_recently_modified(fs, tmp_path, monkeypatch):\n    home = tmp_path / \"home\"\n    sessions = home / \".claude\" / \"projects\" / \"-workspace\"\n    sessions.mkdir(parents=True)\n    old, new = sessions / \"old.jsonl\", sessions / \"new.jsonl\"\n    old.write_text(\"{}\\n\", encoding=\"utf-8\")\n    new.write_text(\"{}\\n\", encoding=\"utf-8\")\n    import os\n    os.utime(old, (1_000_000, 1_000_000))\n    os.utime(new, (2_000_000, 2_000_000))\n    monkeypatch.setenv(\"HOME\", str(home))\n    assert fs.newest_jsonl() == new\n\n\ndef test_newest_jsonl_exits_with_a_named_message_when_there_is_nothing_to_find(fs, tmp_path,\n                                                                              monkeypatch):\n    (tmp_path / \".claude\" / \"projects\" / \"-workspace\").mkdir(parents=True)\n    monkeypatch.setenv(\"HOME\", str(tmp_path))\n    with pytest.raises(SystemExit, match=\"no session JSONL found\"):\n        fs.newest_jsonl()\n\n\n# --- main(): the end-to-end contract ----------------------------------------------------------\n\ndef write_session(tmp_path, rows):\n    path = tmp_path / \"session.jsonl\"\n    path.write_text(\"\".join(json.dumps(r) + \"\\n\" for r in rows), encoding=\"utf-8\")\n    return path\n\n\ndef run_main(fs, monkeypatch, argv):\n    monkeypatch.setattr(sys, \"argv\", [\"finalize-session.py\", *argv])\n    fs.main()\n\n\ndef test_main_writes_the_three_documents_and_scrubs_only_the_committed_ones(\n        fs, tmp_path, monkeypatch, capsys):\n    \"\"\"The .raw.md is gitignored ON PURPOSE and keeps the unscrubbed text; transcript.md and\n    statistics.md are the committed pair and must both be scrubbed.  A regression that scrubbed\n    the raw file would be harmless; one that stopped scrubbing either committed file is a\n    credential in git history.\"\"\"\n    jsonl = write_session(tmp_path, [\n        {\"type\": \"user\", \"message\": {\"content\": \"run it\"}},\n        {\"type\": \"assistant\", \"requestId\": \"r1\",\n         \"message\": {\"id\": \"m1\", \"model\": \"claude-opus-5\", \"usage\": {\"output_tokens\": 3},\n                     \"content\": [{\"type\": \"text\", \"text\": \"SMTP_PASSWORD=«REDACTED:SMTP_PASSWORD»    ])\n    out_dir = tmp_path / \"development\" / \"2026-07-31-thing\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl)])\n\n    scrubbed = (out_dir / \"transcript.md\").read_text(encoding=\"utf-8\")\n    raw = (out_dir / \"transcript.raw.md\").read_text(encoding=\"utf-8\")\n    statistics = (out_dir / \"statistics.md\").read_text(encoding=\"utf-8\")\n    assert \"hunter2-secret\" not in scrubbed\n    assert \"«REDACTED:SMTP_PASSWORD»\" in scrubbed\n    assert \"hunter2-secret\" in raw, \"the raw copy is the gitignored unscrubbed one\"\n    assert \"run it\" in scrubbed\n    assert \"# Session statistics\" in statistics\n    printed = capsys.readouterr().out\n    assert str(jsonl) in printed\n\n\ndef test_main_scrubs_the_statistics_document_too(fs, tmp_path, monkeypatch):\n    \"\"\"statistics.md embeds the /usage capture verbatim; if that paste carried a secret it must\n    not reach the committed file.\"\"\"\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"hi\"}}])\n    capture = tmp_path / \"usage.raw.txt\"\n    capture.write_text(\"cost $1.00\\nAKIAIOSFODNN7EXAMPLE\\n\", encoding=\"utf-8\")\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl),\n                               \"--usage-capture\", str(capture)])\n    statistics = (out_dir / \"statistics.md\").read_text(encoding=\"utf-8\")\n    assert \"«REDACTED:aws-key-id»\" not in statistics\n    assert \"cost $1.00\" in statistics\n\n\ndef test_main_suffixes_every_output_with_the_label(fs, tmp_path, monkeypatch):\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"hi\"}}])\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl), \"--label\", \"02\"])\n    assert (out_dir / \"transcript-02.md\").exists()\n    assert (out_dir / \"transcript-02.raw.md\").exists()\n    assert (out_dir / \"statistics-02.md\").exists()\n    assert not (out_dir / \"transcript.md\").exists(), \"the unlabelled name must not also appear\"\n\n\ndef test_main_creates_the_output_directory_including_parents(fs, tmp_path, monkeypatch):\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"hi\"}}])\n    out_dir = tmp_path / \"a\" / \"b\" / \"c\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl)])\n    assert (out_dir / \"transcript.md\").exists()\n\n\ndef test_main_uses_a_transcript_input_instead_of_rendering_the_jsonl_but_still_scrubs_it(\n        fs, tmp_path, monkeypatch):\n    jsonl = write_session(tmp_path, [\n        {\"type\": \"user\", \"message\": {\"content\": \"FROM THE JSONL\"}}])\n    export = tmp_path / \"export.txt\"\n    export.write_text(\"FROM THE EXPORT\\nSMTP_PASSWORD=«REDACTED:SMTP_PASSWORD» encoding=\"utf-8\")\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl),\n                               \"--transcript-input\", str(export)])\n    scrubbed = (out_dir / \"transcript.md\").read_text(encoding=\"utf-8\")\n    assert \"FROM THE EXPORT\" in scrubbed\n    assert \"FROM THE JSONL\" not in scrubbed\n    assert \"hunter2-secret\" not in scrubbed\n\n\ndef test_main_falls_back_to_rendering_when_the_transcript_input_does_not_exist(\n        fs, tmp_path, monkeypatch):\n    \"\"\"_read() returns None for a missing path, and the fallback is `is not None` -- so a typo'd\n    --transcript-input silently renders the JSONL instead of failing.\"\"\"\n    jsonl = write_session(tmp_path, [{\"type\": \"user\", \"message\": {\"content\": \"FROM THE JSONL\"}}])\n    out_dir = tmp_path / \"out\"\n    run_main(fs, monkeypatch, [\"--dir\", str(out_dir), \"--jsonl\", str(jsonl),\n                               \"--transcript-input\", str(tmp_path / \"nope.txt\")])\n    assert \"FROM THE JSONL\" in (out_dir / \"transcript.md\").read_text(encoding=\"utf-8\")\n\n\ndef test_main_requires_dir(fs, monkeypatch):\n    monkeypatch.setattr(sys, \"argv\", [\"finalize-session.py\"])\n    with pytest.raises(SystemExit):\n        fs.main()\n\n\n# --- the module's own shape -------------------------------------------------------------------\n\ndef test_every_secret_pattern_compiles_and_carries_a_replacement(fs):\n    \"\"\"A malformed pattern would raise only when a matching line appeared, i.e. possibly never\n    until the one session that carried a secret.\"\"\"\n    assert fs._SECRET_PATTERNS, \"the scrubber must not be empty\"\n    for pattern, repl in fs._SECRET_PATTERNS:\n        re.compile(pattern)\n        assert callable(repl)\n\n\ndef test_the_script_imports_only_the_standard_library(fs):\n    \"\"\"Documented as 'stdlib only, no third-party deps' so /archive-session works in any\n    environment -- including one where the project venv is not active.\"\"\"\n    third_party = {name for name in sys.modules\n                   if isinstance(sys.modules.get(name), types.ModuleType)}\n    source = SCRIPT.read_text(encoding=\"utf-8\")\n    imported = set(re.findall(r\"^(?:import|from)\\s+([a-zA-Z_][\\w.]*)\", source, re.MULTILINE))\n    allowed = {\"argparse\", \"contextlib\", \"json\", \"re\", \"datetime\", \"pathlib\"}\n    assert imported <= allowed, f\"non-stdlib import: {imported - allowed}\"\n    assert third_party, \"sanity: sys.modules is populated\"\n"
+development/2026-07-30-platform-domain-util2/transcript-02.md:6608:        out = fs.scrub("«REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE")
+development/2026-07-30-platform-domain-util2/transcript-02.md:6613:E           «REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE
+development/2026-07-30-platform-domain-util2/transcript-02.md:6626:The test caught my own error, not the code's: `AKIAJKLMNOPQR7EXAMPLE` is `AKIA` + **17** chars, so `\bAKIA[0-9A-Z]{16}\b` correctly declines it. Fixing my fixture:
+development/2026-07-30-platform-domain-util2/transcript-02.md:6632:  "command": "python - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/unit/test_finalize_session.py\")\ns = p.read_text()\ns = s.replace('''def test_scrub_redacts_every_occurrence_not_just_the_first(fs):\n    out = fs.scrub(\"«REDACTED:aws-key-id» then AKIAJKLMNOPQR7EXAMPLE\")\n    assert \"AKIA\" not in out\n    assert out.count(\"«REDACTED:aws-key-id»\") == 2''',\n'''def test_scrub_redacts_every_occurrence_not_just_the_first(fs):\n    # Both IDs are AKIA + exactly 16 chars: the pattern is \\\\bAKIA[0-9A-Z]{16}\\\\b, so a 17-char\n    # tail fails the trailing \\\\b and is (correctly) left alone.\n    out = fs.scrub(\"«REDACTED:aws-key-id» then «REDACTED:aws-key-id»\")\n    assert \"AKIA\" not in out\n    assert out.count(\"«REDACTED:aws-key-id»\") == 2\n\n\ndef test_scrub_declines_an_aws_key_id_of_the_wrong_length(fs):\n    \"\"\"The trailing \\\\b is load-bearing: AKIA + 17 chars is not an access key ID, and widening\n    the pattern to catch it would start eating ordinary uppercase identifiers.\"\"\"\n    text = \"AKIAJKLMNOPQR7EXAMPLE is one character too long\"\n    assert fs.scrub(text) == text''')\ns = s.replace('''    loader = SourceFileLoader(\"finalize_session_prop\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    module = importlib.util.module_from_spec(spec)''',\n'''    loader = SourceFileLoader(\"finalize_session_prop\", str(SCRIPT))\n    spec = importlib.util.spec_from_loader(loader.name, loader)\n    assert spec is not None\n    module = importlib.util.module_from_spec(spec)''')\np.write_text(s)\nPY\n./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | tail -12",
+development/2026-07-30-platform-domain-util2/transcript-02.md:6773:Every expected value comes from what each pattern's own comment *claims*, or a hand-built example — never from running the script and pasting output. That caught something immediately: my multi-occurrence AWS test failed, and **the fixture was wrong, not the code** — `AKIAJKLMNOPQR7EXAMPLE` is `AKIA` + 17 chars, which correctly fails the pattern's trailing `\b`. I kept it as its own negative test, since that boundary is load-bearing.
+!!! HITS — DO NOT COMMIT
+
+=== extended sweep: live credential values + edge cookies ===
+LEAKED: ['transcript-02.md:CLOUDFLARE_EMAIL']
+
+=== raw (gitignored) still holds the unscrubbed text? ===
+  redactions in raw: 5
+
+=== git sees ===
+ M development/2026-07-30-platform-domain-util2/02-zone-filter.prompt.md
+ M development/2026-07-30-platform-domain-util2/statistics-02.md
+ M development/2026-07-30-platform-domain-util2/transcript-02.md
+ M development/finalize-session.py
+ M tests/unit/test_finalize_session.py
+```
+
+## Assistant
+
+Two findings — one benign, one I need to investigate before committing. Let me look without printing values.
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "D=development/2026-07-30-platform-domain-util2\npython - <<'PY'\nimport os, pathlib, re\nval = os.environ.get(\"CLOUDFLARE_EMAIL\", \"\")\nt = pathlib.Path(\"development/2026-07-30-platform-domain-util2/transcript-02.md\").read_text()\nprint(f\"CLOUDFLARE_EMAIL value length: {len(val)}; occurrences in transcript: {t.count(val)}\")\n# Is it identical to the git author email (public, in every commit)?\nimport subprocess\ngit_email = subprocess.run([\"git\",\"config\",\"user.email\"],capture_output=True,text=True).stdout.strip()\nprint(\"identical to git config user.email:\", val == git_email)\nprint(\"appears in git log of this repo:\",\n      subprocess.run([\"git\",\"log\",\"-1\",\"--format=%ae\"],capture_output=True,text=True).stdout.strip() == val)\n# Show the CONTEXT of each hit, with the value itself masked.\nfor i, m in enumerate(re.finditer(re.escape(val), t)):\n    ctx = t[max(0,m.start()-90):m.end()+40].replace(val, \"<VALUE>\").replace(\"\\n\", \" \")\n    print(f\"  hit {i+1}: ...{ctx}...\")\n    if i >= 5:\n        print(\"  (more)\"); break\nPY",
+  "description": "Determine whether the flagged value is a real credential leak"
+}
+```
+
+### ↳ Tool result
+
+```
+CLOUDFLARE_EMAIL value length: 18; occurrences in transcript: 1
+identical to git config user.email: True
+appears in git log of this repo: True
+  hit 1: ...↳ Tool result  ``` commit 148d83cffda89b7289df031d16dc60a8e6d9a082 Author: Mark Montague <<VALUE>> Date:   Fri Jul 31 09:40:56 2026 -0400...
+```
+
+## Assistant
+
+Both findings are benign, with evidence:
+
+**1. The `CLOUDFLARE_EMAIL` hit is not a credential leak.** Single occurrence, and it's the **git author line** in `git log` output — identical to `git config user.email` and present in every commit of this repo already. The U-M address doubles as the Cloudflare account identity, so my env-value sweep flagged it. The Cloudflare *key* is the secret; the email is a public identifier.
+
+**2. The grep hits are my own test fixtures.** `AKIAJKLMNOPQR7EXAMPLE` is the deliberately-invalid 17-char string I added to pin the pattern's trailing `\b`. The skill's grep has no `\b`, so it matches the first 16 chars where the scrubber correctly declines. Not a real key.
+
+That second one will re-fire on every future archive that quotes this test, so let me leave a note for whoever hits it:
+
+### ⚙ Tool call: `Bash`
+
+```json
+{
+  "command": "python - <<'PY'\nfrom pathlib import Path\np = Path(\"tests/unit/test_finalize_session.py\")\ns = p.read_text()\ns = s.replace('''    \"\"\"The trailing \\\\b is load-bearing: AKIA + 17 chars is not an access key ID, and widening\n    the pattern to catch it would start eating ordinary uppercase identifiers.\"\"\"''',\n'''    \"\"\"The trailing \\\\b is load-bearing: AKIA + 17 chars is not an access key ID, and widening\n    the pattern to catch it would start eating ordinary uppercase identifiers.\n\n    NOTE for anyone running /archive-session's verification grep: this fixture WILL show up as a\n    hit, because that grep is `AKIA[0-9A-Z]{16}` with no trailing \\\\b and so matches the first 16\n    of these 17 characters.  It is an invented string, not a key -- and the mismatch is the point\n    of the test.  Do not \"fix\" it by renaming the fixture; the AKIA prefix is what exercises the\n    boundary.\"\"\"''')\np.write_text(s)\nPY\nD=development/2026-07-30-platform-domain-util2\n./run-tests --fast tests/unit/test_finalize_session.py -q 2>&1 | tail -3\npython development/finalize-session.py --dir $D --label 02 --usage-capture $D/usage-02.raw.txt 2>&1 | tail -3\necho; echo \"=== final full gate ===\"; ./run-tests -q 2>&1 | tail -3",
+  "description": "Annotate the fixture, regenerate, full gate"
+}
+```
+

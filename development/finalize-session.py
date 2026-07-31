@@ -269,8 +269,11 @@ def render_stats(s, usage_text):
     # Token usage (from the JSONL)
     lines.append("## Token usage\n")
     lines.append("_Per-model totals from the session JSONL, deduped per request. "
-             "**Approximate** — the JSONL is Claude Code's internal format; the "
-             "embedded `/usage` below is authoritative for tokens and cost._\n")
+             "**Approximate** — the JSONL is Claude Code's internal format. Compare against "
+             "the embedded `/usage` below, but do not assume it wins: its per-session block "
+             "reports the window `/usage` itself ran in, so a capture taken after a resumed or "
+             "re-entered session can read `$0.00 / 0 tokens` while this table is populated. "
+             "Where they disagree, the larger non-zero source is the session._\n")
     lines.append("| Model | Input | Output | Cache read | Cache write |")
     lines.append("|---|--:|--:|--:|--:|")
     for model, a in sorted(s["per_model"].items()):

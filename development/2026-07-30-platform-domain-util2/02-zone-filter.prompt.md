@@ -49,6 +49,47 @@ Results recorded in `SPEC.md` **§A1.9 — Live verification (COMPLETED 2026-07-
 > Commit everything and close out this Claude feature implementation session. There is no need to
 > re-run the script / no need to update `platform-domains-cloudflare.json`.
 
+Committed as **`148d83c`**. The session then continued with two follow-ons.
+
+## 5 — the `$CLOUDFLARE_BASE_URL` question
+
+> What do you recommend (and why do you recommend it above other alternatives) to address issue 3,
+> the `plugin/cloudflare/client.py` problems and `$CLOUDFLARE_BASE_URL` exploitability? Do not make
+> any changes yet.
+
+**The premise was mine, and it was wrong.** The close-out message in step 4 had listed the
+`plugin/cloudflare/client.py` ambient-environment defect as still open — taken from `CLAUDE.md` and
+`§8.7` without reading the code. Verifying before recommending showed it had been fixed on
+2026-07-30 by `befb913`. What remained was a **documentation** defect: `CLAUDE.md` contradicted
+itself, and a reader (me) had already been made less accurate by it.
+
+Then, on the answer:
+
+> Fix the docs but do not pin the SDK compatible range (we're going to update all dependencies to
+> the latest versions a few days from now).
+
+Committed as **`f9d9d5b`**; recorded as **Amendment A2**, including the declined SDK pin *with the
+operator's reasoning* so it is not re-litigated as an oversight.
+
+## 6 — the test gap named at close-out
+
+> Add appropriate tests for `development/finalize-session.py`.
+
+The close-out message had flagged that the archive scrubber had no test module — a pre-existing
+gap, made sharper by this session having just changed its patterns. Backfilled per
+`prompts/add-tests-for-change.prompt.md`: 66 tests in `tests/unit/test_finalize_session.py`,
+verified capable of failing by a **ten-mutation sweep** (the tests could not go red first, so this
+was the only adversarial move left). Committed as **`93cbb45`**.
+
+Two methodology notes worth keeping:
+
+- The backfill rule "derive every expected value from an independent source of truth, never by
+  running the code" paid off immediately: the multi-occurrence AWS-key test failed on **my
+  fixture**, not the code — `AKIA` + 17 characters correctly fails the pattern's trailing `\b`.
+- Four of the ten mutations first reported *nothing*, because `./run-tests` gates on ruff before
+  pytest and constructs like `if True:` trip the linter. Read as-is, four blanks would have looked
+  like four passes. Mutation sweeps in this repo must bypass the lint gate.
+
 ---
 
 ## Review rounds

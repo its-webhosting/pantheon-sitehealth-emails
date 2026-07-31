@@ -131,7 +131,13 @@ def test_scrub_redacts_every_occurrence_not_just_the_first(fs):
 
 def test_scrub_declines_an_aws_key_id_of_the_wrong_length(fs):
     """The trailing \b is load-bearing: AKIA + 17 chars is not an access key ID, and widening
-    the pattern to catch it would start eating ordinary uppercase identifiers."""
+    the pattern to catch it would start eating ordinary uppercase identifiers.
+
+    NOTE for anyone running /archive-session's verification grep: this fixture WILL show up as a
+    hit, because that grep is `AKIA[0-9A-Z]{16}` with no trailing \b and so matches the first 16
+    of these 17 characters.  It is an invented string, not a key -- and the mismatch is the point
+    of the test.  Do not "fix" it by renaming the fixture; the AKIA prefix is what exercises the
+    boundary."""
     text = "AKIAJKLMNOPQR7EXAMPLE is one character too long"
     assert fs.scrub(text) == text
 
@@ -339,6 +345,18 @@ def test_render_stats_formats_numbers_with_thousands_separators_and_sums_cache_w
 def test_render_stats_orders_tool_counts_by_descending_frequency(fs):
     out = fs.render_stats(stats(), None)
     assert "Bash \u00d7 7, Read \u00d7 2" in out   # MULTIPLICATION SIGN, as the script emits
+
+
+def test_render_stats_does_not_claim_the_usage_capture_outranks_the_jsonl(fs):
+    """/usage's per-session block reports the window /usage itself ran in, so a capture taken
+    after a resumed or re-entered session reads `$0.00 / 0 tokens` while the JSONL table is
+    populated.  Measured on the 2026-07-31 session: $0.0000 and 0 tokens against 171k output and
+    32.3M cache read.  A caption calling the capture "authoritative" would tell a reader to
+    believe the zeros -- a document making its reader less accurate than no document."""
+    out = fs.render_stats(stats(), "Total cost: $0.0000\nUsage: 0 input, 0 output")
+    assert "authoritative" not in out
+    assert "do not assume it wins" in out
+    assert "| claude-opus-5 | 1,000 | 2,000 |" in out, "the populated table still renders"
 
 
 def test_render_stats_says_so_when_usage_was_not_captured(fs):
