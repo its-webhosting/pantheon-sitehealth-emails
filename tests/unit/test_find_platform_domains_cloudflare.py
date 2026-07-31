@@ -13,8 +13,13 @@ is not in the tests/** ignore list.
 TEMPORARY, deleted with the script after the Pantheon CDN migration -- see
 development/2026-07-30-platform-domain-util2/SPEC.md section 11.
 """
+import contextlib
 import importlib.util
 import json
+import os
+import re
+import subprocess
+import sys
 import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -593,7 +598,7 @@ def test_read_all_warns_but_does_not_abort_when_records_stay_missing(fpc):
     assert sorted(i.id for i in items) == ["rec-1", "rec-2"]
     assert shortfall == 1
     assert any("1 record(s) were missed" in m for m in said)
-    assert any("NOT in this file" in m for m in said)
+    assert any("NOT in the output" in m for m in said)
 
 
 def test_a_reread_is_reported_without_v(fpc, capsys):
@@ -623,26 +628,79 @@ def test_verbose_reports_each_zone_and_whether_it_was_cross_checked(fpc, capsys)
     assert "[2/2] zone example.org -- 1 records (total_count unavailable, not cross-checked)" in err
 
 
-def test_main_writes_the_file_and_reports_the_dns_only_count(fpc, tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
+ENTRY = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
+         "proxied": False, "ttl": 1, "comment": None, "tags": [], "settings": None}
+
+
+def fake_sweep(fpc, monkeypatch, sweep):
+    """Drive main() with a canned SweepResult, skipping the client build and the walk."""
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
-    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False: fpc.SweepResult(
-        {"a.example.edu": {"zone_id": "z", "origins": ["live-a.pantheonsite.io"],
-                           "record_id": "r", "proxied": False, "ttl": 1,
-                           "comment": None, "tags": [], "settings": None}},
-        ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2))
+    monkeypatch.setattr(fpc, "fetch_platform_cnames",
+                        lambda client, verbose=False, zone_names=(): sweep)
+
+
+def test_main_writes_the_json_to_stdout_by_default(fpc, tmp_path, monkeypatch, capsys):
+    """SPEC A1.5: stdout is the result stream; the file is written only when -o names it."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": ENTRY}, ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2, 4))
     assert fpc.main(["-c", "ignored.toml"]) == 0
-    written = json.loads((tmp_path / fpc.OUTPUT_FILE).read_text())
-    assert list(written) == ["a.example.edu"]
     captured = capsys.readouterr()
+    assert list(json.loads(captured.out)) == ["a.example.edu"]
+    assert not (tmp_path / fpc.OUTPUT_FILE).exists(), "no -o, so no file is written"
     err = captured.err
     assert "ATTENTION: something worth seeing" in err
     assert "Wrote 1 platform-domain CNAMEs (1 DNS-only" in err
-    assert "from 12431 records in 4 zones in 1 account(s)" in err
-    assert captured.out == "", "stdout carries only argparse output (SPEC R6)"
+    assert "from 12431 records in 4 zones in 1 account(s) to standard output." in err
     assert ("Completeness cross-check: 40 of 43 paginated lists verified complete, 1 short, "
             "2 unverifiable.") in err
     assert "the short lists are named above" in err
+
+
+def test_main_writes_a_file_when_output_is_given(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 4, 12431,
+                                                 40, 1, 2, 4))
+    assert fpc.main(["-o", fpc.OUTPUT_FILE]) == 0
+    captured = capsys.readouterr()
+    assert list(json.loads((tmp_path / fpc.OUTPUT_FILE).read_text())) == ["a.example.edu"]
+    assert captured.out == "", "with -o, stdout carries only argparse output"
+    assert f"to {fpc.OUTPUT_FILE}." in captured.err
+
+
+def test_main_writes_byte_identical_json_to_stdout_and_to_a_file(fpc, tmp_path, monkeypatch,
+                                                                 capsys):
+    """SPEC A1.5: the two destinations differ in WHERE, never in WHAT."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY, "b.example.edu": ENTRY},
+                                                 [], 1, 4, 1, 1, 0, 0, 4))
+    assert fpc.main([]) == 0
+    from_stdout = capsys.readouterr().out
+    assert fpc.main(["-o", "out.json"]) == 0
+    assert (tmp_path / "out.json").read_text() == from_stdout
+
+
+def test_main_says_how_many_zones_of_how_many_on_a_subset_run(fpc, tmp_path, monkeypatch, capsys):
+    """SPEC A1.6: a subset run can never read as a full sweep in a log."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({}, [], 1, 2, 900, 6, 0, 0, 187))
+    assert fpc.main(["engin.umich.edu", "seas.umich.edu"]) == 0
+    assert "in 2 of 187 zones in 1 account(s)" in capsys.readouterr().err
+
+
+def test_main_passes_the_zone_arguments_through_to_the_sweep(fpc, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+    monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
+
+    def capture(client, *, verbose=False, zone_names=()):
+        seen["zone_names"] = zone_names
+        seen["verbose"] = verbose
+        return fpc.SweepResult({}, [], 1, 1, 0, 1, 0, 0, 1)
+
+    monkeypatch.setattr(fpc, "fetch_platform_cnames", capture)
+    assert fpc.main(["-v", "engin.umich.edu", "seas.umich.edu"]) == 0
+    assert seen == {"zone_names": ["engin.umich.edu", "seas.umich.edu"], "verbose": True}
 
 
 def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, monkeypatch,
@@ -654,8 +712,8 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     entry = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
              "proxied": None, "ttl": 1, "comment": None, "tags": [], "settings": None}
-    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False:
-                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 3, 0, 0))
+    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False, zone_names=():
+                        fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 3, 0, 0, 1))
     assert fpc.main([]) == 0
     err = capsys.readouterr().err
     assert "(0 DNS-only" in err
@@ -666,11 +724,12 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
 def test_main_says_so_when_nothing_matched(fpc, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
-    monkeypatch.setattr(fpc, "fetch_platform_cnames",
-                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 4, 900, 6, 0, 0))
+    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False, zone_names=():
+                        fpc.SweepResult({}, [], 1, 4, 900, 6, 0, 0, 4))
     assert fpc.main([]) == 0
-    assert json.loads((tmp_path / fpc.OUTPUT_FILE).read_text()) == {}
-    assert "no platform-domain CNAMEs found in 4 zones" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {}
+    assert "no platform-domain CNAMEs found in 4 zones" in captured.err
 
 
 def test_main_reports_a_startup_error_as_exit_2(fpc, tmp_path, monkeypatch, capsys):
@@ -696,12 +755,369 @@ def test_main_names_an_unwritable_output_file_instead_of_crashing(fpc, tmp_path,
     exit 1 until it was named (adversarial review round 1, finding 3)."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
-    monkeypatch.setattr(fpc, "fetch_platform_cnames",
-                        lambda client, verbose=False: fpc.SweepResult({}, [], 1, 1, 0, 3, 0, 0))
+    monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False, zone_names=():
+                        fpc.SweepResult({}, [], 1, 1, 0, 3, 0, 0, 1))
 
     def refuse(path, data):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(fpc, "write_json_atomic", refuse)
-    assert fpc.main([]) == 2
+    assert fpc.main(["-o", fpc.OUTPUT_FILE]) == 2
     assert "cannot write" in capsys.readouterr().err
+
+
+# --- Amendment A1: zone selection ------------------------------------------------------------
+
+def test_select_zones_keeps_only_the_named_zones_in_the_order_given(fpc):
+    zones = [zone("z-a", "a.umich.edu"), zone("z-b", "b.umich.edu"), zone("z-c", "c.umich.edu")]
+    picked = fpc.select_zones(zones, ["c.umich.edu", "a.umich.edu"])
+    assert [z.id for z in picked] == ["z-c", "z-a"]
+
+
+def test_select_zones_normalizes_case_and_the_trailing_dot_on_both_sides(fpc):
+    zones = [zone("z-a", "Engin.UMich.edu."), zone("z-b", "b.umich.edu")]
+    assert [z.id for z in fpc.select_zones(zones, ["  ENGIN.umich.EDU  "])] == ["z-a"]
+
+
+def test_select_zones_deduplicates_a_repeated_name_and_keeps_the_order(fpc):
+    zones = [zone("z-a", "a.umich.edu"), zone("z-b", "b.umich.edu")]
+    picked = fpc.select_zones(zones, ["b.umich.edu", "a.umich.edu", "b.umich.edu"])
+    assert [z.id for z in picked] == ["z-b", "z-a"]
+
+
+def test_select_zones_keeps_every_zone_when_one_name_matches_more_than_one(fpc):
+    """The same name in two accounts: both are swept, so collect_entries can still warn."""
+    zones = [zone("z-a", "shared.umich.edu"), zone("z-b", "shared.umich.edu")]
+    assert [z.id for z in fpc.select_zones(zones, ["shared.umich.edu"])] == ["z-a", "z-b"]
+
+
+def test_select_zones_names_every_unmatched_name_not_just_the_first(fpc):
+    zones = [zone("z-a", "a.umich.edu")]
+    with pytest.raises(fpc.StartupError) as excinfo:
+        fpc.select_zones(zones, ["typo1.umich.edu", "a.umich.edu", "typo2.umich.edu"])
+    message = str(excinfo.value)
+    assert "typo1.umich.edu" in message
+    assert "typo2.umich.edu" in message
+    assert "a.umich.edu" not in message.replace("typo1.umich.edu", "").replace(
+        "typo2.umich.edu", "")
+
+
+def test_fetch_platform_cnames_reads_records_for_the_named_zones_only(fpc):
+    """The point of the feature: the other zones are never queried at all."""
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=[zone("z-a", "a.umich.edu"), zone("z-b", "b.umich.edu"),
+               zone("z-c", "c.umich.edu")],
+        pages_by_zone={
+            "z-a": [FakePage([[record(name="www.a.umich.edu", id="rec-a")]], total_count=1)],
+            "z-b": [FakePage([[record(name="www.b.umich.edu", id="rec-b")]], total_count=1)],
+            "z-c": [FakePage([[record(name="www.c.umich.edu", id="rec-c")]], total_count=1)],
+        })
+    sweep = fpc.fetch_platform_cnames(client, zone_names=["c.umich.edu", "a.umich.edu"])
+    assert sorted(sweep.entries) == ["www.a.umich.edu", "www.c.umich.edu"]
+    assert sorted(client._calls) == ["z-a", "z-c"]      # the fake's own call record
+    assert (sweep.zones, sweep.zones_total) == (2, 3)
+
+
+def test_fetch_platform_cnames_without_zone_names_still_sweeps_everything(fpc):
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=[zone("z-a", "a.umich.edu"), zone("z-b", "b.umich.edu")],
+        pages_by_zone={
+            "z-a": [FakePage([[record(name="www.a.umich.edu", id="rec-a")]], total_count=1)],
+            "z-b": [FakePage([[record(name="www.b.umich.edu", id="rec-b")]], total_count=1)],
+        })
+    sweep = fpc.fetch_platform_cnames(client)
+    assert sorted(sweep.entries) == ["www.a.umich.edu", "www.b.umich.edu"]
+    assert (sweep.zones, sweep.zones_total) == (2, 2)
+
+
+def test_fetch_platform_cnames_rejects_an_unmatched_zone_name_before_reading_records(fpc):
+    client = FakeCloudflareClient(accounts=[account()], zones=[zone("z-a", "a.umich.edu")])
+    with pytest.raises(fpc.StartupError, match=re.escape("no Cloudflare zone matches nope.umich.edu")):
+        fpc.fetch_platform_cnames(client, zone_names=["nope.umich.edu"])
+    assert client._calls == {}                          # the fake's own call record
+
+
+# --- Amendment A1: stream guards (SPEC A1.5) --------------------------------------------------
+
+DEV_FULL = "/dev/full"
+needs_dev_full = pytest.mark.skipif(not os.path.exists(DEV_FULL),  # noqa: PTH110 -- a device
+                                    reason="/dev/full is Linux-only")   # node, not a repo path
+
+
+def test_a_closed_stdout_with_no_output_flag_is_a_named_exit_2(fpc, tmp_path, monkeypatch,
+                                                               capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "stdout", None)
+    assert fpc.main([]) == 2
+    assert "standard output is closed" in capsys.readouterr().err
+
+
+def test_a_closed_stdout_is_allowed_when_output_names_a_file(fpc, tmp_path, monkeypatch):
+    """-o gives the JSON somewhere to go, so the stdout guard must not fire."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+    monkeypatch.setattr(sys, "stdout", None)
+    assert fpc.main(["-o", "out.json"]) == 0
+    assert list(json.loads((tmp_path / "out.json").read_text())) == ["a.example.edu"]
+
+
+def test_a_closed_stderr_is_a_named_exit_2_reported_on_the_stdout_fallback(fpc, tmp_path,
+                                                                          monkeypatch, capsys):
+    """Measured: print(file=sys.stderr) with stderr None falls back to stdout, which would
+    otherwise interleave operator messages into the JSON."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "stderr", None)
+    assert fpc.main([]) == 2
+    assert "standard error is closed" in capsys.readouterr().out
+
+
+@needs_dev_full
+def test_a_doomed_stdout_becomes_a_named_startup_error_not_exit_120(fpc, monkeypatch):
+    with Path(DEV_FULL).open("w") as doomed:
+        monkeypatch.setattr(sys, "stdout", doomed)
+        with pytest.raises(fpc.StartupError, match="cannot write the JSON to standard output"):
+            fpc.write_json_stdout({"a.example.edu": ENTRY})
+
+
+def spy_on_dup2(fpc, monkeypatch):
+    """Record every os.dup2 the script performs.  Driven over a REAL file descriptor, never
+    capsys: capsys's pseudo-stream raises io.UnsupportedOperation from fileno(), which
+    point_at_devnull suppresses, so os.dup2 is never reached and the mutation "detach
+    unconditionally" stays green -- an instrument that cannot go red on the condition it guards
+    (PD#14).  The sibling's suite names this exact trap."""
+    calls = []
+    monkeypatch.setattr(fpc.os, "dup2", lambda *args: calls.append(args))
+    return calls
+
+
+def test_a_healthy_stdout_is_never_detached_by_a_successful_write(fpc, tmp_path, monkeypatch):
+    calls = spy_on_dup2(fpc, monkeypatch)
+    with (tmp_path / "out.json").open("w") as real_stdout:
+        monkeypatch.setattr(sys, "stdout", real_stdout)
+        fpc.write_json_stdout({"a.example.edu": ENTRY})
+    assert calls == [], "a stream no write has failed on must never be detached"
+    assert json.loads((tmp_path / "out.json").read_text()) == {"a.example.edu": ENTRY}
+
+
+def test_a_healthy_stderr_is_never_detached_by_report_line(fpc, tmp_path, monkeypatch):
+    calls = spy_on_dup2(fpc, monkeypatch)
+    with (tmp_path / "err.txt").open("w") as real_stderr:
+        monkeypatch.setattr(sys, "stderr", real_stderr)
+        fpc.report_line("ERROR: something happened")
+    assert calls == []
+    assert "ERROR: something happened" in (tmp_path / "err.txt").read_text()
+
+
+@needs_dev_full
+def test_a_doomed_stdout_is_detached_after_its_write_fails(fpc, monkeypatch):
+    calls = spy_on_dup2(fpc, monkeypatch)
+    # No `with`: the dup2 spy suppresses the real detach, so the fd still points at /dev/full and
+    # close() would raise ENOSPC out of __exit__ -- the very condition under test.
+    doomed = Path(DEV_FULL).open("w")           # noqa: SIM115 -- closed in the finally below
+    try:
+        monkeypatch.setattr(sys, "stdout", doomed)
+        with pytest.raises(fpc.StartupError):
+            fpc.write_json_stdout({"a.example.edu": ENTRY})
+    finally:
+        with contextlib.suppress(OSError):
+            doomed.close()
+    assert calls, "a stream a real write proved doomed MUST be detached, or exit 120 wins"
+
+
+@needs_dev_full
+def test_a_doomed_stderr_is_detached_by_report_line_without_raising(fpc, monkeypatch):
+    calls = spy_on_dup2(fpc, monkeypatch)
+    doomed = Path(DEV_FULL).open("w")           # noqa: SIM115 -- see the stdout twin above
+    try:
+        monkeypatch.setattr(sys, "stderr", doomed)
+        fpc.report_line("ERROR: nowhere left to report this")
+    finally:
+        with contextlib.suppress(OSError):
+            doomed.close()
+    assert calls, "report_line is the end of the road; it must detach rather than propagate"
+
+
+@needs_dev_full
+def test_a_doomed_stderr_exits_2_in_a_real_subprocess(tmp_path):
+    """End to end: without report_line's guard the interpreter's shutdown flush of the same
+    doomed stderr overrides the exit code with 120, a code SPEC R6 does not contain."""
+    with Path(DEV_FULL).open("w") as doomed:
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPT), "-c", str(tmp_path / "missing.toml")],
+            stdout=subprocess.PIPE, stderr=doomed, check=False)
+    assert completed.returncode == 2, "a doomed stderr must not become exit 120"
+
+
+def run_main_in_a_subprocess(tmp_path, argv, *, stderr, stdout=subprocess.PIPE,
+                            sweep="canned"):
+    """Drive the REAL main() in a real interpreter, so the shutdown flush that produces exit 120
+    actually runs.  An in-process test cannot observe it: pytest never tears the interpreter down
+    between tests, so the whole 120 mechanism is invisible to one (SPEC A1.8, row A12)."""
+    driver = tmp_path / "driver.py"
+    driver.write_text(f"""
+import sys
+from importlib.machinery import SourceFileLoader
+import importlib.util
+loader = SourceFileLoader("fpc", {str(SCRIPT)!r})
+spec = importlib.util.spec_from_loader("fpc", loader)
+m = importlib.util.module_from_spec(spec)
+sys.modules["fpc"] = m
+loader.exec_module(m)
+entry = {{"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
+         "proxied": False, "ttl": 1, "comment": None, "tags": [], "settings": None}}
+entries = {{"a.example.edu": entry}} if {sweep!r} == "canned" else {{}}
+m.cloudflare_client = lambda path: object()
+m.fetch_platform_cnames = (
+    lambda client, verbose=False, zone_names=(): m.SweepResult(entries, [], 1, 2, 5, 1, 0, 0, 187))
+sys.exit(m.main(sys.argv[1:]))
+""")
+    return subprocess.run([sys.executable, str(driver), *argv],
+                          stdout=stdout, stderr=stderr, check=False)
+
+
+@needs_dev_full
+def test_a_doomed_stderr_on_the_success_path_exits_2_not_120(tmp_path):
+    """The guards originally covered only the error path.  Measured before this test existed:
+    a completed sweep whose summary line hit ENOSPC escaped main() and the interpreter's shutdown
+    flush of the same doomed stderr turned exit 0 into 120 -- a code outside the 0/2/130 taxonomy,
+    so a `case $?` wrapper falls through with a complete JSON already on stdout."""
+    with Path(DEV_FULL).open("w") as doomed:
+        completed = run_main_in_a_subprocess(tmp_path, [], stderr=doomed)
+    assert completed.returncode == 2, "a doomed stderr on the success path must not become 120"
+
+
+@needs_dev_full
+def test_a_doomed_stdout_exits_2_not_120_in_a_real_subprocess(tmp_path):
+    """SPEC A1.8 row A12, as specified: a subprocess, observing the exit code.  The in-process
+    variant cannot pin this -- pytest never tears the interpreter down, so the shutdown flush
+    that produces 120 never runs."""
+    with Path(DEV_FULL).open("w") as doomed_out:
+        completed = run_main_in_a_subprocess(tmp_path, [], stdout=doomed_out,
+                                             stderr=subprocess.PIPE)
+    assert completed.returncode == 2
+    assert b"cannot write the JSON to standard output" in completed.stderr
+
+
+def test_the_zero_match_attention_names_the_real_destination(fpc, tmp_path, monkeypatch, capsys):
+    """It named platform-domains-cloudflare.json unconditionally -- telling an operator that a
+    prior full sweep's baseline had just been overwritten empty, when no file was written at
+    all."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({}, [], 1, 2, 5, 1, 0, 0, 187))
+    assert fpc.main([]) == 0
+    err = capsys.readouterr().err
+    assert "an empty result ({}) was written to standard output" in err
+    assert fpc.OUTPUT_FILE not in err, "no file was written; naming one implies a baseline died"
+
+
+def test_the_zero_match_attention_names_the_output_file_when_one_is_given(fpc, tmp_path,
+                                                                         monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({}, [], 1, 2, 5, 1, 0, 0, 187))
+    assert fpc.main(["-o", "chosen.json"]) == 0
+    assert "an empty result ({}) was written to chosen.json" in capsys.readouterr().err
+
+
+def test_an_interrupt_after_a_successful_stdout_write_does_not_claim_nothing_was_produced(
+        fpc, tmp_path, monkeypatch, capsys):
+    """The message was categorical, so an operator or wrapper acting on it would discard a
+    complete, valid document that is already on stdout."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+
+    def interrupt_after_the_write(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "summarize", interrupt_after_the_write)
+    assert fpc.main([]) == 130
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"a.example.edu": ENTRY}
+    assert "no complete JSON document was produced" not in captured.err
+    assert "complete JSON document was already written to standard output" in captured.err
+
+
+def test_an_interrupt_before_the_write_says_nothing_was_produced(fpc, tmp_path, monkeypatch,
+                                                                 capsys):
+    monkeypatch.chdir(tmp_path)
+
+    def interrupt(config_path):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "cloudflare_client", interrupt)
+    assert fpc.main([]) == 130
+    assert "no complete JSON document was produced" in capsys.readouterr().err
+
+
+def test_a_subset_run_written_to_a_file_warns_that_it_is_not_a_full_sweep(fpc, tmp_path,
+                                                                          monkeypatch, capsys):
+    """-o accepts a subset, and the file is byte-shape-identical to a full sweep with no in-band
+    marker of scope.  The stderr line is the only signal, so it must be loud."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0,
+                                                 187))
+    assert fpc.main(["-o", "subset.json", "engin.umich.edu", "seas.umich.edu"]) == 0
+    err = capsys.readouterr().err
+    assert "ATTENTION" in err
+    assert "2 of 187" in err
+    assert "NOT an organization-wide sweep" in err
+
+
+def test_a_full_sweep_written_to_a_file_does_not_warn(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 187, 5, 1, 0, 0,
+                                                 187))
+    assert fpc.main(["-o", "full.json"]) == 0
+    assert "NOT an organization-wide sweep" not in capsys.readouterr().err
+
+
+def test_write_json_atomic_and_stdout_share_one_serializer(fpc, tmp_path, monkeypatch):
+    """dump_json's docstring calls itself "the ONE serialization"; write_json_atomic formatted
+    separately, so the byte-identity held only by duplicated literals."""
+    seen = []
+    real = fpc.dump_json
+    monkeypatch.setattr(fpc, "dump_json", lambda data, stream: (seen.append(stream), real(
+        data, stream))[1])
+    fpc.write_json_atomic(str(tmp_path / "out.json"), {"a.example.edu": ENTRY})
+    assert len(seen) == 1, "write_json_atomic must serialize through dump_json"
+
+
+def test_an_interrupt_with_output_after_the_write_says_the_file_was_fully_written(
+        fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "summarize", interrupt)
+    assert fpc.main(["-o", "out.json"]) == 130
+    assert "out.json was fully written." in capsys.readouterr().err
+    assert list(json.loads((tmp_path / "out.json").read_text())) == ["a.example.edu"]
+
+
+def test_an_interrupt_with_output_before_the_write_never_claims_the_file_is_unchanged(
+        fpc, tmp_path, monkeypatch, capsys):
+    """`wrote` is a reliable YES and an unreliable NO: a SIGINT between os.replace() and the
+    assignment leaves wrote=False with the file already replaced, so this branch must state only
+    what is always true -- the write is atomic, never partial."""
+    monkeypatch.chdir(tmp_path)
+
+    def interrupt(config_path):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "cloudflare_client", interrupt)
+    assert fpc.main(["-o", "out.json"]) == 130
+    err = capsys.readouterr().err
+    assert "never partial" in err
+    assert "out.json is unchanged --" not in err, "an unqualified 'unchanged' can be false"
+
+
+def test_the_zone_positional_is_documented_as_not_interleavable(fpc):
+    """argparse cannot interleave positionals with options; the operator sees only
+    'unrecognized arguments'.  Pinned so the help text keeps saying so."""
+    parser = fpc.build_arg_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["a.example", "-v", "b.example"])
+    assert "cannot interleave" in parser.format_help()

@@ -113,28 +113,52 @@ CDN migration** — checklist in `development/2026-07-28-platform-domain-util/SP
 
 A standalone, deletable script — **not** part of the main program and importing nothing from
 `psh/`/`check/`/`plugin/` — that writes every Cloudflare DNS **CNAME whose target ends in
-`.pantheonsite.io`** to `./platform-domains-cloudflare.json`. It is the Cloudflare-side
+`.pantheonsite.io`** as JSON. It is the Cloudflare-side
 counterpart to `find-platform-domains-dns`: that one reads public DNS and is blind to a proxied
 record's target; `fqdns.json` is built with `proxied=True` and is blind to a DNS-only record. This
-considers **all** records in **all** zones of every account the credentials can see. Legacy
-`*.gotpantheon.com` targets are out of scope.
+considers **all** records in **all** zones of every account the credentials can see, unless
+**zone names are given as positional arguments**, which narrows the record sweep to those zones.
+Legacy `*.gotpantheon.com` targets are out of scope.
 
-The file is keyed by the **normalized** FQDN with `{zone_id, origins, record_id, proxied, ttl,
+**Output goes to stdout unless `-o PATH` names a file** — so the organization-wide baseline
+`platform-domains-cloudflare.json` is only ever produced deliberately, by a redirect or `-o`, and
+a two-zone subset run can never silently overwrite it *by default*. That matters because the file
+drives a *destructive* rewrite: a subset that looks like a full sweep would silently under-report.
+**The hazard is narrowed, not closed** — `-o platform-domains-cloudflare.json engin.umich.edu`
+still writes a subset under the canonical name, byte-shape-identical to a full sweep, so a
+narrowed sweep written with `-o` emits a loud `ATTENTION: … covers N of M zones … MUST NOT be used
+as the baseline for a rewrite`. The redirect form (`… engin.umich.edu > file`) is invisible to the
+program and cannot be caught at all. The summary names its destination and says `N of M zones`
+whenever a `ZONE` argument narrowed the run. A subset also **cannot see a cross-zone duplicate**
+living in an unselected zone, so an entry can look unambiguous when it is not — one more reason a
+rewrite is driven from a full sweep. **Zone matching is exact** on the same `normalize()` (case and a trailing dot ignored); a
+name matching no zone is **fatal (exit 2) and every miss is named**, because a typo yielding a
+short sweep is exactly the under-reporting failure the design refuses to have. The account and
+zone *lists* are still read in full — that is the cheap half (187 zones vs. 22,911 records) and it
+keeps the completeness cross-check, the zero-zone scope guard, and the account count.
+
+The JSON is keyed by the **normalized** FQDN with `{zone_id, origins, record_id, proxied, ttl,
 comment, tags, settings}`. **Two traps when comparing it to `fqdns.json`:** that file keys by the
 **raw** `record.name` (normalize both sides, or you invent phantom entries), and its `origins`
 means something **wider** — every proxied record's content at that name, IP addresses included —
 where this file's holds only matching platform-CNAME targets. `settings` is `.model_dump()`ed (it
 is a pydantic model and is otherwise unserializable). Every scalar is **first-record-wins**,
-`origins` accumulates, and **every** duplicate name warns on stderr. The file is **regenerated in
-full on every run**, whatever its age; a run that matches nothing writes `{}` loudly rather than
-leaving a stale file. It drives a *destructive* rewrite, so **regenerate it immediately before any
-rewrite** — its mtime is the only freshness signal it carries.
+`origins` accumulates, and **every** duplicate name warns on stderr. The output is **produced in
+full on every run**, whatever the age of anything on disk; a run that matches nothing emits `{}`
+loudly rather than leaving a stale file. It drives a *destructive* rewrite, so **regenerate the
+baseline immediately before any rewrite** — its mtime is the only freshness signal it carries.
 
-Exit 0 = written, 2 = could not complete, 130 = interrupted; there is no exit 1 (a doomed stdout
-or stderr can still exit 120, as with the sibling's argparse output). Exit 2 covers an unreadable
-config, a non-string or unresolvable credential, missing credentials, any Cloudflare API error,
-**zero zones** (a missing `Account:Read`/`DNS:Read` scope and a genuinely empty org otherwise
-produce an identical empty file), and an `OSError` on the write.
+Exit 0 = output produced, 2 = could not complete, 130 = interrupted; there is no exit 1. Exit 2
+covers an unreadable config, a non-string or unresolvable credential, missing credentials, any
+Cloudflare API error, **zero zones** (a missing `Account:Read`/`DNS:Read` scope and a genuinely
+empty org otherwise produce an identical empty result), an unmatched `ZONE` name, an `OSError` on
+an `-o` write, **and a doomed stdout or stderr** — the last because stdout became a result
+stream, so the sibling's guards are ported (`require_usable_streams` refuses a closed stderr,
+whose `print` fallback would interleave operator messages into the JSON; `write_json_stdout` and
+`report_line` detach only a stream a **real** write has proven doomed, never unconditionally).
+**The stated exception, same as the sibling's and exhaustive:** argparse writes its usage, error
+and `--help` text before those guards exist and outside every handler, so both
+`--help >/dev/full` and `--bogus 2>/dev/full` still exit 120.
 
 **Pagination is the subtle part, and the first live sweep is why.** All three list endpoints
 paginate by page *number*, so when rows shift between page fetches — routine in a zone being
@@ -148,8 +172,8 @@ cancelled exactly. A shortfall triggers one re-read unioned with the first, and 
 warning, not an abort**: a paginated walk of a continuously-written zone may never be exactly
 complete, and aborting meant the utility produced nothing at all. The run reports
 `Completeness cross-check: N of M paginated lists verified complete, X short, Y unverifiable`.
-stdout carries only argparse's usage/`--help`; everything else is stderr, and error text
-**never** includes an API response body.
+stdout carries the JSON result (or nothing, with `-o`); every operator message is stderr, and
+error text **never** includes an API response body.
 
 Credentials come from `[Cloudflare]` in the same TOML the main program reads, via a **copied**
 resolver handling only the `<{env NAME}` / `<{secret env NAME}` forms; any other substitution, and
@@ -163,8 +187,15 @@ cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, an
 configured.
 
 ```bash
-./find-platform-domains-cloudflare            # every zone, every account, ~2 minutes
-./find-platform-domains-cloudflare -v         # ... naming each zone and its record count
+# refresh the org-wide baseline (~2 minutes) -- do this immediately before any rewrite.
+# Use -o, NOT `> file`: the shell truncates a redirect target BEFORE the sweep starts, so any
+# failed run (bad config, API error) leaves a zero-byte file where the baseline was; -o writes
+# a temp file and os.replace()s it, only on success.
+./find-platform-domains-cloudflare -o platform-domains-cloudflare.json
+
+# ZONE names go AFTER the options -- argparse cannot interleave positionals with flags:
+./find-platform-domains-cloudflare -v engin.umich.edu seas.umich.edu     # just these two zones
+./find-platform-domains-cloudflare -v | jq 'keys'                        # every zone, to stdout
 ```
 
 First live run (2026-07-30): 4 accounts, 187 zones, 22,911 records, 218 platform-domain CNAMEs of

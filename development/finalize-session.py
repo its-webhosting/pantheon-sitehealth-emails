@@ -92,6 +92,12 @@ _SECRET_PATTERNS = [
     # Bearer / Authorization headers
     (r"(?i)(Authorization:\s*Bearer\s+|Bearer\s+)([A-Za-z0-9._\-]{12,})",
      lambda m: m.group(1) + _REDACT.format("bearer")),
+    # Cloudflare edge cookies from a raw `curl -D -` against api.cloudflare.com.  Session-scoped
+    # and short-lived, but token-shaped and of no value in a committed record -- and the value
+    # carries `.`/`-`/`_`, so the bare high-entropy pattern below (which is \b[A-Za-z0-9]{32,}\b)
+    # walks straight past it.  Measured: a `__cf_bm=` cookie survived every other pattern here.
+    (r"(?i)\b(__cf[a-z_]*|cf_clearance)(=)([A-Za-z0-9._\-]{12,})",
+     lambda m: m.group(1) + m.group(2) + _REDACT.format("cf-cookie")),
     # PEM private key blocks
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
      lambda _m: _REDACT.format("private-key")),

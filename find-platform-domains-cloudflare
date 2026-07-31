@@ -11,19 +11,34 @@ and plugin/cloudflare/client.py; normalize()/is_platform_domain() are copies of
 find-platform-domains-dns.
 
 Unlike fqdns.json, this considers ALL records in ALL zones -- not just proxied ones -- and keeps
-only CNAMEs whose target ends in .pantheonsite.io.  The output file is regenerated in full on
-every run, whatever its age.
+only CNAMEs whose target ends in .pantheonsite.io.  Naming zones on the command line narrows the
+sweep to those zones (SPEC A1.3); with none, every zone in every visible account is swept.  The
+output is produced in full on every run, whatever the age of anything already on disk.
 
-Output: ./platform-domains-cloudflare.json, keyed by FQDN, values {zone_id, origins, record_id,
-proxied, ttl, comment, tags, settings}.  stdout carries ONLY argparse's usage/--help text; every
-operator message -- warnings, progress, the summary, errors -- goes to stderr, and the result is
-the file.  Exit 0 = file written, 2 = could not complete, 130 = interrupted.
+Output: JSON keyed by FQDN, values {zone_id, origins, record_id, proxied, ttl, comment, tags,
+settings}.  It goes to STDOUT unless -o names a file, so a subset run produces a stream rather
+than an artifact and the organization-wide baseline is only ever written deliberately:
+
+    find-platform-domains-cloudflare -o platform-domains-cloudflare.json
+
+-o rather than `> platform-domains-cloudflare.json`: the shell truncates a redirect target BEFORE
+the sweep starts, so any failed run leaves a zero-byte file where the baseline was, while -o
+writes a temp file and os.replace()s it only on success.
+
+Every operator message -- warnings, progress, the summary, errors -- goes to stderr.  Exit 0 =
+output produced, 2 = could not complete, 130 = interrupted; a doomed stdout or stderr is a named
+exit 2, NOT the interpreter's 120, which is what require_usable_streams/report_line/
+write_json_stdout exist for.  The stated exception, exhaustive: argparse writes its usage, error
+and --help text before those guards exist and outside every handler, so BOTH `--help >/dev/full`
+and `--bogus 2>/dev/full` still exit 120.
 
 Requires: the `cloudflare` SDK (declared under this project's `cloudflare` extra, which the
 documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and Cloudflare
 credentials in the [Cloudflare] section of the config file.
 """
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -39,7 +54,9 @@ from cloudflare import Cloudflare
 
 PLATFORM_SUFFIX = ".pantheonsite.io"   # the leading dot is load-bearing: it rejects
                                        # "notpantheonsite.io"
-OUTPUT_FILE = "platform-domains-cloudflare.json"
+OUTPUT_FILE = "platform-domains-cloudflare.json"   # the CONVENTIONAL name of the organization-
+                                       # wide baseline, named in --help; the script writes it
+                                       # only when the operator asks, via -o or a redirect
 DEFAULT_CONFIG = "pantheon-sitehealth-emails.toml"
 API_BASE_URL = "https://api.cloudflare.com/client/v4"   # pinned; see build_client
 
@@ -50,6 +67,79 @@ MARKER_RE = re.compile(r"<\{(.*?)(?<!\\)}")
 
 class StartupError(Exception):
     """Anything that stops the sweep from starting or completing (exit 2)."""
+
+
+def point_at_devnull(stream) -> None:
+    """Repoint `stream`'s file descriptor at /dev/null, so nothing written to it can fail again.
+
+    Copied verbatim from find-platform-domains-dns; the recipe is Python's own, from the "Note on
+    SIGPIPE" in the library/signal docs.  Callers decide WHETHER a stream is doomed -- this only
+    carries it out, and it is NEVER called on a stream a real write has not already failed on.
+
+    suppress(), not try/except/pass: ruff SIM105.  Named exceptions only (PD#2) -- a broad
+    suppression would hide a real dup2 failure.  ValueError/io.UnsupportedOperation are the "not
+    backed by a real file descriptor" shapes (pytest's capture objects raise
+    io.UnsupportedOperation from fileno()), where there is no descriptor to replace at all.
+    """
+    with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stream.fileno())
+        os.close(devnull)
+
+
+def report_line(text) -> None:
+    """One line of an abort report, written to a stderr that may itself be failing.
+
+    Every OTHER stderr write in this script is deliberately unguarded -- the progress notes, the
+    re-read warnings and the summary all let an OSError propagate, because main()'s handlers turn
+    it into a named abort at exit 2.  This is the end of that road: a failure HERE has nowhere
+    left to propagate, and CPython's shutdown flush of the same doomed stream would override the
+    exit code with 120.  Swallowing the OSError is the point -- there is nowhere to report "I
+    could not report", and the exit code is the only channel left.
+
+    The probe is the caller's own failed write, never a flush: sys.stderr is LINE-buffered, so its
+    buffer is empty at probe time and an empty flush succeeds even on a filesystem that is 100%
+    full -- it would report a doomed stream healthy.  With sys.stderr closed, CPython's
+    print(file=None) falls back to sys.stdout, so stdout is then the stream that just failed.
+    """
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except OSError:
+        point_at_devnull(sys.stdout if sys.stderr is None else sys.stderr)
+
+
+def require_usable_streams(output) -> None:
+    """Refuse to sweep when a stream this run depends on is closed (SPEC A1.5).
+
+    Measured, and the second case is the worse one:
+
+      * `find-platform-domains-cloudflare >&-` leaves `sys.stdout is None`, and with no -o there
+        is nowhere to write the JSON at all.  (With -o there is, so that case is allowed.)
+      * `find-platform-domains-cloudflare 2>&-` leaves `sys.stderr is None`, and CPython's
+        `print(msg, file=None)` falls back to **sys.stdout** -- so every progress note, warning
+        and summary line would be interleaved into the JSON on stdout, silently corrupting the
+        result.  Measured directly: print(file=sys.stderr) with sys.stderr = None wrote to stdout.
+
+    The stderr check is UNCONDITIONAL while that corruption argument only applies without -o, and
+    that is deliberate: with -o the JSON is safe, but stderr is the ONLY channel carrying the
+    short-list ATTENTION lines, the duplicate-name warnings and the subset warning -- i.e. every
+    signal that the output is incomplete or narrower than it looks.  Producing a file that drives
+    a destructive rewrite while the warnings about it go nowhere is the failure this whole design
+    is organized against, so a closed stderr is fatal on both paths.
+
+    Raised as a StartupError so main()'s existing handler reports it at exit 2.  With stderr gone
+    that report falls back to stdout, so the operator still gets one line naming the problem --
+    a deliberate one-off exception to "stdout carries only the JSON", because the alternative is
+    total silence (PD#1).
+    """
+    if sys.stdout is None and output is None:
+        raise StartupError(
+            "standard output is closed and no -o/--output was given; there is nowhere to write "
+            "the JSON")
+    if sys.stderr is None:
+        raise StartupError(
+            "standard error is closed; every progress note, warning and summary line would fall "
+            "back to stdout and corrupt the JSON there")
 
 
 def normalize(name):
@@ -277,6 +367,39 @@ def collect_entries(zone_records):
     return entries, warnings
 
 
+def dump_json(data, stream) -> None:
+    """The ONE serialization of the output mapping, so the -o file and stdout are byte-identical
+    (SPEC A1.5).  Two call sites formatting separately is how the two destinations drift."""
+    json.dump(data, stream, indent=4, sort_keys=True)
+    stream.write("\n")
+
+
+def write_json_stdout(data) -> None:
+    """Write the output mapping to stdout, converting a doomed stream into a named exit 2.
+
+    Without this the interpreter's shutdown flush of the same doomed stdout raises and overrides
+    the exit code with 120 -- a code SPEC R6's taxonomy does not contain, so a `case $?` over
+    0/2/130 in a wrapper falls through.  The stream is detached only from the except arm, i.e.
+    only after a REAL write has proven it doomed: an unconditional detach silences a healthy
+    stdout for the rest of the process, which under pytest's fd-level capture repoints the
+    session's own captured stdout at /dev/null (the sibling measured 19 cascading errors).
+    """
+    try:
+        dump_json(data, sys.stdout)
+        sys.stdout.flush()
+    except OSError as e:
+        point_at_devnull(sys.stdout)
+        raise StartupError(f"cannot write the JSON to standard output: {e}") from e
+
+
+def emit(entries, path) -> None:
+    """Send the output mapping to its destination: the -o file, or stdout when there is none."""
+    if path is None:
+        write_json_stdout(entries)
+    else:
+        write_json_atomic(path, entries)
+
+
 def write_json_atomic(path, data) -> None:
     """Write data as JSON to a temp file in the same directory, then os.replace() it onto `path`.
 
@@ -290,8 +413,7 @@ def write_json_atomic(path, data) -> None:
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".platform-domains-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=4, sort_keys=True)
-            f.write("\n")
+            dump_json(data, f)   # the SAME serializer stdout uses, so the two cannot drift
         # mkstemp creates the temp file mode 0600, which os.replace would preserve; restore a
         # normal umask-based mode (typically 0644) so other readers keep their access.
         current_umask = os.umask(0)
@@ -375,7 +497,7 @@ def read_all(fetch, what, notify):
     if shortfall:
         notify(f"ATTENTION: {what} -- read {len(by_id)} unique records but Cloudflare reported "
                f"{expected}; {shortfall} record(s) were missed while paging a list that is being "
-               "actively written.  Any platform-domain CNAME among them is NOT in this file.")
+               "actively written.  Any platform-domain CNAME among them is NOT in the output.")
     return list(by_id.values()), shortfall
 
 
@@ -414,7 +536,7 @@ class SweepResult(NamedTuple):
     entries: dict          # the output mapping, keyed by normalized FQDN
     warnings: list         # duplicate-name ATTENTION lines, printed before the write
     accounts: int          # accounts listed
-    zones: int             # zones listed across those accounts
+    zones: int             # zones actually SWEPT (== zones_total unless ZONE args narrowed it)
     records: int           # unique DNS records actually read and inspected
     # Completeness, counted over EVERY paginated list read -- the account list, one zone list
     # per account, and one record list per zone.  Reporting only the record lists would leave
@@ -422,6 +544,9 @@ class SweepResult(NamedTuple):
     lists_complete: int    # unique count reached Cloudflare's total_count
     lists_short: int       # total_count says items were missed (each named in an ATTENTION)
     lists_unverifiable: int  # Cloudflare supplied no total_count, so nothing could be checked
+    # Zones LISTED, before any ZONE-argument narrowing.  Kept so the summary can say "2 of 187"
+    # and a subset run can never be mistaken for a full sweep in a log (SPEC A1.6).
+    zones_total: int
 
 
 def list_zones(client, warn):
@@ -458,8 +583,49 @@ def list_zones(client, warn):
     return accounts, zones, tally
 
 
-def fetch_platform_cnames(client, *, verbose=False):
+def select_zones(zones, requested):
+    """The zones named on the command line, in the order the operator gave (SPEC A1.3).
+
+    Matching is exact on normalize()d names, so case and a trailing root dot are ignored on both
+    sides -- consistent with every other name comparison here.  Repeated names are de-duplicated
+    silently: unlike a duplicate record (R7), a repeated argument has no consequence.
+
+    One name MAY match more than one zone (the same name in two accounts); all matches are kept,
+    so collect_entries can still raise its cross-zone duplicate warning.
+
+    KNOWN LIMIT of any subset run, stated because it is invisible in the output: collect_entries
+    warns when one FQDN holds a platform CNAME in two zones, and the entry keeps the FIRST zone's
+    zone_id/record_id.  A duplicate living in a zone that was NOT selected cannot be seen, so the
+    entry looks unambiguous and a rewriter is pointed at one of two records with no warning.  Only
+    a full sweep can rule that out -- which is one more reason the organization-wide baseline is
+    what a rewrite must be driven from (SPEC A1.3).
+
+    Any unmatched name is fatal and the message names EVERY miss, not the first -- an operator
+    with three typos fixes three in one round trip.  Fatal rather than skipped because a typo
+    that silently produced a short sweep is the under-reporting failure this whole design is
+    organized against (SPEC section 8, item 12).
+    """
+    wanted = list(dict.fromkeys(normalize(name) for name in requested))
+    by_name = {}
+    for zone in zones:
+        by_name.setdefault(normalize(zone.name), []).append(zone)
+    missing = [name for name in wanted if name not in by_name]
+    if missing:
+        raise StartupError(
+            f"no Cloudflare zone matches {', '.join(missing)} -- these credentials can see "
+            f"{len(zones)} zone(s).  Names must match a zone exactly; case and a trailing dot "
+            "are ignored.")
+    return [zone for name in wanted for zone in by_name[name]]
+
+
+def fetch_platform_cnames(client, *, verbose=False, zone_names=()):
     """Walk every account -> zone -> DNS record and collect the platform-domain CNAMEs.
+
+    `zone_names`, when non-empty, narrows the sweep to those zones (SPEC A1.3).  The account and
+    zone LISTS are still read in full -- that is the cheap half (measured: 187 zones against
+    22,911 records) and it is what keeps read_all's completeness cross-check, the "0 zones means
+    a missing Account:Read/DNS:Read scope" guard, and the account count in the summary.  What the
+    argument skips is the expensive half: no DNS records are read for a zone that was not named.
 
     No `proxied=` filter and no `type=` filter on the record list: every record in every zone is
     fetched and inspected here.  That is what "consider all DNS records" means, and per the spec
@@ -485,6 +651,9 @@ def fetch_platform_cnames(client, *, verbose=False):
         print(message, file=sys.stderr, flush=True)
 
     accounts, zones, tally = list_zones(client, warn)
+    zones_total = len(zones)
+    if zone_names:
+        zones = select_zones(zones, zone_names)
     seen = {"records": 0}
 
     def zone_records():
@@ -507,79 +676,173 @@ def fetch_platform_cnames(client, *, verbose=False):
         raise StartupError(f"listing DNS records failed: {api_error_text(e)}") from e
 
     return SweepResult(entries, warnings, len(accounts), len(zones), seen["records"],
-                       tally.complete, tally.short, tally.unverifiable)
+                       tally.complete, tally.short, tally.unverifiable, zones_total)
+
+
+def destination_name(output):
+    """Where the JSON went, for an operator message.  ONE definition, because naming the wrong
+    destination is how the zero-match ATTENTION came to tell operators that a baseline file they
+    still had on disk "was written empty" when nothing had been written at all."""
+    return "standard output" if output is None else output
+
+
+def interrupt_message(*, wrote, output):
+    """What a Ctrl-C actually left behind -- reported as a fact, never as an assumption.
+
+    The -o write is atomic (temp file + os.replace), so that file is either untouched or
+    complete.  stdout has no such guarantee: an interrupt BEFORE the write leaves nothing usable,
+    one AFTER it leaves a complete document already on the stream.  A categorical "nothing was
+    produced" would tell an operator to discard a good result, which is why this branches on
+    whether emit() actually returned rather than on the destination alone.
+
+    `wrote` is set in main() AFTER emit() returns, so it is a reliable YES and an unreliable NO:
+    a SIGINT landing between os.replace() and that assignment leaves wrote=False with the file
+    already replaced.  The not-wrote branch therefore states only what is ALWAYS true -- the write
+    is atomic, so the file is never partial -- rather than asserting "unchanged", which that race
+    can make affirmatively false.  (Verification review, finding 4: the pre-change wording could
+    not be wrong, and a narrower version of the very defect this helper was added to fix.)
+    """
+    if output is not None:
+        return (f"INTERRUPTED: {output} was fully written." if wrote else
+                f"INTERRUPTED: {output} is unchanged or fully written, never partial -- the write "
+                "is atomic.")
+    return ("INTERRUPTED: a complete JSON document was already written to standard output."
+            if wrote else "INTERRUPTED: no complete JSON document was produced.")
+
+
+def summarize(sweep, output) -> None:
+    """Everything the operator is told about a COMPLETED sweep, on stderr.
+
+    Split out of main() so an interrupt landing between the write and the report has a seam to be
+    tested at -- the window in which interrupt_message()'s `wrote` distinction is the difference
+    between keeping and discarding a good result.
+    """
+    entries = sweep.entries
+    destination = destination_name(output)
+    # `is False`, not falsy: an unknown proxy status is null and must not be counted as
+    # DNS-only -- that count is the headline number this script exists to produce.
+    dns_only = sum(1 for entry in entries.values() if entry["proxied"] is False)
+    unknown_proxy = sorted(n for n, e in entries.items() if e["proxied"] is None)
+    # "N of M zones" only when a ZONE argument narrowed the sweep, so a subset run can never
+    # be mistaken for a full one in a log (SPEC A1.6).
+    scope = (f"{sweep.zones} zones" if sweep.zones == sweep.zones_total
+             else f"{sweep.zones} of {sweep.zones_total} zones")
+    print(f"Wrote {len(entries)} platform-domain CNAMEs ({dns_only} DNS-only, invisible to "
+          f"fqdns.json) from {sweep.records} records in {scope} in "
+          f"{sweep.accounts} account(s) to {destination}.", file=sys.stderr, flush=True)
+    # Report the guard's own coverage: a truncation check that silently never ran looks
+    # exactly like one that ran and found nothing wrong.
+    lists = sweep.lists_complete + sweep.lists_short + sweep.lists_unverifiable
+    print(f"Completeness cross-check: {sweep.lists_complete} of {lists} paginated lists "
+          f"verified complete, {sweep.lists_short} short, {sweep.lists_unverifiable} "
+          "unverifiable.", file=sys.stderr, flush=True)
+    if sweep.lists_short:
+        print("ATTENTION: the short lists are named above; records missed while paging them "
+              "are NOT in the output.", file=sys.stderr, flush=True)
+    if unknown_proxy:
+        print(f"ATTENTION: {len(unknown_proxy)} entr"
+              f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "
+              f"(null, not false): {', '.join(unknown_proxy)} -- a rewriter MUST NOT treat "
+              "these as DNS-only.", file=sys.stderr, flush=True)
+    if not entries:
+        print(f"ATTENTION: no platform-domain CNAMEs found in {sweep.zones} zones; "
+              f"an empty result ({{}}) was written to {destination}.",
+              file=sys.stderr, flush=True)
+    # A subset written to a FILE is byte-shape-identical to a full sweep and carries no in-band
+    # marker of its scope, so this line is the only thing standing between it and a rewriter that
+    # treats it as the organization-wide baseline.  A subset on stdout is a stream, not an
+    # artifact, and the "N of M zones" above already says so.
+    if output is not None and sweep.zones != sweep.zones_total:
+        print(f"ATTENTION: {output} covers {sweep.zones} of {sweep.zones_total} zones -- it is "
+              "NOT an organization-wide sweep and MUST NOT be used as the baseline for a "
+              "rewrite.", file=sys.stderr, flush=True)
 
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         allow_abbrev=False,          # house rule: no --for -> --for-real class of foot-gun
-        description="Write every Cloudflare CNAME record pointing at a Pantheon platform "
-                    f"domain to {OUTPUT_FILE}.")
+        description="Write every Cloudflare CNAME record pointing at a Pantheon platform domain "
+                    "as JSON, to standard output unless -o names a file.",
+        epilog=f"With no ZONE, every zone in every visible account is swept.  To refresh the "
+               f"organization-wide baseline before a rewrite, use -o rather than a redirect: "
+               f"`-o {OUTPUT_FILE}` replaces the file atomically and only on success, where "
+               f"`> {OUTPUT_FILE}` truncates it before the sweep even starts and so destroys the "
+               f"previous baseline on any failed run.")
+    parser.add_argument("zones", nargs="*", metavar="ZONE",
+                        help="sweep only these Cloudflare zones, by name (e.g. engin.umich.edu); "
+                             "case and a trailing dot are ignored, and a name that matches no "
+                             "zone is an error.  Give ZONE names AFTER the options -- argparse "
+                             "cannot interleave them")
     parser.add_argument("-c", "--config", default=DEFAULT_CONFIG,
                         help=f"TOML file to read [Cloudflare] credentials from "
                              f"(default: {DEFAULT_CONFIG})")
+    parser.add_argument("-o", "--output", default=None, metavar="PATH",
+                        help="write the JSON to PATH atomically instead of to standard output")
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="print each zone to stderr as it is scanned")
     return parser
 
 
 def main(argv):
-    """Exit 0 = the output file was written, 2 = could not complete, 130 = interrupted.
+    """Exit 0 = the output was produced, 2 = could not complete, 130 = interrupted.
 
     There is deliberately no exit 1: the sibling find-platform-domains-dns reserves it for
     "completed with indeterminates" because a DNS lookup can be indeterminate, whereas a
-    Cloudflare list call either returns or raises.  Holding that line takes the two conversions
-    to StartupError below and the two inside resolve_env_marker/cloudflare_client -- an OSError
-    on the write and a ValueError from shlex both escaped as raw tracebacks at exit 1 until they
-    were named (adversarial review, finding 3).  A doomed stderr can still produce exit 120 from
-    the interpreter's shutdown flush; that is accepted and documented in SPEC section 8, item 4.
+    Cloudflare list call either returns or raises.  Holding that line takes the three conversions
+    to StartupError under the try below (require_usable_streams, write_json_stdout, and the inner
+    emit arm) plus the two inside resolve_env_marker/cloudflare_client -- an OSError on the write
+    and a ValueError from shlex both escaped as raw tracebacks at exit 1 until they were named
+    (adversarial review, finding 3).
 
-    stdout carries only argparse's usage/--help text; every operator message goes to stderr.
+    stdout carries the JSON RESULT unless -o names a file; every operator message goes to stderr.
+    Because stdout became a result stream, SPEC section 8 item 4's "accept exit 120" call is
+    SUPERSEDED by A1.5: a doomed stdout or stderr is now a named exit 2, which is what the four
+    except arms below plus require_usable_streams/report_line/write_json_stdout exist for.  The
+    ONLY remaining 120 is argparse's own output (`--help >/dev/full`, `--bogus 2>/dev/full`),
+    which is written before any of those guards exist and outside every handler.
     """
     options = build_arg_parser().parse_args(argv)
+    wrote = False          # did emit() actually return?  interrupt_message() reports the fact
     try:
+        require_usable_streams(options.output)
         client = cloudflare_client(options.config)
-        sweep = fetch_platform_cnames(client, verbose=options.verbose)
+        sweep = fetch_platform_cnames(client, verbose=options.verbose,
+                                      zone_names=options.zones)
         entries = sweep.entries
         for message in sweep.warnings:
             print(message, file=sys.stderr, flush=True)
         try:
-            write_json_atomic(OUTPUT_FILE, entries)
+            emit(entries, options.output)
         except OSError as e:
             # A full disk or a read-only directory lands here AFTER the whole multi-minute walk.
-            raise StartupError(f"cannot write {OUTPUT_FILE}: {e}") from e
-        # `is False`, not falsy: an unknown proxy status is null and must not be counted as
-        # DNS-only -- that count is the headline number this script exists to produce.
-        dns_only = sum(1 for entry in entries.values() if entry["proxied"] is False)
-        unknown_proxy = sorted(n for n, e in entries.items() if e["proxied"] is None)
-        print(f"Wrote {len(entries)} platform-domain CNAMEs ({dns_only} DNS-only, invisible to "
-              f"fqdns.json) from {sweep.records} records in {sweep.zones} zones in "
-              f"{sweep.accounts} account(s) to {OUTPUT_FILE}.", file=sys.stderr, flush=True)
-        # Report the guard's own coverage: a truncation check that silently never ran looks
-        # exactly like one that ran and found nothing wrong.
-        lists = sweep.lists_complete + sweep.lists_short + sweep.lists_unverifiable
-        print(f"Completeness cross-check: {sweep.lists_complete} of {lists} paginated lists "
-              f"verified complete, {sweep.lists_short} short, {sweep.lists_unverifiable} "
-              "unverifiable.", file=sys.stderr, flush=True)
-        if sweep.lists_short:
-            print("ATTENTION: the short lists are named above; records missed while paging them "
-                  "are NOT in this file.", file=sys.stderr, flush=True)
-        if unknown_proxy:
-            print(f"ATTENTION: {len(unknown_proxy)} entr"
-                  f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "
-                  f"(null, not false): {', '.join(unknown_proxy)} -- a rewriter MUST NOT treat "
-                  "these as DNS-only.", file=sys.stderr, flush=True)
-        if not entries:
-            print(f"ATTENTION: no platform-domain CNAMEs found in {sweep.zones} zones; "
-                  f"{OUTPUT_FILE} was written empty.", file=sys.stderr, flush=True)
+            # (The stdout path raises StartupError itself, from inside write_json_stdout.)
+            raise StartupError(f"cannot write {destination_name(options.output)}: {e}") from e
+        wrote = True
+        summarize(sweep, options.output)
     except StartupError as e:
-        print(f"ERROR: {e}", file=sys.stderr, flush=True)
+        # report_line(), not print(): this is the end of the road, so an ENOSPC on its own stderr
+        # write has nowhere to propagate and CPython's shutdown flush would override the exit
+        # code with 120.  Measured before the guard: `-c missing.toml 2> /dev/full` -> exit 120.
+        report_line(f"ERROR: {e}")
         return 2
     except KeyboardInterrupt:
-        # The write is atomic, so the file is either untouched or complete -- never half-written.
-        print(f"INTERRUPTED: {OUTPUT_FILE} is either unchanged or fully written.",
-              file=sys.stderr, flush=True)
+        report_line(interrupt_message(wrote=wrote, output=options.output))
         return 130
+    except OSError as e:
+        # The SUCCESS path's own stderr writes -- the duplicate-name warnings, the summary, the
+        # cross-check line, and note()/warn() inside the walk -- are deliberately unguarded, so
+        # this is where they land.  Without this arm an ENOSPC on the summary line escaped main()
+        # entirely and the interpreter's shutdown flush of the same doomed stream turned a
+        # COMPLETED sweep into exit 120, with valid JSON already on stdout and a `case $?` over
+        # 0/2/130 falling through.  Measured: `2> /dev/full` on the success path -> 120 without
+        # this arm, 2 with it.  Catching is not sufficient on its own -- the buffered write is
+        # retried at shutdown -- which is why the report goes through report_line's detach.
+        # Attribution is hedged on purpose: this arm is outermost, and while no cloudflare/httpx
+        # class subclasses OSError on 5.4.0, trust_env=True keeps $SSL_CERT_FILE and $HTTPS_PROXY
+        # in play (SPEC section 8.13) and those failure shapes ARE OSError-derived.
+        report_line(f"ERROR: {type(e).__name__} escaped the sweep, most likely an operator-stream "
+                    f"write: {e}")
+        return 2
     return 0
 
 

@@ -170,6 +170,8 @@ exits **2**. Nothing on it reaches exit 1 — see R6.
 
 ### R1 — CLI
 
+> ⚠️ **SUPERSEDED by Amendment A1.2** (positional `ZONE ...` and `-o/--output` were added).
+
 ```
 find-platform-domains-cloudflare [-c CONFIG] [-v]
 ```
@@ -2294,6 +2296,16 @@ git commit -m "docs(find-platform-domains-cloudflare): document the temporary ut
 
 ## Task 7: Live verification
 
+> ⚠️ **SUPERSEDED by Amendment A1.9a — DO NOT RUN AS WRITTEN.** Step 1 has no `-o`, so under
+> Amendment A1 the JSON goes to the terminal and no file is produced; Steps 2–3 then `json.load()`
+> `platform-domains-cloudflare.json` and would silently validate a **stale** artifact left by an
+> earlier sweep. Run this first, then use the A1.9a Step 1:
+>
+> ```bash
+> mv -n platform-domains-cloudflare.json platform-domains-cloudflare.json.bak   # Step 0
+> time ./find-platform-domains-cloudflare -v -o platform-domains-cloudflare.json ; echo "exit=$?"
+> ```
+
 > # ⛔ STOP — OPERATOR APPROVAL REQUIRED
 >
 > **This is a structural halt, not a checklist item. There is deliberately no checkbox to tick.**
@@ -2375,15 +2387,18 @@ git commit -m "docs(find-platform-domains-cloudflare): record the first live swe
 
 Recorded with the reasoning so a later session does not re-litigate them.
 
-1. **`--output` flag.** The path is fixed by the PROMPT. A script with one caller and a
-   months-long life does not need a configurable output path.
+1. ~~**`--output` flag.**~~ **REVERSED by Amendment A1.2** — `-o/--output` exists, and stdout is
+   the default result stream. The original reasoning ("the path is fixed by the PROMPT") stopped
+   holding once a run could cover a subset of zones.
 2. **Nested `records` list / parallel arrays for per-record detail.** Rejected in favor of scalars
    with first-record-wins, mirroring how `fqdns.json` already treats `zone_id`. Duplicates always
    warn and every target stays in `origins`.
 3. **Server-side filtering (`type="CNAME"` on the records list).** Rejected: the requirement is to
    consider all records, efficiency is explicitly not a goal, and the change is one word if a run
    becomes painful. §14 Q2 revisits it against the measured runtime.
-4. **Doomed-stream detach guards and the exit-120 taxonomy** the sibling carries. Rejected: that
+4. ~~**Doomed-stream detach guards and the exit-120 taxonomy**~~ **REVERSED by Amendment A1.5** —
+   the premise below ("here the result is a file") stopped holding when stdout became the result
+   stream; the guards are ported. Original reasoning retained: that
    machinery exists because the sibling's *result* is a CSV on stdout, where a failed shutdown
    flush silently converts a good sweep into exit 120. Here the result is a file. A doomed stdout
    (`--help >/dev/full`) or stderr can still produce exit 120 — accepted and documented (R6)
@@ -2626,3 +2641,263 @@ later, and a reader should know they are known.
    suite does the same), so changed nowhere rather than changed here alone.
 6. **Task 7 Step 3 assumes `fqdns.json` exists** and will raise `FileNotFoundError` if it does
    not. It is a hand-run step behind the STOP, and the failure is self-explanatory.
+
+---
+
+# Amendment A1 — zone selection and stdout output (2026-07-31)
+
+Authorized by the operator in session, after the utility shipped. This amendment **supersedes**
+`R1`, parts of `R5`/`R6`, and `§8.1`/`§8.4`; everything it does not name is unchanged. It is
+appended rather than spliced so the diff against the shipped baseline stays readable.
+
+## A1.1 — Why
+
+Two independent requests, settled in one design pass:
+
+1. **Sweep only named zones.** A full sweep is 187 zones / 22,911 records / 2m17s (§12). An
+   operator checking one or two zones — during a rewrite, or verifying a fix — should not pay for
+   the whole organization.
+2. **stdout is the result stream.** `-o`/`--output` writes a file; without it the JSON goes to
+   stdout. The operator's stated reason: the pre-rewrite baseline step becomes an explicit
+   redirect, so the canonical file can only ever be produced deliberately.
+
+The second request is what makes the first safe. The shipped design had one output path and one
+filename, so a subset run would have silently overwritten the organization-wide file with a
+two-zone subset of identical shape — the "silently under-reports" failure `§8.12` names as the
+one this design is organized against. With stdout as the default, the *default* subset run
+produces a stream, not an artifact, and the canonical file is written only when someone names it.
+
+**This narrows the hazard; it does not close it**, and the amendment initially over-claimed that
+it did. `-o platform-domains-cloudflare.json engin.umich.edu` and
+`… engin.umich.edu > platform-domains-cloudflare.json` each still produce a file byte-shape-
+identical to a full sweep, with no in-band marker of scope — and the redirect form is invisible to
+the program entirely. `summarize()` therefore emits a loud `ATTENTION: … covers N of M zones … MUST
+NOT be used as the baseline for a rewrite` whenever a narrowed sweep is written with `-o`. The
+redirect form cannot be detected at all; that residual is stated here rather than papered over.
+
+## A1.2 — R1 (superseded) — CLI
+
+```
+find-platform-domains-cloudflare [-c CONFIG] [-o OUTPUT] [-v] [ZONE ...]
+```
+
+| Arg | Default | Meaning |
+|---|---|---|
+| `ZONE ...` | none — every zone | zone names to sweep; DNS records are read for these zones only |
+| `-o`, `--output` | none — stdout | write the JSON here, atomically, instead of to stdout |
+| `-c`, `--config` | `pantheon-sitehealth-emails.toml` | unchanged |
+| `-v`, `--verbose` | off | unchanged |
+
+`allow_abbrev=False` still holds. `ZONE` is the first positional argument this script has had.
+
+## A1.3 — R9 (new) — Zone selection
+
+Zone names are resolved **client-side**, against the zone list `list_zones()` already builds:
+
+1. `list_zones()` runs unchanged — accounts, then zones per account, each through `read_all`'s
+   completeness cross-check.
+2. `select_zones(zones, requested)` filters that list.
+3. Records are read for the selected zones only.
+
+**Rejected alternative: server-side `client.zones.list(name=Z)` per name.** It skips the accounts
+walk and is fewer requests, but it would have to replicate the completeness cross-check per name,
+it loses the `0 zones ⇒ missing Account:Read/DNS:Read` guard, it loses the account count the
+summary prints, and an unmatched name degrades to a bare "0 zones" with no context. The listing
+it avoids is the *cheap* half: measured, records are 22,911 reads against 187 zones. Filtering
+client-side buys better errors and the existing guards for a few seconds.
+
+Rules:
+
+- **Matching is exact, on `normalize()`d names**, both sides — so case and a trailing root dot are
+  ignored, consistent with every other name comparison in this script. No globbing, no suffix
+  matching (`§A1.7`).
+- **Duplicate names on the command line are de-duplicated silently**, order preserved. Unlike a
+  duplicate *record* (`R7`), a repeated CLI argument has no consequence worth a warning.
+- **One name may match more than one zone** (the same name in two accounts). All matches are
+  swept; the existing cross-zone duplicate warning in `collect_entries` still fires if they both
+  hold a platform CNAME.
+- **Any unmatched name is fatal** (`StartupError`, exit 2), and the message names **every** miss,
+  not the first. An operator with three typos fixes three in one round trip. This is the guard
+  that replaces `§A1.4`'s zero-zone check on the filtered path — a typo that silently produced a
+  short sweep is precisely the under-reporting failure this design refuses to have.
+- Selection order is **the order the operator gave**, so `-v` progress reads in the order they
+  asked for.
+
+## A1.4 — R3 addendum — the zero-zone guard
+
+`list_zones()`'s "0 zones is fatal" check is unchanged and still runs **before** selection, so a
+credential missing `Account:Read`/`DNS:Read` is still caught by its own message. On the filtered
+path the unmatched-name error of `A1.3` is what catches a name that cannot be found, and it is
+strictly more informative.
+
+## A1.5 — R5/R6 (amended) — output routing and streams
+
+`R5`'s JSON shape is unchanged. What changes is where it goes, and that stdout is now a result
+stream — which reopens the exit-code question `§8.4` declined.
+
+- `emit(entries, path)`: `path` given → the existing `write_json_atomic()`, untouched; `path`
+  `None` → the same bytes to stdout. Both go through one `dump_json()` so the two forms are
+  **byte-identical**.
+- **`§8.4` is superseded.** It declined the sibling's doomed-stream machinery on the grounds that
+  "here the result is a file". That premise no longer holds. Ported:
+  - `require_usable_streams(output)` — refuses up front when `sys.stdout is None` and no `-o` was
+    given (nowhere to write the JSON), and whenever `sys.stderr is None`. The second is the worse
+    case and is **measured, not assumed**: `print(file=sys.stderr)` with `sys.stderr` set to
+    `None` falls back to `sys.stdout`, so with stderr closed every progress line, warning and
+    summary would be interleaved into the JSON on stdout.
+  - `point_at_devnull(stream)` — copied verbatim from the sibling.
+  - The stdout write is a **single call at the end**, so the sibling's flush-probe variant of
+    `detach_doomed_stdout()` is deliberately **not** ported: `dump_json()` plus an explicit
+    `flush()` inside `except OSError` *is* a real failed write, which is the proof the sibling's
+    stderr twin already uses. Never detach a stream a real write has not proven doomed — an
+    unconditional detach repoints pytest's own captured stdout at `/dev/null`.
+  - `report_line(text)` — the guarded stderr writer, used by `main()`'s end-of-road reporters.
+  - **`main()` MUST carry an `except OSError` arm**, reporting through `report_line` and returning
+    2. This was missed on the first pass and is the defect the sibling had already paid for: the
+    other three arms cover only *error* paths, so an ENOSPC on a **success**-path stderr write —
+    the duplicate-name warnings, the summary, the cross-check line, `note()`/`warn()` inside the
+    walk — escaped `main()` entirely and the shutdown flush turned a *completed* sweep into 120,
+    with valid JSON already on stdout. Measured both ways: 120 without the arm, 2 with it.
+    Catching alone is **not** sufficient — the buffered write is retried at shutdown — so the
+    report must go through `report_line`'s detach. Pinned by
+    `test_a_doomed_stderr_on_the_success_path_exits_2_not_120`, which drives the **success** path;
+    a test driving only the missing-config path is green against a program that still exits 120.
+- **Exit codes are unchanged**: 0 written, 2 could not complete, 130 interrupted. A doomed stdout
+  or stderr now yields **2**, not the interpreter's 120.
+- **The stated exception stands**: argparse writes its usage/`--help` text before any guard
+  exists, so `--help >/dev/full` still exits 120. Same call as the sibling's, same reason.
+
+## A1.6 — §6 addendum — observability
+
+The summary line distinguishes a subset run from a full sweep, so the two can never be confused
+in a log:
+
+```
+Wrote 12 platform-domain CNAMEs (2 DNS-only, invisible to fqdns.json) from 1842 records
+in 2 of 187 zones in 1 account(s) to standard output.
+```
+
+`in N of M zones` appears only when `N != M`; a full sweep keeps reading `in M zones`. The
+destination is named literally (`standard output`, or the `-o` path).
+
+## A1.7 — NOT in scope (additions to §8)
+
+14. **Matching a zone by id.** Names are what an operator has; `§A1.3`'s error names the misses.
+15. **Glob or suffix matching** (`*.umich.edu`). Exact matching cannot silently over-select, and
+    an over-selecting typo on a destructive-rewrite input is the expensive direction.
+16. **Resumability**, still — `§8.12`'s conclusion stands (naming the zones *is* the manual
+    resume), but its *premise* — "there is no partial artifact" — no longer holds on the redirect
+    path, where the shell truncates the target before the sweep starts and a failed run therefore
+    leaves a zero-byte file where the baseline was. This is why `-o` (temp file + `os.replace`,
+    written only on success) is the **recommended** baseline recipe in `--help` and in CLAUDE.md,
+    and `>` is documented as the lossy alternative rather than the headline.
+17. **Reading zone names from a file** (`@zones.txt`). The shell already does this with `$(cat …)`.
+
+## A1.8 — Test plan additions (§7)
+
+All offline, against the existing `FakeCloudflareClient`. Seams: `select_zones` (pure),
+`fetch_platform_cnames`, `emit`, `require_usable_streams`, `main()`, plus **two** subprocess cases
+(A12 and A16 — the shutdown flush that produces exit 120 cannot be observed in-process).
+
+| # | Test | Pins |
+|---|---|---|
+| A1 | selects the named zones, in the order given | `A1.3` |
+| A2 | normalizes case and the trailing dot on both sides | `A1.3` |
+| A3 | de-duplicates a repeated name, order preserved | `A1.3` |
+| A4 | keeps every zone when one name matches two | `A1.3` |
+| A5 | an unmatched name is fatal and names **every** miss | `A1.3` |
+| A6 | records are read for the named zones **only** (the others are never queried) | `A1.3` |
+| A7 | an unfiltered run still sweeps everything | regression |
+| A8 | `-o` and stdout produce byte-identical JSON | `A1.5` |
+| A9 | the summary says `N of M zones` only on a subset run | `A1.6` |
+| A10 | a closed stdout with no `-o` is a named exit 2 | `A1.5` |
+| A11 | a closed stderr is a named exit 2 | `A1.5` |
+| A12 | a doomed stdout (`> /dev/full`) exits **2**, not 120 — **real subprocess** | `A1.5` |
+| A13 | a healthy stdout is never detached — `os.dup2` spy over a **real fd** | `A1.5` |
+| A14 | a healthy **stderr** is never detached by `report_line` — the missing twin | `A1.5` |
+| A15 | a doomed stdout/stderr **is** detached (the positive half of A13/A14) | `A1.5` |
+| A16 | a doomed stderr on the **success** path exits 2, not 120 — real subprocess | `A1.5` |
+| A17 | the zero-match ATTENTION names the real destination, never a file that was not written | `A1.6` |
+| A18 | an interrupt **after** a successful stdout write does not claim nothing was produced | `A1.5` |
+| A19 | a subset written with `-o` warns it is not an organization-wide sweep | `A1.1` |
+| A20 | `write_json_atomic` serializes through `dump_json` — the DRY claim, enforced | `A1.5` |
+
+A13/A14 are the mutation guard the sibling learned the hard way, and the first implementation of
+A13 **could not go red**: driven over `capsys`, `fileno()` raises `io.UnsupportedOperation`, which
+`point_at_devnull`'s `contextlib.suppress` swallows before `os.dup2` is ever reached — so the
+mutation "detach unconditionally" stayed green (verified by mutating the script and re-running).
+They must spy on `os.dup2` and drive over a **real** file descriptor. A12 likewise must be a
+subprocess: pytest never tears the interpreter down, so the shutdown flush that produces 120 never
+runs in-process, and an in-process test asserting a raised `StartupError` pins the wrong thing.
+
+## A1.9a — Task 7 is superseded
+
+**Task 7's live-verification procedure MUST NOT be run as written.** Step 1 is
+`time ./find-platform-domains-cloudflare -v` with no `-o` and no redirect, so under this amendment
+the JSON goes to the terminal and no file is produced; Steps 2–3 then `json.load()`
+`platform-domains-cloudflare.json`. On a clean checkout that is a `FileNotFoundError`, and — worse
+— in the operator's working directory, where the 2026-07-30 sweep left that file, **Steps 2 and 3
+would validate the stale 2026-07-30 artifact and print a green cross-check**: an acceptance
+criterion that passes without testing the run it claims to test (PD#14).
+
+Replace Step 1, and add a Step 0 that moves any existing file aside so a stale one cannot satisfy
+Steps 2–3 (`-o`, not `>`, per `§A1.7` item 16). Task 7 now carries this banner inline:
+
+```bash
+mv -n platform-domains-cloudflare.json platform-domains-cloudflare.json.bak   # Step 0
+time ./find-platform-domains-cloudflare -v -o platform-domains-cloudflare.json ; echo "exit=$?"
+```
+
+## A1.9 — Live verification (COMPLETED 2026-07-31)
+
+Cloudflare's API returned HTTP 521/522/523 for the first part of this session (incident
+*"Cloudflare API Availability Reduced"*, opened 2026-07-31T11:51Z; reproduced with `curl`
+independently of this script, so the utility was correctly reporting a real outage as exit 2).
+The incident cleared later the same day and the verification below was then run for real.
+
+**Full sweep** — `./find-platform-domains-cloudflare -o <scratch>/full.json -v`
+
+```
+Wrote 218 platform-domain CNAMEs (5 DNS-only, invisible to fqdns.json) from 22632 records
+in 187 zones in 4 account(s) to <scratch>/full.json.
+Completeness cross-check: 192 of 192 paginated lists verified complete, 0 short, 0 unverifiable.
+exit=0                                                            real 2m45.473s
+```
+
+Against §12's 2026-07-30 first live run: **identical** account (4), zone (187), entry (218) and
+DNS-only (5) counts, and 192 of 192 lists complete again. Record count moved 22,911 → 22,632,
+which is expected — zones are continuously written. No `-o` file was written over the operator's
+existing baseline; the sweep went to a scratch path.
+
+**Subset sweep** — the two zones holding the most entries (`umich.edu`, 99; `engin.umich.edu`, 55)
+
+```
+[1/2] zone umich.edu -- 683 records
+[2/2] zone engin.umich.edu -- 635 records
+Wrote 154 platform-domain CNAMEs (0 DNS-only) from 1318 records in 2 of 187 zones in 4 account(s)
+  to standard output.
+Completeness cross-check: 7 of 7 paginated lists verified complete, 0 short, 0 unverifiable.
+exit=0                                                            real 0m7.963s
+```
+
+**The subset output is byte-for-byte identical to the full sweep's slice for those two zones**
+(`diff` of `{k: v for k, v in full if v["zone_id"] in {the two ids}}` against the subset output:
+no differences). 154 = 99 + 55. Runtime 8s against 2m45s — the narrowing does what it exists for.
+
+**Everything else, measured live against the recovered API:**
+
+| Check | Result |
+|---|---|
+| `stdout` vs `-o` for the same zones | byte-identical, 73,168 bytes |
+| subset written with `-o` | `ATTENTION: … covers 2 of 187 zones … MUST NOT be used as the baseline` |
+| full sweep written with `-o` | no such ATTENTION (0 occurrences) |
+| `UMICH.EDU.` twice (case + trailing dot + duplicate) | `1 of 187 zones`, 99 entries — normalized and de-duplicated |
+| two unmatched names | exit 2, **both** named, zero records read |
+| `>/dev/full` | exit 2, `cannot write the JSON to standard output: [Errno 28]` |
+| `2>/dev/full` (success path) | exit 2 |
+| `>&-` / `2>&-` | exit 2, each named |
+| `\| head -1`, 73 KB payload | exit 2, `[Errno 32] Broken pipe` — the document was genuinely not delivered, so "could not complete" is correct |
+| `\| head -1`, payload under the 64 KB pipe buffer | exit 0 — no write ever fails |
+| `--bogus` | exit 2 (argparse) |
+
+Offline suite at the same commit: **1301 passed, 3 skipped**, ruff and pyright gates green.
