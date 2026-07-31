@@ -1101,8 +1101,8 @@ def test_an_interrupt_after_a_successful_stdout_write_does_not_claim_nothing_was
     """The message was categorical, so an operator or wrapper acting on it would discard a
     complete, valid document that is already on stdout."""
     monkeypatch.chdir(tmp_path)
-    entry = swept(proxied=False)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 1, 0, 0, 1))
+    fake_sweep(fpc, monkeypatch,
+               fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1, 1, 1, 1, 0, 0, 1))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
 
     def interrupt_after_the_write(*args, **kwargs):
@@ -1111,7 +1111,15 @@ def test_an_interrupt_after_a_successful_stdout_write_does_not_claim_nothing_was
     monkeypatch.setattr(fpc, "summarize", interrupt_after_the_write)
     assert fpc.main([]) == 130
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == {"a.example.edu": entry}
+    # An INDEPENDENTLY built expected dict, never the object main() mutated (task 4 review round
+    # 3, finding 2 residual): asserting against the same object main() wrote into cannot fail no
+    # matter what resolve_target/classify actually computed.  The literal resolved_a/resolved_aaaa
+    # values below come from what fake_dns(ENTRY_HAPPY_DNS) was told to answer, not from reading
+    # main()'s output back.
+    expected = swept(proxied=False)
+    expected["resolved_a"] = ["23.185.0.4"]
+    expected["resolved_aaaa"] = ["2620:12a:8000::4"]
+    assert json.loads(captured.out) == {"a.example.edu": expected}
     assert "no complete JSON document was produced" not in captured.err
     assert "complete JSON document was already written to standard output" in captured.err
 
@@ -1264,11 +1272,18 @@ def test_check_basename_leaves_no_probe_file_behind(fpc, tmp_path):
 def test_the_output_option_takes_a_basename_not_a_path(fpc, tmp_path, monkeypatch, capsys):
     """R2.1: -o/--output-basename replaces -o/--output."""
     monkeypatch.chdir(tmp_path)
-    entry = swept(proxied=False)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": entry}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_sweep(fpc, monkeypatch,
+               fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1, 2, 5, 1, 0, 0, 2))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "engin-zone"]) == 0
-    assert json.loads((tmp_path / "engin-zone.json").read_text()) == {"a.example.edu": entry}
+    # An INDEPENDENTLY built expected dict, never the object main() mutated (task 4 review round
+    # 3, finding 2 residual) -- see the sibling comment above for why that assertion shape is a
+    # dead instrument.  resolved_a/resolved_aaaa below are the literal values ENTRY_HAPPY_DNS
+    # tells fake_dns to answer with.
+    expected = swept(proxied=False)
+    expected["resolved_a"] = ["23.185.0.4"]
+    expected["resolved_aaaa"] = ["2620:12a:8000::4"]
+    assert json.loads((tmp_path / "engin-zone.json").read_text()) == {"a.example.edu": expected}
 
 
 def test_the_old_output_path_form_is_rejected_before_any_api_call(fpc, tmp_path, monkeypatch,
