@@ -617,6 +617,26 @@ Exit 1 is new. The prior spec states "There is deliberately no exit 1"; that rea
 work and can partially succeed. The sibling `find-platform-domains-dns` already uses exit 1 for
 "completed with indeterminates", so the taxonomy stays consistent across the pair.
 
+**Reserving exit 1 requires porting the sibling's last line of defence** (added by the
+whole-branch review, finding 2). CPython exits 1 on **any** uncaught traceback, so giving 1 a
+"completed" meaning without routing every other outcome away from it leaves a crashed run and a
+healthy-with-exclusions run indistinguishable to an operator's `case $?` — and the
+consistency-with-the-sibling justification above false, since the sibling's `main()` carries the
+guard precisely for this reason. `main()` MUST therefore end its handler chain with:
+
+```python
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: ...
+        report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
+        return 2
+```
+
+The `except SystemExit: raise` arm keeps a deliberate exit's own code. The catch-all NEVER
+swallows — the class is always named on stderr (PD#2) — and carries its `# noqa: BLE001` with an
+inline reason, per `prompts/implementation-standards.md`. The only `return 1` in the program is
+the exclusion branch on `main()`'s last line.
+
 **The one documented exception, exhaustive and unchanged:** argparse writes its usage, error and
 `--help` text before any stream guard exists and outside every handler, so `--help >/dev/full`
 and `--bogus 2>/dev/full` still exit **120**.
@@ -637,8 +657,12 @@ and `--bogus 2>/dev/full` still exit **120**.
 | `cloudflare.CloudflareError` | the sweep | existing handlers | existing message, body never echoed | 2 |
 | `KeyboardInterrupt` | anywhere | `main()` | `interrupt_message()` (§9.4) | 130 |
 | `OSError` | file writes, operator-stream writes | `main()`'s existing arms | `ERROR: …` | 2 |
+| `OutputWriteError` (subclass of `StartupError`) | `write_outputs` — one of the four files could not be written or could not be serialized | `main()` (the existing `StartupError` handler — no new catch site) | `ERROR: cannot write <path>: <class>: <message>.  Already replaced before this failure (fresh): …  NOT written by this run (unchanged or absent): …` | 2 |
+| anything else | anywhere inside `main()`'s try | `main()`'s `except BaseException` last line of defence (§8) | `ERROR: unexpected <class>: <message>` | 2 |
 
-No new catch-all is introduced. Ruff's `BLE001`/`E722` gate this mechanically (PD#2).
+**One** deliberate catch-all is introduced — `main()`'s last line of defence (§8), carrying
+`# noqa: BLE001` with an inline reason. It is the mechanism that makes exit 1 mean what §8 says
+it means. Ruff's `BLE001`/`E722` gate every other one mechanically (PD#2).
 
 ### 9.2 Shadow paths for the resolution flow (PD#3), all four traced
 

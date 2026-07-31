@@ -1393,6 +1393,28 @@ def process_one_entry(fqdn, entry, *, verbose, excluded):
     return plan_entry(entry, resolution), revert_entry(entry, resolution)
 
 
+def build_plan_and_revert(entries, *, verbose, excluded):
+    """Every FQDN's plan and revert entry, keyed by normalized FQDN; excluded ones get neither.
+
+    Extracted out of main()'s body for the same reason process_one_entry() was, and by the same
+    ratchet: adding the SystemExit/BaseException last line of defence below pushed main() back
+    over ruff's mccabe limit (C901, 12 > 10).  Not a SPEC section 7 seam -- process_one_entry()
+    and everything under it stay monkeypatchable here, because this calls them as plain module
+    globals, the same lookup-at-call-time the inlined loop used.
+
+    `excluded` is mutated in place by process_one_entry(), which is why it is passed in rather
+    than returned: main() seeds it with the sweep's ambiguous FQDNs before this runs.
+    """
+    plan, revert = {}, {}
+    for fqdn, entry in sorted(entries.items()):
+        plan_item, revert_item = process_one_entry(fqdn, entry, verbose=verbose,
+                                                   excluded=excluded)
+        if plan_item is not None:
+            plan[fqdn] = plan_item
+            revert[fqdn] = revert_item
+    return plan, revert
+
+
 def main(argv):
     """Exit 0 = the output was produced with nothing excluded, 1 = produced with exclusions,
     2 = could not complete, 130 = interrupted.
@@ -1406,6 +1428,19 @@ def main(argv):
     emit arm) plus the two inside resolve_env_marker/cloudflare_client -- an OSError on the write
     and a ValueError from shlex both escaped as raw tracebacks at exit 1 until they were named
     (adversarial review, finding 3).
+
+    THE EXIT-CODE DISCIPLINE IS THE POINT OF THE STRUCTURE BELOW, and it is the sibling's, ported
+    verbatim in reasoning (find-platform-domains-dns:776-790, whose docstring says the same
+    thing).  CPython exits 1 on ANY uncaught traceback, and SPEC section 8 now reserves 1 for
+    "completed with exclusions" -- so an unexpected API shape, or any internal defect, leaking out
+    of here would be indistinguishable to an operator's `case $?` from a healthy sweep that
+    excluded a few FQDNs.  Every other outcome is therefore routed AWAY from 1, and the only
+    `return 1` in this program is the exclusion branch on the last line.  The `except
+    BaseException` arm is that last line of defence; `except SystemExit: raise` sits above it so
+    a deliberate exit keeps its own code rather than being absorbed into 2.  Neither swallows:
+    the class is always named on stderr (PD#2).  Adding exit 1 in this increment WITHOUT porting
+    this guard is what made SPEC section 8's consistency-with-the-sibling justification false
+    (whole-branch review, finding 2).
 
     stdout carries the JSON RESULT unless -o names a file; every operator message goes to stderr.
     Because stdout became a result stream, SPEC section 8 item 4's "accept exit 120" call is
@@ -1431,13 +1466,8 @@ def main(argv):
         for message in sweep.warnings:
             print(message, file=sys.stderr, flush=True)
         excluded = dict(sweep.excluded)
-        plan, revert = {}, {}
-        for fqdn, entry in sorted(sweep.entries.items()):
-            plan_item, revert_item = process_one_entry(
-                fqdn, entry, verbose=options.verbose, excluded=excluded)
-            if plan_item is not None:
-                plan[fqdn] = plan_item
-                revert[fqdn] = revert_item
+        plan, revert = build_plan_and_revert(sweep.entries, verbose=options.verbose,
+                                             excluded=excluded)
         for fqdn, item in sorted(excluded.items()):
             # NEVER -v-gated (SPEC R7.3): these are the only signal that the result is narrower
             # than it looks, and this run's exit code is the only other one.
@@ -1491,6 +1521,11 @@ def main(argv):
         # in play (SPEC section 8.13) and those failure shapes ARE OSError-derived.
         report_line(f"ERROR: {type(e).__name__} escaped the sweep, most likely an operator-stream "
                     f"write: {e}")
+        return 2
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: an uncaught exception here would exit 1, which SPEC section 8 reserves for a COMPLETED sweep with exclusions.  It is re-reported by name, never swallowed silently (PD#2)
+        report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
         return 2
     return 1 if excluded else 0
 

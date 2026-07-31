@@ -2162,12 +2162,18 @@ def test_an_excluded_fqdn_gets_no_plan_or_revert_entry(fpc, tmp_path, monkeypatc
 
 
 def test_a_construction_failure_writes_nothing(fpc, tmp_path, monkeypatch, capsys):
-    """SPEC 9.3: all four documents are built in memory BEFORE any of them is written."""
+    """SPEC 9.3: all four documents are built in memory BEFORE any of them is written.
+
+    REWRITTEN by the whole-branch review, finding 2 -- a strengthening, not a weakening.  It used
+    to assert `pytest.raises(RuntimeError)` around main(), i.e. it ENCODED as correct the very
+    hole finding 2 names: a construction error escaping main() uncaught, which CPython turns into
+    exit 1 -- the code SPEC section 8 reserves for a completed sweep with exclusions.  It now
+    asserts the whole outcome: exit 2, the class named on stderr, and still nothing on disk."""
     planned_run(fpc, monkeypatch, tmp_path)
     monkeypatch.setattr(fpc, "plan_entry",
                         lambda entry, resolution: (_ for _ in ()).throw(RuntimeError("boom")))
-    with pytest.raises(RuntimeError):
-        fpc.main(["-o", "engin-zone"])
+    assert fpc.main(["-o", "engin-zone"]) == 2
+    assert "ERROR: unexpected RuntimeError: boom" in capsys.readouterr().err
     assert list(tmp_path.iterdir()) == []
 
 
@@ -2380,3 +2386,39 @@ def test_a_ctrl_c_mid_write_outputs_leaves_only_fully_written_files_behind(fpc, 
     assert (tmp_path / "engin-zone-plan.json").exists()
     assert not (tmp_path / "engin-zone-revert.json").exists()
     assert not (tmp_path / "engin-zone-excluded.json").exists()
+
+
+# --- Whole-branch review: the exit-code last line of defence ----------------------------------
+
+def test_an_unexpected_exception_exits_2_not_1(fpc, tmp_path, monkeypatch, capsys):
+    """Whole-branch review, finding 2 (CRITICAL, PD#1).  Task 4 gave exit 1 the meaning
+    "completed with exclusions", but CPython exits 1 on ANY uncaught traceback -- so before the
+    last line of defence a KeyError escaping cloudflare_client() was indistinguishable, to an
+    operator's `case $?`, from a healthy sweep with a few exclusions.  The sibling
+    find-platform-domains-dns has carried this guard since its own whole-branch review, for
+    exactly this reason, and SPEC section 8 justifies exit 1 here by consistency with that
+    sibling -- a claim that was false until this arm existed.
+
+    KeyError specifically: it is the shape an unexpected Cloudflare/SDK response would take, and
+    its str() is repr()-quoted, so the assertion below also proves the class is NAMED rather than
+    the message being printed bare (PD#2)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fpc, "cloudflare_client",
+                        lambda config_path: (_ for _ in ()).throw(KeyError("some internal bug")))
+    assert fpc.main([]) == 2
+    assert "ERROR: unexpected KeyError: 'some internal bug'" in capsys.readouterr().err
+
+
+def test_a_system_exit_is_never_absorbed_by_the_last_line_of_defence(fpc, tmp_path, monkeypatch,
+                                                                     capsys):
+    """The `except SystemExit: raise` arm, copied from the sibling.  SystemExit is a
+    BaseException, so without that arm the catch-all below it would swallow one and return 2,
+    replacing whatever code the exit carried.  Nothing in this script raises SystemExit inside
+    main()'s try today -- argparse's own exits happen before it -- so this is defence in depth,
+    pinned rather than assumed because the arm is invisible until it is deleted."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(fpc, "cloudflare_client",
+                        lambda config_path: (_ for _ in ()).throw(SystemExit(3)))
+    with pytest.raises(SystemExit) as excinfo:
+        fpc.main([])
+    assert excinfo.value.code == 3
