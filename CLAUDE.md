@@ -113,52 +113,101 @@ CDN migration** — checklist in `development/2026-07-28-platform-domain-util/SP
 
 A standalone, deletable script — **not** part of the main program and importing nothing from
 `psh/`/`check/`/`plugin/` — that writes every Cloudflare DNS **CNAME whose target ends in
-`.pantheonsite.io`** as JSON. It is the Cloudflare-side
-counterpart to `find-platform-domains-dns`: that one reads public DNS and is blind to a proxied
-record's target; `fqdns.json` is built with `proxied=True` and is blind to a DNS-only record. This
-considers **all** records in **all** zones of every account the credentials can see, unless
-**zone names are given as positional arguments**, which narrows the record sweep to those zones.
-Legacy `*.gotpantheon.com` targets are out of scope.
+`.pantheonsite.io`** as an inventory, plus the batch calls that would rewrite each one to the
+addresses its target resolves to and the batch calls that would undo that rewrite. It is the
+Cloudflare-side counterpart to `find-platform-domains-dns`: that one reads public DNS and is blind
+to a proxied record's target; `fqdns.json` is built with `proxied=True` and is blind to a DNS-only
+record. This considers **all** records in **all** zones of every account the credentials can see,
+unless **zone names are given as positional arguments**, which narrows the record sweep to those
+zones. Legacy `*.gotpantheon.com` targets are out of scope. Full spec:
+`development/2026-07-31-platform-domain-util3/SPEC.md`.
 
-**Output goes to stdout unless `-o PATH` names a file** — so the organization-wide baseline
-`platform-domains-cloudflare.json` is only ever produced deliberately, by a redirect or `-o`, and
-a two-zone subset run can never silently overwrite it *by default*. That matters because the file
-drives a *destructive* rewrite: a subset that looks like a full sweep would silently under-report.
-**The hazard is narrowed, not closed** — `-o platform-domains-cloudflare.json engin.umich.edu`
-still writes a subset under the canonical name, byte-shape-identical to a full sweep, so a
-narrowed sweep written with `-o` emits a loud `ATTENTION: … covers N of M zones … MUST NOT be used
-as the baseline for a rewrite`. The redirect form (`… engin.umich.edu > file`) is invisible to the
-program and cannot be caught at all. The summary names its destination and says `N of M zones`
-whenever a `ZONE` argument narrowed the run. A subset also **cannot see a cross-zone duplicate**
-living in an unselected zone, so an entry can look unambiguous when it is not — one more reason a
-rewrite is driven from a full sweep. **Zone matching is exact** on the same `normalize()` (case and a trailing dot ignored); a
-name matching no zone is **fatal (exit 2) and every miss is named**, because a typo yielding a
-short sweep is exactly the under-reporting failure the design refuses to have. The account and
-zone *lists* are still read in full — that is the cheap half (187 zones vs. 22,911 records) and it
-keeps the completeness cross-check, the zero-zone scope guard, and the account count.
+**A subset run (naming `ZONE`s) narrows the sweep but not the hazard.** The account and zone
+*lists* are still read in full — that is the cheap half (187 zones vs. 22,911 records) — and it
+keeps the completeness cross-check, the zero-zone scope guard, and the account count; only the
+record fetch is skipped for an unselected zone. **Zone matching is exact** on the same
+`normalize()` (case and a trailing dot ignored); a name matching no zone is **fatal (exit 2) and
+every miss is named**, because a typo yielding a short sweep is exactly the under-reporting
+failure the design refuses to have. A subset also **cannot see a cross-zone duplicate** living in
+an unselected zone, so an entry can look unambiguous when it is not — one more reason a rewrite is
+driven from a full sweep. Writing a subset to a file with `-o` is still byte-shape-identical to a
+full sweep, so a narrowed run written that way emits a loud `ATTENTION: … covers N of M zones …
+MUST NOT be used as the baseline for a rewrite`; the redirect form (`… engin.umich.edu > file`) is
+invisible to the program and cannot be caught at all.
 
-The JSON is keyed by the **normalized** FQDN with `{zone_id, origins, record_id, proxied, ttl,
-comment, tags, settings}`. **Two traps when comparing it to `fqdns.json`:** that file keys by the
-**raw** `record.name` (normalize both sides, or you invent phantom entries), and its `origins`
-means something **wider** — every proxied record's content at that name, IP addresses included —
-where this file's holds only matching platform-CNAME targets. `settings` is `.model_dump()`ed (it
-is a pydantic model and is otherwise unserializable). Every scalar is **first-record-wins**,
-`origins` accumulates, and **every** duplicate name warns on stderr. The output is **produced in
-full on every run**, whatever the age of anything on disk; a run that matches nothing emits `{}`
-loudly rather than leaving a stale file. It drives a *destructive* rewrite, so **regenerate the
-baseline immediately before any rewrite** — its mtime is the only freshness signal it carries.
+**`-o/--output-basename BASENAME` writes four files; without it, only the inventory goes to
+stdout.** A `.` anywhere in BASENAME's **final path component** is fatal (directory components may
+contain dots — `out/v1.2/engin-zone` is fine, `engin-zone.json` is not); the old `-o PATH` form is
+gone, so the muscle-memory `-o platform-domains-cloudflare.json` invocation from before this
+increment is now a startup error naming the mistake. Before the first Cloudflare API call, the
+parent directory of BASENAME is probed for writability (a temp file created and removed there), so
+an unwritable destination is caught at second zero, not after the ~2-minute sweep. The four files:
 
-Exit 0 = output produced, 2 = could not complete, 130 = interrupted; there is no exit 1. Exit 2
-covers an unreadable config, a non-string or unresolvable credential, missing credentials, any
-Cloudflare API error, **zero zones** (a missing `Account:Read`/`DNS:Read` scope and a genuinely
-empty org otherwise produce an identical empty result), an unmatched `ZONE` name, an `OSError` on
-an `-o` write, **and a doomed stdout or stderr** — the last because stdout became a result
-stream, so the sibling's guards are ported (`require_usable_streams` refuses a closed stderr,
-whose `print` fallback would interleave operator messages into the JSON; `write_json_stdout` and
-`report_line` detach only a stream a **real** write has proven doomed, never unconditionally).
-**The stated exception, same as the sibling's and exhaustive:** argparse writes its usage, error
-and `--help` text before those guards exist and outside every handler, so both
-`--help >/dev/full` and `--bogus 2>/dev/full` still exit 120.
+| File | Contents |
+|---|---|
+| `<basename>.json` (or stdout) | The **inventory**: every non-ambiguous platform CNAME, keyed by normalized FQDN |
+| `<basename>-plan.json` | The **forward rewrite**: one Cloudflare batch call per FQDN, platform CNAME → resolved A/AAAA |
+| `<basename>-revert.json` | The **reverse** of that same batch call, built from the swept CNAME |
+| `<basename>-excluded.json` | Every FQDN that got **no** plan/revert entry, with a reason code and detail |
+
+Only the inventory exists in stdout mode — resolution, classification and exclusion still run in
+both modes, so the inventory is byte-identical between them and only its destination differs.
+**This utility NEVER calls the Cloudflare API to write anything**: a separate, not-yet-written
+*applier* script is meant to read a plan or revert file and perform the actual batch calls
+(SPEC §5.4 is its normative contract).
+
+**Two traps when comparing the inventory to `fqdns.json`:** that file keys by the **raw**
+`record.name` (normalize both sides, or you invent phantom entries), and its `origins` means
+something **wider** — every proxied record's content at that name, IP addresses included — where
+this file's holds only matching platform-CNAME targets. `settings` is `.model_dump()`ed (it is a
+pydantic model and is otherwise unserializable). The inventory is **produced in full on every
+run**, whatever the age of anything on disk; a run that matches nothing emits `{}` loudly rather
+than leaving a stale file. It drives a *destructive* rewrite, so **regenerate the baseline
+immediately before any rewrite** — the inventory's mtime is its only freshness signal (the
+plan/revert/excluded files instead carry a `generated.at` timestamp, SPEC §5.5).
+
+**Every run now resolves each entry's target** — the `*.pantheonsite.io` hostname the platform
+CNAME points at — for both A and AAAA, following CNAME chains, through the one DNS seam
+`resolve()`; this happens in stdout mode too (SPEC R3.2), which is why the inventory is identical
+between modes. A `Timeout`/`NoNameservers` is retried once before being treated as indeterminate.
+
+The inventory gained four fields over the pre-this-increment shape: `name` (the **raw**
+`record.name` — the JSON key is `normalize()`d, and a batch POST's `name` must be exactly what
+Cloudflare holds, Punycode included), `zone_name`, `resolved_a` and `resolved_aaaa`.
+**`resolved_a`/`resolved_aaaa` are `[]` for a definitive absence (NXDOMAIN/NoAnswer) and `null` for
+an indeterminate lookup** — collapsing the two would tell an operator a target has no addresses
+when the run never established that, the same distinction the sweep already keeps between a null
+and a false `proxied`. The rest of the shape is unchanged: `{zone_id, origins, record_id, proxied,
+ttl, comment, tags, settings}`, all first-record-wins except `origins`, which accumulates.
+**Ambiguous FQDNs** (more than one platform CNAME for the same name, in one zone or across two) are
+**omitted from the inventory entirely, in both modes** — a deliberate change from before this
+increment, when the first record_id of two stayed in and was presented as if it were actionable.
+
+**`delete_match` lives OUTSIDE `body` in every plan and revert entry.** Cloudflare's batch
+`deletes` items are exactly `{"id": …}` — there is no name/type/content delete form — and a plan's
+`posts` mint ids that do not exist until the plan is applied, so the ids to delete on a revert (or
+a re-applied plan) cannot be known until an applier resolves `delete_match` against the zone's
+records at apply time. Keeping it outside `body` means `body` alone is always a real, postable
+batch body and can never be mistaken for a complete request.
+
+**Eight reason codes**, checked in this order (not the order below): `ambiguous-multiple-origins`,
+`ambiguous-multiple-zones`, `unknown-proxy-status`, `resolution-failed`, `no-a`,
+`platform-a-out-of-range`, `no-aaaa`, `platform-aaaa-out-of-range`. **Only the two ambiguous codes
+also remove the FQDN from the inventory**; the other six leave it in the inventory but out of the
+plan and revert. `resolution-failed` MUST be tested before `no-a`: an indeterminate lookup is
+`null`, not `[]`, and a `not resolved_a` test cannot tell the two apart. Every exclusion prints an
+unconditional (never `-v`-gated) stderr `ATTENTION:` line naming the FQDN, the code and the
+detail.
+
+**Exit 1 is new: "completed with exclusions"** (≥1 FQDN carries a reason code). The taxonomy is now
+0 = nothing excluded, 1 = completed with exclusions, 2 = could not complete, 130 = interrupted; a
+doomed stdout or stderr is still a named exit 2, NOT the interpreter's 120 — the sibling's guards
+are ported (`require_usable_streams` refuses a closed stderr, whose `print` fallback would
+interleave operator messages into the JSON; `write_json_stdout` and `report_line` detach only a
+stream a **real** write has proven doomed, never unconditionally). **The stated exception, same as
+the sibling's and exhaustive:** argparse writes its usage, error and `--help` text before those
+guards exist and outside every handler, so both `--help >/dev/full` and `--bogus 2>/dev/full`
+still exit 120.
 
 **Pagination is the subtle part, and the first live sweep is why.** All three list endpoints
 paginate by page *number*, so when rows shift between page fetches — routine in a zone being
@@ -188,25 +237,29 @@ places to check, each with its own real-built-request test.
 
 ```bash
 # refresh the org-wide baseline (~2 minutes) -- do this immediately before any rewrite.
-# Use -o, NOT `> file`: the shell truncates a redirect target BEFORE the sweep starts, so any
-# failed run (bad config, API error) leaves a zero-byte file where the baseline was; -o writes
-# a temp file and os.replace()s it, only on success.
-./find-platform-domains-cloudflare -o platform-domains-cloudflare.json
+# Use -o with a BASENAME (no extension), NOT `> file`: the shell truncates a redirect target
+# BEFORE the sweep starts, so any failed run (bad config, API error) leaves a zero-byte file
+# where the baseline was; -o writes each of the four files to a temp file and os.replace()s it,
+# only on success.
+./find-platform-domains-cloudflare -o platform-domains-cloudflare
+# -> platform-domains-cloudflare.json, -plan.json, -revert.json, -excluded.json
 
 # ZONE names go AFTER the options -- argparse cannot interleave positionals with flags:
-./find-platform-domains-cloudflare -v engin.umich.edu seas.umich.edu     # just these two zones
-./find-platform-domains-cloudflare -v | jq 'keys'                        # every zone, to stdout
+./find-platform-domains-cloudflare -v -o /tmp/one-zone engin.umich.edu seas.umich.edu
+./find-platform-domains-cloudflare -v | jq 'keys'   # every zone, inventory only, to stdout
 ```
 
-First live run (2026-07-30): 4 accounts, 187 zones, 22,911 records, 218 platform-domain CNAMEs of
-which 5 DNS-only, in 2m 17s — 192 of 192 lists verified complete, and 0 discrepancies against a
-50-hour-old `fqdns.json`.
+First live run (2026-07-30, before this increment added DNS resolution and the plan/revert/excluded
+files): 4 accounts, 187 zones, 22,911 records, 218 platform-domain CNAMEs of which 5 DNS-only, in
+2m 17s — 192 of 192 lists verified complete, and 0 discrepancies against a 50-hour-old
+`fqdns.json`.
 
 `find-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
 as `pantheon-sitehealth-emails.py` and `find-platform-domains-dns.py`: ruff, pyright, and
 CodeGraph key off the `.py` extension and would otherwise be blind to the extension-less real
 file. **Delete this script after Pantheon's CDN migration** — checklist in
-`development/2026-07-30-platform-domain-util2/SPEC.md` §11.
+`development/2026-07-30-platform-domain-util2/SPEC.md` §11 (amended, glob only, by
+`development/2026-07-31-platform-domain-util3/SPEC.md` §13).
 
 ## Required runtime credentials / external tools
 

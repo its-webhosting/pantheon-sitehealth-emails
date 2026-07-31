@@ -382,6 +382,16 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 * See if we can get a better recommendation by using AI -- either a customized LLM, or a specifically trained DNN
 
+* **Retire `SweepResult.warnings` in `find-platform-domains-cloudflare`** — the field is now
+  permanently `[]`: `development/2026-07-31-platform-domain-util3/` task 6 retired its only
+  producer (the ambiguity warning inside `collect_entries`), folding that fact into the uniform
+  per-exclusion `ATTENTION` line `main()` already prints for every reason code instead of printing
+  it twice. The field, its `NamedTuple` slot, and `main()`'s now-dead `for message in
+  sweep.warnings` loop were deliberately left in place rather than folding a refactor into that
+  task (`prompts/implementation-standards.md` — "refactoring is not part of the red→green loop").
+  Removing all three is the follow-up, and is purely mechanical: no producer writes to the field
+  anymore.
+
 
 ## Copyright and license information
 

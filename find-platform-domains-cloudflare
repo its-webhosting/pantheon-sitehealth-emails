@@ -15,22 +15,33 @@ only CNAMEs whose target ends in .pantheonsite.io.  Naming zones on the command 
 sweep to those zones (SPEC A1.3); with none, every zone in every visible account is swept.  The
 output is produced in full on every run, whatever the age of anything already on disk.
 
-Output: JSON keyed by FQDN, values {zone_id, origins, record_id, proxied, ttl, comment, tags,
-settings}.  It goes to STDOUT unless -o names a file, so a subset run produces a stream rather
-than an artifact and the organization-wide baseline is only ever written deliberately:
+Output: FOUR files in basename mode (-o/--output-basename BASENAME -- a `.` anywhere in the FINAL
+path component of BASENAME is fatal; directory components may contain dots): BASENAME.json (the
+inventory -- every platform CNAME, keyed by normalized FQDN, with its zone_name and the A/AAAA
+addresses its target resolves to), BASENAME-plan.json (the forward rewrite: platform CNAME ->
+resolved A/AAAA, one Cloudflare batch call per FQDN), BASENAME-revert.json (that batch call's
+reverse) and BASENAME-excluded.json (every FQDN that got no plan entry, with one of eight reason
+codes -- see classify()'s docstring -- and why).  Without -o, only the inventory goes to stdout and
+no other file is written.  EVERY run resolves each entry's target for A and AAAA and applies the
+same eight exclusion gates in BOTH modes, so the inventory is identical either way -- only its
+destination differs.  Ambiguous FQDNs (more than one platform CNAME for the same name) are omitted
+from the inventory entirely, in both modes.  The conventional organization-wide-baseline invocation
+is now:
 
-    find-platform-domains-cloudflare -o platform-domains-cloudflare.json
+    find-platform-domains-cloudflare -o platform-domains-cloudflare
 
 -o rather than `> platform-domains-cloudflare.json`: the shell truncates a redirect target BEFORE
-the sweep starts, so any failed run leaves a zero-byte file where the baseline was, while -o
-writes a temp file and os.replace()s it only on success.
+the sweep starts, so any failed run leaves a zero-byte file where the baseline was, while -o writes
+a temp file and os.replace()s each of the four files only on success (per file -- the four are not
+atomic as a SET; see write_outputs()'s docstring for the accepted residual).
 
 Every operator message -- warnings, progress, the summary, errors -- goes to stderr.  Exit 0 =
-output produced, 2 = could not complete, 130 = interrupted; a doomed stdout or stderr is a named
-exit 2, NOT the interpreter's 120, which is what require_usable_streams/report_line/
-write_json_stdout exist for.  The stated exception, exhaustive: argparse writes its usage, error
-and --help text before those guards exist and outside every handler, so BOTH `--help >/dev/full`
-and `--bogus 2>/dev/full` still exit 120.
+output produced with nothing excluded, 1 = produced but at least one FQDN was excluded (NEW in
+this increment -- see the eight reason codes in classify()'s docstring), 2 = could not complete,
+130 = interrupted; a doomed stdout or stderr is a named exit 2, NOT the interpreter's 120, which is
+what require_usable_streams/report_line/write_json_stdout exist for.  The stated exception,
+exhaustive: argparse writes its usage, error and --help text before those guards exist and outside
+every handler, so BOTH `--help >/dev/full` and `--bogus 2>/dev/full` still exit 120.
 
 Requires: the `cloudflare` SDK (declared under this project's `cloudflare` extra, which the
 documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and Cloudflare

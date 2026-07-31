@@ -2469,13 +2469,17 @@ Recorded with the reasoning so a later session does not re-litigate them.
 
 ## 11. Deletion checklist (after Pantheon's CDN migration)
 
+> **Superseded in part by `development/2026-07-31-platform-domain-util3/SPEC.md` §13** — that
+> increment adds the plan/revert/excluded files. The checklist below is still the canonical one;
+> only item 6's glob changed.
+
 1. `git rm find-platform-domains-cloudflare find-platform-domains-cloudflare.py`
 2. `git rm tests/unit/test_find_platform_domains_cloudflare.py`
 3. `pyproject.toml`: remove the **two** `[tool.ruff.lint.per-file-ignores]` entries.
 4. `pyproject.toml`: remove `"find-platform-domains-cloudflare.py"` from `[tool.pyright].include`.
 5. `.claude/hooks/ruff-check.sh`: remove the `"$REPO_ROOT/find-platform-domains-cloudflare"` case
    arm and trim its comment back to naming only `find-platform-domains-dns`.
-6. `.gitignore`: remove `/platform-domains-cloudflare.json`.
+6. `.gitignore`: remove `/platform-domains-cloudflare*.json`.
 7. `CLAUDE.md`: remove the `### find-platform-domains-cloudflare (temporary utility)` subsection.
 8. Delete any leftover `platform-domains-cloudflare.json` from working checkouts.
 

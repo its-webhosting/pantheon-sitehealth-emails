@@ -8,7 +8,7 @@
 
 /site_results.json
 /fqdns.json
-/platform-domains-cloudflare.json
+/platform-domains-cloudflare*.json
 /news/*.toml
 /build/
 /tmp/
