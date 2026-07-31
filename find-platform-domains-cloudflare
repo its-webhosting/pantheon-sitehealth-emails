@@ -339,6 +339,26 @@ def resolve_target(target):
     return Resolution(a, aaaa, "")
 
 
+def render_rrset(addresses):
+    """The -v per-target line's rendering of one rrset (SPEC section 10's documented format:
+    `live-umich-x.pantheonsite.io -> A 23.185.0.4 | AAAA 2620:12a:8000::4, 2620:12a:8001::4`).
+
+    Three shapes, deliberately distinct so none can be mistaken for another -- carrying R4.4's
+    definitive-vs-indeterminate distinction into the operator-visible line, not just the JSON
+    (task 4 review, finding 4): `None` (the lookup was INDETERMINATE -- resolution failed) renders
+    as the word "indeterminate"; `[]` (a DEFINITIVE absence) renders as the word "none"; anything
+    else renders as the addresses, comma-separated, in the order resolve_target already sorted
+    them -- never an f-string's bare `{addresses}`, which would print Python's list repr
+    (`['23.185.0.4']`, brackets and quotes) for a real answer and the bare word "None" -- not
+    visibly different from a hostname or an intentional word -- for an indeterminate one.
+    """
+    if addresses is None:
+        return "indeterminate"
+    if not addresses:
+        return "none"
+    return ", ".join(addresses)
+
+
 def outside(addresses, network):
     """The addresses that are NOT in `network`, in the order given."""
     return [a for a in addresses if ipaddress.ip_address(a) not in network]
@@ -1121,8 +1141,11 @@ def main(argv):
             entry["resolved_a"] = resolution.a
             entry["resolved_aaaa"] = resolution.aaaa
             if options.verbose:
-                print(f"{fqdn} -> {target} -> A {resolution.a} | AAAA {resolution.aaaa}",
-                      file=sys.stderr, flush=True)
+                # SPEC section 10's exact documented format -- target only, no fqdn prefix (a
+                # target may be shared by more than one FQDN; the per-target answer is the same
+                # either way, and SPEC's own worked example has no fqdn in it).
+                print(f"{target} -> A {render_rrset(resolution.a)} | "
+                      f"AAAA {render_rrset(resolution.aaaa)}", file=sys.stderr, flush=True)
             reason, detail = classify(entry, resolution)
             if reason is not None:
                 excluded[fqdn] = {"reason": reason, "detail": detail,

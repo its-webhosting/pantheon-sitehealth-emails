@@ -43,6 +43,26 @@ def fpc():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _refuse_real_dns(fpc, monkeypatch):
+    """SPEC section 7: "NOTHING in the suite may touch real DNS."  Since Task 4 wired resolution
+    into main(), any test driving main() with a non-empty, non-ambiguous sweep reaches this seam
+    -- and a test that forgets fake_dns(...) was passing silently against the REAL network in this
+    sandbox (task 4 review, finding 1), because "resolve to whatever the network answers" happened
+    to satisfy assertions that don't care about the resolution outcome (interrupt-message wording,
+    stream-doomedness, etc.).  Default `resolve` to a stub that fails LOUDLY instead, closing the
+    whole class of "forgot fake_dns" defects at once rather than patching found instances one at a
+    time (PD#14: an instrument that can pass by accident is not evidence).  A test that legitimately
+    needs an answer opts in via fake_dns(fpc, monkeypatch, ...), which monkeypatches over this
+    default the same way any other override would.
+    """
+    def refuse(hostname, rrtype):
+        raise AssertionError(
+            f"real DNS seam reached for ({hostname!r}, {rrtype!r}) -- this test is missing "
+            "fake_dns(fpc, monkeypatch, ...) (SPEC section 7 forbids touching real DNS)")
+    monkeypatch.setattr(fpc, "resolve", refuse)
+
+
 def record(**overrides):
     """A stand-in for a cloudflare RecordResponse; the code under test only reads attributes."""
     fields = {"type": "CNAME", "name": "www.example.edu", "id": "rec-1",
@@ -645,16 +665,25 @@ def test_verbose_reports_each_zone_and_whether_it_was_cross_checked(fpc, capsys)
     assert "[2/2] zone example.org -- 1 records (total_count unavailable, not cross-checked)" in err
 
 
-ENTRY = {"name": "a.example.edu", "zone_id": "z", "zone_name": "example.edu",
-         "origins": ["live-a.pantheonsite.io"], "record_id": "r",
-         "proxied": False, "ttl": 1, "comment": None, "tags": [], "settings": None}
-
-# Task 4 wires resolution into EVERY main() call, so any pre-Task-4 test driving main() with
-# ENTRY now needs its target resolved too, or it hits real DNS (SPEC section 7: "NOTHING in the
-# suite may touch real DNS").  This is the one in-range answer set every such test uses via
-# fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS) -- addresses inside both PLATFORM_A_RANGE and
-# PLATFORM_AAAA_RANGE, so classify() returns (None, "") and these pre-existing tests' exit-0
-# assertions are unaffected by this task.
+# Task 4 wires resolution into EVERY main() call, so any pre-Task-4 test driving main() with an
+# ENTRY-shaped dict now needs its target resolved too, or it hits real DNS (SPEC section 7:
+# "NOTHING in the suite may touch real DNS") -- enforced class-wide by the autouse
+# `_refuse_real_dns` fixture above, which fails loudly on any un-mocked resolve() call.  This is
+# the one in-range answer set every such test uses via fake_dns(fpc, monkeypatch,
+# ENTRY_HAPPY_DNS) -- addresses inside both PLATFORM_A_RANGE and PLATFORM_AAAA_RANGE, so
+# classify() returns (None, "") and these pre-existing tests' exit-0 assertions are unaffected by
+# this task.
+#
+# There is deliberately no module-level ENTRY constant: main() mutates the entry dict it is
+# handed in place (adding resolved_a/resolved_aaaa), so a single shared dict object reused across
+# many tests both leaks state between them and makes any assertion of the shape
+# `... == {"a.example.edu": ENTRY}` self-referential -- it compares the mutated object to itself
+# and passes no matter what was actually written (task 4 review, finding 2, which is what masked
+# finding 1: two tests below were reaching real DNS while their content assertions kept passing
+# against the very state real DNS had just written into the shared object).  Every test below
+# builds its own entry fresh via swept() (defined in the Task 4 section further down -- forward
+# references to test-local helpers are safe here because pytest fully executes this module before
+# running any test, the same reason fake_dns() is usable from tests above its own definition).
 ENTRY_HAPPY_DNS = {("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
                    ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]}
 
@@ -670,7 +699,8 @@ def test_main_writes_the_json_to_stdout_by_default(fpc, tmp_path, monkeypatch, c
     """SPEC A1.5: stdout is the result stream; the file is written only when -o names it."""
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult(
-        {"a.example.edu": ENTRY}, ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2, 4))
+        {"a.example.edu": swept(proxied=False)},
+        ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2, 4))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-c", "ignored.toml"]) == 0
     captured = capsys.readouterr()
@@ -687,8 +717,8 @@ def test_main_writes_the_json_to_stdout_by_default(fpc, tmp_path, monkeypatch, c
 
 def test_main_writes_a_file_when_output_is_given(fpc, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 4, 12431,
-                                                 40, 1, 2, 4))
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1, 4,
+                                                 12431, 40, 1, 2, 4))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", fpc.OUTPUT_BASENAME]) == 0
     captured = capsys.readouterr()
@@ -702,8 +732,9 @@ def test_main_writes_byte_identical_json_to_stdout_and_to_a_file(fpc, tmp_path, 
                                                                  capsys):
     """SPEC A1.5: the two destinations differ in WHERE, never in WHAT."""
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY, "b.example.edu": ENTRY},
-                                                 [], 1, 4, 1, 1, 0, 0, 4))
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(proxied=False), "b.example.edu": swept(proxied=False)},
+        [], 1, 4, 1, 1, 0, 0, 4))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main([]) == 0
     from_stdout = capsys.readouterr().out
@@ -893,7 +924,8 @@ def test_a_closed_stdout_with_no_output_flag_is_a_named_exit_2(fpc, tmp_path, mo
 def test_a_closed_stdout_is_allowed_when_output_names_a_file(fpc, tmp_path, monkeypatch):
     """-o gives the JSON somewhere to go, so the stdout guard must not fire."""
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1, 1,
+                                                 1, 1, 0, 0, 1))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     monkeypatch.setattr(sys, "stdout", None)
     assert fpc.main(["-o", "out"]) == 0
@@ -915,7 +947,7 @@ def test_a_doomed_stdout_becomes_a_named_startup_error_not_exit_120(fpc, monkeyp
     with Path(DEV_FULL).open("w") as doomed:
         monkeypatch.setattr(sys, "stdout", doomed)
         with pytest.raises(fpc.StartupError, match="cannot write the JSON to standard output"):
-            fpc.write_json_stdout({"a.example.edu": ENTRY})
+            fpc.write_json_stdout({"a.example.edu": swept(proxied=False)})
 
 
 def spy_on_dup2(fpc, monkeypatch):
@@ -931,11 +963,12 @@ def spy_on_dup2(fpc, monkeypatch):
 
 def test_a_healthy_stdout_is_never_detached_by_a_successful_write(fpc, tmp_path, monkeypatch):
     calls = spy_on_dup2(fpc, monkeypatch)
+    entry = swept(proxied=False)
     with (tmp_path / "out.json").open("w") as real_stdout:
         monkeypatch.setattr(sys, "stdout", real_stdout)
-        fpc.write_json_stdout({"a.example.edu": ENTRY})
+        fpc.write_json_stdout({"a.example.edu": entry})
     assert calls == [], "a stream no write has failed on must never be detached"
-    assert json.loads((tmp_path / "out.json").read_text()) == {"a.example.edu": ENTRY}
+    assert json.loads((tmp_path / "out.json").read_text()) == {"a.example.edu": entry}
 
 
 def test_a_healthy_stderr_is_never_detached_by_report_line(fpc, tmp_path, monkeypatch):
@@ -956,7 +989,7 @@ def test_a_doomed_stdout_is_detached_after_its_write_fails(fpc, monkeypatch):
     try:
         monkeypatch.setattr(sys, "stdout", doomed)
         with pytest.raises(fpc.StartupError):
-            fpc.write_json_stdout({"a.example.edu": ENTRY})
+            fpc.write_json_stdout({"a.example.edu": swept(proxied=False)})
     finally:
         with contextlib.suppress(OSError):
             doomed.close()
@@ -1068,7 +1101,9 @@ def test_an_interrupt_after_a_successful_stdout_write_does_not_claim_nothing_was
     """The message was categorical, so an operator or wrapper acting on it would discard a
     complete, valid document that is already on stdout."""
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+    entry = swept(proxied=False)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 1, 0, 0, 1))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
 
     def interrupt_after_the_write(*args, **kwargs):
         raise KeyboardInterrupt
@@ -1076,7 +1111,7 @@ def test_an_interrupt_after_a_successful_stdout_write_does_not_claim_nothing_was
     monkeypatch.setattr(fpc, "summarize", interrupt_after_the_write)
     assert fpc.main([]) == 130
     captured = capsys.readouterr()
-    assert json.loads(captured.out) == {"a.example.edu": ENTRY}
+    assert json.loads(captured.out) == {"a.example.edu": entry}
     assert "no complete JSON document was produced" not in captured.err
     assert "complete JSON document was already written to standard output" in captured.err
 
@@ -1098,8 +1133,8 @@ def test_a_subset_run_written_to_a_file_warns_that_it_is_not_a_full_sweep(fpc, t
     """-o accepts a subset, and the file is byte-shape-identical to a full sweep with no in-band
     marker of scope.  The stderr line is the only signal, so it must be loud."""
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0,
-                                                 187))
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1, 2,
+                                                 5, 1, 0, 0, 187))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "subset", "engin.umich.edu", "seas.umich.edu"]) == 0
     err = capsys.readouterr().err
@@ -1110,8 +1145,8 @@ def test_a_subset_run_written_to_a_file_warns_that_it_is_not_a_full_sweep(fpc, t
 
 def test_a_full_sweep_written_to_a_file_does_not_warn(fpc, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 187, 5, 1, 0, 0,
-                                                 187))
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1,
+                                                 187, 5, 1, 0, 0, 187))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "full"]) == 0
     assert "NOT an organization-wide sweep" not in capsys.readouterr().err
@@ -1124,14 +1159,16 @@ def test_write_json_atomic_and_stdout_share_one_serializer(fpc, tmp_path, monkey
     real = fpc.dump_json
     monkeypatch.setattr(fpc, "dump_json", lambda data, stream: (seen.append(stream), real(
         data, stream))[1])
-    fpc.write_json_atomic(str(tmp_path / "out.json"), {"a.example.edu": ENTRY})
+    fpc.write_json_atomic(str(tmp_path / "out.json"), {"a.example.edu": swept(proxied=False)})
     assert len(seen) == 1, "write_json_atomic must serialize through dump_json"
 
 
 def test_an_interrupt_with_output_after_the_write_says_the_file_was_fully_written(
         fpc, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept(proxied=False)}, [], 1, 1,
+                                                 1, 1, 0, 0, 1))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
 
     def interrupt(*args, **kwargs):
         raise KeyboardInterrupt
@@ -1227,10 +1264,11 @@ def test_check_basename_leaves_no_probe_file_behind(fpc, tmp_path):
 def test_the_output_option_takes_a_basename_not_a_path(fpc, tmp_path, monkeypatch, capsys):
     """R2.1: -o/--output-basename replaces -o/--output."""
     monkeypatch.chdir(tmp_path)
-    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0, 2))
+    entry = swept(proxied=False)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": entry}, [], 1, 2, 5, 1, 0, 0, 2))
     fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "engin-zone"]) == 0
-    assert json.loads((tmp_path / "engin-zone.json").read_text()) == {"a.example.edu": ENTRY}
+    assert json.loads((tmp_path / "engin-zone.json").read_text()) == {"a.example.edu": entry}
 
 
 def test_the_old_output_path_form_is_rejected_before_any_api_call(fpc, tmp_path, monkeypatch,
@@ -1722,3 +1760,87 @@ def test_an_indeterminate_lookup_leaves_null_in_the_inventory_not_an_empty_list(
     written = json.loads(capsys.readouterr().out)
     assert written["a.example.edu"]["resolved_a"] is None
     assert written["a.example.edu"]["resolved_aaaa"] is None
+
+
+# --- Task 4 review fixes (findings 3 and 4) ---------------------------------------------------
+
+def test_summarize_reports_excluded_counts_by_reason_code(fpc, tmp_path, monkeypatch, capsys):
+    """SPEC section 10: the always-printed summary gains 'a count of exclusions by reason code'.
+    This had ZERO coverage before -- deleting summarize()'s whole `if excluded:` block left the
+    suite green (task 4 review, finding 3).  Mutation used to confirm red: temporarily removed
+    that block; this test failed (see FIX REPORT in task-4-report.md for the pasted red run).
+
+    Two DIFFERENT reason codes with a known count each, so the test pins the format precisely --
+    "N reason, M reason", sorted by reason, comma-joined -- not merely "something got printed"."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(name="a.example.edu"),
+         "b.example.edu": swept(name="b.example.edu", proxied=None,
+                                origins=["live-b.pantheonsite.io"])},
+        [], 1, 2, 10, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): [],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+        ("live-b.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-b.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+    })
+    assert fpc.main([]) == 1
+    err = capsys.readouterr().err
+    assert "Excluded from the rewrite plan: 1 no-a, 1 unknown-proxy-status" in err
+
+
+def test_render_rrset_distinguishes_indeterminate_empty_and_present(fpc):
+    """The pure helper in isolation (SPEC section 10 / R4.4, task 4 review, finding 4): three
+    shapes that must never render as each other."""
+    assert fpc.render_rrset(None) == "indeterminate"
+    assert fpc.render_rrset([]) == "none"
+    assert fpc.render_rrset(["23.185.0.4"]) == "23.185.0.4"
+    assert fpc.render_rrset(["23.185.0.4", "23.185.0.1"]) == "23.185.0.4, 23.185.0.1"
+
+
+def test_verbose_reports_target_resolution_in_the_spec_documented_format(fpc, tmp_path,
+                                                                         monkeypatch, capsys):
+    """SPEC section 10's exact documented line: 'live-umich-x.pantheonsite.io -> A 23.185.0.4 |
+    AAAA 2620:12a:8000::4, 2620:12a:8001::4'.  The brief's code printed Python's list repr
+    instead (`A ['23.185.0.4']`) and prefixed the fqdn, which SPEC's example does not have (task 4
+    review, finding 4).  Mutation used to confirm red: reverted the -v print line to the brief's
+    original `f"{fqdn} -> {target} -> A {resolution.a} | AAAA {resolution.aaaa}"`; this test
+    failed (see FIX REPORT in task-4-report.md for the pasted red run)."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(origins=["live-umich-x.pantheonsite.io"])}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {
+        ("live-umich-x.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-umich-x.pantheonsite.io", "AAAA"): ["2620:12a:8000::4", "2620:12a:8001::4"],
+    })
+    assert fpc.main(["-v"]) == 0
+    err = capsys.readouterr().err
+    assert ("live-umich-x.pantheonsite.io -> A 23.185.0.4 | AAAA 2620:12a:8000::4, "
+            "2620:12a:8001::4") in err
+
+
+def test_verbose_renders_an_indeterminate_resolution_as_the_word_indeterminate(fpc, tmp_path,
+                                                                               monkeypatch,
+                                                                               capsys):
+    """R4.4 carried into the -v line (task 4 review, finding 4): an f-string's bare `{None}`
+    would print the literal word "None", which is not visibly different from a real value at a
+    glance."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): dns.resolver.Timeout()})
+    assert fpc.main(["-v"]) == 1
+    err = capsys.readouterr().err
+    assert "live-a.pantheonsite.io -> A indeterminate | AAAA indeterminate" in err
+
+
+def test_verbose_renders_a_definitive_empty_rrset_as_none_not_indeterminate(fpc, tmp_path,
+                                                                            monkeypatch, capsys):
+    """The other half of the same distinction: a DEFINITIVE absence must not read the same as an
+    indeterminate one (task 4 review, finding 4)."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): dns.resolver.NoAnswer(),
+                                ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]})
+    assert fpc.main(["-v"]) == 1
+    err = capsys.readouterr().err
+    assert "live-a.pantheonsite.io -> A none | AAAA 2620:12a:8000::4" in err
