@@ -221,8 +221,14 @@ def build_client(**creds):
     base_url.  Routes 3 and 4 were missed on the first pass -- and 4 is worse than the defect
     this function was written for, because the credential LEAVES THE MACHINE rather than merely
     failing to authenticate.  This pin is SDK-version-sensitive: measured against cloudflare
-    5.4.0, and pyproject declares the dependency unpinned as "cloudflare".  (The main program's
-    plugin/cloudflare/client.py has all four; fixing it is a separate change.)
+    5.4.0, and pyproject declares the dependency unpinned as "cloudflare".
+
+    The main program carries the SAME pin, by the same mechanism, in
+    plugin/cloudflare/client.py's pinned_client() (added 2026-07-30, commit befb913).  This is a
+    deliberate SECOND COPY, not a fork: the utility imports nothing from plugin/ so that deleting
+    it stays `git rm` of three files.  An SDK upgrade must re-verify BOTH -- each has its own test
+    asserting a REAL built request rather than these attribute assignments, so a change that
+    breaks either goes red rather than silently reopening the route.
     """
     try:
         client = Cloudflare(**creds, base_url=API_BASE_URL)

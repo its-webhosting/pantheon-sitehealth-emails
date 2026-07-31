@@ -178,13 +178,13 @@ error text **never** includes an API response body.
 Credentials come from `[Cloudflare]` in the same TOML the main program reads, via a **copied**
 resolver handling only the `<{env NAME}` / `<{secret env NAME}` forms; any other substitution, and
 any non-string value, is a named error rather than a silent passthrough. `enabled` is not
-consulted. **`build_client()` pins the client against the ambient environment** — four credential
-fields, `base_url`, and `_custom_headers` — because the SDK back-fills unset credentials from six
-environment variables and ambient values reach the wire by four routes, the worst being
-`$CLOUDFLARE_BASE_URL`, which sends the configured token to an arbitrary host. Measured against
-cloudflare 5.4.0. **`plugin/cloudflare/client.py` has all four routes open**, and
-`$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is
-configured.
+consulted. **`build_client()` pins the client against the ambient environment**, closing the same
+four routes, by the same mechanism, as the main program's `pinned_client()` — see **Cloudflare
+auth + shared client** under *Architecture* for the one full description of what those routes are
+and why the pin is load-bearing. This is a **second, independent copy** of that pin (the utility
+imports nothing from `plugin/`, so it can be deleted with `git rm`), and both are measured against
+cloudflare 5.4.0 while `pyproject` declares the dependency unpinned — so an SDK upgrade has **two**
+places to check, each with its own real-built-request test.
 
 ```bash
 # refresh the org-wide baseline (~2 minutes) -- do this immediately before any rewrite.

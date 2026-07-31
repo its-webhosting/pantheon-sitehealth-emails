@@ -278,6 +278,10 @@ another unnamed escape to exit 1, now converted to a `StartupError`. If the oper
 > passes `api_email` + `api_key` explicitly, which happens to win route 1. **Route 4 is
 > exploitable against the main program today**, regardless of which credential form is
 > configured. Fixing it is a separate change with its own test surface (§8.7).
+>
+> ⚠️ **RESOLVED 2026-07-30 by commit `befb913`, after this was written** —
+> `plugin/cloudflare/client.py` now has `pinned_client()`, closing all four routes, verified
+> against a real built request with all six ambient variables set hostile. See Amendment A2.
 
 ### R3 — The walk, and the truncation guard
 
@@ -2407,8 +2411,10 @@ Recorded with the reasoning so a later session does not re-litigate them.
    behind Task 7's STOP.
 6. **Progress bars (`rich.progress`).** Rejected: `-v` stderr lines carry the same information
    with none of the copied machinery.
-7. **Fixing `plugin/cloudflare/client.py`'s R2a defect.** Real, measured, reported — but a change
-   to the main program with its own test surface. **It is not merely latent:**
+7. ~~**Fixing `plugin/cloudflare/client.py`'s R2a defect.**~~ **DONE 2026-07-30, commit
+   `befb913`** — out of scope for this utility as written below, but fixed separately the same day;
+   see Amendment A2. Original reasoning retained: real, measured, reported — but a change
+   to the main program with its own test surface. **It was not merely latent:**
    `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form
    is configured.
 8. **A `docs/` page.** The CLAUDE.md subsection is the documentation; a temporary utility does not
@@ -2607,7 +2613,7 @@ Answered from the 2026-07-30 live run (§12) except where noted.
 | 6 | Does the rewriter consume `ttl`/`comment`/`tags`/`settings`? | **Open** — the rewriter does not exist yet. Revisit §8.2 before the next such file is designed. |
 | 7 | Any legacy `*.gotpantheon.com` targets? | **Not measured** — this sweep matches `.pantheonsite.io` only, per PROMPT line 7, so it cannot answer its own question. A one-line change to `PLATFORM_SUFFIX` would test it. **Worth doing once** before relying on the file for completeness. |
 | 8 | The rewriter's staleness policy for this file? | **Open.** The file drives deletions and carries no capture timestamp; R5's rule is "regenerate immediately before any rewrite". At 2m 17s that is cheap. |
-| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **Open, and live.** `$CLOUDFLARE_BASE_URL` is exploitable against the main program today, whichever credential form is configured. |
+| 9 | `plugin/cloudflare/client.py`'s R2a defect — filed or fixed? | **FIXED 2026-07-30, commit `befb913`** (`pinned_client()`; see Amendment A2). Was "open, and live" when this row was written, hours earlier. |
 | 10 | Any `null` proxy status? | **None** — 0 of 218. |
 | 11 | Should the client use `trust_env=False`? | **Open** — operator decision (§8.13); the proxy/trust-store residual is unclosed. |
 | 12 | Was a re-run needed after a partial failure? | **Yes, once** — the first attempt aborted and was re-run after the fix. At two minutes the no-resume decision (§8.12) held up. |
@@ -2901,3 +2907,71 @@ no differences). 154 = 99 + 55. Runtime 8s against 2m45s — the narrowing does 
 | `--bogus` | exit 2 (argparse) |
 
 Offline suite at the same commit: **1301 passed, 3 skipped**, ruff and pyright gates green.
+
+
+---
+
+# Amendment A2 — the R2a defect in the main program is fixed (2026-07-31)
+
+## A2.1 — What changed
+
+`§8` item 7 and `§14` Q9 recorded `plugin/cloudflare/client.py`'s ambient-environment defect as
+**open and live**, and `R2a`'s blockquote said `$CLOUDFLARE_BASE_URL` was "exploitable against the
+main program today". All three were true **when written**. They stopped being true hours later, on
+the same day: commit **`befb913` (2026-07-30), "fix(cloudflare): pin the shared client against the
+ambient environment"**, added `pinned_client()` to `plugin/cloudflare/client.py` and 97 lines of
+test to `tests/integration/test_plugin_cloudflare_client.py`.
+
+Verified 2026-07-31 by building a real request with **all six** SDK-read variables set hostile —
+`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY`, `CLOUDFLARE_EMAIL`,
+`CLOUDFLARE_API_USER_SERVICE_KEY`, `CLOUDFLARE_BASE_URL=https://evil.example/v4`, and a
+`CLOUDFLARE_CUSTOM_HEADERS` injecting `X-Auth-Email`/`X-Auth-Key` — against a config supplying only
+`api_token`:
+
+```
+URL the request actually goes to : https://api.cloudflare.com/client/v4/zones
+Authorization                    : Bearer REAL-CONFIGURED-TOKEN
+X-Auth-Email present             : False
+X-Auth-Key present               : False
+```
+
+All four routes closed. `tests/integration/test_plugin_cloudflare_client.py`: 9 passed.
+
+## A2.2 — Why this amendment exists at all
+
+The stale claims were not harmless. `CLAUDE.md` had **contradicted itself** since 2026-07-30 —
+`§Cloudflare auth + shared client` said `pinned_client()` "closes all four", while the
+`find-platform-domains-cloudflare` subsection said the plugin "has all four routes open … exploitable
+against the main program today". A session on 2026-07-31 read the second, believed it, and reported
+a **phantom vulnerability** to the operator as a closing recommendation. That is the measured cost:
+a document that makes its reader *less* accurate than no document.
+
+Root cause, and the reason the fix is structural rather than a wording correction: **the same fact
+was stated in full in two places.** `CLAUDE.md`'s utility subsection now **cross-references** the
+canonical description instead of restating it — the Spine's own rule, *"Each rule stated once and
+cross-referenced elsewhere (DRY)"*, and exactly the drift `CLAUDE.md` already warns about for
+`prompts/`. The utility's `build_client()` docstring likewise now points at `pinned_client()` and
+states the two-copy relationship, rather than asserting the plugin's status.
+
+## A2.3 — What is deliberately NOT changed here
+
+`Task 2`'s code listing (`~:1102`) and `Task 6`'s CLAUDE.md text block (`~:2272`) still contain the
+old wording. They are **verbatim records of what was authored at the time**, in an implementation
+plan that was already executed; rewriting them would falsify the archive rather than correct it.
+Only the *normative* and *status* statements — `R2a`'s blockquote, `§8` item 7, `§14` Q9 — carry
+resolution banners, because those are the ones a reader consults to answer "is this open?".
+
+## A2.4 — Residual, unchanged
+
+- **Two independent copies of the pin** (`pinned_client()` and the utility's `build_client()`),
+  both measured against cloudflare 5.4.0. Deliberate: the utility imports nothing from `plugin/` so
+  its deletion stays `git rm` of three files (`§14`). An SDK upgrade must re-verify **both**; each
+  has its own test asserting a **real built request**, so either breaking goes red.
+- **`cloudflare` is declared unpinned** in `pyproject.toml`. `§8` item 10's rejection of pinning
+  stands, and the operator declined a compatible-range pin on 2026-07-31 with a stated reason: all
+  dependencies are being updated to latest within days, so a range pin would be immediately
+  re-litigated. The real-request tests are the mitigation, as `§8` item 10 always intended.
+- **`trust_env=True`** (`§8.13`) — `$HTTPS_PROXY` / `$SSL_CERT_FILE` still influence transport.
+  Unchanged operator decision. Note the risk shape is weaker than the closed route: `$HTTPS_PROXY`
+  alone leaks only the `CONNECT` hostname (`api.cloudflare.com`, not a secret); reading the token
+  needs a poisoned `$SSL_CERT_FILE` as well.
