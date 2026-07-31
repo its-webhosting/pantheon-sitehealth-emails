@@ -1634,9 +1634,6 @@ def swept(**overrides):
     return entry
 
 
-GOOD = None   # placeholder rebound in each test via fpc.Resolution
-
-
 def test_classify_passes_a_healthy_proxied_entry(fpc):
     resolution = fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], "")
     assert fpc.classify(swept(), resolution) == (None, "")
@@ -1859,3 +1856,128 @@ def test_verbose_renders_a_definitive_empty_rrset_as_none_not_indeterminate(fpc,
     assert fpc.main(["-v"]) == 1
     err = capsys.readouterr().err
     assert "live-a.pantheonsite.io -> A none | AAAA 2620:12a:8000::4" in err
+
+
+# --- Task 5: the batch bodies ----------------------------------------------------------------
+
+FULL_SETTINGS = {"flatten_cname": False, "ipv4_only": True, "ipv6_only": None}
+
+
+def test_clean_settings_drops_flatten_cname_going_forward(fpc):
+    """flatten_cname is not a member of the A/AAAA settings schema, and is already inert on a
+    proxied CNAME: "unavailable for proxied records, since they are always flattened" (R6)."""
+    assert fpc.clean_settings(FULL_SETTINGS, drop_cname_only=True) == {"ipv4_only": True}
+
+
+def test_clean_settings_keeps_flatten_cname_going_back(fpc):
+    assert fpc.clean_settings(FULL_SETTINGS, drop_cname_only=False) == {
+        "flatten_cname": False, "ipv4_only": True}
+
+
+def test_clean_settings_returns_none_when_nothing_survives(fpc):
+    """R6.1: an empty settings object is omitted from the body, not sent as {}."""
+    assert fpc.clean_settings({"flatten_cname": True}, drop_cname_only=True) is None
+    assert fpc.clean_settings(None, drop_cname_only=True) is None
+    assert fpc.clean_settings({}, drop_cname_only=False) is None
+
+
+def test_record_body_always_emits_proxied(fpc):
+    """R6: the API default is false, and a silently DNS-only replacement takes the hostname out
+    of certificate service."""
+    body = fpc.record_body(swept(proxied=False, ttl=300), "A", "23.185.0.4", None)
+    assert body["proxied"] is False
+
+
+def test_record_body_forces_ttl_1_when_proxied(fpc):
+    """Cloudflare forces a proxied record's TTL to Auto regardless, and whether the API rejects
+    or coerces a non-1 ttl is documented silence we do not build on (R6)."""
+    assert fpc.record_body(swept(proxied=True, ttl=300), "A", "23.185.0.4", None)["ttl"] == 1
+
+
+def test_record_body_carries_a_dns_only_ttl_verbatim(fpc):
+    assert fpc.record_body(swept(proxied=False, ttl=300), "A", "23.185.0.4", None)["ttl"] == 300
+
+
+def test_record_body_omits_a_null_comment_and_empty_tags(fpc):
+    body = fpc.record_body(swept(), "A", "23.185.0.4", None)
+    assert "comment" not in body
+    assert "tags" not in body
+    assert "settings" not in body
+
+
+def test_record_body_carries_a_comment_and_tags(fpc):
+    body = fpc.record_body(swept(comment="owned by ITS", tags=["team:wws"]),
+                           "A", "23.185.0.4", {"ipv4_only": True})
+    assert body["comment"] == "owned by ITS"
+    assert body["tags"] == ["team:wws"]
+    assert body["settings"] == {"ipv4_only": True}
+
+
+def test_record_body_uses_the_raw_record_name(fpc):
+    assert fpc.record_body(swept(name="WWW.Example.edu"), "A", "23.185.0.4", None)["name"] == \
+        "WWW.Example.edu"
+
+
+def test_proxied_ttl_anomaly_flags_a_proxied_record_whose_ttl_is_not_1(fpc):
+    assert fpc.proxied_ttl_anomaly(swept(proxied=True, ttl=300)) is True
+    assert fpc.proxied_ttl_anomaly(swept(proxied=True, ttl=1)) is False
+    assert fpc.proxied_ttl_anomaly(swept(proxied=False, ttl=300)) is False
+
+
+def test_plan_entry_deletes_the_cname_and_posts_the_addresses(fpc):
+    resolution = fpc.Resolution(["23.185.0.4"],
+                                ["2620:12a:8000::4", "2620:12a:8001::4"], "")
+    entry = fpc.plan_entry(swept(settings=FULL_SETTINGS), resolution)
+    assert entry["zone_id"] == "zone-a"
+    assert entry["method"] == "POST"
+    assert entry["path"] == "/zones/zone-a/dns_records/batch"
+    assert entry["delete_match"] == [
+        {"type": "CNAME", "name": "a.example.edu", "content": "live-a.pantheonsite.io"}]
+    assert [p["type"] for p in entry["body"]["posts"]] == ["A", "AAAA", "AAAA"]
+    assert [p["content"] for p in entry["body"]["posts"]] == [
+        "23.185.0.4", "2620:12a:8000::4", "2620:12a:8001::4"]
+    assert all(p["settings"] == {"ipv4_only": True} for p in entry["body"]["posts"])
+
+
+def test_plan_entry_keeps_delete_match_outside_the_body(fpc):
+    """R5.3: `body` must be a real, postable batch body at all times.  A shape like
+    {"deletes": [{"match": ...}]} looks postable and is not."""
+    entry = fpc.plan_entry(swept(), fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], ""))
+    assert set(entry["body"]) == {"posts"}
+    assert "deletes" not in entry["body"]
+
+
+def test_plan_entry_refuses_an_entry_with_more_than_one_origin(fpc):
+    """An ambiguous entry never reaches here (Task 3 removes it).  The invariant is asserted
+    rather than assumed, because a silent [0] would rewrite one of two records."""
+    with pytest.raises(fpc.StartupError):
+        fpc.plan_entry(swept(origins=["live-a.pantheonsite.io", "live-b.pantheonsite.io"]),
+                       fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], ""))
+
+
+def test_revert_entry_deletes_the_addresses_and_restores_the_cname(fpc):
+    resolution = fpc.Resolution(["23.185.0.4"],
+                                ["2620:12a:8000::4", "2620:12a:8001::4"], "")
+    entry = fpc.revert_entry(swept(settings=FULL_SETTINGS, comment="note", tags=["t:1"]),
+                             resolution)
+    assert entry["delete_match"] == [
+        {"type": "A", "name": "a.example.edu", "content": "23.185.0.4"},
+        {"type": "AAAA", "name": "a.example.edu", "content": "2620:12a:8000::4"},
+        {"type": "AAAA", "name": "a.example.edu", "content": "2620:12a:8001::4"}]
+    post, = entry["body"]["posts"]
+    assert post["type"] == "CNAME"
+    assert post["content"] == "live-a.pantheonsite.io"
+    assert post["settings"] == {"flatten_cname": False, "ipv4_only": True}
+
+
+def test_the_revert_reproduces_every_writable_field_of_the_swept_cname(fpc):
+    """R5.4, the round-trip property.  The writable CNAME fields are exactly name, type, content,
+    ttl, proxied, settings, tags, comment (SPEC R4.3)."""
+    entry = swept(settings={"flatten_cname": True, "ipv4_only": False, "ipv6_only": False},
+                  comment="owned by ITS", tags=["team:wws"], proxied=False, ttl=300)
+    post, = fpc.revert_entry(entry, fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], "")
+                             )["body"]["posts"]
+    assert post == {"type": "CNAME", "name": "a.example.edu",
+                    "content": "live-a.pantheonsite.io", "proxied": False, "ttl": 300,
+                    "settings": {"flatten_cname": True, "ipv4_only": False, "ipv6_only": False},
+                    "comment": "owned by ITS", "tags": ["team:wws"]}

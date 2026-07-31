@@ -404,6 +404,127 @@ def classify(entry, resolution):  # noqa: PLR0911 -- 7 returns, one per SPEC sec
     return None, ""
 
 
+# Settings keys that exist on a CNAME record but NOT on an A/AAAA record.  Verified against the
+# spec-generated SDK models in cloudflare/types/dns/{a,aaaa,cname}_record.py: A and AAAA carry
+# ipv4_only and ipv6_only; CNAME carries those PLUS flatten_cname.  Whether an out-of-type key is
+# rejected or ignored is documented silence, so it is stripped client-side (SPEC R6).
+CNAME_ONLY_SETTINGS = ("flatten_cname",)
+
+
+def clean_settings(settings, *, drop_cname_only):
+    """The `settings` value for a batch body, or None when the key should be omitted.
+
+    ipv4_only/ipv6_only are carried BOTH ways.  They look CNAME-irrelevant and are not: they are
+    valid on all three types, and "this option only applies to proxied records" -- which is
+    precisely the case here.  Dropping them would change which address families Cloudflare
+    advertises at the edge for that hostname.
+
+    Null-valued keys are dropped (SPEC R6.1): the SDK's model_dump emits every declared field,
+    so an unset setting arrives as None, and sending it back adds nothing the API's own default
+    does not already do.
+    """
+    if not isinstance(settings, dict):
+        return None
+    kept = {key: value for key, value in settings.items()
+            if value is not None and not (drop_cname_only and key in CNAME_ONLY_SETTINGS)}
+    return kept or None
+
+
+def proxied_ttl_anomaly(entry):
+    """True when a PROXIED record's swept ttl is not 1 -- which should be impossible.
+
+    Cloudflare forces a proxied record's TTL to Auto, so a stored value other than 1 means an
+    assumption behind record_body's ttl rule is wrong and the operator should hear about it.
+    """
+    return bool(entry["proxied"]) and entry["ttl"] not in (None, 1)
+
+
+def record_body(entry, rtype, content, settings):
+    """One `posts` item, applying every carry-over rule in SPEC R6.
+
+    `proxied` is ALWAYS emitted: its API default is false, and a replacement created DNS-only
+    would take the hostname out of certificate service ("Cloudflare can only serve an SSL/TLS
+    certificate for a DNS record when you set the record's proxy status to Proxied").
+
+    `ttl` is forced to 1 for a proxied record.  Cloudflare forces it to Auto regardless ("all
+    proxied records have a time to live (TTL) of Auto ... This value cannot be edited"), and
+    whether the API rejects or silently coerces a non-1 value is documented silence.  A DNS-only
+    record's ttl is carried verbatim; a missing one falls back to 1 ("automatic"), because ttl is
+    a required field and there is no better answer.
+    """
+    body = {"type": rtype,
+            # the RAW name Cloudflare holds, never the normalized inventory key (SPEC R4.2)
+            "name": entry["name"],
+            "content": content,
+            "proxied": entry["proxied"],
+            "ttl": 1 if entry["proxied"] or not entry["ttl"] else entry["ttl"]}
+    if settings is not None:
+        body["settings"] = settings
+    if entry["comment"] is not None:
+        body["comment"] = entry["comment"]
+    if entry["tags"]:
+        body["tags"] = list(entry["tags"])
+    return body
+
+
+def sole_origin(entry):
+    """The entry's one platform-domain target.
+
+    An entry reaching a body builder has exactly one origin: collect_entries removes every
+    ambiguous FQDN (SPEC R4.1).  Asserted rather than assumed -- a silent origins[0] would aim a
+    destructive rewrite at one of two records, which is the exact failure that exclusion exists
+    to prevent.
+    """
+    if len(entry["origins"]) != 1:
+        raise StartupError(
+            f"internal invariant violated: {entry['name']} reached a batch-body builder with "
+            f"{len(entry['origins'])} origins; ambiguous entries must have been excluded")
+    return entry["origins"][0]
+
+
+def batch_envelope(entry, delete_match, posts):
+    """The fields every plan and revert entry shares (SPEC 5.3, 5.4).
+
+    `delete_match` lives OUTSIDE `body` on purpose: batch `deletes` items are exactly {"id": ...}
+    and the ids of records the plan has not created yet cannot be known, so an applier resolves
+    the match to ids at apply time.  Keeping it out of `body` means `body` is a real, postable
+    batch body at all times and cannot be mistaken for a complete request (SPEC R5.3).
+    """
+    return {"zone_id": entry["zone_id"],
+            "method": "POST",
+            "path": f"/zones/{entry['zone_id']}/dns_records/batch",
+            "delete_match": delete_match,
+            "body": {"posts": posts}}
+
+
+def plan_entry(entry, resolution):
+    """Forward rewrite: delete the platform CNAME, create the resolved A/AAAA records."""
+    origin = sole_origin(entry)
+    settings = clean_settings(entry["settings"], drop_cname_only=True)
+    posts = [record_body(entry, "A", address, settings) for address in resolution.a]
+    posts += [record_body(entry, "AAAA", address, settings) for address in resolution.aaaa]
+    return batch_envelope(
+        entry,
+        [{"type": "CNAME", "name": entry["name"], "content": origin}],
+        posts)
+
+
+def revert_entry(entry, resolution):
+    """Reverse rewrite: delete the A/AAAA records, restore the platform CNAME verbatim.
+
+    The restored settings are the ORIGINAL CNAME's, flatten_cname included -- it is what the API
+    itself returned for that record, so posting it back is what round-trips (SPEC R5.4).
+    """
+    origin = sole_origin(entry)
+    settings = clean_settings(entry["settings"], drop_cname_only=False)
+    delete_match = [{"type": "A", "name": entry["name"], "content": address}
+                    for address in resolution.a]
+    delete_match += [{"type": "AAAA", "name": entry["name"], "content": address}
+                     for address in resolution.aaaa]
+    return batch_envelope(entry, delete_match,
+                          [record_body(entry, "CNAME", origin, settings)])
+
+
 def resolve_env_marker(expr, where):
     """Resolve the body of ONE `<{ ... }` marker.  Only the env forms this script needs.
 
