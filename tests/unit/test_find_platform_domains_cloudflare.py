@@ -57,6 +57,12 @@ def _refuse_real_dns(fpc, monkeypatch):
     time (PD#14: an instrument that can pass by accident is not evidence).  A test that legitimately
     needs an answer opts in via fake_dns(fpc, monkeypatch, ...), which monkeypatches over this
     default the same way any other override would.
+
+    READING THE FAILURE: since the whole-branch review added main()'s last line of defence
+    (finding 2), a test driving main() no longer sees this AssertionError propagate -- main()
+    catches it, names it on stderr and returns 2.  So the top-line failure is an unexpected
+    `2` from main(), and the sentence naming the missing fake_dns is in pytest's "Captured
+    stderr call" section.  Verified after that change: the message still reaches the report.
     """
     def refuse(hostname, rrtype):
         raise AssertionError(

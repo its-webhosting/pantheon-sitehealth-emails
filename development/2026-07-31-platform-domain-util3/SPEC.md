@@ -837,6 +837,68 @@ jq '.entries["<one fqdn>"].body.posts[0]' platform-domains-cloudflare-revert.jso
 jq '.["<one fqdn>"]' platform-domains-cloudflare.json
 ```
 
+### Results — items 1–5, run 2026-07-31 after the whole-branch review fix wave
+
+Items 6–8 remain behind §18 STOP 2 (`RUN LIVE`) and are the human's to run.
+
+```
+$ ./run-tests --fast                                                       # item 1
+107 snapshots passed.
+========= 1465 passed, 3 skipped, 2 deselected, 15 warnings in 30.86s ==========
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+exit=0
+
+$ ./run-tests --fast tests/unit/test_find_platform_domains_cloudflare.py   # item 2
+============================= 195 passed in 2.40s ==============================
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+
+$ git diff --stat find-platform-domains-dns \                              # item 3
+      tests/unit/test_find_platform_domains_dns.py
+                                        <no output -- the sibling is byte-identical>
+
+$ ./find-platform-domains-cloudflare -o platform-domains-cloudflare.json   # item 4
+ERROR: --output-basename 'platform-domains-cloudflare.json' contains a file extension; give the
+basename WITHOUT one (for example 'engin-zone', not 'engin-zone.json').  The four output files get
+.json, -plan.json, -revert.json and -excluded.json appended.
+exit=2
+                       (no Cloudflare API call is made -- check_basename runs before the client)
+
+$ ./find-platform-domains-cloudflare --help                                # item 5
+usage: find-platform-domains-cloudflare [-h] [-c CONFIG] [-o BASENAME] [-v]
+                                        [ZONE ...]
+
+Write every Cloudflare CNAME record pointing at a Pantheon platform domain as
+JSON, with the Cloudflare batch calls that would rewrite it to the addresses
+its target resolves to, and the calls that would undo that. With -o/--output-
+basename: four files. Without it: the inventory alone, on standard output.
+
+positional arguments:
+  ZONE                  sweep only these Cloudflare zones, by name (e.g.
+                        engin.umich.edu); case and a trailing dot are ignored,
+                        and a name that matches no zone is an error. Give ZONE
+                        names AFTER the options -- argparse cannot interleave
+                        them
+
+options:
+  -h, --help            show this help message and exit
+  -c, --config CONFIG   TOML file to read [Cloudflare] credentials from
+                        (default: pantheon-sitehealth-emails.toml)
+  -o, --output-basename BASENAME
+                        write four JSON files -- BASENAME.json, BASENAME-
+                        plan.json, BASENAME-revert.json and BASENAME-
+                        excluded.json -- instead of writing the inventory to
+                        standard output. BASENAME must have NO file extension
+  -v, --verbose         print each zone to stderr as it is scanned
+
+With no ZONE, every zone in every visible account is swept. To refresh the
+organization-wide baseline before a rewrite, use -o rather than a redirect:
+`-o platform-domains-cloudflare` replaces each file atomically and only on
+success, where `> platform-domains-cloudflare.json` truncates it before the
+sweep even starts and so destroys the previous baseline on any failed run.
+```
+
 ---
 
 ## 16. Security (PD#6)
