@@ -2422,3 +2422,55 @@ def test_a_system_exit_is_never_absorbed_by_the_last_line_of_defence(fpc, tmp_pa
     with pytest.raises(SystemExit) as excinfo:
         fpc.main([])
     assert excinfo.value.code == 3
+
+
+def test_a_serialization_failure_on_the_second_file_reports_the_partial_set(fpc, tmp_path):
+    """Whole-branch review, finding 3 (PD#1).  write_outputs' docstring promises that "a failed
+    write here reports EXACTLY which paths were already replaced (fresh) and which were not
+    touched by this run" -- but the handler caught only OSError, while write_json_atomic ->
+    dump_json -> json.dump raises TypeError/ValueError on an unserializable value and
+    write_json_atomic's own `except BaseException` re-raises it untouched.  Measured before the
+    fix: a TypeError on file 2 left engin-zone.json replaced, produced NO report at all, and
+    (before finding 2's guard) exited 1.
+
+    Reachable in production, which is why it is caught rather than declared impossible: plain()
+    passes through anything without model_dump, so an SDK shape change putting a non-JSON type
+    into `settings` lands here.  Driven with a REAL json.dump failure at the real write_outputs
+    seam -- not a monkeypatched write_json_atomic -- so the assertion covers the actual
+    serializer, and what is on disk afterwards is checked against what the message claims."""
+    paths = fpc.output_paths(str(tmp_path / "engin-zone"))
+    with pytest.raises(fpc.OutputWriteError) as excinfo:
+        fpc.write_outputs(paths, {"a.example.edu": {"zone_id": "z"}},
+                          {"generated": {}, "entries": {"a.example.edu": object()}}, {}, {})
+    message = str(excinfo.value)
+    assert f"cannot write {paths.plan}: TypeError:" in message
+    assert f"Already replaced before this failure (fresh): {paths.inventory}" in message
+    assert (f"NOT written by this run (unchanged or absent): {paths.plan}, {paths.revert}, "
+            f"{paths.excluded}") in message
+    # The message's claim, checked against the filesystem.
+    assert Path(paths.inventory).exists()
+    assert not Path(paths.plan).exists()
+    assert not Path(paths.revert).exists()
+    assert not Path(paths.excluded).exists()
+
+
+def test_a_serialization_failure_is_a_named_startup_error_at_exit_2(fpc, tmp_path, monkeypatch,
+                                                                    capsys):
+    """The main() half of finding 3: OutputWriteError subclasses StartupError, so it lands in
+    main()'s existing exit-2 arm and its message is relayed verbatim -- NOT caught by the
+    catch-all last line of defence (which would report it as "unexpected", losing the fresh/stale
+    detail an operator recovering from a partial set needs)."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    real_write_json_atomic = fpc.write_json_atomic
+
+    def unserializable(path, data):
+        if path.endswith("-plan.json"):
+            data = {"entries": object()}
+        real_write_json_atomic(path, data)
+
+    monkeypatch.setattr(fpc, "write_json_atomic", unserializable)
+    assert fpc.main(["-o", "engin-zone"]) == 2
+    err = capsys.readouterr().err
+    assert "ERROR: cannot write engin-zone-plan.json: TypeError:" in err
+    assert "unexpected" not in err
+    assert "Already replaced before this failure (fresh): engin-zone.json" in err

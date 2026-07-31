@@ -679,6 +679,14 @@ it means. Ruff's `BLE001`/`E722` gate every other one mechanically (PD#2).
 construction error writes nothing. It then writes four temp files and `os.replace()`s each, reusing
 the existing `write_json_atomic()`.
 
+A failure on any of the four MUST raise `OutputWriteError` naming **which** file failed, which
+were already replaced (fresh), and which this run never touched. The caught set is **exhaustive**:
+`OSError`, `TypeError`, `ValueError`. *Intent (whole-branch review, finding 3):* the last two are
+what `json.dump` raises on an unserializable value or a circular reference, and `plain()` passes
+through anything without `model_dump`, so an SDK shape change putting a non-JSON type into
+`settings` reaches it. Catching only `OSError` left the exact partial set this section exists to
+make detectable arriving with the detection disabled.
+
 **Accepted residual:** `os.replace` is atomic per file, not across four. A crash between replaces
 leaves a mixed set. Mitigation: all four share one `generated.at`, so the mismatch is detectable,
 and this paragraph is the disclosure rather than a silence. *Not* mitigated further because the

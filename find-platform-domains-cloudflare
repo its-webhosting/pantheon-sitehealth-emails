@@ -109,6 +109,22 @@ class InvariantError(StartupError):
     """
 
 
+class OutputWriteError(StartupError):
+    """One of the four output files could not be written, or could not be serialized.
+
+    A subclass of StartupError for the same reason InvariantError is: main()'s existing handler
+    and the exit-2 taxonomy stay unchanged -- this adds a NAME, not a code path.  Named rather
+    than reusing OSError (whole-branch review, finding 3) because the failure is not always an
+    OS-level one: json.dump raises TypeError/ValueError on an unserializable value, and calling
+    that an OSError would be exactly the "handle errors" mis-naming PD#2 forbids.
+
+    Its message is the partial-set report, built by write_outputs and relayed VERBATIM by main()
+    -- never with destination_name(paths) prepended, which always names the inventory whichever
+    of the four actually failed.  This is what makes main()'s stdout-vs-basename write paths
+    symmetric: write_json_stdout already converts its own OSError into a StartupError.
+    """
+
+
 def point_at_devnull(stream) -> None:
     """Repoint `stream`'s file descriptor at /dev/null, so nothing written to it can fail again.
 
@@ -952,6 +968,16 @@ def write_outputs(paths, inventory, plan, revert, excluded) -> None:
     not touched by this run (unchanged or absent), not just the one that raised.  A single
     container file would close the per-file-atomicity residual entirely and is ruled out by the
     four-file requirement.
+
+    THE CAUGHT TUPLE IS THREE CLASSES, NOT JUST OSError (whole-branch review, finding 3):
+    write_json_atomic -> dump_json -> json.dump raises TypeError (an unserializable value) or
+    ValueError (a circular reference) and write_json_atomic's own `except BaseException` re-raises
+    it untouched.  Measured before the fix: a TypeError on file 2 left file 1 replaced and
+    produced NO report at all -- precisely the partial set this docstring promises to make
+    detectable, arriving with the detection disabled.  Reachable in production rather than
+    theoretical: plain() passes through anything without model_dump, so an SDK shape change that
+    puts a non-JSON type into `settings` lands here.  The class is named in the message, because
+    "cannot write X" reads as a disk problem and a TypeError is a defect in what we built.
     """
     order = ((paths.inventory, inventory), (paths.plan, plan),
              (paths.revert, revert), (paths.excluded, excluded))
@@ -959,12 +985,12 @@ def write_outputs(paths, inventory, plan, revert, excluded) -> None:
     for index, (path, data) in enumerate(order):
         try:
             write_json_atomic(path, data)
-        except OSError as e:
+        except (OSError, TypeError, ValueError) as e:
             not_written = [p for p, _ in order[index:]]
-            raise OSError(
-                f"cannot write {path}: {e}.  Already replaced before this failure (fresh): "
-                f"{', '.join(written) if written else 'none'}.  NOT written by this run "
-                f"(unchanged or absent): {', '.join(not_written)}.") from e
+            raise OutputWriteError(
+                f"cannot write {path}: {type(e).__name__}: {e}.  Already replaced before this "
+                f"failure (fresh): {', '.join(written) if written else 'none'}.  NOT written by "
+                f"this run (unchanged or absent): {', '.join(not_written)}.") from e
         written.append(path)
 
 
@@ -1486,16 +1512,15 @@ def main(argv):
                 {"generated": provenance(argv, sweep, "excluded", len(excluded), at),
                  "entries": excluded},
             )
-        try:
-            emit(sweep.entries, paths, *(documents or (None, None, None)))
-        except OSError as e:
-            # A full disk or a read-only directory lands here AFTER the whole multi-minute walk.
-            # (The stdout path raises StartupError itself, from inside write_json_stdout.)  In
-            # basename mode `e` IS write_outputs' own message, naming exactly which of the four
-            # files failed and which were already replaced (review findings 3/4) -- wrapping
-            # must relay it as-is, NOT prepend destination_name(paths) (always the inventory,
-            # whichever file actually failed) on top of it.
-            raise StartupError(str(e)) from e
+        # A full disk or a read-only directory lands here AFTER the whole multi-minute walk, and
+        # BOTH destinations name themselves: write_json_stdout raises StartupError, write_outputs
+        # raises OutputWriteError (a StartupError too), whose message already names exactly which
+        # of the four files failed and which were already replaced (review findings 3/4).  There
+        # is deliberately no wrapping arm here -- one used to convert an OSError, and once
+        # write_outputs grew a name of its own it could only ever have re-wrapped a message that
+        # was already right, or prepended destination_name(paths) (always the inventory,
+        # whichever file actually failed) on top of it.
+        emit(sweep.entries, paths, *(documents or (None, None, None)))
         wrote = True
         summarize(sweep, plan, revert, excluded, paths)
     except StartupError as e:
