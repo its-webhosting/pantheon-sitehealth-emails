@@ -83,6 +83,20 @@ class StartupError(Exception):
     """Anything that stops the sweep from starting or completing (exit 2)."""
 
 
+class InvariantError(StartupError):
+    """A mid-sweep INTERNAL INVARIANT violated -- not an operator error, but named separately from
+    StartupError so the failure describes what actually went wrong (PD#2) rather than reusing the
+    generic "could not start/complete" name for a defect in this script's own reasoning.
+
+    A subclass of StartupError on purpose: main()'s existing handler and the exit-2 taxonomy stay
+    unchanged (task 5 review, finding 3) -- this adds a name, not a new code path.  Raised when a
+    body builder is handed an entry that classify()/collect_entries() should already have excluded
+    (an ambiguous `origins` list, an unknown `proxied` status): reaching the builder anyway means
+    the upstream gate has a bug, and the alternative -- silently proceeding -- is exactly the
+    failure class PD#1 forbids.
+    """
+
+
 def point_at_devnull(stream) -> None:
     """Repoint `stream`'s file descriptor at /dev/null, so nothing written to it can fail again.
 
@@ -439,6 +453,22 @@ def proxied_ttl_anomaly(entry):
     return bool(entry["proxied"]) and entry["ttl"] not in (None, 1)
 
 
+def known_proxied(entry):
+    """The entry's proxied status, asserted known (task 5 review, finding 2).
+
+    An entry reaching a body builder has a known proxied status: classify() already excludes an
+    entry whose swept `proxied` is null (`unknown-proxy-status`, SPEC section 6) before any body
+    is built.  Asserted rather than assumed -- the same reasoning `sole_origin` gets -- because a
+    silent null would emit "proxied": null into a rewrite body, which Cloudflare defaults to
+    false: the exact certificate-service loss record_body's always-emit rule exists to prevent.
+    """
+    if entry["proxied"] is None:
+        raise InvariantError(
+            f"internal invariant violated: {entry['name']} reached a batch-body builder with "
+            "proxied unknown; classify() must have excluded it as unknown-proxy-status")
+    return entry["proxied"]
+
+
 def record_body(entry, rtype, content, settings):
     """One `posts` item, applying every carry-over rule in SPEC R6.
 
@@ -452,12 +482,13 @@ def record_body(entry, rtype, content, settings):
     record's ttl is carried verbatim; a missing one falls back to 1 ("automatic"), because ttl is
     a required field and there is no better answer.
     """
+    proxied = known_proxied(entry)
     body = {"type": rtype,
             # the RAW name Cloudflare holds, never the normalized inventory key (SPEC R4.2)
             "name": entry["name"],
             "content": content,
-            "proxied": entry["proxied"],
-            "ttl": 1 if entry["proxied"] or not entry["ttl"] else entry["ttl"]}
+            "proxied": proxied,
+            "ttl": 1 if proxied or not entry["ttl"] else entry["ttl"]}
     if settings is not None:
         body["settings"] = settings
     if entry["comment"] is not None:
@@ -476,7 +507,7 @@ def sole_origin(entry):
     to prevent.
     """
     if len(entry["origins"]) != 1:
-        raise StartupError(
+        raise InvariantError(
             f"internal invariant violated: {entry['name']} reached a batch-body builder with "
             f"{len(entry['origins'])} origins; ambiguous entries must have been excluded")
     return entry["origins"][0]

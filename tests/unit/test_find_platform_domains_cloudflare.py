@@ -1898,6 +1898,16 @@ def test_record_body_carries_a_dns_only_ttl_verbatim(fpc):
     assert fpc.record_body(swept(proxied=False, ttl=300), "A", "23.185.0.4", None)["ttl"] == 300
 
 
+def test_record_body_falls_back_to_ttl_1_when_dns_only_ttl_is_missing(fpc):
+    """R6's ttl rule has a THIRD case beyond "proxied -> 1" / "dns-only -> verbatim" (task 5
+    review, finding 1): a null/zero swept ttl on a DNS-only record also falls back to 1
+    ("automatic"), because ttl is a required field (SPEC R4.3) and there is no better answer.
+    `collect_entries()` reads ttl via `getattr(..., None)` defensively, so a record missing the
+    attribute -- which should not happen, since every record model declares it -- is the only way
+    this null shape can arise; it is covered rather than assumed unreachable."""
+    assert fpc.record_body(swept(proxied=False, ttl=None), "A", "23.185.0.4", None)["ttl"] == 1
+
+
 def test_record_body_omits_a_null_comment_and_empty_tags(fpc):
     body = fpc.record_body(swept(), "A", "23.185.0.4", None)
     assert "comment" not in body
@@ -1947,10 +1957,25 @@ def test_plan_entry_keeps_delete_match_outside_the_body(fpc):
     assert "deletes" not in entry["body"]
 
 
+def test_record_body_refuses_an_entry_with_unknown_proxy_status(fpc):
+    """Mirrors the origins invariant above (task 5 review, finding 2): classify() already excludes
+    an entry whose swept `proxied` is null upstream (`unknown-proxy-status`, SPEC section 6), so
+    this is defense-in-depth, not a live bug -- but a silent null would emit "proxied": null into
+    a rewrite body, which Cloudflare defaults to false: the exact certificate-service loss R6's
+    always-emit rule exists to prevent.  The invariant is asserted rather than assumed, the same
+    reasoning `sole_origin` already gets."""
+    with pytest.raises(fpc.InvariantError):
+        fpc.record_body(swept(proxied=None), "A", "23.185.0.4", None)
+
+
 def test_plan_entry_refuses_an_entry_with_more_than_one_origin(fpc):
     """An ambiguous entry never reaches here (Task 3 removes it).  The invariant is asserted
-    rather than assumed, because a silent [0] would rewrite one of two records."""
-    with pytest.raises(fpc.StartupError):
+    rather than assumed, because a silent [0] would rewrite one of two records.
+
+    Asserts the NAMED subclass `InvariantError`, not merely `StartupError` (task 5 review,
+    finding 3): this is a mid-sweep internal-invariant violation, not an operator error, and the
+    two must not collapse into the same anonymous exception."""
+    with pytest.raises(fpc.InvariantError):
         fpc.plan_entry(swept(origins=["live-a.pantheonsite.io", "live-b.pantheonsite.io"]),
                        fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], ""))
 
