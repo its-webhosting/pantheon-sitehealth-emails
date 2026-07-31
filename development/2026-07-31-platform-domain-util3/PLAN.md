@@ -291,9 +291,17 @@ def test_bare_double_dash_output_is_not_accepted(fpc, capsys):
 ./run-tests --fast tests/unit/test_find_platform_domains_cloudflare.py -k "output_option or old_output_path or bare_double_dash"
 ```
 
-Expected: the first two fail on `unrecognized arguments: -o` or on `options.output`; the third
-**passes already** (argparse rejects `--output` only after the rename — if it passes before the
-rename, note that in the task report and keep it, since it will still be meaningful after).
+Expected, and **all three must fail** — a test that passes the moment you write it is testing
+existing behavior:
+
+| Test | Fails because |
+|---|---|
+| `..._takes_a_basename_not_a_path` | the old `-o` writes to the literal path `engin-zone`, so `engin-zone.json` does not exist |
+| `..._old_output_path_form_is_rejected...` | the old `-o` accepts the `.json` path, so `main` returns 0, not 2, and `cloudflare_client` **is** reached — the injected `explode` fires |
+| `..._bare_double_dash_output_is_not_accepted` | `--output` is still a valid option, so `parse_args` succeeds and no `SystemExit` is raised |
+
+If any of the three passes before the implementation, **stop and report it** — the test is not
+covering what it claims to (PD#14).
 
 - [ ] **Step 7: Rename the option and thread `output_basename` through**
 
