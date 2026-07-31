@@ -1899,11 +1899,18 @@ def test_clean_settings_returns_none_when_nothing_survives(fpc):
     assert fpc.clean_settings({}, drop_cname_only=False) is None
 
 
-def test_record_body_always_emits_proxied(fpc):
+@pytest.mark.parametrize(("proxied", "ttl"), [(True, 1), (False, 300)])
+def test_record_body_always_emits_proxied(fpc, proxied, ttl):
     """R6: the API default is false, and a silently DNS-only replacement takes the hostname out
-    of certificate service."""
-    body = fpc.record_body(swept(proxied=False, ttl=300), "A", "23.185.0.4", None)
-    assert body["proxied"] is False
+    of certificate service.
+
+    Parametrized over BOTH proxy states (whole-branch review, finding 1).  It used to assert only
+    the proxied=False case -- 5 of 218 records in the last live sweep -- so mutating
+    `"proxied": proxied` to `"proxied": False` inside record_body left the entire suite green
+    while every one of the other 213 hostnames would have been re-created DNS-only, out of
+    certificate service.  `is`, not `==`: True == 1 in Python, and the API distinguishes them."""
+    body = fpc.record_body(swept(proxied=proxied, ttl=ttl), "A", "23.185.0.4", None)
+    assert body["proxied"] is proxied
 
 
 def test_record_body_forces_ttl_1_when_proxied(fpc):
@@ -1965,6 +1972,31 @@ def test_plan_entry_deletes_the_cname_and_posts_the_addresses(fpc):
     assert [p["content"] for p in entry["body"]["posts"]] == [
         "23.185.0.4", "2620:12a:8000::4", "2620:12a:8001::4"]
     assert all(p["settings"] == {"ipv4_only": True} for p in entry["body"]["posts"])
+
+
+def test_the_plan_posts_reproduce_every_writable_field_of_a_proxied_entry(fpc):
+    """R6, the PLAN-side mirror of test_the_revert_reproduces_every_writable_field_of_the_swept
+    _cname (whole-branch review, finding 1).  That one -- the branch's only exhaustive
+    `post == {...}` -- runs on a proxied=FALSE entry, so before this test nothing in the suite
+    could go red on a plan `posts` item emitted DNS-only.  research.md: "proxied: true is the
+    load-bearing field in both directions"; under "What would break it" the first bullet is
+    "Creating the replacement records DNS-only instead of proxied".
+
+    Exhaustive `==` on the whole dict rather than per-key asserts: a MISSING or EXTRA key is a
+    defect too, and only equality catches one.  This pins, in one instrument: proxied carried
+    true, ttl forced to 1, flatten_cname dropped forward, a null-valued setting dropped (R6.1),
+    ipv4_only carried, and comment/tags carried."""
+    entry = swept(proxied=True, ttl=1, comment="owned by ITS", tags=["team:wws"],
+                  settings={"flatten_cname": False, "ipv4_only": True, "ipv6_only": None})
+    plan = fpc.plan_entry(entry, fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], ""))
+    a_post, aaaa_post = plan["body"]["posts"]
+    assert a_post == {"type": "A", "name": "a.example.edu", "content": "23.185.0.4",
+                      "proxied": True, "ttl": 1, "settings": {"ipv4_only": True},
+                      "comment": "owned by ITS", "tags": ["team:wws"]}
+    assert aaaa_post == {"type": "AAAA", "name": "a.example.edu",
+                         "content": "2620:12a:8000::4",
+                         "proxied": True, "ttl": 1, "settings": {"ipv4_only": True},
+                         "comment": "owned by ITS", "tags": ["team:wws"]}
 
 
 def test_plan_entry_keeps_delete_match_outside_the_body(fpc):
