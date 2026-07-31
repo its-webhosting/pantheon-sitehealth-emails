@@ -1488,9 +1488,11 @@ def main(argv):
     (adversarial review, finding 3).
 
     THE EXIT-CODE DISCIPLINE IS THE POINT OF THE STRUCTURE BELOW, and it is the sibling's, ported
-    verbatim in reasoning (find-platform-domains-dns:776-790, whose docstring says the same
-    thing).  CPython exits 1 on ANY uncaught traceback, and SPEC section 8 now reserves 1 for
-    "completed with exclusions" -- so an unexpected API shape, or any internal defect, leaking out
+    verbatim in reasoning from find-platform-domains-dns's main() (a symbol reference, not the
+    line range this cited before: a range rots the moment either docstring is next edited, and
+    nothing marks it stale).  CPython exits 1 on ANY uncaught traceback, and SPEC section 8 now
+    reserves 1 for "completed with exclusions" -- so an unexpected API shape, or any internal
+    defect, leaking out
     of here would be indistinguishable to an operator's `case $?` from a healthy sweep that
     excluded a few FQDNs.  Every other outcome is therefore routed AWAY from 1, and the only
     `return 1` in this program is the exclusion branch on the last line.  The `except

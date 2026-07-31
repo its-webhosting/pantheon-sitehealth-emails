@@ -205,17 +205,18 @@ plan and revert. `resolution-failed` MUST be tested before `no-a`: an indetermin
 unconditional (never `-v`-gated) stderr `ATTENTION:` line naming the FQDN, the code and the
 detail.
 
-**Exit 1 is new: "completed with exclusions"** (≥1 FQDN carries a reason code). The taxonomy is now
-0 = nothing excluded, 1 = completed with exclusions, 2 = could not complete, 130 = interrupted.
-Giving 1 that meaning is only trustworthy because `main()` ends with the sibling's last line of
-defence (`except SystemExit: raise` / `except BaseException` → `ERROR: unexpected <class>: <msg>`,
-exit 2): CPython exits 1 on **any** uncaught traceback, so without it a crashed run and a healthy
-run with exclusions are indistinguishable to a `case $?`. The only `return 1` in the program is the
-exclusion branch. A doomed stdout or stderr is likewise a named exit 2, NOT the interpreter's 120 — the sibling's guards
-are ported (`require_usable_streams` refuses a closed stderr, whose `print` fallback would
-interleave operator messages into the JSON; `write_json_stdout` and `report_line` detach only a
-stream a **real** write has proven doomed, never unconditionally). **The stated exception, same as
-the sibling's and exhaustive:** argparse writes its usage, error and `--help` text before those
+**Exit 1 is new: "completed with exclusions"** (≥1 FQDN carries a reason code). The taxonomy is
+now 0 = nothing excluded, 1 = completed with exclusions, 2 = could not complete, 130 =
+interrupted. Giving 1 that meaning is only trustworthy because `main()` ends with the sibling's
+last line of defence (`except SystemExit: raise` / `except BaseException` → `ERROR: unexpected
+<class>: <msg>`, exit 2): CPython exits 1 on **any** uncaught traceback, so without it a
+crashed run and a healthy run with exclusions are indistinguishable to a `case $?`. The only
+`return 1` in the program is the exclusion branch. A doomed stdout or stderr is likewise a
+named exit 2, NOT the interpreter's 120 — the sibling's guards are ported
+(`require_usable_streams` refuses a closed stderr, whose `print` fallback would interleave
+operator messages into the JSON; `write_json_stdout` and `report_line` detach only a stream a
+**real** write has proven doomed, never unconditionally). **The stated exception, same as the
+sibling's and exhaustive:** argparse writes its usage, error and `--help` text before those
 guards exist and outside every handler, so both `--help >/dev/full` and `--bogus 2>/dev/full`
 still exit 120.
 
