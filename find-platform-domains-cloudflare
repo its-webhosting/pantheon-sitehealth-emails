@@ -39,17 +39,23 @@ credentials in the [Cloudflare] section of the config file.
 import argparse
 import contextlib
 import io
+import ipaddress
 import json
 import os
 import re
 import shlex
+import struct
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
 import cloudflare  # for cloudflare.CloudflareError
+import dns.exception
+import dns.name
+import dns.resolver
 from cloudflare import Cloudflare
 
 PLATFORM_SUFFIX = ".pantheonsite.io"   # the leading dot is load-bearing: it rejects
@@ -208,6 +214,121 @@ def check_basename(basename):
     os.close(handle)
     os.unlink(probe)  # noqa: PTH108 -- cleanup of the same os.path/tempfile surface above
     return basename
+
+
+DNS_RETRY_SLEEP = 1.0     # before retrying a NoNameservers only -- see resolve_retrying
+
+
+class MalformedNameError(Exception):
+    """`hostname` is not a syntactically valid DNS name.
+
+    Copied from find-platform-domains-dns, which copied it from psh/dns_classify.py.  dnspython
+    raises four unrelated exception types for a bad name -- dns.exception.SyntaxError subclasses,
+    dns.name.NameTooLong, dns.name.IDNAException, and the stdlib struct.error for an out-of-range
+    byte escape -- none of which derive from dns.resolver.*, so no resolver handler catches them.
+    resolve() converts them here, ONCE, so no caller can forget them and abort a whole sweep on
+    one malformed record content.
+    """
+
+
+def resolve(hostname, rrtype):
+    """The one seam over dns.resolver.resolve; tests monkeypatch this module attribute.
+
+    Copied from find-platform-domains-dns:62, including the struct.error split: the name is
+    parsed FIRST, in its own try, so only a parse-time struct.error is reported as a malformed
+    name.  dnspython ALSO raises struct.error from its TCP length-prefix unpack -- i.e. from
+    garbled wire data on a perfectly valid name -- and that must surface as transient
+    (NoNameservers), never as "not a valid DNS name".
+    """
+    try:
+        dns.name.from_text(hostname)
+    except (dns.exception.SyntaxError, dns.name.NameTooLong, dns.name.IDNAException,
+            struct.error) as e:
+        raise MalformedNameError(f"{hostname}: {type(e).__name__}") from e
+
+    try:
+        return dns.resolver.resolve(hostname, rrtype)
+    except (dns.exception.SyntaxError, dns.name.NameTooLong, dns.name.IDNAException) as e:
+        raise MalformedNameError(f"{hostname}: {type(e).__name__}") from e
+    except struct.error as e:
+        raise dns.resolver.NoNameservers from e
+
+
+def resolve_retrying(hostname, rrtype):
+    """resolve() with ONE retry on a transient resolver failure (SPEC R3.3).
+
+    The delay depends on which failure it was, and the difference is measured rather than
+    assumed (find-platform-domains-dns:139): a Timeout has already consumed dnspython's own ~5s
+    lifetime, so retrying immediately is right; NoNameservers (SERVFAIL/REFUSED) comes back in
+    ~0.3s, and the likeliest cause of a burst of those during a sweep is the recursive resolver
+    rate-limiting us -- so an immediate retry just re-fires into the same condition.
+
+    ONE retry, not a loop: on a systemic resolver failure a loop multiplies the whole sweep's
+    wall time by the resolver timeout, for an answer that is not coming.
+    """
+    try:
+        return resolve(hostname, rrtype)
+    except dns.resolver.Timeout:
+        return resolve(hostname, rrtype)
+    except dns.resolver.NoNameservers:
+        time.sleep(DNS_RETRY_SLEEP)
+        return resolve(hostname, rrtype)
+
+
+def sorted_addresses(values):
+    """Addresses sorted by ip_address() VALUE, never lexically (SPEC 5.2).
+
+    Two reasons, both real.  Lexically "23.185.0.10" sorts before "23.185.0.4".  And DNS rrsets
+    rotate -- two live AAAA queries on 2026-07-31 returned the same pair in opposite orders -- so
+    without a stable sort two identical sweeps produce diffing files and no golden is stable.
+    """
+    return [str(address) for address in sorted(ipaddress.ip_address(str(v)) for v in values)]
+
+
+class Resolution(NamedTuple):
+    """What one platform-domain target resolved to.
+
+    `a`/`aaaa` are [] for a DEFINITIVE absence and None when the lookup was INDETERMINATE
+    (SPEC R4.4).  Collapsing the two would tell an operator a target has no addresses when the
+    run never established that -- the same distinction the sweep already keeps between a null
+    and a false `proxied`.
+    """
+
+    a: list | None
+    aaaa: list | None
+    problem: str          # "" for a definitive answer; else why it is indeterminate
+
+
+def resolve_one_rrset(target, rrtype):
+    """(addresses, problem) for one rrset.  ([], "") when definitively absent."""
+    try:
+        answer = resolve_retrying(target, rrtype)
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+        return [], ""
+    except (dns.resolver.Timeout, dns.resolver.NoNameservers, MalformedNameError) as e:
+        return None, f"{type(e).__name__} resolving {rrtype} for {target}"
+    return sorted_addresses(str(rdata) for rdata in answer), ""
+
+
+def resolve_target(target):
+    """The A and AAAA records a platform domain resolves to, following CNAME chains.
+
+    dnspython follows the chain itself and returns the terminal rrset, which is what makes both
+    live shapes work uniformly -- live-bus-occb.pantheonsite.io is a CNAME into
+    fe4.edge.pantheon.io, while live-umich-its-wws-test1.pantheonsite.io answers A/AAAA directly
+    (SPEC section 1).
+
+    An indeterminate A leaves BOTH halves None: with the A answer unknown there is nothing the
+    AAAA answer alone can be used for, and spending a second lookup to enrich a row that is
+    already excluded is wasted.  An indeterminate AAAA keeps the good A, which is still evidence.
+    """
+    a, problem = resolve_one_rrset(target, "A")
+    if problem:
+        return Resolution(None, None, problem)
+    aaaa, problem = resolve_one_rrset(target, "AAAA")
+    if problem:
+        return Resolution(a, None, problem)
+    return Resolution(a, aaaa, "")
 
 
 def resolve_env_marker(expr, where):

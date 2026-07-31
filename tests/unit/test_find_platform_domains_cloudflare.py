@@ -24,6 +24,7 @@ import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
+import dns.resolver
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -1243,3 +1244,132 @@ def test_an_interrupt_before_paths_is_assigned_does_not_crash_with_unboundlocale
     monkeypatch.setattr(fpc, "require_usable_streams", interrupt)
     assert fpc.main(["-o", "engin-zone"]) == 130
     assert "no complete JSON document was produced" in capsys.readouterr().err
+
+
+# --- Task 2: the DNS layer -------------------------------------------------------------------
+
+def fake_dns(fpc, monkeypatch, answers):
+    """Patch the ONE DNS seam.  `answers` maps (hostname, rrtype) to a list of address strings,
+    or to an exception INSTANCE to raise.  Nothing in this suite may touch real DNS (SPEC 7)."""
+    calls = []
+
+    def fake(hostname, rrtype):
+        calls.append((hostname, rrtype))
+        answer = answers[(hostname, rrtype)]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(fpc, "resolve", fake)
+    return calls
+
+
+def test_sorted_addresses_orders_by_value_not_lexically(fpc):
+    """23.185.0.10 sorts BEFORE 23.185.0.4 as a string.  A lexical sort would make the plan
+    file's post order depend on nothing meaningful (SPEC 5.2)."""
+    assert fpc.sorted_addresses(["23.185.0.10", "23.185.0.4", "23.185.0.2"]) == [
+        "23.185.0.2", "23.185.0.4", "23.185.0.10"]
+
+
+def test_sorted_addresses_normalizes_rotating_rrset_order(fpc):
+    """Measured 2026-07-31: two live AAAA queries returned the pair in OPPOSITE orders, so
+    without this no two sweeps produce identical bytes (SPEC 1, SPEC 5.2)."""
+    one = fpc.sorted_addresses(["2620:12a:8001::4", "2620:12a:8000::4"])
+    two = fpc.sorted_addresses(["2620:12a:8000::4", "2620:12a:8001::4"])
+    assert one == two == ["2620:12a:8000::4", "2620:12a:8001::4"]
+
+
+def test_resolve_target_returns_both_sorted_rrsets(fpc, monkeypatch):
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8001::4", "2620:12a:8000::4"],
+    })
+    assert fpc.resolve_target("live-a.pantheonsite.io") == (
+        ["23.185.0.4"], ["2620:12a:8000::4", "2620:12a:8001::4"], "")
+
+
+def test_resolve_target_reports_a_definitive_absence_as_empty_not_null(fpc, monkeypatch):
+    """R4.4: [] means "definitively none", null means "we do not know"."""
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): dns.resolver.NoAnswer(),
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+    })
+    result = fpc.resolve_target("live-a.pantheonsite.io")
+    assert result.a == []
+    assert result.problem == ""
+
+
+def test_resolve_target_reports_an_indeterminate_lookup_as_null(fpc, monkeypatch):
+    """R4.4 again, the other half: a timeout must never be rendered as "no records"."""
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): dns.resolver.Timeout()})
+    result = fpc.resolve_target("live-a.pantheonsite.io")
+    assert result.a is None
+    assert result.aaaa is None
+    assert "Timeout" in result.problem
+
+
+def test_resolve_target_keeps_a_good_a_when_only_aaaa_is_indeterminate(fpc, monkeypatch):
+    """The A answer was definitive and is still evidence; only the unknown half goes null."""
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): dns.resolver.NoNameservers(),
+    })
+    result = fpc.resolve_target("live-a.pantheonsite.io")
+    assert result.a == ["23.185.0.4"]
+    assert result.aaaa is None
+    assert "NoNameservers" in result.problem
+
+
+def test_resolve_target_reports_a_malformed_name_as_indeterminate(fpc, monkeypatch):
+    fake_dns(fpc, monkeypatch,
+             {("a..b.pantheonsite.io", "A"): fpc.MalformedNameError("a..b: SyntaxError")})
+    assert fpc.resolve_target("a..b.pantheonsite.io").problem.startswith("MalformedNameError")
+
+
+def test_resolve_retrying_retries_a_timeout_exactly_once(fpc, monkeypatch):
+    """R3.3.  Exactly once: a retry loop would multiply a whole sweep's wall time by the
+    resolver's timeout on a systemic failure."""
+    attempts = []
+
+    def flaky(hostname, rrtype):
+        attempts.append(rrtype)
+        if len(attempts) == 1:
+            raise dns.resolver.Timeout
+        return ["23.185.0.4"]
+
+    monkeypatch.setattr(fpc, "resolve", flaky)
+    assert fpc.resolve_retrying("live-a.pantheonsite.io", "A") == ["23.185.0.4"]
+    assert attempts == ["A", "A"]
+
+
+def test_resolve_retrying_gives_up_after_the_second_failure(fpc, monkeypatch):
+    attempts = []
+
+    def always_down(hostname, rrtype):
+        attempts.append(rrtype)
+        raise dns.resolver.Timeout
+
+    monkeypatch.setattr(fpc, "resolve", always_down)
+    monkeypatch.setattr(fpc.time, "sleep", lambda seconds: None)
+    with pytest.raises(dns.resolver.Timeout):
+        fpc.resolve_retrying("live-a.pantheonsite.io", "A")
+    assert attempts == ["A", "A"]
+
+
+def test_resolve_retrying_sleeps_before_retrying_a_nonameservers(fpc, monkeypatch):
+    """Copied reasoning from find-platform-domains-dns:139 -- a Timeout has already consumed
+    dnspython's ~5s lifetime, but NoNameservers returns in ~0.3s and is most often the recursive
+    resolver rate-limiting us, so an immediate retry re-fires into the same condition."""
+    slept = []
+    monkeypatch.setattr(fpc.time, "sleep", slept.append)
+    attempts = []
+
+    def flaky(hostname, rrtype):
+        attempts.append(rrtype)
+        if len(attempts) == 1:
+            raise dns.resolver.NoNameservers
+        return ["23.185.0.4"]
+
+    monkeypatch.setattr(fpc, "resolve", flaky)
+    assert fpc.resolve_retrying("live-a.pantheonsite.io", "A") == ["23.185.0.4"]
+    assert slept == [fpc.DNS_RETRY_SLEEP]
