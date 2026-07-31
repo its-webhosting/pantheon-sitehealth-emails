@@ -1,8 +1,10 @@
 # Session 02 prompts — zone selection, stdout output, and one non-bug
 
 The second session against this utility (2026-07-31). Verbatim operator prompts, in order.
-Session 01's record is `transcript.md` / `statistics.md`; this session's are `transcript-02.md` /
-`statistics-02.md`. The spec it produced is **Amendment A1** at the end of `SPEC.md`.
+Session 01's record is `transcript-01.md` / `statistics-01.md`; this session's are
+`transcript-02.md` / `statistics-02.md` (the per-session suffixes `development/README.md` requires
+for a feature spanning more than one session). The spec this session produced is **Amendment A1**
+at the end of `SPEC.md`.
 
 ---
 
