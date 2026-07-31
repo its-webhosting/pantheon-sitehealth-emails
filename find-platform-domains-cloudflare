@@ -49,7 +49,9 @@ import sys
 import tempfile
 import time
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import NamedTuple
 
 import cloudflare  # for cloudflare.CloudflareError
@@ -492,23 +494,32 @@ def plain(value):
 
 
 def collect_entries(zone_records):
-    """Fold (zone_id, record) pairs into the output mapping.  Returns (entries, warnings).
+    """Fold (zone_id, zone_name, record) triples into the inventory.
+
+    Returns (entries, warnings, excluded).
 
     A record is kept only when it is a CNAME whose content is a *.pantheonsite.io hostname.
     Proxy status is NOT part of the test -- that is exactly what separates this script from
     fqdns.json, which is built with proxied=True and therefore cannot see a DNS-only record.
 
-    Every scalar (zone_id, record_id, proxied, ttl, comment, tags, settings) is
-    FIRST-RECORD-WINS, mirroring how fqdns.json already keeps only the first zone_id for a name.
-    `origins` accumulates every match, so a name that matches more than once stays visible in the
-    file and not only in the warning.
+    Every scalar (zone_id, zone_name, record_id, proxied, ttl, comment, tags, settings) is
+    FIRST-RECORD-WINS.  `origins` accumulates every match.
+
+    AMBIGUITY (SPEC R4.1): an FQDN with more than one platform CNAME -- in one zone or across
+    two -- is REMOVED from `entries` entirely and reported in `excluded`.  It used to stay, with
+    the FIRST record_id of two, which presented an unrewritable entry as if it were actionable;
+    select_zones()'s docstring already records that a rewriter pointed at one of two records has
+    no way to know.  A cross-zone duplicate outranks a same-zone one: it is the more serious
+    finding, and one FQDN carries exactly one reason code.
 
     `zone_records` is consumed lazily, so the caller can hand over a generator and the whole
     organization's record set is never held in memory at once.
     """
     entries = {}
     warnings = []
-    for zone_id, dns_record in zone_records:
+    reasons = {}            # fqdn -> reason code; the detail is built from `entries` below
+    zone_ids = {}           # fqdn -> [zone_id, ...] in first-seen order
+    for zone_id, zone_name, dns_record in zone_records:
         if getattr(dns_record, "type", None) != "CNAME":
             continue
         content = getattr(dns_record, "content", None)
@@ -518,7 +529,11 @@ def collect_entries(zone_records):
         entry = entries.get(name)
         if entry is None:
             entries[name] = {
+                # The RAW record name, not the normalized key: a batch POST body's `name` must
+                # be exactly what Cloudflare holds, Punycode included (SPEC R4.2).
+                "name": str(dns_record.name),
                 "zone_id": zone_id,
+                "zone_name": zone_name,
                 "origins": [content],
                 "record_id": dns_record.id,
                 # Stored VERBATIM, never coerced.  proxied is Optional[bool] on every record
@@ -526,29 +541,46 @@ def collect_entries(zone_records):
                 # field in both directions" -- a None flattened to false would inflate the
                 # DNS-only count AND instruct a rewriter to re-create a proxied hostname
                 # unproxied, taking it out of certificate service.  An unknown stays null and
-                # main() calls it out.
+                # classify() excludes it.
                 "proxied": getattr(dns_record, "proxied", None),
                 "ttl": getattr(dns_record, "ttl", None),
                 "comment": getattr(dns_record, "comment", None),
                 "tags": list(getattr(dns_record, "tags", None) or []),
                 "settings": plain(getattr(dns_record, "settings", None)),
             }
+            zone_ids[name] = [zone_id]
             continue
         entry["origins"].append(content)
-        # Warn on EVERY duplicate, not only a cross-zone one.  The file keeps one record_id of
-        # two and feeds a destructive rewrite, so silence is the wrong default even for the
-        # same-zone case -- which the Cloudflare API should make unreachable (a name may hold at
-        # most one CNAME), making a warning there a signal worth seeing.
+        if zone_id not in zone_ids[name]:
+            zone_ids[name].append(zone_id)
+        # Warn on EVERY duplicate, not only a cross-zone one.  The same-zone case is one the
+        # Cloudflare API should make unreachable (a name may hold at most one CNAME), which makes
+        # a warning there a signal worth seeing rather than noise.
         if entry["zone_id"] == zone_id:
+            reasons.setdefault(name, "ambiguous-multiple-origins")
             warnings.append(
                 f"ATTENTION: {name} has more than one platform-domain CNAME in zone {zone_id}, "
-                f"which the Cloudflare API should not permit; keeping record_id "
-                f"{entry['record_id']}")
+                "which the Cloudflare API should not permit; it is omitted from the inventory "
+                "and gets no rewrite plan")
         else:
+            reasons[name] = "ambiguous-multiple-zones"   # NOT setdefault: cross-zone outranks
             warnings.append(
                 f"ATTENTION: {name} has a platform-domain CNAME in more than one Cloudflare "
-                f"zone ({entry['zone_id']} and {zone_id}); keeping the first zone_id/record_id")
-    return entries, warnings
+                f"zone ({entry['zone_id']} and {zone_id}); it is omitted from the inventory and "
+                "gets no rewrite plan")
+
+    excluded = {}
+    for name, reason in reasons.items():
+        entry = entries.pop(name)
+        excluded[name] = {
+            "reason": reason,
+            "detail": (f"{len(entry['origins'])} platform-domain CNAMEs in zone(s) "
+                       f"{', '.join(zone_ids[name])}; the record to rewrite is ambiguous, so "
+                       "this FQDN is omitted from the inventory, the plan and the revert"),
+            "zone_ids": zone_ids[name],
+            "origins": entry["origins"],
+        }
+    return entries, warnings, excluded
 
 
 def dump_json(data, stream) -> None:
@@ -731,6 +763,10 @@ class SweepResult(NamedTuple):
     # Zones LISTED, before any ZONE-argument narrowing.  Kept so the summary can say "2 of 187"
     # and a subset run can never be mistaken for a full sweep in a log (SPEC A1.6).
     zones_total: int
+    # Ambiguous FQDNs, keyed by normalized name (SPEC R4.1).  They are NOT in `entries`.
+    # MappingProxyType, not {}: a NamedTuple default is a single shared instance, and a mutable
+    # one would leak between runs and between tests.  An attempted write raises (PD#14).
+    excluded: Mapping = MappingProxyType({})
 
 
 def list_zones(client, warn):
@@ -841,7 +877,7 @@ def fetch_platform_cnames(client, *, verbose=False, zone_names=()):
     seen = {"records": 0}
 
     def zone_records():
-        """(zone_id, record) pairs, one zone at a time."""
+        """(zone_id, zone_name, record) triples, one zone at a time."""
         for number, zone in enumerate(zones, start=1):
             records, shortfall = read_all(
                 lambda zone_id=zone.id: client.dns.records.list(zone_id=zone_id),
@@ -852,15 +888,15 @@ def fetch_platform_cnames(client, *, verbose=False, zone_names=()):
                       0: ""}.get(shortfall, f" ({shortfall} missed)")
             note(f"[{number}/{len(zones)}] zone {zone.name} -- {len(records)} records{marker}")
             for dns_record in records:
-                yield zone.id, dns_record
+                yield zone.id, zone.name, dns_record
 
     try:
-        entries, warnings = collect_entries(zone_records())
+        entries, warnings, excluded = collect_entries(zone_records())
     except cloudflare.CloudflareError as e:
         raise StartupError(f"listing DNS records failed: {api_error_text(e)}") from e
 
     return SweepResult(entries, warnings, len(accounts), len(zones), seen["records"],
-                       tally.complete, tally.short, tally.unverifiable, zones_total)
+                       tally.complete, tally.short, tally.unverifiable, zones_total, excluded)
 
 
 def destination_name(paths):

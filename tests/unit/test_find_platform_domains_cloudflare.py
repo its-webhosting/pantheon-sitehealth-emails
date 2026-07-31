@@ -246,11 +246,13 @@ def test_cloudflare_client_with_a_non_utf8_file_is_a_startup_error(fpc, tmp_path
 # --- Task 3: the fold ------------------------------------------------------------------------
 
 def test_collect_entries_builds_the_output_structure(fpc):
-    entries, warnings = fpc.collect_entries([("zone-a", record(ttl=300, comment="migrated",
-                                                               tags=["cdn"]))])
+    entries, warnings, excluded = fpc.collect_entries(
+        [("zone-a", "example.edu", record(ttl=300, comment="migrated", tags=["cdn"]))])
     assert entries == {
         "www.example.edu": {
+            "name": "www.example.edu",
             "zone_id": "zone-a",
+            "zone_name": "example.edu",
             "origins": ["live-umich-example1.pantheonsite.io"],
             "record_id": "rec-1",
             "proxied": True,
@@ -261,19 +263,20 @@ def test_collect_entries_builds_the_output_structure(fpc):
         },
     }
     assert warnings == []
+    assert excluded == {}
 
 
 def test_collect_entries_keeps_dns_only_records(fpc):
     """The whole reason this script exists next to fqdns.json, which is proxied=True only."""
-    entries, _ = fpc.collect_entries([("zone-a", record(proxied=False))])
+    entries, _, _ = fpc.collect_entries([("zone-a", "example.edu", record(proxied=False))])
     assert entries["www.example.edu"]["proxied"] is False
 
 
 def test_collect_entries_serializes_a_pydantic_settings_model(fpc):
     """record.settings is a pydantic model; json.dump cannot serialize one."""
     from cloudflare.types.dns.cname_record import Settings
-    entries, _ = fpc.collect_entries(
-        [("zone-a", record(settings=Settings(flatten_cname=True)))])
+    entries, _, _ = fpc.collect_entries(
+        [("zone-a", "example.edu", record(settings=Settings(flatten_cname=True)))])
     settings = entries["www.example.edu"]["settings"]
     assert settings["flatten_cname"] is True
     # Asserting the whole dict would pin the SDK's model shape (it also carries ipv4_only /
@@ -285,7 +288,7 @@ def test_collect_entries_serializes_a_pydantic_settings_model(fpc):
 def test_collect_entries_tolerates_a_record_missing_the_optional_fields(fpc):
     bare = types.SimpleNamespace(type="CNAME", name="www.example.edu", id="rec-1",
                                  content="live-umich-example1.pantheonsite.io")
-    entries, _ = fpc.collect_entries([("zone-a", bare)])
+    entries, _, _ = fpc.collect_entries([("zone-a", "example.edu", bare)])
     entry = entries["www.example.edu"]
     assert entry["proxied"] is None      # unknown, NOT coerced to False -- see R5
     assert entry["ttl"] is None
@@ -302,30 +305,36 @@ def test_collect_entries_tolerates_a_record_missing_the_optional_fields(fpc):
     {"type": "CNAME", "content": "notpantheonsite.io"},
 ])
 def test_collect_entries_skips_everything_that_is_not_a_platform_cname(fpc, skipped):
-    entries, warnings = fpc.collect_entries([("zone-a", record(**skipped))])
+    entries, warnings, excluded = fpc.collect_entries(
+        [("zone-a", "example.edu", record(**skipped))])
     assert entries == {}
     assert warnings == []
+    assert excluded == {}
 
 
 def test_collect_entries_normalizes_the_key_and_keeps_origins_raw(fpc):
-    entries, _ = fpc.collect_entries(
-        [("zone-a", record(name="WWW.Example.EDU.",
-                           content="Live-Umich-Example1.PantheonSite.IO"))])
+    entries, _, _ = fpc.collect_entries(
+        [("zone-a", "example.edu", record(name="WWW.Example.EDU.",
+                                          content="Live-Umich-Example1.PantheonSite.IO"))])
     assert list(entries) == ["www.example.edu"]
     assert entries["www.example.edu"]["origins"] == ["Live-Umich-Example1.PantheonSite.IO"]
 
 
 def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
-    entries, warnings = fpc.collect_entries([
-        ("zone-a", record(id="rec-1", content="live-a.pantheonsite.io", proxied=True, ttl=1)),
-        ("zone-b", record(id="rec-2", content="live-b.pantheonsite.io", proxied=False, ttl=300)),
+    """SPEC R4.1: this used to be the first-record-wins case (entry kept, origins accumulated).
+    A cross-zone duplicate is now ambiguous and is REMOVED from `entries` -- kept in `excluded`
+    instead -- because the kept record_id was never safe to act on.  The warning is unchanged."""
+    entries, warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu",
+         record(id="rec-1", content="live-a.pantheonsite.io", proxied=True, ttl=1)),
+        ("zone-b", "example.org",
+         record(id="rec-2", content="live-b.pantheonsite.io", proxied=False, ttl=300)),
     ])
-    entry = entries["www.example.edu"]
-    assert entry["zone_id"] == "zone-a"
-    assert entry["record_id"] == "rec-1"
-    assert entry["proxied"] is True
-    assert entry["ttl"] == 1
-    assert entry["origins"] == ["live-a.pantheonsite.io", "live-b.pantheonsite.io"]
+    assert entries == {}
+    assert excluded["www.example.edu"]["reason"] == "ambiguous-multiple-zones"
+    assert excluded["www.example.edu"]["origins"] == ["live-a.pantheonsite.io",
+                                                      "live-b.pantheonsite.io"]
+    assert excluded["www.example.edu"]["zone_ids"] == ["zone-a", "zone-b"]
     assert len(warnings) == 1
     assert "www.example.edu" in warnings[0]
     assert "zone-a" in warnings[0]
@@ -334,14 +343,21 @@ def test_collect_entries_is_first_record_wins_across_zones_and_warns(fpc):
 
 def test_collect_entries_warns_for_two_matches_in_one_zone(fpc):
     """API-unreachable (a name holds at most one CNAME), but the file would keep one record_id
-    of two and feed a destructive rewrite, so silence is the wrong default."""
-    entries, warnings = fpc.collect_entries([
-        ("zone-a", record(id="rec-1", content="live-a.pantheonsite.io")),
-        ("zone-a", record(id="rec-2", content="live-b.pantheonsite.io")),
+    of two and feed a destructive rewrite, so silence is the wrong default.
+
+    SPEC R4.1: this used to be the first-record-wins case (entry kept with record_id "rec-1").
+    A same-zone duplicate is now ambiguous and is REMOVED from `entries` -- kept in `excluded`
+    instead.  The warning is unchanged."""
+    entries, warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(id="rec-1", content="live-a.pantheonsite.io")),
+        ("zone-a", "example.edu", record(id="rec-2", content="live-b.pantheonsite.io")),
     ])
-    assert entries["www.example.edu"]["record_id"] == "rec-1"
+    assert entries == {}
+    assert excluded["www.example.edu"]["reason"] == "ambiguous-multiple-origins"
     assert len(warnings) == 1
-    assert "rec-1" in warnings[0]
+    assert "www.example.edu" in warnings[0]
+    assert "zone-a" in warnings[0]
+    assert "omitted from the inventory" in warnings[0]   # new wording; no kept record_id (R4.1)
 
 
 # --- Task 4: the atomic write ----------------------------------------------------------------
@@ -1373,3 +1389,88 @@ def test_resolve_retrying_sleeps_before_retrying_a_nonameservers(fpc, monkeypatc
     monkeypatch.setattr(fpc, "resolve", flaky)
     assert fpc.resolve_retrying("live-a.pantheonsite.io", "A") == ["23.185.0.4"]
     assert slept == [fpc.DNS_RETRY_SLEEP]
+
+
+# --- Task 3: zone_name, the raw name, and ambiguity exclusion --------------------------------
+
+def test_collect_entries_records_the_raw_name_and_the_zone_name(fpc):
+    """The inventory key is normalize()d, but a batch POST body's `name` must be exactly what
+    Cloudflare holds -- Punycode included (R4.2)."""
+    entries, warnings, excluded = fpc.collect_entries(
+        [("zone-a", "example.edu", record(name="WWW.Example.edu"))])
+    assert list(entries) == ["www.example.edu"]
+    assert entries["www.example.edu"]["name"] == "WWW.Example.edu"
+    assert entries["www.example.edu"]["zone_name"] == "example.edu"
+    assert (warnings, excluded) == ([], {})
+
+
+def test_collect_entries_excludes_a_name_with_two_platform_cnames_in_one_zone(fpc):
+    """R4.1: the entry would keep the FIRST record_id of two and present it as actionable."""
+    entries, warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1",
+                                         content="live-one.pantheonsite.io")),
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-2",
+                                         content="live-two.pantheonsite.io")),
+    ])
+    assert entries == {}
+    assert excluded["a.example.edu"]["reason"] == "ambiguous-multiple-origins"
+    assert excluded["a.example.edu"]["origins"] == ["live-one.pantheonsite.io",
+                                                   "live-two.pantheonsite.io"]
+    assert excluded["a.example.edu"]["zone_ids"] == ["zone-a"]
+    assert warnings, "the operator must still get the ATTENTION line"
+
+
+def test_collect_entries_excludes_a_name_present_in_two_zones(fpc):
+    entries, _warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1")),
+        ("zone-b", "example.org", record(name="a.example.edu", id="rec-2")),
+    ])
+    assert entries == {}
+    assert excluded["a.example.edu"]["reason"] == "ambiguous-multiple-zones"
+    assert excluded["a.example.edu"]["zone_ids"] == ["zone-a", "zone-b"]
+
+
+def test_a_cross_zone_duplicate_outranks_a_same_zone_duplicate(fpc):
+    """One FQDN carries exactly one reason code (SPEC 6).  Cross-zone is the more serious
+    finding -- it means two Cloudflare zones both answer for the name -- so it wins."""
+    entries, _warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1",
+                                         content="live-one.pantheonsite.io")),
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-2",
+                                         content="live-two.pantheonsite.io")),
+        ("zone-b", "example.org", record(name="a.example.edu", id="rec-3")),
+    ])
+    assert entries == {}
+    assert excluded["a.example.edu"]["reason"] == "ambiguous-multiple-zones"
+
+
+def test_an_unambiguous_neighbour_survives_an_ambiguous_entry(fpc):
+    """Exclusion is per-FQDN, never per-zone or per-run."""
+    entries, _warnings, excluded = fpc.collect_entries([
+        ("zone-a", "example.edu", record(name="a.example.edu", id="rec-1")),
+        ("zone-b", "example.org", record(name="a.example.edu", id="rec-2")),
+        ("zone-a", "example.edu", record(name="b.example.edu", id="rec-3")),
+    ])
+    assert list(entries) == ["b.example.edu"]
+    assert list(excluded) == ["a.example.edu"]
+
+
+def test_fetch_platform_cnames_carries_the_excluded_map_on_the_sweep_result(fpc):
+    client = FakeCloudflareClient(
+        accounts=[account()],
+        zones=[zone("zone-a"), zone("zone-b", "example.org")],
+        pages_by_zone={
+            "zone-a": [FakePage([[record(name="a.example.edu", id="rec-1")]], total_count=1)],
+            "zone-b": [FakePage([[record(name="a.example.edu", id="rec-2")]], total_count=1)],
+        })
+    sweep = fpc.fetch_platform_cnames(client)
+    assert sweep.entries == {}
+    assert sweep.excluded["a.example.edu"]["reason"] == "ambiguous-multiple-zones"
+
+
+def test_the_sweep_result_excluded_default_cannot_be_mutated(fpc):
+    """A shared mutable default on a NamedTuple is a cross-test contamination bug waiting to
+    happen; MappingProxyType makes an attempted write loud (PD#14)."""
+    sweep = fpc.SweepResult({}, [], 1, 2, 5, 1, 0, 0, 187)
+    with pytest.raises(TypeError):
+        sweep.excluded["oops"] = {}
