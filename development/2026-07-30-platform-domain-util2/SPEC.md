@@ -2481,7 +2481,9 @@ Recorded with the reasoning so a later session does not re-litigate them.
    arm and trim its comment back to naming only `find-platform-domains-dns`.
 6. `.gitignore`: remove `/platform-domains-cloudflare*.json`.
 7. `CLAUDE.md`: remove the `### find-platform-domains-cloudflare (temporary utility)` subsection.
-8. Delete any leftover `platform-domains-cloudflare.json` from working checkouts.
+8. Delete any leftover `platform-domains-cloudflare*.json` from working checkouts — the glob
+   matters: the util3 increment made this **four** files (the inventory plus `-plan`, `-revert`
+   and `-excluded`), and item 6's `.gitignore` entry was globbed for the same reason.
 
 This folder stays — it is the historical record.
 

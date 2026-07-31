@@ -485,7 +485,9 @@ stay byte-identical between stdout mode and basename mode, and stdout mode has n
 `at` is UTC ISO-8601 with a `Z` suffix, from the `now_utc()` seam (§7). `zones_swept` and
 `zones_total` are two integers, never a `"1 of 187"` string — a machine reads this. `entries` is
 the number of entries **in this file**, so the plan's and the excluded file's counts differ and
-together account for every non-ambiguous FQDN.
+together account for **every** FQDN the sweep found — the ambiguous ones included, since R7.1 gives
+every reason code an excluded-file entry and R4.1 removes only the two ambiguous codes from the
+*inventory*.
 
 *Intent:* the plan pins addresses resolved at sweep time. If Pantheon migrates a site between
 sweep and apply, those addresses become wrong, and the file's mtime — today's only freshness

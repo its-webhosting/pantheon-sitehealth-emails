@@ -178,7 +178,13 @@ Cloudflare holds, Punycode included), `zone_name`, `resolved_a` and `resolved_aa
 an indeterminate lookup** — collapsing the two would tell an operator a target has no addresses
 when the run never established that, the same distinction the sweep already keeps between a null
 and a false `proxied`. The rest of the shape is unchanged: `{zone_id, origins, record_id, proxied,
-ttl, comment, tags, settings}`, all first-record-wins except `origins`, which accumulates.
+ttl, comment, tags, settings}`, every scalar first-record-wins. **`origins` in the inventory always
+has exactly one element** — `collect_entries` accumulates every match while folding, but a second
+one makes the FQDN ambiguous and R4.1 then removes it from the inventory outright, so no
+multi-origin entry can survive; `sole_origin()` raises `InvariantError` if one ever reaches a body
+builder. Do not write an applier loop over `origins` expecting more than one, and do not read the
+inventory as able to express ambiguity — it deliberately cannot; `-excluded.json` is where an
+ambiguous FQDN's `origins` list (and its `zone_ids`/`record_ids`) lives.
 **Ambiguous FQDNs** (more than one platform CNAME for the same name, in one zone or across two) are
 **omitted from the inventory entirely, in both modes** — a deliberate change from before this
 increment, when the first record_id of two stayed in and was presented as if it were actionable.
@@ -190,7 +196,7 @@ a re-applied plan) cannot be known until an applier resolves `delete_match` agai
 records at apply time. Keeping it outside `body` means `body` alone is always a real, postable
 batch body and can never be mistaken for a complete request.
 
-**Eight reason codes**, checked in this order (not the order below): `ambiguous-multiple-origins`,
+**Eight reason codes**, listed here in the order they are checked: `ambiguous-multiple-origins`,
 `ambiguous-multiple-zones`, `unknown-proxy-status`, `resolution-failed`, `no-a`,
 `platform-a-out-of-range`, `no-aaaa`, `platform-aaaa-out-of-range`. **Only the two ambiguous codes
 also remove the FQDN from the inventory**; the other six leave it in the inventory but out of the
@@ -200,8 +206,12 @@ unconditional (never `-v`-gated) stderr `ATTENTION:` line naming the FQDN, the c
 detail.
 
 **Exit 1 is new: "completed with exclusions"** (≥1 FQDN carries a reason code). The taxonomy is now
-0 = nothing excluded, 1 = completed with exclusions, 2 = could not complete, 130 = interrupted; a
-doomed stdout or stderr is still a named exit 2, NOT the interpreter's 120 — the sibling's guards
+0 = nothing excluded, 1 = completed with exclusions, 2 = could not complete, 130 = interrupted.
+Giving 1 that meaning is only trustworthy because `main()` ends with the sibling's last line of
+defence (`except SystemExit: raise` / `except BaseException` → `ERROR: unexpected <class>: <msg>`,
+exit 2): CPython exits 1 on **any** uncaught traceback, so without it a crashed run and a healthy
+run with exclusions are indistinguishable to a `case $?`. The only `return 1` in the program is the
+exclusion branch. A doomed stdout or stderr is likewise a named exit 2, NOT the interpreter's 120 — the sibling's guards
 are ported (`require_usable_streams` refuses a closed stderr, whose `print` fallback would
 interleave operator messages into the JSON; `write_json_stdout` and `report_line` detach only a
 stream a **real** write has proven doomed, never unconditionally). **The stated exception, same as
