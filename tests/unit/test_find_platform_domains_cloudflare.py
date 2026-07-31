@@ -647,7 +647,7 @@ def test_main_writes_the_json_to_stdout_by_default(fpc, tmp_path, monkeypatch, c
     assert fpc.main(["-c", "ignored.toml"]) == 0
     captured = capsys.readouterr()
     assert list(json.loads(captured.out)) == ["a.example.edu"]
-    assert not (tmp_path / fpc.OUTPUT_FILE).exists(), "no -o, so no file is written"
+    assert not (tmp_path / f"{fpc.OUTPUT_BASENAME}.json").exists(), "no -o, so no file is written"
     err = captured.err
     assert "ATTENTION: something worth seeing" in err
     assert "Wrote 1 platform-domain CNAMEs (1 DNS-only" in err
@@ -661,11 +661,12 @@ def test_main_writes_a_file_when_output_is_given(fpc, tmp_path, monkeypatch, cap
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 4, 12431,
                                                  40, 1, 2, 4))
-    assert fpc.main(["-o", fpc.OUTPUT_FILE]) == 0
+    assert fpc.main(["-o", fpc.OUTPUT_BASENAME]) == 0
     captured = capsys.readouterr()
-    assert list(json.loads((tmp_path / fpc.OUTPUT_FILE).read_text())) == ["a.example.edu"]
+    assert list(json.loads((tmp_path / f"{fpc.OUTPUT_BASENAME}.json").read_text())) == \
+        ["a.example.edu"]
     assert captured.out == "", "with -o, stdout carries only argparse output"
-    assert f"to {fpc.OUTPUT_FILE}." in captured.err
+    assert f"to {fpc.OUTPUT_BASENAME}.json." in captured.err
 
 
 def test_main_writes_byte_identical_json_to_stdout_and_to_a_file(fpc, tmp_path, monkeypatch,
@@ -676,7 +677,7 @@ def test_main_writes_byte_identical_json_to_stdout_and_to_a_file(fpc, tmp_path, 
                                                  [], 1, 4, 1, 1, 0, 0, 4))
     assert fpc.main([]) == 0
     from_stdout = capsys.readouterr().out
-    assert fpc.main(["-o", "out.json"]) == 0
+    assert fpc.main(["-o", "out"]) == 0
     assert (tmp_path / "out.json").read_text() == from_stdout
 
 
@@ -762,7 +763,7 @@ def test_main_names_an_unwritable_output_file_instead_of_crashing(fpc, tmp_path,
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(fpc, "write_json_atomic", refuse)
-    assert fpc.main(["-o", fpc.OUTPUT_FILE]) == 2
+    assert fpc.main(["-o", fpc.OUTPUT_BASENAME]) == 2
     assert "cannot write" in capsys.readouterr().err
 
 
@@ -859,7 +860,7 @@ def test_a_closed_stdout_is_allowed_when_output_names_a_file(fpc, tmp_path, monk
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
     monkeypatch.setattr(sys, "stdout", None)
-    assert fpc.main(["-o", "out.json"]) == 0
+    assert fpc.main(["-o", "out"]) == 0
     assert list(json.loads((tmp_path / "out.json").read_text())) == ["a.example.edu"]
 
 
@@ -1009,14 +1010,15 @@ def test_the_zero_match_attention_names_the_real_destination(fpc, tmp_path, monk
     assert fpc.main([]) == 0
     err = capsys.readouterr().err
     assert "an empty result ({}) was written to standard output" in err
-    assert fpc.OUTPUT_FILE not in err, "no file was written; naming one implies a baseline died"
+    assert f"{fpc.OUTPUT_BASENAME}.json" not in err, \
+        "no file was written; naming one implies a baseline died"
 
 
 def test_the_zero_match_attention_names_the_output_file_when_one_is_given(fpc, tmp_path,
                                                                          monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({}, [], 1, 2, 5, 1, 0, 0, 187))
-    assert fpc.main(["-o", "chosen.json"]) == 0
+    assert fpc.main(["-o", "chosen"]) == 0
     assert "an empty result ({}) was written to chosen.json" in capsys.readouterr().err
 
 
@@ -1057,7 +1059,7 @@ def test_a_subset_run_written_to_a_file_warns_that_it_is_not_a_full_sweep(fpc, t
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0,
                                                  187))
-    assert fpc.main(["-o", "subset.json", "engin.umich.edu", "seas.umich.edu"]) == 0
+    assert fpc.main(["-o", "subset", "engin.umich.edu", "seas.umich.edu"]) == 0
     err = capsys.readouterr().err
     assert "ATTENTION" in err
     assert "2 of 187" in err
@@ -1068,7 +1070,7 @@ def test_a_full_sweep_written_to_a_file_does_not_warn(fpc, tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 187, 5, 1, 0, 0,
                                                  187))
-    assert fpc.main(["-o", "full.json"]) == 0
+    assert fpc.main(["-o", "full"]) == 0
     assert "NOT an organization-wide sweep" not in capsys.readouterr().err
 
 
@@ -1092,7 +1094,7 @@ def test_an_interrupt_with_output_after_the_write_says_the_file_was_fully_writte
         raise KeyboardInterrupt
 
     monkeypatch.setattr(fpc, "summarize", interrupt)
-    assert fpc.main(["-o", "out.json"]) == 130
+    assert fpc.main(["-o", "out"]) == 130
     assert "out.json was fully written." in capsys.readouterr().err
     assert list(json.loads((tmp_path / "out.json").read_text())) == ["a.example.edu"]
 
@@ -1108,7 +1110,7 @@ def test_an_interrupt_with_output_before_the_write_never_claims_the_file_is_unch
         raise KeyboardInterrupt
 
     monkeypatch.setattr(fpc, "cloudflare_client", interrupt)
-    assert fpc.main(["-o", "out.json"]) == 130
+    assert fpc.main(["-o", "out"]) == 130
     err = capsys.readouterr().err
     assert "never partial" in err
     assert "out.json is unchanged --" not in err, "an unqualified 'unchanged' can be false"
@@ -1121,3 +1123,87 @@ def test_the_zone_positional_is_documented_as_not_interleavable(fpc):
     with pytest.raises(SystemExit):
         parser.parse_args(["a.example", "-v", "b.example"])
     assert "cannot interleave" in parser.format_help()
+
+
+# --- Task 1: the output basename -------------------------------------------------------------
+
+def test_output_paths_appends_the_four_suffixes(fpc):
+    paths = fpc.output_paths("engin-zone")
+    assert paths == ("engin-zone.json", "engin-zone-plan.json",
+                     "engin-zone-revert.json", "engin-zone-excluded.json")
+    assert paths.inventory == "engin-zone.json"
+    assert paths.excluded == "engin-zone-excluded.json"
+
+
+@pytest.mark.parametrize("basename", ["engin-zone", "out/engin-zone", "out/v1.2/engin-zone"])
+def test_check_basename_accepts_a_dotless_final_component(fpc, tmp_path, basename):
+    """A dot in a DIRECTORY component is fine; only the filename component is checked (R2.2)."""
+    target = tmp_path / basename
+    target.parent.mkdir(parents=True, exist_ok=True)
+    assert fpc.check_basename(str(target)) == str(target)
+
+
+@pytest.mark.parametrize("basename", ["engin-zone.json", "engin.umich.edu", ".hidden",
+                                      "report.txt"])
+def test_check_basename_rejects_an_extension(fpc, tmp_path, basename):
+    """The old `-o platform-domains-cloudflare.json` is muscle memory and would otherwise
+    produce platform-domains-cloudflare.json.json (R2.2)."""
+    with pytest.raises(fpc.StartupError) as excinfo:
+        fpc.check_basename(str(tmp_path / basename))
+    assert basename in str(excinfo.value)
+    assert "extension" in str(excinfo.value)
+
+
+def test_check_basename_rejects_a_directory_with_no_filename_component(fpc, tmp_path):
+    """Path('out/').name is 'out', so a Path-based check would ACCEPT this; os.path.basename
+    returns '' and catches it (R2.2)."""
+    with pytest.raises(fpc.StartupError) as excinfo:
+        fpc.check_basename(f"{tmp_path}/")
+    assert "no filename component" in str(excinfo.value)
+
+
+def test_check_basename_rejects_an_unwritable_directory(fpc, tmp_path):
+    """R2.4: the sweep takes ~2 minutes and today's write failure surfaces only after it."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        with pytest.raises(fpc.StartupError) as excinfo:
+            fpc.check_basename(str(locked / "engin-zone"))
+    finally:
+        locked.chmod(0o700)
+    assert "cannot write output files" in str(excinfo.value)
+
+
+def test_check_basename_leaves_no_probe_file_behind(fpc, tmp_path):
+    """The probe proves writability; leaving it would litter the operator's directory."""
+    fpc.check_basename(str(tmp_path / "engin-zone"))
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_output_option_takes_a_basename_not_a_path(fpc, tmp_path, monkeypatch, capsys):
+    """R2.1: -o/--output-basename replaces -o/--output."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0, 2))
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    assert json.loads((tmp_path / "engin-zone.json").read_text()) == {"a.example.edu": ENTRY}
+
+
+def test_the_old_output_path_form_is_rejected_before_any_api_call(fpc, tmp_path, monkeypatch,
+                                                                  capsys):
+    """The probe must fire BEFORE cloudflare_client, or an operator waits ~2 minutes to learn
+    they mistyped the destination (R2.4)."""
+    monkeypatch.chdir(tmp_path)
+
+    def explode(config_path):
+        raise AssertionError("cloudflare_client must not be reached")
+
+    monkeypatch.setattr(fpc, "cloudflare_client", explode)
+    assert fpc.main(["-o", "platform-domains-cloudflare.json"]) == 2
+    assert "contains a file extension" in capsys.readouterr().err
+
+
+def test_bare_double_dash_output_is_not_accepted(fpc, capsys):
+    """allow_abbrev=False, so no prefix match rescues the removed spelling."""
+    with pytest.raises(SystemExit):
+        fpc.build_arg_parser().parse_args(["--output", "engin-zone"])
