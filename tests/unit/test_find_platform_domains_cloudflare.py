@@ -14,12 +14,14 @@ TEMPORARY, deleted with the script after the Pantheon CDN migration -- see
 development/2026-07-30-platform-domain-util2/SPEC.md section 11.
 """
 import contextlib
+import datetime
 import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -2474,3 +2476,34 @@ def test_a_serialization_failure_is_a_named_startup_error_at_exit_2(fpc, tmp_pat
     assert "ERROR: cannot write engin-zone-plan.json: TypeError:" in err
     assert "unexpected" not in err
     assert "Already replaced before this failure (fresh): engin-zone.json" in err
+
+
+def test_now_utc_is_utc_with_a_z_suffix(fpc, monkeypatch):
+    """Whole-branch review, finding 7 (PD#14).  now_utc() is the ONE clock seam and every other
+    test in this file replaces it (freeze_clock, or the ticking stub), so its real body -- the
+    thing that decides what `generated.at` actually means -- never executed under test.  SPEC 5.5
+    requires "UTC ISO-8601 with a Z suffix"; if it emitted LOCAL time with a Z suffix, nothing
+    went red, and an operator comparing generated.at against `date -u` while recovering from a
+    partial multi-file write (SPEC 9.3) would be misled by hours.
+
+    The local timezone is forced to America/Detroit for the call, which is what makes this a live
+    instrument rather than a tautology: this sandbox runs on UTC, so under TZ=UTC a naive
+    datetime.now() and an aware now(tz=UTC) are byte-identical and no assertion here could tell
+    them apart.  At UTC-4 the two differ by four hours and the bounds below reject it.
+
+    The one-second slack absorbs strftime truncating to whole seconds.
+    """
+    monkeypatch.setenv("TZ", "America/Detroit")
+    time.tzset()
+    try:
+        before = datetime.datetime.now(tz=datetime.UTC)
+        stamp = fpc.now_utc()
+        after = datetime.datetime.now(tz=datetime.UTC)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp), stamp
+    parsed = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.UTC)
+    slack = datetime.timedelta(seconds=1)
+    assert before - slack <= parsed <= after + slack
