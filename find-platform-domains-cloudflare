@@ -836,8 +836,16 @@ def now_utc():
     return datetime.datetime.now(tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def provenance(argv, sweep, direction, count):
+def provenance(argv, sweep, direction, count, at):
     """The `generated` header (SPEC 5.5).
+
+    `at` is taken as a PARAMETER, never computed here with `now_utc()` directly (review finding
+    1): this is called once per headed file (plan/revert/excluded), and a function that calls
+    `now_utc()` itself lets the three files carry three DIFFERENT timestamps -- falsifying both
+    write_outputs()'s "all three headed files share one generated.at" docstring claim and
+    interrupt_message()'s operator advice to compare them for a partial multi-file write.  The
+    caller (main()) takes ONE stamp via `now_utc()` and passes it to every call, so "one call,
+    not three" is a property of the CALL SITE, not an accident of a fast clock.
 
     The plan pins addresses resolved at SWEEP time.  If Pantheon migrates a site between the
     sweep and the rewrite those addresses are wrong, and the file's mtime -- the only freshness
@@ -848,7 +856,7 @@ def provenance(argv, sweep, direction, count):
     zones_swept/zones_total are two integers rather than a "1 of 187" string: a machine reads
     this.
     """
-    return {"at": now_utc(),
+    return {"at": at,
             "tool": "find-platform-domains-cloudflare",
             "direction": direction,
             "argv": list(argv),
@@ -921,13 +929,32 @@ def write_outputs(paths, inventory, plan, revert, excluded) -> None:
     writes nothing at all.
 
     ACCEPTED RESIDUAL: os.replace is atomic per file, not across four, so a crash between
-    replaces leaves a mixed set.  All three headed files share one generated.at, which makes such
-    a set detectable.  A single container file would close it and is ruled out by the four-file
-    requirement.
+    replaces leaves a mixed set.  All three headed files share one generated.at (review finding
+    1: the caller takes ONE now_utc() stamp and threads it through every provenance() call, so
+    this is true by construction, not by luck), which makes such a set detectable -- PROVIDED the
+    operator is actually told which files are which (review findings 3/4): naming only the
+    inventory on a write failure, whichever of the four actually failed, would leave a fresh
+    inventory sitting beside three untouched, now-stale headed files with no signal that
+    anything is wrong -- exactly the set "compare generated.at" is supposed to catch, but cannot,
+    because the failed write means the operator was never told a comparison is warranted.  So a
+    failed write here reports EXACTLY which paths were already replaced (fresh) and which were
+    not touched by this run (unchanged or absent), not just the one that raised.  A single
+    container file would close the per-file-atomicity residual entirely and is ruled out by the
+    four-file requirement.
     """
-    for path, data in ((paths.inventory, inventory), (paths.plan, plan),
-                       (paths.revert, revert), (paths.excluded, excluded)):
-        write_json_atomic(path, data)
+    order = ((paths.inventory, inventory), (paths.plan, plan),
+             (paths.revert, revert), (paths.excluded, excluded))
+    written = []
+    for index, (path, data) in enumerate(order):
+        try:
+            write_json_atomic(path, data)
+        except OSError as e:
+            not_written = [p for p, _ in order[index:]]
+            raise OSError(
+                f"cannot write {path}: {e}.  Already replaced before this failure (fresh): "
+                f"{', '.join(written) if written else 'none'}.  NOT written by this run "
+                f"(unchanged or absent): {', '.join(not_written)}.") from e
+        written.append(path)
 
 
 def expected_record_count(page):
@@ -1214,7 +1241,7 @@ def interrupt_message(*, wrote, paths):
             if wrote else "INTERRUPTED: no complete JSON document was produced.")
 
 
-def summarize(sweep, excluded, paths) -> None:
+def summarize(sweep, plan, revert, excluded, paths) -> None:
     """Everything the operator is told about a COMPLETED sweep, on stderr.
 
     Split out of main() so an interrupt landing between the write and the report has a seam to be
@@ -1231,9 +1258,21 @@ def summarize(sweep, excluded, paths) -> None:
     # be mistaken for a full one in a log (SPEC A1.6).
     scope = (f"{sweep.zones} zones" if sweep.zones == sweep.zones_total
              else f"{sweep.zones} of {sweep.zones_total} zones")
-    print(f"Wrote {len(entries)} platform-domain CNAMEs ({dns_only} DNS-only, invisible to "
-          f"fqdns.json) from {sweep.records} records in {scope} in "
-          f"{sweep.accounts} account(s) to {destination}.", file=sys.stderr, flush=True)
+    lede = (f"Wrote {len(entries)} platform-domain CNAMEs ({dns_only} DNS-only, invisible to "
+            f"fqdns.json) from {sweep.records} records in {scope} in {sweep.accounts} "
+            "account(s) to")
+    if paths is None:
+        print(f"{lede} {destination}.", file=sys.stderr, flush=True)
+    else:
+        # SPEC section 10's `destination` row: name ALL FOUR paths, with each file's own entry
+        # count (review finding 2) -- the plan/revert/excluded files are the ones that drive a
+        # destructive rewrite, and a summary naming only the inventory left them invisible on
+        # every full-org run.
+        print(f"{lede}:", file=sys.stderr, flush=True)
+        print(f"  {paths.inventory} ({len(entries)} entries)", file=sys.stderr, flush=True)
+        print(f"  {paths.plan} ({len(plan)} entries)", file=sys.stderr, flush=True)
+        print(f"  {paths.revert} ({len(revert)} entries)", file=sys.stderr, flush=True)
+        print(f"  {paths.excluded} ({len(excluded)} entries)", file=sys.stderr, flush=True)
     # Report the guard's own coverage: a truncation check that silently never ran looks
     # exactly like one that ran and found nothing wrong.
     lists = sweep.lists_complete + sweep.lists_short + sweep.lists_unverifiable
@@ -1395,20 +1434,29 @@ def main(argv):
                   file=sys.stderr, flush=True)
         documents = None
         if paths is not None:
+            # ONE now_utc() call for all three headed files (review finding 1): provenance()
+            # takes `at` as a parameter rather than calling now_utc() itself, so the three
+            # `generated.at` values cannot drift apart -- see provenance()'s docstring.
+            at = now_utc()
             documents = (
-                {"generated": provenance(argv, sweep, "plan", len(plan)), "entries": plan},
-                {"generated": provenance(argv, sweep, "revert", len(revert)), "entries": revert},
-                {"generated": provenance(argv, sweep, "excluded", len(excluded)),
+                {"generated": provenance(argv, sweep, "plan", len(plan), at), "entries": plan},
+                {"generated": provenance(argv, sweep, "revert", len(revert), at),
+                 "entries": revert},
+                {"generated": provenance(argv, sweep, "excluded", len(excluded), at),
                  "entries": excluded},
             )
         try:
             emit(sweep.entries, paths, *(documents or (None, None, None)))
         except OSError as e:
             # A full disk or a read-only directory lands here AFTER the whole multi-minute walk.
-            # (The stdout path raises StartupError itself, from inside write_json_stdout.)
-            raise StartupError(f"cannot write {destination_name(paths)}: {e}") from e
+            # (The stdout path raises StartupError itself, from inside write_json_stdout.)  In
+            # basename mode `e` IS write_outputs' own message, naming exactly which of the four
+            # files failed and which were already replaced (review findings 3/4) -- wrapping
+            # must relay it as-is, NOT prepend destination_name(paths) (always the inventory,
+            # whichever file actually failed) on top of it.
+            raise StartupError(str(e)) from e
         wrote = True
-        summarize(sweep, excluded, paths)
+        summarize(sweep, plan, revert, excluded, paths)
     except StartupError as e:
         # report_line(), not print(): this is the end of the road, so an ENOSPC on its own stderr
         # write has nowhere to propagate and CPython's shutdown flush would override the exit

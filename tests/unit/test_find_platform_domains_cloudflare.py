@@ -728,7 +728,13 @@ def test_main_writes_a_file_when_output_is_given(fpc, tmp_path, monkeypatch, cap
     assert list(json.loads((tmp_path / f"{fpc.OUTPUT_BASENAME}.json").read_text())) == \
         ["a.example.edu"]
     assert captured.out == "", "with -o, stdout carries only argparse output"
-    assert f"to {fpc.OUTPUT_BASENAME}.json." in captured.err
+    # Review finding 2: the summary names ALL FOUR files in basename mode, each with its own
+    # entry count -- not just the inventory.
+    err = captured.err
+    assert f"{fpc.OUTPUT_BASENAME}.json (1 entries)" in err
+    assert f"{fpc.OUTPUT_BASENAME}-plan.json (1 entries)" in err
+    assert f"{fpc.OUTPUT_BASENAME}-revert.json (1 entries)" in err
+    assert f"{fpc.OUTPUT_BASENAME}-excluded.json (0 entries)" in err
 
 
 def test_main_writes_byte_identical_json_to_stdout_and_to_a_file(fpc, tmp_path, monkeypatch,
@@ -2226,3 +2232,119 @@ def test_main_warns_on_a_proxied_entry_with_a_non_one_ttl(fpc, tmp_path, monkeyp
             "bodies use 1, which is what Cloudflare enforces anyway") in err
     plan = json.loads((tmp_path / "engin-zone-plan.json").read_text())["entries"]
     assert plan["a.example.edu"]["body"]["posts"][0]["ttl"] == 1
+
+
+# --- Task 6 review round 2: findings 1/2/3/4 ---------------------------------------------------
+
+def test_now_utc_is_called_exactly_once_and_every_headed_file_shares_that_stamp(
+        fpc, tmp_path, monkeypatch, capsys):
+    """Review finding 1 (CRITICAL): provenance() used to call now_utc() itself, once per headed
+    file, so the three files COULD carry three DIFFERENT generated.at values -- falsifying both
+    write_outputs()'s "all three headed files share one generated.at" docstring claim and
+    interrupt_message()'s operator advice to compare them for a partial write.
+
+    A CONSTANT stub (freeze_clock, used everywhere else in this file) can NEVER catch this class
+    of defect: every call returns the same value no matter how many times it is made, so a test
+    built on one can pass against three independent now_utc() calls just as easily as against
+    one.  A TICKING stub -- returning a DIFFERENT value each call -- is the only instrument that
+    can go red on "called more than once" (PD#14)."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    stamps = iter(["2026-07-31T14:02:11Z", "2026-07-31T14:02:12Z", "2026-07-31T14:02:13Z",
+                  "2026-07-31T14:02:14Z"])
+    calls = []
+
+    def ticking():
+        stamp = next(stamps)
+        calls.append(stamp)
+        return stamp
+
+    monkeypatch.setattr(fpc, "now_utc", ticking)
+    assert fpc.main(["-o", "engin-zone"]) == 0
+    assert len(calls) == 1, "now_utc() must be called EXACTLY ONCE per run, not once per file"
+    seen = {json.loads((tmp_path / f"engin-zone-{suffix}.json").read_text())["generated"]["at"]
+            for suffix in ("plan", "revert", "excluded")}
+    assert seen == {calls[0]}, "every headed file must carry the SAME generated.at"
+
+
+def test_the_summary_names_all_four_files_with_per_file_entry_counts(fpc, tmp_path, monkeypatch,
+                                                                     capsys):
+    """Review finding 2: SPEC section 10's `destination` row says the summary "names all four
+    paths in basename mode" -- unimplemented pre-fix, where a full-org run's summary named only
+    the inventory and left the plan/revert/excluded files (the ones that actually drive a
+    destructive rewrite) invisible.  Uses a mixed sweep (one plan-worthy entry, one excluded) so
+    all four counts differ and "something got printed" cannot pass by accident."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {"a.example.edu": swept(), "b.example.edu": swept(name="b.example.edu",
+                                                          origins=["live-b.pantheonsite.io"])},
+        [], 1, 2, 5, 1, 0, 0, 187))
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+        ("live-b.pantheonsite.io", "A"): ["104.18.2.7"],   # out of range -> excluded
+        ("live-b.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+    })
+    assert fpc.main(["-o", "engin-zone"]) == 1
+    err = capsys.readouterr().err
+    assert "engin-zone.json (2 entries)" in err
+    assert "engin-zone-plan.json (1 entries)" in err
+    assert "engin-zone-revert.json (1 entries)" in err
+    assert "engin-zone-excluded.json (1 entries)" in err
+
+
+def test_a_failed_write_of_the_second_file_names_that_file_not_the_first(fpc, tmp_path,
+                                                                         monkeypatch, capsys):
+    """Review findings 3/4: forcing an OSError on the PLAN write (file 2) used to report
+    'cannot write <inventory>' -- naming the WRONG file, since the inventory (file 1) had
+    already succeeded -- and said nothing about which of the four files were actually left
+    fresh vs. stale/absent.  The fix names the file that actually failed and reports exactly
+    what was already replaced (so an operator recovering from this knows the inventory is fresh
+    while the plan/revert/excluded are untouched, not the other way around)."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    real_write_json_atomic = fpc.write_json_atomic
+
+    def flaky(path, data):
+        if path.endswith("-plan.json"):
+            raise OSError(28, "No space left on device")
+        real_write_json_atomic(path, data)
+
+    monkeypatch.setattr(fpc, "write_json_atomic", flaky)
+    assert fpc.main(["-o", "engin-zone"]) == 2
+    err = capsys.readouterr().err
+    assert "ERROR: cannot write engin-zone-plan.json:" in err
+    assert "cannot write engin-zone.json" not in err
+    assert "Already replaced before this failure (fresh): engin-zone.json" in err
+    assert ("NOT written by this run (unchanged or absent): engin-zone-plan.json, "
+            "engin-zone-revert.json, engin-zone-excluded.json") in err
+    # What is ACTUALLY on disk matches the message: the inventory really is fresh, the other
+    # three were never attempted.
+    assert (tmp_path / "engin-zone.json").exists()
+    assert not (tmp_path / "engin-zone-plan.json").exists()
+    assert not (tmp_path / "engin-zone-revert.json").exists()
+    assert not (tmp_path / "engin-zone-excluded.json").exists()
+
+
+def test_a_ctrl_c_mid_write_outputs_leaves_only_fully_written_files_behind(fpc, tmp_path,
+                                                                          monkeypatch, capsys):
+    """Review finding 3's named coverage gap: 'No test exists for any partial multi-file write,
+    by OSError or by Ctrl-C inside write_outputs.'  Each os.replace is atomic, so a SIGINT
+    landing between file 2 (plan) and file 3 (revert) must leave files 1-2 complete and files
+    3-4 absent -- never a partial file.  Checked against what is ACTUALLY on disk, not merely
+    against interrupt_message()'s wording."""
+    planned_run(fpc, monkeypatch, tmp_path)
+    real_write_json_atomic = fpc.write_json_atomic
+
+    def interrupt_after_plan(path, data):
+        real_write_json_atomic(path, data)
+        if path.endswith("-plan.json"):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc, "write_json_atomic", interrupt_after_plan)
+    assert fpc.main(["-o", "engin-zone"]) == 130
+    err = capsys.readouterr().err
+    assert "INTERRUPTED" in err
+    assert "never partial" in err
+    assert (tmp_path / "engin-zone.json").exists()
+    assert (tmp_path / "engin-zone-plan.json").exists()
+    assert not (tmp_path / "engin-zone-revert.json").exists()
+    assert not (tmp_path / "engin-zone-excluded.json").exists()
