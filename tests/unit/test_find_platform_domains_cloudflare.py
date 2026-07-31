@@ -649,6 +649,15 @@ ENTRY = {"name": "a.example.edu", "zone_id": "z", "zone_name": "example.edu",
          "origins": ["live-a.pantheonsite.io"], "record_id": "r",
          "proxied": False, "ttl": 1, "comment": None, "tags": [], "settings": None}
 
+# Task 4 wires resolution into EVERY main() call, so any pre-Task-4 test driving main() with
+# ENTRY now needs its target resolved too, or it hits real DNS (SPEC section 7: "NOTHING in the
+# suite may touch real DNS").  This is the one in-range answer set every such test uses via
+# fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS) -- addresses inside both PLATFORM_A_RANGE and
+# PLATFORM_AAAA_RANGE, so classify() returns (None, "") and these pre-existing tests' exit-0
+# assertions are unaffected by this task.
+ENTRY_HAPPY_DNS = {("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+                   ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]}
+
 
 def fake_sweep(fpc, monkeypatch, sweep):
     """Drive main() with a canned SweepResult, skipping the client build and the walk."""
@@ -662,6 +671,7 @@ def test_main_writes_the_json_to_stdout_by_default(fpc, tmp_path, monkeypatch, c
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult(
         {"a.example.edu": ENTRY}, ["ATTENTION: something worth seeing"], 1, 4, 12431, 40, 1, 2, 4))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-c", "ignored.toml"]) == 0
     captured = capsys.readouterr()
     assert list(json.loads(captured.out)) == ["a.example.edu"]
@@ -679,6 +689,7 @@ def test_main_writes_a_file_when_output_is_given(fpc, tmp_path, monkeypatch, cap
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 4, 12431,
                                                  40, 1, 2, 4))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", fpc.OUTPUT_BASENAME]) == 0
     captured = capsys.readouterr()
     assert list(json.loads((tmp_path / f"{fpc.OUTPUT_BASENAME}.json").read_text())) == \
@@ -693,6 +704,7 @@ def test_main_writes_byte_identical_json_to_stdout_and_to_a_file(fpc, tmp_path, 
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY, "b.example.edu": ENTRY},
                                                  [], 1, 4, 1, 1, 0, 0, 4))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main([]) == 0
     from_stdout = capsys.readouterr().out
     assert fpc.main(["-o", "out"]) == 0
@@ -726,14 +738,19 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
                                                                  capsys):
     """research.md: "proxied: true is the load-bearing field in both directions".  A null
     flattened to false would inflate the headline count AND tell a rewriter to re-create a
-    proxied hostname unproxied (round 3, finding 4)."""
+    proxied hostname unproxied (round 3, finding 4).
+
+    Exit is now 1, not 0 (Task 4): classify() excludes an unknown-proxy-status entry regardless
+    of what it resolves to (SPEC 6, evaluated before any resolution outcome) -- fake_dns is still
+    required so resolve_target's unconditional call does not reach real DNS."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     entry = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
              "proxied": None, "ttl": 1, "comment": None, "tags": [], "settings": None}
     monkeypatch.setattr(fpc, "fetch_platform_cnames", lambda client, verbose=False, zone_names=():
                         fpc.SweepResult({"a.example.edu": entry}, [], 1, 1, 1, 3, 0, 0, 1))
-    assert fpc.main([]) == 0
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
+    assert fpc.main([]) == 1
     err = capsys.readouterr().err
     assert "(0 DNS-only" in err
     assert "unknown proxy status" in err
@@ -877,6 +894,7 @@ def test_a_closed_stdout_is_allowed_when_output_names_a_file(fpc, tmp_path, monk
     """-o gives the JSON somewhere to go, so the stdout guard must not fire."""
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 1, 1, 1, 0, 0, 1))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     monkeypatch.setattr(sys, "stdout", None)
     assert fpc.main(["-o", "out"]) == 0
     assert list(json.loads((tmp_path / "out.json").read_text())) == ["a.example.edu"]
@@ -990,6 +1008,11 @@ entries = {{"a.example.edu": entry}} if {sweep!r} == "canned" else {{}}
 m.cloudflare_client = lambda path: object()
 m.fetch_platform_cnames = (
     lambda client, verbose=False, zone_names=(): m.SweepResult(entries, [], 1, 2, 5, 1, 0, 0, 187))
+# Task 4 wires resolve_target into every main() call; this is a real subprocess (SPEC A1.8), not
+# an in-process test, so the module-level `resolve` monkeypatch idiom (fake_dns) does not apply
+# here -- patch the same seam directly on this fresh module instance instead.  Without it, main()
+# would resolve "live-a.pantheonsite.io" against REAL DNS, which SPEC section 7 forbids.
+m.resolve = lambda hostname, rrtype: {{"A": ["23.185.0.4"], "AAAA": ["2620:12a:8000::4"]}}[rrtype]
 sys.exit(m.main(sys.argv[1:]))
 """)
     return subprocess.run([sys.executable, str(driver), *argv],
@@ -1077,6 +1100,7 @@ def test_a_subset_run_written_to_a_file_warns_that_it_is_not_a_full_sweep(fpc, t
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0,
                                                  187))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "subset", "engin.umich.edu", "seas.umich.edu"]) == 0
     err = capsys.readouterr().err
     assert "ATTENTION" in err
@@ -1088,6 +1112,7 @@ def test_a_full_sweep_written_to_a_file_does_not_warn(fpc, tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 187, 5, 1, 0, 0,
                                                  187))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "full"]) == 0
     assert "NOT an organization-wide sweep" not in capsys.readouterr().err
 
@@ -1203,6 +1228,7 @@ def test_the_output_option_takes_a_basename_not_a_path(fpc, tmp_path, monkeypatc
     """R2.1: -o/--output-basename replaces -o/--output."""
     monkeypatch.chdir(tmp_path)
     fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": ENTRY}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, ENTRY_HAPPY_DNS)
     assert fpc.main(["-o", "engin-zone"]) == 0
     assert json.loads((tmp_path / "engin-zone.json").read_text()) == {"a.example.edu": ENTRY}
 
@@ -1542,3 +1568,157 @@ def test_collect_entries_excluded_entry_detail_is_never_blank(fpc):
     assert "2 platform-domain CNAMEs" in detail
     assert "zone-a" in detail
     assert "rec-1" in detail
+
+
+# --- Task 4: classify and the reason codes ----------------------------------------------------
+
+def swept(**overrides):
+    """An inventory entry as collect_entries builds one."""
+    entry = {"name": "a.example.edu", "zone_id": "zone-a", "zone_name": "example.edu",
+             "origins": ["live-a.pantheonsite.io"], "record_id": "rec-1", "proxied": True,
+             "ttl": 1, "comment": None, "tags": [], "settings": None}
+    entry.update(overrides)
+    return entry
+
+
+GOOD = None   # placeholder rebound in each test via fpc.Resolution
+
+
+def test_classify_passes_a_healthy_proxied_entry(fpc):
+    resolution = fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], "")
+    assert fpc.classify(swept(), resolution) == (None, "")
+
+
+def test_classify_passes_a_dns_only_entry(fpc):
+    """5 of 218 in the last live sweep.  The swap is type-only and preserves proxied=false,
+    so a DNS-only entry is NOT excluded (SPEC 6)."""
+    resolution = fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], "")
+    assert fpc.classify(swept(proxied=False), resolution) == (None, "")
+
+
+def test_classify_excludes_an_unknown_proxy_status(fpc):
+    resolution = fpc.Resolution(["23.185.0.4"], ["2620:12a:8000::4"], "")
+    reason, detail = fpc.classify(swept(proxied=None), resolution)
+    assert reason == "unknown-proxy-status"
+    assert "null" in detail
+
+
+def test_classify_excludes_an_indeterminate_resolution_before_testing_for_no_a(fpc):
+    """SPEC 6, evaluation order: resolution-failed (8) MUST be tested before no-a (4).  With
+    `a` null, a `not a` test treats "we do not know" and "definitively none" alike, and would
+    report a timeout as "the target has no A records" (R4.4)."""
+    resolution = fpc.Resolution(None, None, "Timeout resolving A for live-a.pantheonsite.io")
+    reason, detail = fpc.classify(swept(), resolution)
+    assert reason == "resolution-failed"
+    assert "Timeout" in detail
+
+
+def test_classify_excludes_a_target_with_no_a_records(fpc):
+    resolution = fpc.Resolution([], ["2620:12a:8000::4"], "")
+    assert fpc.classify(swept(), resolution)[0] == "no-a"
+
+
+def test_classify_excludes_an_a_record_outside_the_pantheon_range(fpc):
+    resolution = fpc.Resolution(["104.18.2.7"], ["2620:12a:8000::4"], "")
+    reason, detail = fpc.classify(swept(), resolution)
+    assert reason == "platform-a-out-of-range"
+    assert "104.18.2.7" in detail
+    assert "23.185.0.0/24" in detail
+
+
+def test_classify_excludes_a_mixed_a_rrset_even_though_one_address_is_in_range(fpc):
+    """SPEC 6: EVERY resolved A must be in range, not merely one.  Under a >=1 rule the plan
+    would post 104.18.2.7 as a proxied origin."""
+    resolution = fpc.Resolution(["23.185.0.4", "104.18.2.7"], ["2620:12a:8000::4"], "")
+    assert fpc.classify(swept(), resolution)[0] == "platform-a-out-of-range"
+
+
+def test_classify_excludes_a_target_with_no_aaaa_records(fpc):
+    resolution = fpc.Resolution(["23.185.0.4"], [], "")
+    assert fpc.classify(swept(), resolution)[0] == "no-aaaa"
+
+
+def test_classify_excludes_an_aaaa_record_outside_the_pantheon_range(fpc):
+    resolution = fpc.Resolution(["23.185.0.4"], ["2606:4700::1111"], "")
+    reason, detail = fpc.classify(swept(), resolution)
+    assert reason == "platform-aaaa-out-of-range"
+    assert "2620:12a::/32" in detail
+
+
+def test_classify_accepts_both_live_observed_address_sets(fpc):
+    """Measured 2026-07-31 against live DNS; a range that rejected either would be wrong."""
+    for a, aaaa in ((["23.185.0.4"], ["2620:12a:8000::4", "2620:12a:8001::4"]),
+                    (["23.185.0.1"], ["2620:12a:8000::1", "2620:12a:8001::1"])):
+        assert fpc.classify(swept(), fpc.Resolution(a, aaaa, "")) == (None, "")
+
+
+def test_main_records_the_resolved_addresses_on_each_inventory_entry(fpc, tmp_path, monkeypatch,
+                                                                     capsys):
+    """R4.2/Expansion 2: the inventory carries the evidence behind every plan entry."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4", "2620:12a:8001::4"],
+    })
+    assert fpc.main([]) == 0
+    written = json.loads(capsys.readouterr().out)
+    assert written["a.example.edu"]["resolved_a"] == ["23.185.0.4"]
+    assert written["a.example.edu"]["resolved_aaaa"] == ["2620:12a:8000::4", "2620:12a:8001::4"]
+
+
+def test_main_resolves_in_stdout_mode_too(fpc, tmp_path, monkeypatch, capsys):
+    """R3.2: if resolution were basename-mode only, the two modes would produce different
+    inventories for the same sweep -- the divergence dump_json() exists to prevent."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    calls = fake_dns(fpc, monkeypatch, {
+        ("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+        ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"],
+    })
+    assert fpc.main([]) == 0
+    assert calls == [("live-a.pantheonsite.io", "A"), ("live-a.pantheonsite.io", "AAAA")]
+
+
+def test_main_exits_1_and_names_every_exclusion_on_stderr(fpc, tmp_path, monkeypatch, capsys):
+    """R7.1/R7.3: unconditional, not -v-gated.  A file that drives a destructive rewrite while
+    the warnings about it go nowhere is the failure this design is organized against."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): ["104.18.2.7"],
+                                ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]})
+    assert fpc.main([]) == 1
+    err = capsys.readouterr().err
+    assert "a.example.edu" in err
+    assert "platform-a-out-of-range" in err
+
+
+def test_main_exits_1_for_an_ambiguous_entry_in_stdout_mode(fpc, tmp_path, monkeypatch, capsys):
+    """The one exclusion detectable without DNS, and the one that also leaves the inventory."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult(
+        {}, [], 1, 2, 5, 1, 0, 0, 2,
+        {"a.example.edu": {"reason": "ambiguous-multiple-zones", "detail": "two zones",
+                           "zone_ids": ["z1", "z2"], "origins": ["live-a.pantheonsite.io"]}}))
+    assert fpc.main([]) == 1
+    assert json.loads(capsys.readouterr().out) == {}
+
+
+def test_main_exits_0_when_nothing_was_excluded(fpc, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): ["23.185.0.4"],
+                                ("live-a.pantheonsite.io", "AAAA"): ["2620:12a:8000::4"]})
+    assert fpc.main([]) == 0
+
+
+def test_an_indeterminate_lookup_leaves_null_in_the_inventory_not_an_empty_list(
+        fpc, tmp_path, monkeypatch, capsys):
+    """R4.4 end to end: [] would tell an operator the target has no addresses."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch, fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): dns.resolver.Timeout()})
+    assert fpc.main([]) == 1
+    written = json.loads(capsys.readouterr().out)
+    assert written["a.example.edu"]["resolved_a"] is None
+    assert written["a.example.edu"]["resolved_aaaa"] is None

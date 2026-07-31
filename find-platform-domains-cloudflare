@@ -37,6 +37,7 @@ documented `uv pip install .[mysql,aws,cloudflare]` setup line installs) and Clo
 credentials in the [Cloudflare] section of the config file.
 """
 import argparse
+import collections
 import contextlib
 import io
 import ipaddress
@@ -62,6 +63,11 @@ from cloudflare import Cloudflare
 
 PLATFORM_SUFFIX = ".pantheonsite.io"   # the leading dot is load-bearing: it rejects
                                        # "notpantheonsite.io"
+# Pantheon's edge address ranges.  Measured live 2026-07-31 across two sites: 23.185.0.1 and
+# 23.185.0.4, 2620:12a:8000::1/::4 and 2620:12a:8001::1/::4.  A replacement record outside these
+# is not Pantheon's, and a plan MUST NOT post it as a proxied origin (SPEC 6, rows 5 and 7).
+PLATFORM_A_RANGE = ipaddress.ip_network("23.185.0.0/24")
+PLATFORM_AAAA_RANGE = ipaddress.ip_network("2620:12a::/32")
 OUTPUT_BASENAME = "platform-domains-cloudflare"   # the CONVENTIONAL basename of the
                                        # organization-wide baseline, named in --help; the script
                                        # writes it only when the operator asks, via -o
@@ -331,6 +337,51 @@ def resolve_target(target):
     if problem:
         return Resolution(a, None, problem)
     return Resolution(a, aaaa, "")
+
+
+def outside(addresses, network):
+    """The addresses that are NOT in `network`, in the order given."""
+    return [a for a in addresses if ipaddress.ip_address(a) not in network]
+
+
+def classify(entry, resolution):  # noqa: PLR0911 -- 7 returns, one per SPEC section 6 gate-table
+    # row plus the pass case; collapsing them into a result variable would hide which branch
+    # produced which outcome, and the sibling's walk() sets the same precedent (find-platform-
+    # domains-dns.py:158)
+    """(reason_code, detail) for an entry that must be excluded, else (None, "").
+
+    THE ORDER IS LOAD-BEARING and is SPEC section 6's: unknown-proxy-status, then
+    resolution-failed, then the four resolution outcomes.  resolution-failed MUST come before
+    no-a: `resolution.a` is None for an indeterminate lookup and [] for a definitive absence
+    (SPEC R4.4), and a `not resolution.a` test cannot tell them apart -- so testing no-a first
+    would report a timeout as "the target definitively has no A records", a claim the run never
+    established.
+
+    Both range tests require EVERY address to be in range, not merely one.  SPEC section 6 records
+    why: under a >=1 rule a target resolving to [23.185.0.4, 104.18.2.7] passes and the plan then
+    posts the foreign address as a proxied origin.
+    """
+    if entry["proxied"] is None:
+        return ("unknown-proxy-status",
+                "proxied is null, not false -- whether the replacement records must be created "
+                "proxied cannot be determined, and guessing either way is unsafe")
+    if resolution.problem:
+        return "resolution-failed", resolution.problem
+    if not resolution.a:
+        return "no-a", f"{entry['origins'][0]} resolved to no A records"
+    stray = outside(resolution.a, PLATFORM_A_RANGE)
+    if stray:
+        return ("platform-a-out-of-range",
+                f"{entry['origins'][0]} resolved to A {', '.join(stray)}, which is not in "
+                f"{PLATFORM_A_RANGE}")
+    if not resolution.aaaa:
+        return "no-aaaa", f"{entry['origins'][0]} resolved to no AAAA records"
+    stray = outside(resolution.aaaa, PLATFORM_AAAA_RANGE)
+    if stray:
+        return ("platform-aaaa-out-of-range",
+                f"{entry['origins'][0]} resolved to AAAA {', '.join(stray)}, which is not in "
+                f"{PLATFORM_AAAA_RANGE}")
+    return None, ""
 
 
 def resolve_env_marker(expr, where):
@@ -945,7 +996,7 @@ def interrupt_message(*, wrote, paths):
             if wrote else "INTERRUPTED: no complete JSON document was produced.")
 
 
-def summarize(sweep, paths) -> None:
+def summarize(sweep, excluded, paths) -> None:
     """Everything the operator is told about a COMPLETED sweep, on stderr.
 
     Split out of main() so an interrupt landing between the write and the report has a seam to be
@@ -979,6 +1030,11 @@ def summarize(sweep, paths) -> None:
               f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "
               f"(null, not false): {', '.join(unknown_proxy)} -- a rewriter MUST NOT treat "
               "these as DNS-only.", file=sys.stderr, flush=True)
+    if excluded:
+        by_reason = collections.Counter(item["reason"] for item in excluded.values())
+        print("Excluded from the rewrite plan: "
+              + ", ".join(f"{count} {reason}" for reason, count in sorted(by_reason.items())),
+              file=sys.stderr, flush=True)
     if not entries:
         print(f"ATTENTION: no platform-domain CNAMEs found in {sweep.zones} zones; "
               f"an empty result ({{}}) was written to {destination}.",
@@ -1022,12 +1078,15 @@ def build_arg_parser():
 
 
 def main(argv):
-    """Exit 0 = the output was produced, 2 = could not complete, 130 = interrupted.
+    """Exit 0 = the output was produced with nothing excluded, 1 = produced with exclusions,
+    2 = could not complete, 130 = interrupted.
 
-    There is deliberately no exit 1: the sibling find-platform-domains-dns reserves it for
-    "completed with indeterminates" because a DNS lookup can be indeterminate, whereas a
-    Cloudflare list call either returns or raises.  Holding that line takes the three conversions
-    to StartupError under the try below (require_usable_streams, write_json_stdout, and the inner
+    Exit 1 is new in this increment.  The prior spec stated there was deliberately no exit 1
+    because a Cloudflare list call either returns or raises; that reasoning no longer holds now
+    that the run also does DNS work and can partially succeed.  The sibling
+    find-platform-domains-dns already uses 1 for "completed with indeterminates", so the pair
+    stays consistent.  Holding the rest of the taxonomy takes the three conversions to
+    StartupError under the try below (require_usable_streams, write_json_stdout, and the inner
     emit arm) plus the two inside resolve_env_marker/cloudflare_client -- an OSError on the write
     and a ValueError from shlex both escaped as raw tracebacks at exit 1 until they were named
     (adversarial review, finding 3).
@@ -1044,6 +1103,8 @@ def main(argv):
     paths = None           # set below; kept defined here so a KeyboardInterrupt landing before
                            # that assignment (e.g. inside require_usable_streams) still finds a
                            # bound name in the except clause below, instead of UnboundLocalError
+    excluded = {}          # set below; kept defined here so the final `return 1 if excluded
+                           # else 0` is never reached with the name unbound
     try:
         require_usable_streams(options.output_basename)
         paths = (output_paths(check_basename(options.output_basename))
@@ -1051,17 +1112,34 @@ def main(argv):
         client = cloudflare_client(options.config)
         sweep = fetch_platform_cnames(client, verbose=options.verbose,
                                       zone_names=options.zones)
-        entries = sweep.entries
         for message in sweep.warnings:
             print(message, file=sys.stderr, flush=True)
+        excluded = dict(sweep.excluded)
+        for fqdn, entry in sorted(sweep.entries.items()):
+            target = entry["origins"][0]
+            resolution = resolve_target(target)
+            entry["resolved_a"] = resolution.a
+            entry["resolved_aaaa"] = resolution.aaaa
+            if options.verbose:
+                print(f"{fqdn} -> {target} -> A {resolution.a} | AAAA {resolution.aaaa}",
+                      file=sys.stderr, flush=True)
+            reason, detail = classify(entry, resolution)
+            if reason is not None:
+                excluded[fqdn] = {"reason": reason, "detail": detail,
+                                  "resolved_a": resolution.a, "resolved_aaaa": resolution.aaaa}
+        for fqdn, item in sorted(excluded.items()):
+            # NEVER -v-gated (SPEC R7.3): these are the only signal that the result is narrower
+            # than it looks, and this run's exit code is the only other one.
+            print(f"ATTENTION: {fqdn} excluded ({item['reason']}): {item['detail']}",
+                  file=sys.stderr, flush=True)
         try:
-            emit(entries, paths)
+            emit(sweep.entries, paths)
         except OSError as e:
             # A full disk or a read-only directory lands here AFTER the whole multi-minute walk.
             # (The stdout path raises StartupError itself, from inside write_json_stdout.)
             raise StartupError(f"cannot write {destination_name(paths)}: {e}") from e
         wrote = True
-        summarize(sweep, paths)
+        summarize(sweep, excluded, paths)
     except StartupError as e:
         # report_line(), not print(): this is the end of the road, so an ENOSPC on its own stderr
         # write has nowhere to propagate and CPython's shutdown flush would override the exit
@@ -1086,7 +1164,7 @@ def main(argv):
         report_line(f"ERROR: {type(e).__name__} escaped the sweep, most likely an operator-stream "
                     f"write: {e}")
         return 2
-    return 0
+    return 1 if excluded else 0
 
 
 if __name__ == "__main__":
