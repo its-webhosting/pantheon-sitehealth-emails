@@ -268,8 +268,15 @@ def check_basename(basename):
         handle, probe = tempfile.mkstemp(dir=directory, prefix=".platform-domains-probe-")
     except OSError as e:
         raise StartupError(f"cannot write output files next to {basename}: {e}") from e
-    os.close(handle)
-    os.unlink(probe)  # noqa: PTH108 -- cleanup of the same os.path/tempfile surface above
+    # try/finally (independent review, finding 4): a bare os.close() then os.unlink() left a
+    # KeyboardInterrupt -- or an os.close() failure -- between the two a way to leave the
+    # dot-prefixed probe file behind in the operator's output directory.  Ctrl-C at second zero
+    # (realizing -o or the zone list is wrong) is a realistic operator action, and the leak
+    # accumulates unnoticed because the name is dot-prefixed.
+    try:
+        os.close(handle)
+    finally:
+        os.unlink(probe)  # noqa: PTH108 -- cleanup of the same os.path/tempfile surface above
     return basename
 
 
@@ -357,12 +364,26 @@ class Resolution(NamedTuple):
 
 
 def resolve_one_rrset(target, rrtype):
-    """(addresses, problem) for one rrset.  ([], "") when definitively absent."""
+    """(addresses, problem) for one rrset.  ([], "") when definitively absent.
+
+    THE ORDER IS LOAD-BEARING.  The NoAnswer/NXDOMAIN arm MUST come first and stay narrow: both
+    are dns.exception.DNSException subclasses, and they are the ONLY two outcomes that mean a
+    DEFINITIVE absence (R4.4) -- a broadened arm placed above them would turn "definitively no
+    records" into an indeterminate null.
+
+    The second arm then catches dns.exception.DNSException GENERICALLY (independent review,
+    finding 1) rather than naming Timeout/NoNameservers alone: any other subclass -- e.g.
+    YXDOMAIN, NoResolverConfiguration -- escaped this function, through resolve_target and
+    process_one_entry, into main()'s except BaseException, aborting the WHOLE sweep and
+    discarding every other FQDN's work over one bad record.  MalformedNameError is named
+    explicitly alongside it because it is a plain Exception, not a DNSException (see its own
+    docstring) -- dns.exception.DNSException would not catch it.
+    """
     try:
         answer = resolve_retrying(target, rrtype)
     except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
         return [], ""
-    except (dns.resolver.Timeout, dns.resolver.NoNameservers, MalformedNameError) as e:
+    except (dns.exception.DNSException, MalformedNameError) as e:
         return None, f"{type(e).__name__} resolving {rrtype} for {target}"
     return sorted_addresses(str(rdata) for rdata in answer), ""
 
@@ -436,19 +457,25 @@ def classify(entry, resolution):  # noqa: PLR0911 -- 7 returns, one per SPEC sec
                 "proxied cannot be determined, and guessing either way is unsafe")
     if resolution.problem:
         return "resolution-failed", resolution.problem
+    # Every remaining branch names the target, so from here on read it through sole_origin()
+    # (independent review, finding 3), never entry['origins'][0] directly: the ambiguity gate
+    # (R4.1) has already run by the time classify() is called, so this is defense-in-depth, not a
+    # live bug -- but it puts the assertion at classify()'s FIRST read of the origin, not the
+    # THIRD (plan_entry's), so a regressed ambiguity gate is caught here instead of silently
+    # describing the first of two origins in a detail string or the -v line.
     if not resolution.a:
-        return "no-a", f"{entry['origins'][0]} resolved to no A records"
+        return "no-a", f"{sole_origin(entry)} resolved to no A records"
     stray = outside(resolution.a, PLATFORM_A_RANGE)
     if stray:
         return ("platform-a-out-of-range",
-                f"{entry['origins'][0]} resolved to A {', '.join(stray)}, which is not in "
+                f"{sole_origin(entry)} resolved to A {', '.join(stray)}, which is not in "
                 f"{PLATFORM_A_RANGE}")
     if not resolution.aaaa:
-        return "no-aaaa", f"{entry['origins'][0]} resolved to no AAAA records"
+        return "no-aaaa", f"{sole_origin(entry)} resolved to no AAAA records"
     stray = outside(resolution.aaaa, PLATFORM_AAAA_RANGE)
     if stray:
         return ("platform-aaaa-out-of-range",
-                f"{entry['origins'][0]} resolved to AAAA {', '.join(stray)}, which is not in "
+                f"{sole_origin(entry)} resolved to AAAA {', '.join(stray)}, which is not in "
                 f"{PLATFORM_AAAA_RANGE}")
     return None, ""
 
@@ -1319,7 +1346,6 @@ def summarize(sweep, plan, revert, excluded, paths) -> None:
     # `is False`, not falsy: an unknown proxy status is null and must not be counted as
     # DNS-only -- that count is the headline number this script exists to produce.
     dns_only = sum(1 for entry in entries.values() if entry["proxied"] is False)
-    unknown_proxy = sorted(n for n, e in entries.items() if e["proxied"] is None)
     # "N of M zones" only when a ZONE argument narrowed the sweep, so a subset run can never
     # be mistaken for a full one in a log (SPEC A1.6).
     scope = (f"{sweep.zones} zones" if sweep.zones == sweep.zones_total
@@ -1348,11 +1374,6 @@ def summarize(sweep, plan, revert, excluded, paths) -> None:
     if sweep.lists_short:
         print("ATTENTION: the short lists are named above; records missed while paging them "
               "are NOT in the output.", file=sys.stderr, flush=True)
-    if unknown_proxy:
-        print(f"ATTENTION: {len(unknown_proxy)} entr"
-              f"{'y has' if len(unknown_proxy) == 1 else 'ies have'} an unknown proxy status "
-              f"(null, not false): {', '.join(unknown_proxy)} -- a rewriter MUST NOT treat "
-              "these as DNS-only.", file=sys.stderr, flush=True)
     if excluded:
         by_reason = collections.Counter(item["reason"] for item in excluded.values())
         print("Excluded from the rewrite plan: "
@@ -1428,8 +1449,14 @@ def process_one_entry(fqdn, entry, *, verbose, excluded):
     Mutates `entry` in place with resolved_a/resolved_aaaa (SPEC R4.2, so the inventory carries
     them regardless of the outcome here) and `excluded` in place on exclusion.  Returns
     (plan_item, revert_item), both None when the entry was excluded.
+
+    `target` is read through sole_origin() (independent review, finding 3), not
+    entry['origins'][0] directly: this is the FIRST read of the origin in the whole per-entry
+    flow, so routing it through the assertion here means a regressed ambiguity gate (R4.1) is
+    caught before any DNS lookup, any -v line, or any -excluded.json detail silently describes
+    the first of two origins -- rather than only later, inside plan_entry().
     """
-    target = entry["origins"][0]
+    target = sole_origin(entry)
     resolution = resolve_target(target)
     entry["resolved_a"] = resolution.a
     entry["resolved_aaaa"] = resolution.aaaa

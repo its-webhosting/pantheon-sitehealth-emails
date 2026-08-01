@@ -539,7 +539,7 @@ The single canonical table. No negation chains anywhere else in this document.
 | 5 | `platform-a-out-of-range` | ≥1 A record, but **not every** A is in `23.185.0.0/24` | resolution | yes | 1 |
 | 6 | `no-aaaa` | target returned zero AAAA records | resolution | yes | 1 |
 | 7 | `platform-aaaa-out-of-range` | ≥1 AAAA record, but **not every** AAAA is in `2620:12a::/32` | resolution | yes | 1 |
-| 8 | `resolution-failed` | Timeout / NoNameservers / `MalformedNameError`, after one retry | resolution | yes | 1 |
+| 8 | `resolution-failed` | Timeout / NoNameservers (after one retry), `MalformedNameError`, or any OTHER `dns.exception.DNSException` (e.g. `YXDOMAIN`, `NoResolverConfiguration`) | resolution | yes | 1 |
 
 This list is **exhaustive**, and each FQDN carries exactly one reason code. **Evaluation order is
 1, 2, 3, 8, 4, 5, 6, 7** — not the table's row order, which is grouped for reading.
@@ -548,6 +548,16 @@ This list is **exhaustive**, and each FQDN carries exactly one reason code. **Ev
 `null` on an indeterminate lookup, and a `not resolved_a` test treats `null` and `[]` alike — so
 checking 4 first would report a timeout as "the target definitively has no A records", which is
 precisely the definitive-vs-indeterminate confusion R4.4 exists to prevent.
+
+**Post-merge fix (independent review, finding 1).** The first shipped `resolve_one_rrset` caught
+only `Timeout`/`NoNameservers`/`MalformedNameError`; any OTHER `dns.exception.DNSException` (e.g.
+`YXDOMAIN`, `NoResolverConfiguration`) escaped `resolve_target` → `process_one_entry` → `main()`'s
+last line of defence, aborting the WHOLE sweep and discarding every other FQDN's work over one bad
+record — reproduced live: a single `YXDOMAIN` on a 1-entry run printed `ERROR: unexpected
+YXDOMAIN: ...` and returned 2 instead of excluding that one FQDN. The catch is now
+`dns.exception.DNSException` generically (`MalformedNameError` stays named explicitly beside it —
+it is a plain `Exception`, not a `DNSException`), with the `NoAnswer`/`NXDOMAIN` arm kept strictly
+ABOVE it so a definitive absence can never fall into the broadened arm and read as indeterminate.
 
 **Codes 1 and 2** are the only ones detectable without DNS. Conditions 3–8 require resolution,
 which R3.2 makes unconditional, so **all eight apply in both modes**.
@@ -652,10 +662,10 @@ and `--bogus 2>/dev/full` still exit **120**.
 | Exception | Raised by | Caught by | Operator sees | Exit |
 |---|---|---|---|---|
 | `StartupError` | existing sites, plus `check_basename` (R2.2/R2.4) | `main()` | `ERROR: …` on stderr via `report_line` | 2 |
-| `InvariantError` (subclass of `StartupError`) | `sole_origin`, `known_proxied` — a mid-sweep INTERNAL invariant violated: an entry reached a batch-body builder that `classify()`/`collect_entries()` should already have excluded (an ambiguous `origins` list, or an unknown `proxied` status). Named separately from `StartupError` because this is a defect in the script's own reasoning, not an operator/environment error (PD#2), even though it is caught and reported identically. | `main()` (the existing `StartupError` handler — no new catch site) | `ERROR: …` on stderr via `report_line` | 2 |
+| `InvariantError` (subclass of `StartupError`) | `sole_origin`, `known_proxied` — a mid-sweep INTERNAL invariant violated: an entry reached a read that `classify()`/`collect_entries()` should already have excluded (an ambiguous `origins` list, or an unknown `proxied` status). Named separately from `StartupError` because this is a defect in the script's own reasoning, not an operator/environment error (PD#2), even though it is caught and reported identically. **Post-merge fix (independent review, finding 3):** `sole_origin` is now called from `process_one_entry` (the FIRST read of `origins`, before any resolution) and from `classify`'s four detail-string reads, not only from the batch-body builders (`plan_entry`/`revert_entry`/`record_body`) — defense-in-depth, so a regressed ambiguity gate is caught at the earliest read rather than three call frames later. | `main()` (the existing `StartupError` handler — no new catch site) | `ERROR: …` on stderr via `report_line` | 2 |
 | `MalformedNameError` | `resolve()` — copied from `find-platform-domains-dns:51` | `resolve_target` | exclusion `resolution-failed` | 1 |
 | `dns.resolver.NXDOMAIN`, `NoAnswer` | `resolve()` | `resolve_target` | exclusion `no-a` / `no-aaaa` | 1 |
-| `dns.resolver.Timeout`, `NoNameservers` | `resolve()` | `resolve_target`, after one retry | exclusion `resolution-failed` | 1 |
+| `dns.resolver.Timeout`, `NoNameservers` (after one retry), or any OTHER `dns.exception.DNSException` (e.g. `YXDOMAIN`, `NoResolverConfiguration`) | `resolve()` | `resolve_target` | exclusion `resolution-failed` | 1 |
 | `cloudflare.CloudflareError` | the sweep | existing handlers | existing message, body never echoed | 2 |
 | `KeyboardInterrupt` | anywhere | `main()` | `interrupt_message()` (§9.4) | 130 |
 | `OSError` | file writes, operator-stream writes | `main()`'s existing arms | `ERROR: …` | 2 |

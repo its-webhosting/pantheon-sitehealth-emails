@@ -803,7 +803,15 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
 
     Exit is now 1, not 0 (Task 4): classify() excludes an unknown-proxy-status entry regardless
     of what it resolves to (SPEC 6, evaluated before any resolution outcome) -- fake_dns is still
-    required so resolve_target's unconditional call does not reach real DNS."""
+    required so resolve_target's unconditional call does not reach real DNS.
+
+    Rewritten for an independent post-merge review's finding 2: summarize() used to print its OWN
+    'ATTENTION: N entries have an unknown proxy status ...' line ON TOP OF main()'s uniform R7.1
+    exclusion ATTENTION for the very same fact -- triple-reporting one exclusion together with the
+    'Excluded from the rewrite plan' count.  This is the same duplication a controller decision
+    already removed from collect_entries() for the ambiguity case (see
+    test_an_ambiguous_exclusion_produces_exactly_one_operator_line, which asserts the same
+    err.count(...) == 1 shape); the same fix and the same assertion shape apply here."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(fpc, "cloudflare_client", lambda config_path: object())
     entry = {"zone_id": "z", "origins": ["live-a.pantheonsite.io"], "record_id": "r",
@@ -814,8 +822,8 @@ def test_main_does_not_count_an_unknown_proxy_status_as_dns_only(fpc, tmp_path, 
     assert fpc.main([]) == 1
     err = capsys.readouterr().err
     assert "(0 DNS-only" in err
-    assert "unknown proxy status" in err
-    assert "a.example.edu" in err
+    assert "ATTENTION: a.example.edu excluded (unknown-proxy-status):" in err
+    assert err.count("a.example.edu") == 1
 
 
 def test_main_says_so_when_nothing_matched(fpc, tmp_path, monkeypatch, capsys):
@@ -2554,3 +2562,105 @@ def test_now_utc_is_utc_with_a_z_suffix(fpc, monkeypatch):
     parsed = datetime.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.UTC)
     slack = datetime.timedelta(seconds=1)
     assert before - slack <= parsed <= after + slack
+
+
+# --- Independent post-merge review fixes (findings 1, 3, 4; finding 2 rewrites a test above) --
+
+@pytest.mark.parametrize("exc", [dns.resolver.YXDOMAIN(), dns.resolver.NoResolverConfiguration()])
+def test_resolve_one_rrset_treats_any_dns_exception_as_indeterminate(fpc, monkeypatch, exc):
+    """Finding 1 (medium-low, the important one).  resolve_one_rrset caught only
+    Timeout/NoNameservers/MalformedNameError, so ANY OTHER dns.exception.DNSException -- e.g.
+    YXDOMAIN or NoResolverConfiguration -- escaped resolve_target -> process_one_entry ->
+    main()'s except BaseException, aborting the WHOLE ~2-minute sweep and discarding every other
+    FQDN's plan/revert entry over ONE bad record.  Reproduced by the reviewer: a 1-entry run with
+    `resolve` raising YXDOMAIN printed 'ERROR: unexpected YXDOMAIN: ...' and returned 2.
+
+    The broadened arm catches dns.exception.DNSException generically -- NXDOMAIN/NoAnswer stay in
+    the EARLIER, more specific arm (asserted by the next test): both are DNSException subclasses,
+    and a broadened arm placed above them would turn a definitive "no records" into an
+    indeterminate null, inverting R4.4.  MalformedNameError stays named explicitly alongside the
+    broadened arm because it is a plain Exception, not a DNSException (see its own docstring)."""
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): exc})
+    addresses, problem = fpc.resolve_one_rrset("live-a.pantheonsite.io", "A")
+    assert addresses is None
+    assert type(exc).__name__ in problem
+
+
+@pytest.mark.parametrize("exc", [dns.resolver.NXDOMAIN(), dns.resolver.NoAnswer()])
+def test_resolve_one_rrset_still_reports_a_definitive_absence_as_empty(fpc, monkeypatch, exc):
+    """The order guard for the fix above: NXDOMAIN/NoAnswer MUST stay caught as a DEFINITIVE []
+    and must NOT fall into the newly broadened dns.exception.DNSException arm, or a real "no
+    records" answer would be reported as an indeterminate null (R4.4)."""
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): exc})
+    assert fpc.resolve_one_rrset("live-a.pantheonsite.io", "A") == ([], "")
+
+
+def test_main_excludes_one_bad_record_instead_of_aborting_the_whole_sweep(fpc, tmp_path,
+                                                                          monkeypatch, capsys):
+    """Finding 1, end to end.  Before the fix this returned 2 ('ERROR: unexpected YXDOMAIN: ...')
+    -- exactly the reviewer's reproduction -- discarding the whole sweep's work over one bad
+    record.  After the fix the entry is excluded as resolution-failed and the run completes."""
+    monkeypatch.chdir(tmp_path)
+    fake_sweep(fpc, monkeypatch,
+               fpc.SweepResult({"a.example.edu": swept()}, [], 1, 2, 5, 1, 0, 0, 2))
+    fake_dns(fpc, monkeypatch, {("live-a.pantheonsite.io", "A"): dns.resolver.YXDOMAIN()})
+    assert fpc.main([]) == 1
+    err = capsys.readouterr().err
+    assert "ATTENTION: a.example.edu excluded (resolution-failed):" in err
+    assert "YXDOMAIN" in err
+    assert "unexpected" not in err
+
+
+def test_classify_asserts_sole_origin_before_building_a_detail_string(fpc):
+    """Finding 3.  classify() interpolated entry['origins'][0] directly into FOUR detail strings,
+    bypassing sole_origin() -- the helper whose docstring says the single-origin property is
+    "asserted rather than assumed".  Defense-in-depth: collect_entries() already excludes every
+    ambiguous FQDN (R4.1), so classify() should never see one -- but if that gate ever regressed,
+    the OLD code silently described the first of two origins instead of raising, and
+    InvariantError fired only later, inside plan_entry().  This exercises the no-a detail string;
+    the other three (platform-a-out-of-range, no-aaaa, platform-aaaa-out-of-range) share the same
+    read and the same fix."""
+    entry = swept(origins=["live-a.pantheonsite.io", "live-b.pantheonsite.io"])
+    resolution = fpc.Resolution([], ["2620:12a:8000::4"], "")   # would reach the no-a detail line
+    with pytest.raises(fpc.InvariantError):
+        fpc.classify(entry, resolution)
+
+
+def test_process_one_entry_asserts_sole_origin_before_resolving(fpc, monkeypatch):
+    """Finding 3, the other bypass: process_one_entry() read entry['origins'][0] to build
+    `target`, then called resolve_target(target) -- before classify() (and so before the
+    ambiguity invariant) ever ran.  resolve_target is monkeypatched to explode if reached, which
+    proves the assertion now fires FIRST, not after a live-looking DNS lookup on a target the
+    entry should never have carried."""
+    def explode(target):
+        raise AssertionError("resolve_target must not be reached for an ambiguous entry")
+    monkeypatch.setattr(fpc, "resolve_target", explode)
+    entry = swept(origins=["live-a.pantheonsite.io", "live-b.pantheonsite.io"])
+    with pytest.raises(fpc.InvariantError):
+        fpc.process_one_entry("a.example.edu", entry, verbose=False, excluded={})
+
+
+def test_check_basename_probe_cleanup_survives_an_interrupted_close(fpc, tmp_path, monkeypatch):
+    """Finding 4.  mkstemp / os.close / os.unlink were three bare statements, so a KeyboardInterrupt
+    (or an os.close failure) landing between them left a hidden .platform-domains-probe-XXXXXX
+    file behind in the operator's output directory.  Ctrl-C at second zero -- realizing -o or the
+    zone list is wrong -- is a realistic operator action, and the dot-prefixed name means the leak
+    accumulates unnoticed.
+
+    os.close is monkeypatched to raise on its FIRST call only, and always performs the real close
+    first, so the patch cannot leak a real file descriptor or intercept an UNRELATED close
+    elsewhere in the process -- check_basename's happy path makes exactly one close call, and
+    nothing else runs between the patch and that call."""
+    real_close = os.close
+    calls = []
+
+    def flaky_close(fd):
+        calls.append(fd)
+        real_close(fd)
+        if len(calls) == 1:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(fpc.os, "close", flaky_close)
+    with pytest.raises(KeyboardInterrupt):
+        fpc.check_basename(str(tmp_path / "engin-zone"))
+    assert list(tmp_path.iterdir()) == []
