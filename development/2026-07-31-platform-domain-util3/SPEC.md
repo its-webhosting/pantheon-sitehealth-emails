@@ -944,16 +944,217 @@ this spec and the diff, reviews before merge, per `prompts/adversarial-review.md
 
 ---
 
-## 19. Closing audit questions (answer after implementation)
+## 19. Closing audit questions (answered after implementation)
 
-1. Did any test in group 10 get weakened rather than rewritten? Show each diff.
-2. Was every new test observed failing for the right reason before its implementation existed?
-3. Is the inventory byte-identical between stdout mode and basename mode on the same fixture?
-   Which test proves it, and has that test been shown capable of going red?
-4. Does `git grep -n "pantheon.io\|gotpantheon" find-platform-domains-cloudflare` return only
-   `.pantheonsite.io` matches (R1)?
-5. Did the script's line count grow enough that the "copy, don't modularize" rule is now costing
-   more than it saves? Record the number; do not act on it.
-6. Was `build_client()`'s environment pin disturbed? Which test proves it was not?
-7. Are all eight reason codes reachable in the test suite, and is each asserted on a distinct
-   condition rather than on the same fixture with a changed expectation?
+Evidence: the seven per-task reports/reviews (`.superpowers/sdd/PLAN/task-{1..7}-report.md` /
+`task-{1,3,4,5,6,7}-review.md`), the whole-branch review (`final-review.md`), the two fix waves
+(`final-fix-report.md`, `regression-fix-report.md`), the ledger (`progress.md`), and the code and
+history at `HEAD` (`c3deb27..103ca41`, 27 commits, no branch created per `CLAUDE.md`).
+
+1. **Did any test in group 10 get weakened rather than rewritten? Show each diff.**
+
+   No. Group 10 was 12 tests, all rewritten in Task 3, plus 3 more retired-warning tests rewritten
+   in Task 6 under a separate controller decision (decision A) — 15 total, none weakened.
+
+   The Task 3 review (`task-3-review.md`) walked all 12 individually in a table ("The 12 rewritten
+   tests, one at a time") and its verdict: *"none is a weakening. Every rewrite replaces an
+   inclusion assertion with an exclusion assertion of equal-or-greater specificity (exact `==` on a
+   reason code, not an `in` that would pass either way), no test was deleted, no matcher loosened,
+   no `assert True`."* Two representative diffs, quoted verbatim from `task-3-report.md` §3:
+
+   - `test_collect_entries_is_first_record_wins_across_zones_and_warns` — before: asserted the
+     cross-zone duplicate **stayed** in `entries` (`zone_id == "zone-a"`, `record_id == "rec-1"`,
+     `origins` accumulating both contents). After: `entries == {}`;
+     `excluded["www.example.edu"]["reason"] == "ambiguous-multiple-zones"`; `origins` == both;
+     `zone_ids == ["zone-a", "zone-b"]`; **`len(warnings) == 1` and all three substring checks kept
+     verbatim.** The operator-visible warning assertion — the one thing R4.1 requires to survive —
+     was not touched.
+   - `test_collect_entries_warns_for_two_matches_in_one_zone` — before: entry **kept**, asserted
+     `"rec-1" in warnings[0]`. After: `entries == {}`; `reason == "ambiguous-multiple-origins"`;
+     `len(warnings) == 1`; three substring checks including `"omitted from the inventory"`,
+     replacing the now-meaningless `"rec-1"` check (there is no longer a kept record to name).
+
+   Task 6's 3 additional rewrites (`test_collect_entries_is_first_record_wins_across_zones_and_warns`,
+   `test_collect_entries_warns_for_two_matches_in_one_zone`, and
+   `test_collect_entries_excludes_a_name_with_two_platform_cnames_in_one_zone`) exist because
+   decision A retired `collect_entries`' own ATTENTION text (the uniform R7.1 line in `main()` had
+   made it a duplicate of the same fact). Each went from `assert len(warnings) == 1` + substrings to
+   `assert warnings == []` — again not "assert True": it pins a real, specific new fact
+   (`collect_entries` no longer warns), and the retired assertion's *intent* — the operator must
+   still be told — is re-covered by a new, independent test at the `main()` seam,
+   `test_an_ambiguous_exclusion_produces_exactly_one_operator_line`, which drives the real
+   `fetch_platform_cnames()` → `main()` path (not a canned `SweepResult`) and was watched failing
+   pre-fix (`task-6-report.md`: *"ATTENTION: ... a.example.edu ... assert err.count("a.example.edu")
+   == 1 ... AssertionError: assert 2 == 1"*). Both the Task 3 reviewer and the whole-branch reviewer
+   independently confirmed (via `git diff | grep '^-def test'`) that zero tests were deleted across
+   the branch — only rewritten or added.
+
+2. **Was every new test observed failing for the right reason before its implementation existed?**
+
+   With two disclosed, honest exceptions — neither papered over by the implementer or the reviewer:
+
+   - **Task 4 — `test_main_exits_0_when_nothing_was_excluded`.** This brief-supplied test asserts
+     `fpc.main([]) == 0` on a healthy, in-range entry. The implementer verified directly (restoring
+     the pre-Task-4 script byte-for-byte and running the test alone) that it **already passed
+     against the pre-implementation code**: pre-Task-4 `main()` had no exit-1 concept and
+     unconditionally `return 0`s on the success path, so the assertion held with or without
+     `classify()`/resolution existing. `task-4-report.md`: *"This means
+     `test_main_exits_0_when_nothing_was_excluded` did not fail for the right reason at Step 2 — it
+     did not fail at all."* The reviewer independently confirmed this is not a defect — it is a
+     **live instrument**, not a dead one — by mutating `return 1 if excluded else 0` to `return 1`
+     and observing it (and 14 others) go red (`task-4-review.md`, "It goes red on a mutation of the
+     behavior it claims to guard, so it is **not** a dead instrument and this is **not** a
+     finding"). It is a legitimate regression test going forward; it simply was never independently
+     falsified by Task 4's own code, because the pre-existing behavior happened to coincide with the
+     new contract's success case.
+   - **Task 6 fix round 2 — `test_a_ctrl_c_mid_write_outputs_leaves_only_fully_written_files_behind`.**
+     Added to close a reviewer-named coverage **gap** (no test existed for a Ctrl-C mid-`write_outputs`),
+     not a behavior defect. Run against the stashed-back pre-fix script alongside three genuinely
+     red siblings, it was the one that **passed both before and after**: `task-6-report.md`
+     (fix-round-2 section): *"The 4th test ... passed even against the pre-fix code ... This is
+     expected and is called out here rather than hidden ... `write_json_atomic`'s existing per-file
+     atomicity and `main()`'s existing `except KeyboardInterrupt` handling were already correct
+     before this round ... This test is coverage for a previously-untested-but-already-correct path
+     ... it is not a red→green pair and I am not claiming otherwise."*
+
+   Two smaller, related notes surfaced by the same discipline but not full exceptions: Task 4's
+   two subprocess-driver tests were found — by the implementer, then independently reproduced by
+   the reviewer — to have been passing green while silently reaching **real DNS** (a live instrument
+   that could not report the SPEC §7 violation it was already committing); fixed with an autouse
+   `resolve`-raising guard, and that guard itself was later found (regression-fix-report.md,
+   Defect 1) to be satisfiable by accident once `main()` grew a catch-all — fixed by moving its
+   assertion to fixture teardown. Every other new test across all seven tasks and both whole-branch
+   fix waves was watched failing for its stated reason before the implementation existed (each
+   task's report pastes the red run; the reviewers independently re-ran the reviewer-supplied
+   mutations and pasted the red output themselves rather than trusting the report).
+
+3. **Is the inventory byte-identical between stdout mode and basename mode on the same fixture?
+   Which test proves it, and has that test been shown capable of going red?**
+
+   Yes. The test is `test_the_inventory_is_byte_identical_between_the_two_modes`
+   (`tests/unit/test_find_platform_domains_cloudflare.py:2116`): it runs the same planned sweep
+   twice, once through `main([])` (stdout, captured) and once through `main(["-o", "engin-zone"])`,
+   and asserts `(tmp_path / "engin-zone.json").read_text() == from_stdout` — a real byte
+   comparison, not a shape comparison.
+
+   It has been shown capable of going red, in two independent ways: (a) Task 6's report
+   (`task-6-report.md`, "Watching every new/changed test fail for the right reason") shows it in the
+   pasted list of 17 tests that failed when the script was reverted to its pre-Task-6 state via
+   `git stash push -- find-platform-domains-cloudflare` — i.e. it was observed red before the
+   feature it guards (both modes doing resolution/classification identically) existed; (b) the
+   whole-branch reviewer explicitly declined to take the test's green status on faith
+   (`final-review.md`, "Attacks that found nothing"): *"Byte-identical inventory (R3.2). I did not
+   trust the test."* — and independently re-derived the same property by reading every function in
+   the `entry`-mutation path for aliasing, then driving a **richer**, hand-built three-entry sweep
+   (mixed-case name, non-null `settings` with a null-valued key, `tags`, `comment`, a DNS-only entry,
+   one excluded entry) through both modes and diffing the bytes directly: `"BYTE IDENTICAL: True,
+   both modes exit 1."` No reviewer performed a targeted mutation of production code specifically
+   designed to make *this test* diverge (e.g. gating resolution on `paths is not None`); the
+   stash-revert red run and the independent hand-driven re-derivation are the two pieces of evidence
+   that exist, and together they satisfy PD#14's bar without a third, narrower mutation having been
+   run.
+
+4. **Does `git grep -n "pantheon.io\|gotpantheon" find-platform-domains-cloudflare` return only
+   `.pantheonsite.io` matches (R1)?**
+
+   Run 2026-07-31 at `HEAD` (`103ca41`):
+
+   ```
+   $ git grep -n "pantheon.io\|gotpantheon" -- find-platform-domains-cloudflare
+   find-platform-domains-cloudflare:375:    fe4.edge.pantheon.io, while live-umich-its-wws-test1.pantheonsite.io answers A/AAAA directly
+   ```
+
+   One match, and it is not `.pantheonsite.io`. It is prose inside `resolve_target()`'s docstring,
+   explaining *why* the resolver follows CNAME chains uniformly — quoting SPEC §1's live example
+   verbatim (`fe4.edge.pantheon.io` is the real target one platform CNAME's chain terminates at,
+   per the two live DNS queries §1 records). It is not code that reads, plans, reverts, or excludes
+   a `*.pantheon.io` record: R1 governs which Cloudflare CNAME records the utility **acts on**
+   (`PLATFORM_SUFFIX = ".pantheonsite.io"`, checked by `is_platform_domain()` before any record ever
+   reaches `collect_entries`), and this line is commentary about DNS *resolution* behavior for a
+   target that already passed that filter. **Not an R1 violation.**
+
+5. **Did the script's line count grow enough that the "copy, don't modularize" rule is now costing
+   more than it saves? Record the number; do not act on it.**
+
+   ```
+   $ git show c3deb27:find-platform-domains-cloudflare | wc -l
+   856
+   $ wc -l find-platform-domains-cloudflare
+   1593 find-platform-domains-cloudflare
+   ```
+
+   856 → 1593 lines (+737, +86%). The test file grew from 96 tests to 197 (2556 lines). Recorded;
+   not acted on, per the question's own instruction. (For scale: the sibling `find-platform-domains-dns`,
+   the precedent SPEC §8 leans on for the exit-1 taxonomy, is a comparable size and has not needed
+   modularizing either.)
+
+6. **Was `build_client()`'s environment pin disturbed? Which test proves it was not?**
+
+   No. `git diff c3deb27..HEAD -- find-platform-domains-cloudflare | grep -n "def build_client"`
+   returns nothing — the function has zero lines touched across all 27 commits; the only new
+   reference to it anywhere in the diff is one comment (`API_BASE_URL = "..." # pinned; see
+   build_client`, unrelated code added by Task 1 for the writability-probe/basename work). The test
+   file has one single-line diff near the `build_client` test block (a non-UTF8-file startup-error
+   test), unrelated to the pin itself.
+
+   The test that asserts the pin against a **real built request** is
+   `test_cloudflare_client_ignores_an_ambient_base_url`
+   (`tests/unit/test_find_platform_domains_cloudflare.py:227`), part of the pre-existing block also
+   covering `test_cloudflare_client_prefers_the_api_token`,
+   `test_cloudflare_client_sends_only_the_configured_credential`, and
+   `test_cloudflare_client_falls_back_to_email_and_key` — none of which changed in this branch. All
+   of them pass unmodified in the final `./run-tests --fast` run (1467 passed).
+
+7. **Are all eight reason codes reachable in the test suite, and is each asserted on a distinct
+   condition rather than on the same fixture with a changed expectation?**
+
+   Yes to both. Each of the 8 `classify()` tests constructs its own distinct `Resolution`/`swept()`
+   input (not a shared fixture with only the expected value edited):
+
+   | Code | Test | Distinguishing input |
+   |---|---|---|
+   | `ambiguous-multiple-origins` | `test_collect_entries_excludes_a_name_with_two_platform_cnames_in_one_zone` | two records, same zone |
+   | `ambiguous-multiple-zones` | `test_collect_entries_excludes_a_name_present_in_two_zones` | two records, different zones |
+   | `unknown-proxy-status` | `test_classify_excludes_an_unknown_proxy_status` | `swept(proxied=None)` |
+   | `resolution-failed` | `test_classify_excludes_an_indeterminate_resolution_before_testing_for_no_a` | `Resolution(None, None, "Timeout...")` |
+   | `no-a` | `test_classify_excludes_a_target_with_no_a_records` | `Resolution([], [...], "")` |
+   | `platform-a-out-of-range` | `test_classify_excludes_an_a_record_outside_the_pantheon_range` (+ the mixed-rrset variant) | `Resolution(["104.18.2.7"], ...)` |
+   | `no-aaaa` | `test_classify_excludes_a_target_with_no_aaaa_records` | `Resolution([...], [], "")` |
+   | `platform-aaaa-out-of-range` | `test_classify_excludes_an_aaaa_record_outside_the_pantheon_range` | `Resolution([...], ["2606:4700::1111"], "")` |
+
+   Each also has a `main()`-level counterpart proving the code reaches `-excluded.json`/the
+   summary/exit 1 end to end (e.g. `test_the_summary_names_all_four_files_with_per_file_entry_counts`,
+   `test_the_summary_counts_exclusions_by_reason` for a two-reason-code sweep). The evaluation-order
+   requirement (`resolution-failed` before `no-a`) has its own dedicated test rather than being
+   inferred from the pass/fail table, and the reviewer independently confirmed it
+   (`final-review.md`: *"Evaluation order matches SPEC §6 and
+   `test_classify_excludes_an_indeterminate_resolution_before_testing_for_no_a` genuinely guards
+   it"*).
+
+---
+
+### Parked findings
+
+Every finding raised across the seven task reviews and the whole-branch review that was
+**deliberately not fixed**, with the ruling that parked it. The whole-branch review's "Ruling on
+every deferred Minor in the ledger" (`final-review.md`) is the authority; items it marked **MUST
+FIX** were fixed in the final fix wave and are omitted here (they are closed, not parked). This
+list is the complement: everything ruled **Leave**.
+
+| Finding | Ruling |
+|---|---|
+| `plan_entry` shares one `settings` dict object across every post it builds (aliasing) — `record_body` already copies `tags` for the same reason but not `settings` | **Leave.** Harmless today (nothing mutates a post after construction; JSON output is unaffected); a one-word fix (`dict(settings)`) if anyone is in that code again. |
+| SPEC §5.2's `posts` address ordering is correct only because it inherits sorted order from `resolve_one_rrset`; `plan_entry`'s own docstring does not name the owner | **Leave.** Not a live bug — the inheritance is real and tested — but the ownership should be named in the docstring if the code is touched again. |
+| `SweepResult.warnings` is permanently `[]` after Task 6's decision A retired its only producer; `main()`'s `for message in sweep.warnings` loop is now dead | **Leave.** PD#9 ("Everything deferred is written down") is satisfied — a named `README.md` TODO item exists — so this is a decision, not an oversight. ~6-line deletion in a script whose whole purpose is to be deleted. |
+| Three test fixtures hand-build an `entry` dict rather than routing through the `swept(**overrides)` factory, so a data-contract field (`zone_name`) is missing from two of them and was already caught missing once (the `run_main_in_a_subprocess` driver, Task 6) | **Leave** (the surviving two instances). Harmless today — `zone_name` is read by no code path, and the other hand-built entry is excluded before any body-builder reads its missing fields — but it is an instance fix where a class fix exists ("fix the class, not the instance"); worth doing if the branch is touched again. |
+| No progress output during the resolution phase at default verbosity (218 entries × up to 2 lookups × up to 2 retries can mean ~40 minutes of silence under a resolver outage, vs. ~2 minutes normally) | **Leave.** SPEC §2 forbids performance work, and this is an observability gap, not a performance one, but was judged not worth a mid-branch spec amendment. A single "resolving N targets…" line before the loop would close it. |
+| `-excluded.json` has two disjoint entry shapes (codes 1–2 carry `zone_ids`/`origins`/`record_id`/`record_ids`; codes 3–8 carry `resolved_a`/`resolved_aaaa`), with `reason` as the only discriminator | **Leave.** Contract-legal — SPEC §5.6 marks the non-`reason`/`detail` keys illustrative, not exhaustive — but an applier/triage-tooling author should be told explicitly in one added sentence. |
+| R3.1a (AAAA is skipped, not resolved, when A is indeterminate) is invisible to the operator: both the module docstring and `CLAUDE.md` say every run resolves "both A and AAAA" with no caveat | **Leave.** Cheap to add (one clause in each), but not blocking; an operator investigating a `resolution-failed` entry cannot currently tell "AAAA never attempted" from "AAAA attempted and failed," both render as `null`. |
+| SPEC §15 acceptance item 4's pasted error text is hard-wrapped across two lines in the document where the program actually emits one line | **Leave.** A transcription artifact of pasting into a Markdown table cell, not a behavior claim; the real single-line output was independently confirmed during the final fix wave. |
+
+Two smaller items were raised and closed (not parked) during the branch and are recorded here only
+so they are not mistaken for open: the duplicate ambiguous-exclusion ATTENTION line (both the Task
+4 implementer and reviewer flagged it; the controller made a binding decision in Task 6 to keep the
+uniform R7.1 line and retire `collect_entries`' own warning — closed, not deferred) and the dead
+`GOOD = None` test-file placeholder from the Task 4 brief (deleted; `grep -n GOOD` on the test file
+now returns nothing).
