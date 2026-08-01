@@ -6,7 +6,10 @@
       "args": [
         "serve",
         "--mcp"
-      ]
+      ],
+      "env": {
+        "CODEGRAPH_MCP_TOOLS": "explore,node,search,callers,callees,impact,files,status"
+      }
     },
     "chrome-devtools": {
       "type": "stdio",
