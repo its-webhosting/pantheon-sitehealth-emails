@@ -837,9 +837,80 @@ jq '.entries["<one fqdn>"].body.posts[0]' platform-domains-cloudflare-revert.jso
 jq '.["<one fqdn>"]' platform-domains-cloudflare.json
 ```
 
-### Results — items 1–5, run 2026-07-31 after the whole-branch review fix wave
+### Results — items 6–8, run live 2026-08-01 after `RUN LIVE` was given
 
-Items 6–8 remain behind §18 STOP 2 (`RUN LIVE`) and are the human's to run.
+**Item 6 — one zone.** Exit **1**, four files written. Abridged (the `-v` per-target lines are one
+per record):
+
+```
+[1/1] zone engin.umich.edu -- 635 records
+live-engin-depts.pantheonsite.io -> A 23.185.0.4 | AAAA 2620:12a:8000::4, 2620:12a:8001::4
+live-engin-rws.pantheonsite.io -> A 185.178.196.2 | AAAA 2a0a:6c80::2
+ATTENTION: rws.engin.umich.edu excluded (platform-a-out-of-range):
+  live-engin-rws.pantheonsite.io resolved to A 185.178.196.2, which is not in 23.185.0.0/24
+Wrote 55 platform-domain CNAMEs (0 DNS-only, invisible to fqdns.json) from 635 records
+  in 1 of 187 zones in 5 account(s) to:
+  /tmp/one-zone.json (55 entries)
+  /tmp/one-zone-plan.json (54 entries)
+  /tmp/one-zone-revert.json (54 entries)
+  /tmp/one-zone-excluded.json (1 entries)
+Completeness cross-check: 7 of 7 paginated lists verified complete, 0 short, 0 unverifiable.
+Excluded from the rewrite plan: 1 platform-a-out-of-range
+ATTENTION: /tmp/one-zone.json, /tmp/one-zone-plan.json, /tmp/one-zone-revert.json and
+  /tmp/one-zone-excluded.json cover 1 of 187 zones -- this is NOT an organization-wide sweep
+  and MUST NOT be used as the baseline for a rewrite. ...
+exit=1
+```
+
+**Item 7 — organization-wide baseline.** Exit **1**, `real 2m21.217s`:
+
+```
+ATTENTION: rws.engin.umich.edu excluded (platform-a-out-of-range): ...
+Wrote 218 platform-domain CNAMEs (5 DNS-only, invisible to fqdns.json) from 22298 records
+  in 187 zones in 5 account(s) to:
+  platform-domains-cloudflare.json (218 entries)
+  platform-domains-cloudflare-plan.json (217 entries)
+  platform-domains-cloudflare-revert.json (217 entries)
+  platform-domains-cloudflare-excluded.json (1 entries)
+Completeness cross-check: 193 of 193 paginated lists verified complete, 0 short, 0 unverifiable.
+Excluded from the rewrite plan: 1 platform-a-out-of-range
+```
+
+Consistent with the 2026-07-30 baseline (218 CNAMEs, 5 DNS-only, 2m 17s).
+
+**Item 8 — the round-trip property.** Run over **all 217 plan entries**, not the single FQDN the
+command above sketches:
+
+```
+shared generated.at: {'2026-08-01T00:22:23Z'} | directions: ['plan', 'revert', 'excluded']
+zones: 187 of 187 | counts: 217 217 1
+plan/revert cover identical FQDN sets: 217
+round-trip: revert restores every writable field for 217 of 217 entries; failures: []
+plan body invariants:  OK          # proxied always explicit, ttl 1 when proxied,
+                                   # no flatten_cname leaked, every A in 23.185.0.0/24,
+                                   # every AAAA in 2620:12a::/32, no deletes inside body
+AAAA-count distribution: Counter({2: 217})
+DNS-only entries in the plan: 5
+```
+
+**Three findings from the live run, none of them defects:**
+
+1. **The 23.185.0.0/24 safety check fired on real data, first run.** `rws.engin.umich.edu` →
+   `live-engin-rws.pantheonsite.io` → `A 185.178.196.2` / `AAAA 2a0a:6c80::2`. That is not
+   Pantheon's range at all, so the FQDN is excluded from the plan and named on stderr. Under
+   `PROMPT.md`'s literal "≥1 in range" rule this would still have been excluded (there is no
+   in-range A at all) — but it is exactly the shape §6's tightening exists for.
+2. **A fifth address set is live, where four were expected.** `PROMPT.md` says "at least 5
+   different sets … although in practice we only see 4". The sweep found **five**:
+   `23.185.0.1` (27), `.2` (26), `.3` (79), `.4` (84) and **`.253` (1)** —
+   `firearminjury.umich.edu` → `dev-umor-ifip.pantheonsite.io` → `23.185.0.253` /
+   `2620:12a:8000::253` / `2620:12a:8001::253`, a **dev** environment target. This is the
+   decisive vindication of R3/§1: a hardcoded constant would have written the wrong addresses
+   for this hostname.
+3. **Every planned FQDN returned exactly two AAAA records**, and all five DNS-only records
+   reached the plan with `proxied: false` preserved.
+
+### Results — items 1–5, run 2026-07-31 after the whole-branch review fix wave
 
 ```
 $ ./run-tests --fast                                                       # item 1
