@@ -1,0 +1,976 @@
+# `apply-platform-domains-cloudflare` — the applier
+
+**Spec.** A new, temporary, standalone utility that reads a **plan** or **revert** file produced by
+`find-platform-domains-cloudflare` and performs the Cloudflare DNS batch calls it describes. The
+prompt is `PROMPT.md` in this folder. This script is the **applier** whose normative contract was
+written, but not implemented, as §5.4 of
+`development/2026-07-31-platform-domain-util3/SPEC.md` (hereafter **util3 SPEC**).
+
+Prior increments, in order: `development/2026-07-28-platform-domain-util/` (the
+`find-platform-domains-dns` sibling), `development/2026-07-30-platform-domain-util2/` (this
+utility's Cloudflare-side sibling, plus `research.md`, the record-level mechanics research), and
+`development/2026-07-31-platform-domain-util3/` (the plan/revert/excluded file formats).
+
+> **Read `prompts/directives.md` first** — the Spine. This spec cites Prime Directives by number
+> and restates none of them.
+
+---
+
+## Requirement vocabulary
+
+| Word | Meaning |
+|---|---|
+| **MUST** / **MUST NOT** | An absolute requirement. A violation is a defect, and there is a test. |
+| **SHOULD** | Strong recommendation; a deviation requires a stated reason in code. |
+| **MAY** | Genuinely optional. |
+| **NEVER** | Same force as MUST NOT, used where the negative reads more clearly. |
+
+Every list in this document is marked **exhaustive** or **illustrative**. An unmarked list is a
+defect in this spec.
+
+---
+
+## Glossary
+
+Terms carried from the util3 SPEC keep their meaning exactly; new terms are marked **(new)**.
+Each term is used once per concept, here and in the code.
+
+| Term | Meaning |
+|---|---|
+| **platform domain** | A hostname ending in `.pantheonsite.io`. **Nothing else.** |
+| **FQDN** | The custom hostname a Pantheon site is served on; the key of every entry in every file. |
+| **inventory** | `<basename>.json` — the record of Cloudflare state. **This script never reads it.** |
+| **plan** | `<basename>-plan.json`. Forward rewrite: platform CNAME → A/AAAA. |
+| **revert** | `<basename>-revert.json`. Reverse rewrite: A/AAAA → platform CNAME. |
+| **excluded** | `<basename>-excluded.json`. Carries no `body`; this script refuses it by name. |
+| **input file** **(new)** | The one plan-or-revert file this run was given. |
+| **direction** | `generated.direction` in the input file: `plan` or `revert`. |
+| **entry** | One FQDN's object inside the input file. |
+| **applier** | This script. |
+| **match block** | `delete_match` — the record identity resolved to record ids at apply time. |
+| **D** **(new)** | The set of records an entry's `delete_match` describes. |
+| **P** **(new)** | The set of records an entry's `body.posts` would create. |
+| **R** **(new)** | The set of records Cloudflare currently holds at that FQDN **whose type is CNAME, A or AAAA** (§7.1). |
+| **verdict** **(new)** | The classification of one entry against R: `ready`, `already-applied`, or one of four invalid reason codes (§7.3). |
+| **outcome** **(new)** | What actually happened to one entry in this run (§12): one of `applied`, `already-applied`, `planned`, `failed`, `unknown`, `not-attempted`. |
+| **run record** **(new)** | `<input-stem>-run-<timestamp>.json`, written on every exit path (§12). |
+| **dry run** **(new)** | The default: validate, report, change nothing. |
+| **for-real run** **(new)** | `--for-real` was given: validate, report, and perform the calls. |
+
+**Verdict and outcome are different words on purpose.** A verdict is what pass 1 decided about
+Cloudflare's state; an outcome is what this run did. `already-applied` is deliberately both — the
+verdict determines that outcome with no further action.
+
+---
+
+## 1. What this is and why
+
+`find-platform-domains-cloudflare` writes a plan file and a revert file, and **never calls the
+Cloudflare API to write anything**. This script is the other half: it takes one of those files and
+performs the batch calls, or — by default — reports exactly what it would perform and stops.
+
+The change being applied is the Pantheon Fastly → Pantheon-Cloudflare CDN migration: for each
+FQDN, swap a proxied CNAME pointing at a `*.pantheonsite.io` platform domain for the A/AAAA
+records that platform domain resolves to. The record-level mechanics, the certificate analysis,
+and the reason a single batch call is the right instrument are
+`development/2026-07-30-platform-domain-util2/research.md`.
+
+**Two properties define this script, and everything below serves them:**
+
+1. **Nothing is written until everything has been checked.** A run either passes validation
+   entirely and then applies, or fails validation and changes nothing at all.
+2. **A run that dies partway is loud about exactly where.** Every entry's outcome is printed, and
+   written to a file, on every exit path — including the fatal and interrupted ones.
+
+---
+
+## 2. Global constraints
+
+1. **Standalone.** The script MUST import nothing from `psh/`, `check/`, `plugin/` or
+   `script_context`. Code needed from the main program or from the siblings is **copied into the
+   script**, not imported and not modularized (§17). `PROMPT.md`: *"Prefer copying code written
+   for the main script into the … script … in order to make deletion/cleanup easy."*
+2. **Temporary.** Delete after Pantheon's CDN migration. The checklist delta is §19.
+3. **No performance work.** `PROMPT.md`: *"Do not put any significant amount of work into making
+   this script fast or efficient."*
+4. **Test-first**, at the seams named in §13, per `prompts/implementation-standards.md` and
+   `mattpocock-skills:tdd`.
+5. **It reads exactly one file.** Not the inventory, not both directions, not a config-driven set.
+
+---
+
+## 3. Requirements
+
+### R1 — Scope (exhaustive)
+
+R1.1 The script MUST act only on entries in the input file, and only on records whose `type` is
+`CNAME`, `A` or `AAAA`. Records of any other type at the same FQDN MUST be ignored entirely —
+never read as state, never deleted, never counted (§7.1).
+
+R1.2 The script MUST NEVER create, modify or delete a record the input file did not name.
+
+R1.3 The script MUST NEVER write to any Cloudflare API other than
+`POST /zones/{zone_id}/dns_records/batch`, and MUST NEVER read any Cloudflare API other than the
+DNS record list. *Intent:* the blast radius is stated as a requirement so that widening it is a
+visible spec change, not an implementation detail.
+
+### R2 — Command-line surface
+
+```
+usage: apply-platform-domains-cloudflare [-h] [-c CONFIG] [--only FQDN] [--for-real] [-v] FILE
+```
+
+R2.1 `FILE` is the one positional argument: a plan or revert file.
+
+R2.2 `--only FQDN` is **repeatable** (`action="append"`), NOT `nargs="+"`.
+
+*Intent:* the sibling documents in its own `--help` that `ZONE` names must be given *after* the
+options because argparse cannot interleave positionals with a variadic option. With one positional
+`FILE` and a variadic `--only`, `--only a b file.json` would silently swallow the filename into the
+option. A repeatable single-value option has no such ambiguity, at the cost of typing `--only`
+twice. **Explicit over clever.**
+
+R2.3 `allow_abbrev=False` MUST be set, so `--for` is an error rather than an abbreviation of
+`--for-real`. *Intent:* the same foot-gun the main program's parser documents; here the
+abbreviation would turn a dry run into a production rewrite.
+
+R2.4 `-c/--config` defaults to `pantheon-sitehealth-emails.toml` and is read **only** for
+`[Cloudflare]` credentials, exactly as the sibling reads it.
+
+R2.5 `-v/--verbose` adds the API method, path and exact request body per entry (§11).
+
+R2.6 **Without `--for-real`, the run MUST NOT perform any batch call.** This is the primary
+blast-radius control, and §14 group 5 asserts it against the fake client rather than inferring it.
+
+### R3 — Two passes, in this order, with no interleaving
+
+R3.1 **Pass 1 (validate)** MUST complete for every selected entry before pass 3 begins. It
+performs only DNS record **list** calls.
+
+R3.2 If **any** selected entry's verdict is invalid, the run MUST report every invalid entry and
+exit 2 having performed no write. `PROMPT.md`: *"if there are problems with any entry, the script
+should exit with a fatal error without doing anything."*
+
+R3.3 **Pass 2 (report)** MUST run identically in both modes, from the same data pass 1 produced.
+*Intent:* the dry run is a rehearsal of the real run, not a parallel implementation of it. Any
+divergence between what a dry run prints and what a for-real run does is a defect of the first
+order for a destructive tool.
+
+R3.4 **Pass 3 (apply)** runs only with `--for-real`, processes entries **in the input file's key
+order** (sorted, since the file is written with sorted keys), and stops at the first failure.
+`PROMPT.md`: *"If any API call fails, the script should exit immediately with a fatal error; it
+should not attempt to revert any changes it has already made, and it should not attempt to make
+the remaining changes specified in the file."*
+
+R3.5 Pass 3 MUST NOT re-decide anything pass 1 decided. It sends the merged body built from pass
+1's resolved record ids, and verifies. An entry reaching pass 3 without a `ready` verdict is an
+`InvariantError` (§10.1).
+
+### R4 — Deviation from util3 SPEC §5.4, stated explicitly
+
+util3 SPEC §5.4 step 3 says a `delete_match` with **zero** matches means the entry *"is already
+applied, or Cloudflare drifted. **Skip the entry and report it.** Do not partially apply."* and
+that **more than one** match means *"refuse the entry and report it"* — i.e. per-entry tolerance
+with the rest of the file still applied.
+
+This spec **supersedes** that, on `PROMPT.md`'s explicit instruction, in one direction and one
+only:
+
+R4.1 A zero-match entry is skipped **only** when it is affirmatively `already-applied` (§7.3
+row 3) — R == P exactly. Every other zero-match state is invalid and aborts the whole run.
+
+R4.2 Every other invalid verdict, including the multi-match case §5.4 would have skipped, aborts
+the whole run before anything is written.
+
+*Intent:* §5.4's per-entry tolerance means a file that is half-stale gets half-applied, and the
+operator discovers which half afterwards. The prompt's all-or-nothing rule is stronger. The
+`already-applied` carve-out is what keeps it usable: without it, a run that died at entry 12 of
+217 could never be re-run at all, because entries 1–11 would now fail validation — the operator
+would have to hand-edit a 217-entry JSON file, and a hand-edited file is an unreviewed input to a
+destructive change. With it, re-running the same file finishes the job and plan→plan is a verified
+no-op.
+
+R4.3 `already-applied` MUST be established affirmatively (R == P), never inferred from the absence
+of D. *Intent:* PD#1. "The records I meant to delete are missing" and "the records I meant to
+create are present" are different claims, and only the second one licenses skipping.
+
+### R5 — What is applied
+
+R5.1 The request body MUST be `{"deletes": [{"id": …}, …], "posts": <entry body posts verbatim>}`
+— the entry's `body.posts` passed through **unmodified**, with a `deletes` array built from the
+record ids pass 1 resolved.
+
+R5.2 `delete_match` lives outside `body` in the input file (util3 R5.3) and MUST stay there; the
+merged body is constructed in memory and never written back.
+
+R5.3 The call MUST be made through the SDK's typed entry point,
+`client.dns.records.batch(zone_id=…, deletes=…, posts=…)`, after asserting the entry's `method`
+and `path` (§6 checks 5). *Intent:* the typed method is the documented, supported surface and
+parses the response. It ignores the file's `path`, which would make that field decorative and a
+hand-edited path silently ineffective — the assertion turns "ignored" into "checked".
+
+**Measured, cloudflare 5.4.0:** the SDK's `maybe_transform` against
+`record_batch_params.RecordBatchParams` returned a test body **byte-identical**, including a key
+its schema does not define. The typed path therefore does not rewrite, drop or rename anything in
+`posts`. This was verified rather than assumed, because the whole value of the plan file is that
+its `body` is *"the exact JSON body to be used for the API call"* (util3 `PROMPT.md` 1(c)).
+
+R5.4 Cloudflare executes batch operations in the documented order **Deletes → Patches → Puts →
+Posts** inside one database transaction. The applier relies on this ordering and MUST NOT split a
+batch into separate calls. *Intent:* it is what keeps an FQDN from ever being record-less, and
+what lets a CNAME and its replacement A records — which cannot coexist — be swapped in one step.
+
+### R6 — Post-apply verification
+
+R6.1 After each successful batch call, the applier MUST re-list the FQDN and require R == P
+exactly (§7.1's governed-type rule applies).
+
+R6.2 On mismatch, the applier MUST wait `VERIFY_RETRY_SLEEP` (2.0 s, through the `sleep` seam)
+and re-list **once** before failing.
+
+*Intent:* PD#14 — *"a green check is a claim, not evidence."* A 200 from the batch endpoint is
+Cloudflare's claim; the record list is the evidence. The single retry exists because Cloudflare's
+own batch documentation warns that *"Cloudflare's distributed KV store must treat each record
+change as a single key-value pair. This means that the propagation of changes is not atomic"* — a
+read served before the change lands would otherwise be a false mismatch on a healthy run.
+
+R6.3 A mismatch surviving the retry MUST raise `ApplyError` and stop the run. The entry's outcome
+is `failed`, and the run exits 3 (Cloudflare was changed).
+
+### R7 — Entry selection
+
+R7.1 With no `--only`, every entry in the file is selected.
+
+R7.2 With `--only`, only the named FQDNs are selected. Names are compared after `normalize()`
+(lowercase, trailing dot stripped) against the file's keys, which util3 §5.1 states are already
+normalized.
+
+R7.2a **Unselected entries are never validated and never counted as anything but "in the file".**
+They appear only in the summary's `entries in file` number. *Intent:* validating an entry the run
+will not touch would let an unrelated FQDN's drift abort a deliberately narrow, safe run — the
+opposite of what `--only` is for.
+
+R7.3 An `--only` value matching no key in the file is **fatal (exit 2), and every miss is named**.
+*Intent:* the sibling applies exactly this rule to unmatched `ZONE` names, for exactly this reason
+— a typo that silently narrows a destructive run is the under-reporting failure this family of
+scripts refuses to have.
+
+R7.4 A subset run MUST print an unconditional `ATTENTION:` line stating how many of the file's
+entries it covers.
+
+### R8 — Reporting (`PROMPT.md`, verbatim requirement)
+
+R8.1 On every exit path — normal, fatal, or interrupted — the run MUST print the summary block
+(§11.3): the number of entries in the file, the number selected, and the count of each outcome.
+
+R8.2 The summary counts **entries (FQDNs)**, and says so in its own wording.
+
+*Intent:* `PROMPT.md` asks for *"the total number of sites specified by the plan."* The plan file
+contains no site information — util3's glossary defines an entry as one FQDN's object, several
+FQDNs can belong to one Pantheon site, and nothing in the file can tell which. Printing an FQDN
+count under the word "sites" would be a wrong number in an operator's incident notes. This is a
+**deliberate deviation from the prompt's wording**, not from its intent.
+
+### R9 — The run record
+
+R9.1 Every run MUST write a run record (§12) beside the input file, on every exit path.
+
+R9.2 A dry run writes one too, with `"for_real": false`. *Intent:* it is the validation report,
+and it is the thing an operator can attach to a change ticket before the change.
+
+R9.3 A failure to write the run record MUST NOT cause the process to claim nothing was changed
+(§9.2).
+
+---
+
+## 4. Data flow
+
+```
+argv ─► parse ─► read FILE ─► §6 file contract (8 checks)  ──fail──► ERROR, exit 2
+                                  │
+                                  ├─ --only ─► unmatched name ──────► ERROR naming every miss, exit 2
+                                  ▼
+                    ┌──────────────────────────────────────────┐
+                    │ PASS 1 — VALIDATE  (read-only)           │
+                    │  for each selected entry:                │
+                    │    R = records_at_name(zone_id, fqdn)    │  dns.records.list(
+                    │        keep type in {CNAME, A, AAAA}     │    name={"exact": fqdn})
+                    │    verdict_for(entry, R) ──►             │
+                    │      ready | already-applied | invalid   │
+                    └──────────────────┬───────────────────────┘
+                                       │
+                         any invalid? ─┴─yes─► ATTENTION per entry, exit 2   [NOTHING CHANGED]
+                                       │ no
+                                       ▼
+                    ┌──────────────────────────────────────────┐
+                    │ PASS 2 — REPORT  (identical both modes)  │
+                    │  per entry: one change line              │
+                    │  -v: METHOD PATH + exact merged body     │
+                    └──────────────────┬───────────────────────┘
+                                       │
+                         --for-real? ──┴─no──► summary + run record ─► exit 0 / 1
+                                       │ yes
+                                       ▼
+                    ┌──────────────────────────────────────────┐
+                    │ PASS 3 — APPLY, in key order, one at a   │
+                    │ time:                                    │
+                    │   batch(zone_id, deletes=ids, posts=…)   │
+                    │   re-list; R == P?  ─no─► sleep 2s, once │
+                    │                          ─still no─► fail│
+                    │   record outcome                         │
+                    │   failure ─► STOP; rest = not-attempted  │
+                    └──────────────────┬───────────────────────┘
+                                       ▼
+                    ALWAYS: summary + run record  ─► exit 0 / 1 / 3 / 130
+```
+
+---
+
+## 5. Copied, not imported
+
+See §17 for the full inventory. The shape to note here: this script is a **third independent
+copy** of `build_client()`'s environment pin. CLAUDE.md currently states there are **two** places
+to check on a Cloudflare SDK upgrade; after this increment there are **three**, each with its own
+real-built-request test (§14 group 13). That sentence in CLAUDE.md MUST be updated (§18).
+
+---
+
+## 6. File contract — the eight fatal checks
+
+Evaluated in this order, before any Cloudflare call. Each is fatal: `PlanFileError`, exit 2.
+This list is **exhaustive**.
+
+| # | Condition | Message names |
+|---|---|---|
+| 1 | File unreadable, not valid JSON, or not a JSON object | the path and the underlying error class |
+| 2 | `generated.direction` absent, or not `"plan"` / `"revert"` | the value found; an `"excluded"` direction is refused **by name** with a sentence saying an excluded file carries no `body` |
+| 3 | `entries` absent, not an object, or empty | the path |
+| 4 | An entry missing any of `zone_id`, `method`, `path`, `body`, `delete_match` | the FQDN key and the missing field |
+| 5 | `method != "POST"`, or `path != "/zones/{zone_id}/dns_records/batch"` built from that entry's own `zone_id` | the FQDN key, the expected and the found value |
+| 6 | `body` contains a `deletes` key | the FQDN key, and why (util3 R5.3: ids are resolved at apply time, so a baked-in `deletes` cannot be correct) |
+| 7 | `body.posts` absent or empty; a post missing `type`/`name`/`content`; a post `type` outside `{CNAME, A, AAAA}` | the FQDN key and the offending post index |
+| 8 | `delete_match` absent, empty, or an item missing `type`/`name`/`content`, or an item `type` outside `{CNAME, A, AAAA}` | the FQDN key and the offending item index |
+
+Check 5 is what makes R5.3's typed call honest. Checks 7 and 8 are what make R1.1's governed-type
+rule total: after them, D and P contain only governed types by construction.
+
+*Intent for "fatal, not skipped":* every one of these means the file is not what this script knows
+how to apply. A file that is malformed in one entry is a file whose provenance is in question, and
+partially applying it is the outcome §3's property 1 exists to prevent.
+
+---
+
+## 7. The verdict — the single canonical gate table
+
+### 7.1 What is compared
+
+**R** is every record Cloudflare currently returns at the entry's FQDN whose `type` is `CNAME`,
+`A` or `AAAA`. A `TXT`, `MX`, `CAA` or any other record at the same name is **not** in R and
+blocks nothing (R1.1).
+
+Records are compared by **`record_key` = `(TYPE, normalize(name), canonical_content)`**, where:
+
+| Type | `canonical_content` |
+|---|---|
+| `A`, `AAAA` | `str(ipaddress.ip_address(content))` |
+| `CNAME` | `normalize(content)` |
+
+*Intent:* `2620:12a:8000::4` and `2620:12A:8000:0:0:0:0:4` are one address written two ways, and a
+string comparison would call them two records — inventing a `partially-applied` verdict on a
+healthy zone. Names and CNAME targets are compared case-insensitively with a trailing dot ignored,
+matching `normalize()` in both siblings. The API's own `name` and `content` filters are documented
+**case-insensitive**, so what the filter returns is re-checked in code regardless.
+
+### 7.2 The comparison
+
+Pass 1 computes `R`, `D` (from `delete_match`) and `P` (from `body.posts`) as **sets of
+`record_key`**, then asks which set R equals.
+
+### 7.3 Gate table (exhaustive; evaluated in this order; every entry gets exactly one verdict)
+
+| # | Verdict | Condition | Valid? | Effect |
+|---|---|---|---|---|
+| 1 | `record-ambiguous` | some `record_key` occurs more than once in R | **invalid** | abort |
+| 2 | **`ready`** | R == D | valid | applied in pass 3 |
+| 3 | **`already-applied`** | R == P | valid | skipped, reported, counted; contributes exit 1 |
+| 4 | `partially-applied` | R contains at least one member of D **and** at least one member of P | **invalid** | abort |
+| 5 | `unexpected-records` | R ⊃ D, or R ⊃ P (a proper superset — every expected record plus extra governed records) | **invalid** | abort |
+| 6 | `records-missing` | anything else (R is a strict subset of D or of P, R is empty, or R holds unrelated governed records) | **invalid** | abort |
+
+Note rows 2 and 3 are mutually exclusive in practice: D and P differ in type by construction (a
+plan's D is a CNAME and its P is A/AAAA; a revert's is the reverse), and CNAME cannot coexist with
+A/AAAA at one name. Row 1 is evaluated first so a duplicated key can never make a set comparison
+accidentally succeed.
+
+**Row 5 is what closes util3 §5.4's "known and accepted" hazard.** That section accepted that if
+an unrelated fourth A record appears at a name after a plan is applied, the revert's `POST`
+collides and Cloudflare rolls the batch back with an error. Here that state is `unexpected-records`
+at validation time, named on stderr, hours earlier, with nothing written.
+
+**Detail strings.** Every invalid verdict carries a human-readable `detail` naming what was found
+versus what was expected, in `record_key` terms. It is the only thing the operator has to work
+from, so it is not optional and it is not `-v`-gated (§11).
+
+### 7.4 Shadow paths for the validation flow (PD#3), all four traced
+
+| Shadow | Condition | Outcome |
+|---|---|---|
+| happy | R == D | `ready` |
+| **nil** | `delete_match` or `posts` absent/empty | **unreachable** — §6 checks 7 and 8 made it fatal before pass 1. Asserted in code (`InvariantError`), not assumed. |
+| **empty** | R is empty — no governed record at the name at all | `records-missing`; abort. *Not* silently treated as already-applied. |
+| **upstream error** | the list call raises `cloudflare.CloudflareError` | `CloudflareReadError`, exit 2, nothing changed |
+
+---
+
+## 8. Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Completed; every selected entry applied, or a dry run that validated clean |
+| 1 | Completed; ≥1 entry was `already-applied`; nothing failed |
+| 2 | Could not complete, and **nothing in Cloudflare was changed** |
+| 3 | **Failed mid-apply — Cloudflare was left partially changed** |
+| 130 | Interrupted |
+
+### 8.1 The rule that makes 2 and 3 trustworthy
+
+Define `changed` = the number of entries whose outcome is `applied` **plus** the number whose
+outcome is `unknown`.
+
+- `changed == 0` and the run failed → **2**.
+- `changed > 0` and the run failed → **3**.
+
+*Intent:* PD#1. An entry whose batch call raised a timeout or a connection error did not tell us
+whether Cloudflare committed it. Counting that as "unchanged" would let the process print
+"nothing was changed" about a production DNS rewrite it cannot account for. Unknown counts as
+changed; the run record (§12) says which entry and why.
+
+`exit_code_for(outcome)` is a **pure function of the outcome tally** and is unit-tested against a
+full truth table (§14 group 11). *Intent:* it is the most consequential logic in the script and
+would otherwise be reachable only through a full end-to-end run.
+
+### 8.2 Deviation from the sibling family, stated
+
+Both siblings use `0 / 1 / 2 / 130`. This script adds **3**. *Intent:* after a destructive run the
+first question is "did it change anything?", and folding a half-finished rewrite into 2 makes it
+indistinguishable from a clean refusal to an operator's `case $?`. CLAUDE.md's description of the
+pair's shared taxonomy MUST record that this third script differs (§18).
+
+### 8.3 The last line of defence
+
+`main()` MUST end its handler chain with the sibling's guard, verbatim in reasoning:
+
+```python
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: ...
+        report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
+        return 2
+```
+
+CPython exits **1** on any uncaught traceback, and 1 here means "completed with already-applied
+skips". Without this guard a crashed run and a healthy run are indistinguishable. The catch-all
+NEVER swallows — the class is always named on stderr (PD#2).
+
+**The one documented exception, exhaustive:** argparse writes its usage, error and `--help` text
+before any stream guard exists and outside every handler, so `--help >/dev/full` and
+`--bogus 2>/dev/full` still exit **120**. Identical to both siblings; declined for the same reason.
+
+---
+
+## 9. Error handling
+
+### 9.1 Named exceptions (exhaustive)
+
+| Exception | Raised by | Caught by | Operator sees | Exit |
+|---|---|---|---|---|
+| `StartupError` | argv, config file, credential resolution, stream guards — copied from the sibling | `main()` | `ERROR: …` via `report_line` | 2 |
+| `PlanFileError` (subclass of `StartupError`) | the eight §6 checks | `main()` | `ERROR: …` naming the file, the FQDN key and the field | 2 |
+| `InvariantError` (subclass of `StartupError`) | an entry reaching pass 3 without a `ready` verdict; a delete id pass 1 never resolved; a `delete_match`/`posts` shape §6 should have rejected | `main()` | `ERROR: …`, named as a defect in this script's own reasoning (PD#2) | 2 |
+| `CloudflareReadError` (subclass of `StartupError`) | a record-list call in **pass 1** | `main()` | `ERROR: …` with the Cloudflare error codes | 2 |
+| `ApplyError` | a batch call that failed; a post-apply verification that did not match after one retry; **or a record-list call that failed during post-apply verification** | `main()` | `ERROR: …` naming the FQDN and the Cloudflare error codes | 2 or 3 per §8.1 |
+| `OutputWriteError` (subclass of `StartupError`) | the run record write | `main()` | `ERROR: cannot write <path>: <class>: <message>` | §9.2 |
+| `KeyboardInterrupt` | anywhere | `main()` | the summary, then the interrupt notice | 130 |
+| `OSError` | report/record writes | `main()` | `ERROR: …` | 2 |
+| anything else | inside `main()`'s try | `main()`'s `except BaseException` (§8.3) | `ERROR: unexpected <class>: <message>` | 2 |
+
+**Validation failure is deliberately NOT an exception.** It is a tally of verdicts that `main()`
+returns 2 on. *Intent:* an invalid file is an expected outcome of a read-only pass, not an error
+condition, and modelling it as a raise would make §3's "nothing was changed" guarantee depend on
+an exception path rather than on control flow.
+
+**One deliberate reversal of a sibling rule.** The sibling's `api_error_text()` states that API
+error text **never** includes a response body, and CLAUDE.md repeats it. Here the operator needs
+Cloudflare's own diagnosis of a failed write ("record already exists", "content for A record is
+invalid"). `ApplyError` and `CloudflareReadError` therefore include the SDK's **structured
+`errors[].code` and `errors[].message` fields only** — never a raw body dump, never response
+headers. *Intent:* the sibling suppressed the body because nothing in it helped and echoing an
+arbitrary response is a needless exposure; for a write path the two named fields are the entire
+diagnosis. The narrowing to two fields is what keeps that reasoning intact.
+
+### 9.2 Run-record write failure — precedence rule
+
+If the run record cannot be written, the error is named on stderr, and then:
+
+| Situation | Exit |
+|---|---|
+| The run changed something (§8.1 `changed > 0`) | the earned code (0, 1 or 3) **stands** |
+| The run changed nothing (a dry run, or an `already-applied`-only run) | **2** |
+
+*Intent:* PD#1 in both directions. Exiting 2 after a for-real run that rewrote 200 FQDNs would
+assert "nothing was changed" about production DNS, which is the worse lie; but a dry run whose only
+deliverable was the record has genuinely failed to deliver it.
+
+### 9.3 Interruption
+
+A `KeyboardInterrupt` during pass 3 leaves the in-flight entry's outcome **`unknown`** — never
+`failed`, never `not-attempted` — and every later entry `not-attempted`. The summary and the run
+record are written, then exit 130.
+
+During that final flush, SIGINT MUST be set to `SIG_IGN`, the same guard `abort_run()` uses in the
+main program, so a second Ctrl-C cannot truncate the only record of what a destructive run did.
+
+**Test caveat, load-bearing:** an in-process test of that path MUST
+`monkeypatch.setattr(<module>.signal, "signal", …)`, or the rest of the pytest session silently
+stops honoring Ctrl-C. CLAUDE.md records this as a live trap.
+
+### 9.4 Interactions mapped (PD#4)
+
+| Interaction | Behavior |
+|---|---|
+| Ctrl-C during pass 1 | nothing changed; summary + record; exit 130 |
+| Ctrl-C between two entries in pass 3 | in-flight = none; applied so far recorded; rest `not-attempted`; exit 130 |
+| Ctrl-C during a batch call | that entry `unknown`; exit 130; the record names it |
+| Cloudflare rate limit / 5xx in pass 1 | `CloudflareReadError`, exit 2, nothing changed |
+| Cloudflare rate limit / 5xx in pass 3 | `ApplyError`; earlier entries stay applied; exit 3 |
+| The file was applied already, in full | every entry `already-applied`; exit 1; no call made |
+| A record vanished between pass 1 and pass 3 | its id is stale; Cloudflare rejects the batch; `ApplyError`. **Assumption to falsify on the live canary (§15).** If a stale id is instead ignored silently, R6's post-apply verification is what catches it, and this row is rewritten. |
+| Two runs of the same file concurrently | out of scope and unguarded; the second run's pass 1 sees the first's writes and aborts with `partially-applied` or `already-applied`. Stated so it is not mistaken for a designed property. |
+
+---
+
+## 10. What the script never does
+
+Stated as flow, because absence is hard to review. **Exhaustive.**
+
+1. It never performs a write call in a dry run (R2.6).
+2. It never performs a write call before every selected entry has a valid verdict (R3.2).
+3. It never continues past a failed write call (R3.4).
+4. It never attempts to revert what it already applied (`PROMPT.md`, quoted in R3.4).
+5. It never modifies the input file, or writes any file other than the run record.
+6. It never reads a credential from the environment; credentials come from `[Cloudflare]` in the
+   TOML through the copied `<{env …}` / `<{secret env …}` resolver, and the client is pinned
+   against the ambient environment (§16).
+
+---
+
+## 11. Observability (PD#5)
+
+### 11.1 Streams
+
+`stdout` carries the report: the per-entry change lines, the `-v` bodies, and the summary block.
+`stderr` carries `ERROR:` and `ATTENTION:` lines only. *Intent:* `> apply.log` then captures the
+account of the change while problems still reach a watching operator.
+
+Both streams get the sibling's guards, ported: `require_usable_streams()` refuses a closed stderr,
+and the writers detach **only** a stream a real write has proven doomed — never unconditionally,
+which discards a buffered line and, under pytest's fd-level capture, repoints the session's own
+stream at `/dev/null`.
+
+### 11.2 Message table (exhaustive)
+
+| Message | Verbosity | Stream |
+|---|---|---|
+| `FOR REAL -- changes WILL be made to Cloudflare` banner, before the first call | always | stderr |
+| per-entry change line (§11.4) | always, both modes | stdout |
+| `POST /zones/<id>/dns_records/batch` + the exact merged JSON body | `-v` | stdout |
+| per-entry result in pass 3: `applied` / `failed` + reason | always | stdout |
+| every invalid verdict: `ATTENTION: <fqdn> <code>: <detail>` | **always, never `-v`-gated** | stderr |
+| `--only` subset coverage: `ATTENTION: applying N of M entries in this file` | always | stderr |
+| the summary block (§11.3) | always, every exit path | stdout |
+| the run record's path | always | stdout |
+
+### 11.3 The summary block
+
+```
+apply-platform-domains-cloudflare: direction=plan
+  source: platform-domains-cloudflare-plan.json (generated 2026-08-01T00:22:23Z)
+  mode:   DRY RUN -- no changes were made
+  entries in file: 217   selected: 217   (entries are FQDNs, not Pantheon sites)
+  applied 0   already applied 0   planned 217   failed 0   unknown 0   not attempted 0
+  record: platform-domains-cloudflare-plan-run-20260803T142211Z.json
+```
+
+The `source` line prints the input file's own `generated.at`. *Intent:* the plan pins addresses
+resolved at sweep time, and this spec deliberately does not re-resolve them (§20). The age of the
+file is therefore the operator's only staleness signal, so it is printed on every run rather than
+left to the file's mtime, which survives neither a copy nor `git add`.
+
+### 11.4 The per-entry change line
+
+```
+a.umich.edu  zone abc123  CNAME live-umich-x.pantheonsite.io -> A 23.185.0.4 + AAAA 2620:12a:8000::4, 2620:12a:8001::4  (proxied, ttl 1)
+```
+
+Derived **entirely from the entry** — `delete_match` gives the left side, `body.posts` the right,
+`zone_id` the zone. It shows the zone **id**, not the zone name: util3 §5.3's plan/revert entry
+carries `zone_id` and nothing else about the zone (`zone_name` exists only in the *inventory*,
+which this script never reads, per Global Constraint 5). Recorded explicitly so an implementer does
+not add a zone-name lookup — that would be a second Cloudflare read per entry for cosmetics.
+
+---
+
+## 12. The run record
+
+### 12.1 Name and location
+
+`<input-stem>-run-<YYYYMMDDThhmmssZ>.json`, in the input file's directory. For
+`platform-domains-cloudflare-plan.json` that is
+`platform-domains-cloudflare-plan-run-20260803T142211Z.json`.
+
+Named `-run-`, not `-applied-`, because a dry run writes one too. The timestamp is from the
+`now_utc()` seam and makes a run incapable of clobbering a previous one.
+
+The repository's existing `.gitignore` line `/platform-domains-cloudflare*.json` **already covers**
+records written next to the conventional baseline, so no new ignore entry is required (§19).
+
+### 12.2 Format
+
+```jsonc
+{
+  "run": {
+    "at": "2026-08-03T14:22:11Z",
+    "tool": "apply-platform-domains-cloudflare",
+    "direction": "plan",
+    "source": "platform-domains-cloudflare-plan.json",
+    "source_generated_at": "2026-08-01T00:22:23Z",
+    "for_real": true,
+    "argv": ["--for-real", "platform-domains-cloudflare-plan.json"],
+    "exit_code": 3,
+    "entries_in_file": 217,
+    "selected": 217,
+    "counts": {"applied": 12, "already-applied": 0, "planned": 0,
+               "failed": 1, "unknown": 0, "not-attempted": 204}
+  },
+  "entries": {
+    "a.umich.edu": {"outcome": "applied", "at": "2026-08-03T14:22:13Z",
+                    "deleted_ids": ["9f1c…"], "created_ids": ["a1b2…", "c3d4…", "e5f6…"]},
+    "b.umich.edu": {"outcome": "failed", "at": "2026-08-03T14:22:14Z",
+                    "error": "batch rejected: 81058 An identical record already exists."},
+    "c.umich.edu": {"outcome": "not-attempted"}
+  }
+}
+```
+
+`outcome` is exhaustively one of `applied`, `already-applied`, `planned`, `failed`, `unknown`,
+`not-attempted`. `created_ids` come from the post-apply verification listing (the authoritative
+read), not from the batch response. Serialization goes through one `dump_json()` copied from the
+sibling — sorted keys, 4-space indent, trailing newline — and the file is written with
+`write_json_atomic()` (temp file + `os.replace`).
+
+### 12.3 Determinism note (PD#14)
+
+`run.at`, each entry's `at`, and the filename are non-deterministic. Tests MUST monkeypatch
+`now_utc()` rather than normalizing after the fact, so a golden compares real bytes.
+
+---
+
+## 13. Seams under test — named and agreed, before implementation
+
+Named **here** because implementation is test-first and an implementer subagent runs with fresh
+context and cannot ask. The test file loads the script fresh per test via `SourceFileLoader`, the
+idiom `tests/unit/test_find_platform_domains_cloudflare.py` already uses, which is what makes
+monkeypatching module attributes safe and leak-free.
+
+| Seam | Kind | Covers |
+|---|---|---|
+| `FakeCloudflareClient` | test fixture, adapted from the sibling's | **all** Cloudflare I/O: `dns.records.list` (honoring the `name`/`type` filters) and `dns.records.batch`, recording every call with its arguments |
+| `now_utc()` | module attribute | every timestamp and the run-record filename |
+| `sleep` | module attribute | R6.2's verification retry — no test may take 2 real seconds |
+| an autouse **teardown-asserted** guard | conftest-level in the test module | fails the test if a real `Cloudflare` client was constructed or any real network call attempted |
+
+*Intent for the teardown-asserted guard:* the sibling shipped two tests that were green while
+silently reaching real DNS, and then a replacement guard that could be satisfied by accident once
+`main()` grew a catch-all. Asserting at teardown, not inside the run, is the shape that survived.
+
+**Pure helpers to extract** (no I/O, unit-testable directly — the discipline that produced
+`overage_blocks`, `plan_costs`, `sites_from_resume_point` in the main program and `classify`,
+`record_body`, `plan_entry` in the sibling):
+
+| Helper | Returns |
+|---|---|
+| `read_apply_file(path)` | the parsed document; raises `PlanFileError` |
+| `check_file_contract(doc, path)` | `None`; raises `PlanFileError` on any §6 check |
+| `select_entries(entries, only)` | the selected `{fqdn: entry}`; raises `StartupError` naming every miss (R7.3) |
+| `normalize(name)` | copied from the sibling |
+| `record_key(rtype, name, content)` | the §7.1 comparison key |
+| `governed_records(rows)` | the subset of a list response that forms R |
+| `verdict_for(entry, rows)` | `(verdict, detail)` per §7.3 |
+| `merge_body(entry, delete_ids)` | the postable batch body (R5.1) |
+| `describe_change(fqdn, entry)` | the §11.4 line |
+| `verify_records(entry, rows)` | `True` when R == P (R6.1) |
+| `outcome_document(...)` | the §12.2 document |
+| `outcome_path(input_path, at)` | the §12.1 path |
+| `summary_lines(tally, ...)` | the §11.3 block |
+| `exit_code_for(tally, failed)` | §8's code, from the tally alone |
+
+`apply_entry(client, fqdn, entry, delete_ids)` and `records_at_name(client, zone_id, fqdn)` are
+the only I/O functions; they are listed here so the extraction list is complete, and are covered
+through the fake client.
+
+---
+
+## 14. Test plan
+
+All offline, `unit` tier, in `tests/unit/test_apply_platform_domains_cloudflare.py`.
+
+| # | Group | Cases |
+|---|---|---|
+| 1 | file contract | one test per §6 check (8), including an `-excluded.json` refused by name and a `deletes`-in-body refusal |
+| 2 | `--only` | selection; an unmatched name is fatal and **every** miss is named; the subset ATTENTION line; `--only` matching after `normalize()` |
+| 3 | `verdict_for` | one test per §7.3 row (6); plus: an IPv6 address written two ways is one record; a trailing dot and a case difference do not split a key; an unrelated `TXT` at the name blocks nothing; row 1 evaluated before the set comparisons |
+| 4 | `merge_body` | `deletes` built from the resolved ids; `posts` passed through **byte-identical** to the file; nothing else added |
+| 5 | dry run | **zero** batch calls, asserted against the fake client's recorded calls; the report is printed; exit 0; a `planned` tally |
+| 6 | for-real happy path | `batch()` called once per entry with exactly the expected `zone_id`/`deletes`/`posts`; post-verify runs; exit 0 |
+| 7 | failure mid-apply | entry 3 fails → 1–2 `applied`, 3 `failed`, 4..N `not-attempted`, exit **3**; entry 1 fails → `changed == 0` → exit **2** |
+| 8 | unknown outcome | a connection error on entry 2 → outcome `unknown` → exit **3** (never 2) |
+| 9 | post-apply verification | mismatch → one `sleep` + one re-list (asserted), then `ApplyError`; a mismatch that resolves on the retry succeeds |
+| 10 | interruption | Ctrl-C in pass 1 → exit 130, nothing changed; Ctrl-C during a batch → that entry `unknown`, rest `not-attempted`, summary and record still written; `signal.signal` monkeypatched (§9.3) |
+| 11 | `exit_code_for` | the full truth table: clean, already-applied-only, dry run, failure with and without prior applies, unknown-only |
+| 12 | run record | written on every exit path (success, validation failure, apply failure, interrupt); dry-run variant with `for_real: false`; both branches of the §9.2 precedence rule |
+| 13 | credentials | the copied `build_client()` pin asserted against a **real built request**: an ambient `CLOUDFLARE_BASE_URL`, `CLOUDFLARE_EMAIL` and `CLOUDFLARE_CUSTOM_HEADERS` are all ignored; the configured credential alone is sent |
+| 14 | streams and exit taxonomy | a doomed stdout and a doomed stderr each produce a named exit 2, not 120; `--help` still documents `--for-real` and `--only` |
+
+**NEVER-block — tests are load-bearing (PD#14).** Every new test MUST be observed failing for the
+**right reason** before its implementation is written. NEVER weaken an assertion to make it pass,
+NEVER delete a test to make a suite green, and NEVER regenerate a golden without a reviewed diff.
+Group 5's "zero batch calls" and group 13's pin are the two assertions most likely to be green for
+the wrong reason; each MUST be shown red under a deliberate mutation (make the dry run call
+`batch()`; drop one of the three pins) and the red output pasted into the task report.
+
+`tests/unit/test_find_platform_domains_cloudflare.py` and
+`tests/unit/test_find_platform_domains_dns.py` MUST stay untouched and green. If either moves,
+something was modularized that Global Constraint 1 forbids.
+
+---
+
+## 15. Acceptance criteria
+
+Exact commands. To be **run and their real output pasted into this section** before the work is
+submitted; an unrun acceptance suite is PD#14 exactly.
+
+### Offline (no gate)
+
+```bash
+# 1. Full suite, offline tier.  Expected: the pre-change count + this file's tests, 0 failed;
+#    ruff and pyright clean.
+./run-tests --fast
+
+# 2. This utility's own file.
+./run-tests --fast tests/unit/test_apply_platform_domains_cloudflare.py
+
+# 3. Both siblings MUST be untouched.
+git diff --stat find-platform-domains-dns find-platform-domains-cloudflare \
+    tests/unit/test_find_platform_domains_dns.py \
+    tests/unit/test_find_platform_domains_cloudflare.py
+#    Expected: empty output.
+
+# 4. An excluded file is refused by name.
+./apply-platform-domains-cloudflare platform-domains-cloudflare-excluded.json ; echo "exit=$?"
+#    Expected: ERROR naming the direction, exit=2, no Cloudflare call made.
+
+# 5. --help documents FILE, --only, --for-real and the exit codes.
+./apply-platform-domains-cloudflare --help
+
+# 6. A dry run against the real baseline plan file makes NO write call (and needs credentials
+#    only for reads).  Expected: the full report, the summary, a run record, exit 0 or 1 or 2.
+./apply-platform-domains-cloudflare -v platform-domains-cloudflare-plan.json ; echo "exit=$?"
+```
+
+### Live canary — gated behind STOP 2 (§21)
+
+Follows `development/2026-07-30-platform-domain-util2/research.md`'s own verification procedure
+rather than inventing one. **One throwaway hostname**, chosen with the human, referred to below as
+`$FQDN`.
+
+```bash
+# 7. Refresh the baseline immediately before the rewrite (the sibling; ~2 minutes).
+./find-platform-domains-cloudflare -o /tmp/canary
+
+# 8. BEFORE: certificate pack and served leaf certificate.
+#    (zone id from the inventory entry for $FQDN)
+#    GET /zones/{zone_id}/ssl/certificate_packs?status=all   -- record id, status, hosts
+openssl s_client -connect "$FQDN:443" -servername "$FQDN" </dev/null 2>/dev/null \
+  | openssl x509 -noout -serial -dates -subject
+
+# 9. Apply the plan for that one hostname.
+./apply-platform-domains-cloudflare -v --only "$FQDN" --for-real /tmp/canary-plan.json
+echo "exit=$?"
+
+# 10. AFTER (immediately, then again at ~15 min): repeat 8 and diff.  Expect an identical pack
+#     id, status active, and an IDENTICAL certificate serial -- the same certificate, not a
+#     re-issued one.  Confirm the DNS answer changed and HTTPS still serves.
+dig +short A "$FQDN" ; dig +short AAAA "$FQDN" ; curl -sSI "https://$FQDN" | head -1
+
+# 11. Re-run the SAME plan file.  Expected: every selected entry already-applied, exit 1,
+#     zero batch calls.  This is the R4.2 property, live.
+./apply-platform-domains-cloudflare --only "$FQDN" --for-real /tmp/canary-plan.json ; echo "exit=$?"
+
+# 12. Revert the same hostname and repeat 8/10, proving the round trip.
+./apply-platform-domains-cloudflare -v --only "$FQDN" --for-real /tmp/canary-revert.json
+echo "exit=$?"
+
+# 13. The assumption in §9.4's stale-id row, falsified deliberately: apply the plan, then
+#     apply the SAME plan a second time with a hand-edited stale delete id, and observe
+#     whether Cloudflare rejects the batch loudly.  Record the real answer here.
+```
+
+Item 13 is the one place this design rests on an unverified claim. Cloudflare's documentation
+search returned nothing on batch error semantics for a non-existent delete id, so the claim is
+carried as an assumption and falsified here. If a stale id is silently ignored, §9.4's row is
+rewritten and R6's post-apply verification becomes the sole guard — which it already is in
+practice.
+
+### Results
+
+*(To be pasted here, verbatim, before submission.)*
+
+---
+
+## 16. Security (PD#6)
+
+- **No new credential path.** `[Cloudflare]` resolution and the `build_client()` environment pin
+  are copied unchanged from the sibling. The pin closes four routes by which ambient environment
+  values reach the wire — `auth_headers` credential precedence, `default_headers`,
+  `$CLOUDFLARE_CUSTOM_HEADERS`, and `$CLOUDFLARE_BASE_URL` redirecting a configured credential to
+  an arbitrary host. Group 13 asserts it against a **real built request**, not against the
+  attribute assignments that implement it.
+- **This is the first of the three copies that performs writes**, which raises the stakes of the
+  `$CLOUDFLARE_BASE_URL` route from "credential disclosure" to "credential disclosure plus a
+  rewrite aimed at an attacker-chosen host." The pin is therefore load-bearing here in a way it is
+  not in the read-only siblings, and §14 group 13 is not optional.
+- **No credential reaches a file.** The run record contains record ids, FQDNs, outcomes and
+  `argv`; `argv` carries a config **path** and FQDN names, never a secret, because credentials are
+  only ever read from the config file.
+- **Error text is narrowed, not widened.** §9.1's reversal admits exactly two structured fields
+  from a Cloudflare error response and nothing else.
+- **No new outbound channel.** Unlike the sibling, this script performs **no DNS resolution at
+  all** (§20). Its only network peer is the Cloudflare API.
+
+---
+
+## 17. Copied code inventory (Global Constraint 1)
+
+From `find-platform-domains-cloudflare`, copied verbatim or near-verbatim:
+
+| What | Why |
+|---|---|
+| `point_at_devnull`, `report_line`, `require_usable_streams` | the doomed-stream guards that keep the exit taxonomy from being hijacked by a failed shutdown flush |
+| `normalize` | the FQDN comparison rule, shared with the file format |
+| `StartupError`, `InvariantError`, `OutputWriteError` | the exception spine |
+| `MARKER_RE`, `resolve_env_marker`, `resolve_config_value` | the `<{env …}` / `<{secret env …}` resolver |
+| `build_client`, `cloudflare_client` | credentials and the environment pin |
+| `api_error_text` | narrowed per §9.1 |
+| `dump_json`, `write_json_atomic` | the run-record serializer and atomic write |
+| `main()`'s handler-chain shape | the exit taxonomy (§8.3) |
+
+**Not copied, deliberately:** `read_all`, `read_page_once`, `expected_record_count`, `ListTally`
+and the completeness cross-check (~120 lines). They exist to survive paginating a whole zone;
+this script lists one FQDN at a time and never paginates. *Intent:* recorded so a reviewer does
+not read their absence as an oversight, and so nobody reintroduces whole-zone listing (§18's
+rejected approach).
+
+**Not copied:** `resolve`, `resolve_retrying`, `resolve_target`, `sorted_addresses`, `classify`
+and the range constants. This script does no DNS work (§20).
+
+---
+
+## 18. Documentation to update, in the same change
+
+| File | Change |
+|---|---|
+| `CLAUDE.md` | A new `### apply-platform-domains-cloudflare (temporary utility)` subsection: the two passes, the verdict table, the exit taxonomy **including that this script adds 3 and why**, the run record, `--for-real` as the blast-radius gate, and the deletion pointer. Also: the "**two** places to check on a Cloudflare SDK upgrade" sentence becomes **three** (§5); and the `find-platform-domains-cloudflare` subsection's "a separate, not-yet-written *applier* script" sentence now names this one. |
+| the script's module docstring | the same, in brief, plus the copied-code inventory rationale |
+| `development/2026-07-31-platform-domain-util3/SPEC.md` | a pointer at §5.4 to this spec, recording that §5.4's per-entry tolerance was superseded by R4 |
+| `development/2026-07-30-platform-domain-util2/SPEC.md` §11 | the deletion checklist gains this script's share (§19) |
+| this folder | `PROMPT.md`, `SPEC.md`, `PLAN.md`, and — at session end via `/archive-session` — the scrubbed transcript and statistics |
+
+---
+
+## 19. Deletion checklist delta
+
+`development/2026-07-30-platform-domain-util2/SPEC.md` §11 remains the master checklist. This
+script adds:
+
+1. `git rm apply-platform-domains-cloudflare apply-platform-domains-cloudflare.py`
+2. `git rm tests/unit/test_apply_platform_domains_cloudflare.py`
+3. `pyproject.toml`: remove the two `[tool.ruff.lint.per-file-ignores]` entries
+   (`"apply-platform-domains-cloudflare.py"` and the extension-less twin) and the
+   `[tool.pyright].include` entry
+4. `.claude/hooks/ruff-check.sh`: remove the `"$REPO_ROOT/apply-platform-domains-cloudflare"` case
+   arm
+5. `CLAUDE.md`: remove the subsection, and revert "three places" to "two" if the other two survive
+   (they will not — all three go together)
+6. **No `.gitignore` change is required** — `/platform-domains-cloudflare*.json` already covers the
+   run records written beside the conventional baseline (§12.1)
+
+**Deletion stays `git rm` of two files plus four textual edits.** No new source module, no package,
+nothing imported from `psh/`.
+
+---
+
+## 20. NOT in scope
+
+Each with the reasoning preserved, so a later session does not re-litigate it.
+
+| Item | Why not |
+|---|---|
+| **Re-resolving each plan entry's target to detect a stale plan** | Offered as an expansion and **declined** in the design conversation: the file is the authority. Mitigated by printing the input file's `generated.at` on every run (§11.3) and by the operator discipline CLAUDE.md already states — regenerate the baseline immediately before a rewrite. This also keeps the script free of any DNS dependency (§16). |
+| Auto-reverting entries already applied when one fails | `PROMPT.md` forbids it: *"it should not attempt to revert any changes it has already made."* |
+| Applying more than one file per invocation | One file, one direction, one decision (Global Constraint 5). |
+| Interactive y/N confirmation | `--for-real` is the blast-radius gate, matching the main program's primary safety mechanism. An interactive prompt would also break any scripted use. |
+| Concurrency, pacing, retry-on-rate-limit, batching entries together | `PROMPT.md`: no performance work. A rate-limit response is a named failure (§9.1), not something to smooth over. |
+| Validating by re-walking each zone's full record list | Measurably worse: util3 measured **2 duplicates and 2 misses in one walk** of an 18,848-record zone, and a miss would produce a *false* validation failure. It also needs ~229 page fetches across 187 zones against ~217 single-name lists, and drags in the ~120 lines §17 deliberately does not copy. |
+| Certificate-pack verification inside the script | `research.md`'s procedure is an operator runbook step (§15 items 8/10); automating it adds an SSL API surface to a script scheduled for deletion. |
+| Editing, filtering or regenerating plan files | That is `find-platform-domains-cloudflare`'s job. `--only` selects; it never rewrites. |
+| Guarding against two concurrent runs of the same file | Unguarded and stated in §9.4 rather than silently absent. |
+| Requiring the operator to *declare* the direction (`--plan` / `--revert`) | util3 SPEC §5.4 step 1 says to refuse a file whose `generated.direction` is not *"the direction the operator asked for"*, which presumes the operator asks. Here the header is the authority: the direction is read from it, an `"excluded"` or absent value is fatal by name (§6 check 2), and the direction is printed as the first line of the summary and echoed in the run record. A redundant flag would add a way to be wrong without adding a way to detect it. |
+| De-U-M-ifying anything | This utility is institution-neutral already; it reads a config file. |
+
+---
+
+## 21. Approval gates (structural STOPs)
+
+**STOP 1 — spec approved.** Implementation MUST NOT begin until the human replies with the exact
+phrase `SPEC APPROVED`. The spec MUST be committed before the first implementation commit, so
+there is a baseline to diff against.
+
+**STOP 2 — live canary.** §15 items 7–13 make **real, destructive changes to production DNS**.
+They MUST NOT be run until the human replies with the exact phrase `RUN LIVE` **and** has named
+the throwaway hostname to use. Items 1–6 are offline (item 6 needs read-only credentials) and need
+no gate.
+
+**STOP 3 — adversarial review.** A `psh-reviewer` subagent with **fresh context**, seeing only this
+spec and the diff, reviews before merge, per `prompts/adversarial-review.md`.
+
+---
+
+## 22. Closing audit questions (answered after implementation)
+
+1. Was every new test observed failing for the **right reason** before its implementation existed?
+   Which ones were not, and why — quoted from the task reports, not summarized?
+2. Group 5 asserts a dry run makes zero write calls. Was that assertion shown red under a
+   deliberate mutation (a dry run that calls `batch()`)? Paste the red output.
+3. Group 13 asserts the environment pin against a real built request. Was each of the three pins
+   mutation-tested independently? A set-intersection version of that assertion silently missed the
+   `_custom_headers` route in the sibling.
+4. Does `exit_code_for` have a test for every row of §8, including the `unknown`-only row, and does
+   each test use a **distinct** tally rather than one fixture with the expectation edited?
+5. Did the live canary (§15 item 13) confirm or refute the stale-delete-id assumption in §9.4?
+   Record the real answer and update that row.
+6. Is `git grep -n "resolve\|dns\." apply-platform-domains-cloudflare` free of any DNS resolution?
+   (§20 — this script must have no DNS dependency at all.)
+7. How many lines did the script reach, and did the "copy, don't modularize" rule start costing
+   more than it saves across three scripts now sharing `build_client`, `report_line` and
+   `normalize`? Record the number; do not act on it.
+8. Did any test in the two sibling test files change? `git diff --stat` them; expected empty.
