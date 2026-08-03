@@ -52,7 +52,7 @@ Each term is used once per concept, here and in the code.
 | **P** **(new)** | The set of records an entry's `body.posts` would create. |
 | **R** **(new)** | The set of records Cloudflare currently holds at that FQDN **whose type is CNAME, A or AAAA** (§7.1). |
 | **verdict** **(new)** | The classification of one entry against R: `ready`, `already-applied`, or one of four invalid reason codes (§7.3). |
-| **outcome** **(new)** | What actually happened to one entry in this run (§12): one of `applied`, `already-applied`, `planned`, `failed`, `unknown`, `not-attempted`. |
+| **outcome** **(new)** | What actually happened to one entry in this run (§12): one of `applied`, `already-applied`, `planned`, `failed`, `unverified`, `unknown`, `not-attempted`. |
 | **run record** **(new)** | `<input-stem>-run-<timestamp>.json`, written on every exit path (§12). |
 | **dry run** **(new)** | The default: validate, report, change nothing. |
 | **for-real run** **(new)** | `--for-real` was given: validate, report, and perform the calls. |
@@ -235,7 +235,10 @@ change as a single key-value pair. This means that the propagation of changes is
 read served before the change lands would otherwise be a false mismatch on a healthy run.
 
 R6.3 A mismatch surviving the retry MUST raise `ApplyError` and stop the run. The entry's outcome
-is `failed`, and the run exits 3 (Cloudflare was changed).
+is **`unverified`** — not `failed` — and the run exits 3, because the batch returned and therefore
+committed. A verification **read** that fails outright (a `cloudflare.CloudflareError` from the
+re-list) takes the same outcome, for the same reason: the write already happened, and only our
+confirmation of it did not. See §8.1's four-state table.
 
 ### R7 — Entry selection
 
@@ -442,16 +445,31 @@ raw rows as a local, so the ids are a same-scope lookup, not a signature change.
 
 ### 8.1 The rule that makes 2 and 3 trustworthy
 
-Define `changed` = the number of entries whose outcome is `applied` **plus** the number whose
-outcome is `unknown`.
+Define `changed` = the number of entries whose outcome is `applied`, `unverified` **or** `unknown`.
 
 - `changed == 0` and the run failed → **2**.
 - `changed > 0` and the run failed → **3**.
 
-*Intent:* PD#1. An entry whose batch call raised a timeout or a connection error did not tell us
-whether Cloudflare committed it. Counting that as "unchanged" would let the process print
-"nothing was changed" about a production DNS rewrite it cannot account for. Unknown counts as
-changed; the run record (§12) says which entry and why.
+*Intent:* PD#1. Each of the three terms is a state in which Cloudflare **may or does** hold a
+change, and calling any of them "unchanged" would let the process print "nothing was changed"
+about a production DNS rewrite it cannot account for.
+
+**The four post-call states are distinct, and conflating any two of them loses an operator
+action.** A batch call ends in exactly one of:
+
+| Outcome | What is true of Cloudflare | What the operator must do |
+|---|---|---|
+| `applied` | the batch returned **and** the records read back as expected | nothing |
+| `unverified` | the batch **returned** (so it committed), but the records do **not** read back as expected after §R6.2's retry, or could not be read at all | **inspect this FQDN by hand** — Cloudflare changed, but not verifiably into the intended state |
+| `failed` | the batch was **rejected** — a batch is one transaction, so nothing committed for this entry | fix the cause and re-run; this entry is untouched |
+| `unknown` | the call did not complete (dropped connection, timeout), so whether it committed is **not known** | inspect this FQDN by hand before re-running |
+
+*Intent for `unverified` specifically (added after Task 8 surfaced the contradiction):* R6.3 says a
+surviving verification mismatch exits 3 because Cloudflare was changed, while an earlier version of
+this section derived `changed` from `applied + unknown` only — so a lone mismatch produced
+`{failed: 1}`, `changed == 0`, and **exit 2, the code that means "nothing was changed."** The
+formula was wrong, not R6.3: the batch returned 200, so it committed. `failed` must mean "rejected,
+nothing committed", and the committed-but-unconfirmed state needs its own name.
 
 `exit_code_for(outcome)` is a **pure function of the outcome tally** and is unit-tested against a
 full truth table (§14 group 11). *Intent:* it is the most consequential logic in the script and
@@ -711,8 +729,8 @@ records written next to the conventional baseline, so no new ignore entry is req
 }
 ```
 
-`outcome` is exhaustively one of `applied`, `already-applied`, `planned`, `failed`, `unknown`,
-`not-attempted`. `created_ids` come from the post-apply verification listing (the authoritative
+`outcome` is exhaustively one of `applied`, `already-applied`, `planned`, `failed`, `unverified`,
+`unknown`, `not-attempted`. `created_ids` come from the post-apply verification listing (the authoritative
 read), not from the batch response. Serialization goes through one `dump_json()` copied from the
 sibling — sorted keys, 4-space indent, trailing newline — and the file is written with
 `write_json_atomic()` (temp file + `os.replace`).
