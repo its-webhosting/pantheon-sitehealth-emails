@@ -599,6 +599,18 @@ and the writers detach **only** a stream a real write has proven doomed — neve
 which discards a buffered line and, under pytest's fd-level capture, repoints the session's own
 stream at `/dev/null`.
 
+**Every stdout write MUST go through a guarded writer, not a bare `print`.** `report_line` covers
+stderr; stdout needs its counterpart, and the moment the program writes its first stdout byte it
+owes one. *Intent:* CPython's shutdown flush covers **both** std streams and turns a failure of
+either into exit **120**, overriding whatever `main()` returned — so an `except OSError` arm that
+correctly returns 2 is silently overridden by the interpreter unless the doomed stream has been
+detached first. This is the **third** appearance of this class in this script family; CLAUDE.md
+records the other two. **An in-process test cannot pin it** — pytest never tears the interpreter
+down, so the shutdown flush never runs. The cover MUST be a real subprocess test, copying
+`test_a_doomed_stdout_exits_2_not_120_in_a_real_subprocess` in
+`tests/unit/test_find_platform_domains_cloudflare.py`, and it MUST redirect at something that
+really fails (`/dev/full`), never `subprocess.DEVNULL`, which accepts every write.
+
 ### 11.2 Message table (exhaustive)
 
 | Message | Verbosity | Stream |
@@ -608,10 +620,16 @@ stream at `/dev/null`.
 | per-entry change line (§11.4) | always, both modes | stdout |
 | `POST /zones/<id>/dns_records/batch` + the exact merged JSON body | `-v` | stdout |
 | per-entry result in pass 3: `applied` / `failed` + reason | always | stdout |
+| per-entry, when the verdict is `already-applied`: `<fqdn>  already applied -- nothing to do` | always, both modes | stdout |
 | every invalid verdict: `ATTENTION: <fqdn> <code>: <detail>` | **always, never `-v`-gated** | stderr |
+| the validation-failure abort: `ERROR: N of M selected entries did not match Cloudflare's current state; NOTHING was changed. …` | always (that path only) | stderr |
 | `--only` subset coverage: `ATTENTION: applying N of M entries in this file` | always | stderr |
 | the summary block (§11.3) | always, every exit path | stdout |
 | the run record's path | always | stdout |
+
+*Intent for the `already-applied` row:* it is what tells an operator which entries a re-run skipped
+— the affordance R4.2's carve-out exists to provide. It is deliberately **not** the §11.4 change
+line, because there is no change to describe.
 
 ### 11.3 The summary block
 
@@ -628,6 +646,14 @@ The `source` line prints the input file's own `generated.at`. *Intent:* the plan
 resolved at sweep time, and this spec deliberately does not re-resolve them (§20). The age of the
 file is therefore the operator's only staleness signal, so it is printed on every run rather than
 left to the file's mtime, which survives neither a copy nor `git add`.
+
+**The `mode:` line MUST be derived from the tally, never from `--for-real` alone.** A dry run reads
+`DRY RUN -- no changes were made`; a for-real run reads
+`FOR REAL -- N of M entries changed`, where N is `applied + unknown` (§8.1's `changed`) and M is the
+number selected. *Intent:* `FOR REAL -- changes were made` is a claim about production DNS, and a
+for-real run that reached no entry — because every one was `already-applied`, or because it aborted
+in validation — would assert a rewrite that never happened. Deriving it from the tally makes the
+line true on every path, including the transitional state where pass 3 is not yet wired.
 
 ### 11.4 The per-entry change line
 
