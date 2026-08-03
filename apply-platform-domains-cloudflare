@@ -747,6 +747,66 @@ def api_error_text(e):
             + "; ".join(parts) + suffix)
 
 
+OUTCOMES = ("applied", "already-applied", "planned", "failed", "unknown", "not-attempted")
+
+
+def tally(outcomes):
+    """Count outcomes, zero-filling every key so no consumer has to .get() (SPEC 12.2).
+
+    `outcomes` maps fqdn -> one of OUTCOMES; only the values matter.  An outcome string outside
+    OUTCOMES is a defect upstream (a typo'd literal, not operator input), so it raises
+    InvariantError rather than silently landing nowhere -- the same discipline verdict_for and
+    validate_entries already apply to their own closed vocabularies.
+    """
+    counts = dict.fromkeys(OUTCOMES, 0)
+    for outcome in outcomes.values():
+        if outcome not in counts:
+            raise InvariantError(f"unknown outcome {outcome!r}")
+        counts[outcome] += 1
+    return counts
+
+
+def exit_code_for(counts):
+    """SPEC section 8, as a PURE function of the tally.
+
+    Extracted deliberately: it is the most consequential logic in this script and would otherwise
+    be reachable only through a full end-to-end run.  It covers the dry-run and post-apply paths;
+    a validation failure returns 2 and an interrupt returns 130 directly from main(), before any
+    outcome exists.
+
+    `changed` counts applied PLUS unknown.  An entry whose batch call raised a timeout did not
+    tell us whether Cloudflare committed it, and reporting "nothing was changed" about a
+    production rewrite we cannot account for is exactly the silent failure PD#1 forbids.
+    """
+    if counts["failed"] or counts["unknown"]:
+        changed = counts["applied"] + counts["unknown"]
+        return 3 if changed else 2
+    if counts["already-applied"]:
+        return 1
+    return 0
+
+
+def summary_lines(*, direction, source, source_generated_at, for_real, entries_in_file,  # noqa: PLR0913 -- the exact keyword-only interface SPEC 11.3/R8.1 requires for the block printed on every exit path; splitting it would just move the same 8 facts into a second data structure
+                  selected, counts, record_path):
+    """The block printed on EVERY exit path (SPEC R8.1, 11.3).
+
+    Iterates OUTCOMES rather than a hardcoded name list, so a future addition to that tuple
+    cannot silently vanish from the operator's only report -- the same reasoning as tally's
+    zero-fill.
+    """
+    mode = ("FOR REAL -- changes were made" if for_real
+            else "DRY RUN -- no changes were made")
+    return [
+        f"apply-platform-domains-cloudflare: direction={direction}",
+        f"  source: {source} (generated {source_generated_at})",
+        f"  mode:   {mode}",
+        f"  entries in file: {entries_in_file}   selected: {selected}   "
+        "(entries are FQDNs, not Pantheon sites)",
+        "  " + "   ".join(f"{name.replace('-', ' ')} {counts[name]}" for name in OUTCOMES),
+        f"  record: {record_path}",
+    ]
+
+
 def build_arg_parser():
     """The CLI (SPEC R2).
 

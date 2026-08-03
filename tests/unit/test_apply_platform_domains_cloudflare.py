@@ -917,3 +917,85 @@ def test_the_network_guard_itself_can_fire(apc, tmp_path, refuse_real_network):
         "exists for exactly this: prove it before trusting it")
     refuse_real_network.clear()
 
+
+# ---------------------------------------------------------------------------------------------
+# Task 6: the outcome tally, exit codes, and the summary block (SPEC section 8, 11.3, R8).  Pure.
+# ---------------------------------------------------------------------------------------------
+
+
+def test_tally_zero_fills_every_outcome(apc):
+    counts = apc.tally({"a": "applied"})
+    assert counts == {"applied": 1, "already-applied": 0, "planned": 0,
+                      "failed": 0, "unknown": 0, "not-attempted": 0}
+
+
+def test_exit_code_zero_when_everything_applied(apc):
+    assert apc.exit_code_for(apc.tally({"a": "applied", "b": "applied"})) == 0
+
+
+def test_exit_code_zero_for_a_clean_dry_run(apc):
+    assert apc.exit_code_for(apc.tally({"a": "planned", "b": "planned"})) == 0
+
+
+def test_exit_code_one_when_anything_was_already_applied(apc):
+    assert apc.exit_code_for(apc.tally({"a": "applied", "b": "already-applied"})) == 1
+
+
+def test_exit_code_two_when_a_failure_changed_nothing(apc):
+    """The first entry failed, so its batch never committed -- Cloudflare is untouched."""
+    assert apc.exit_code_for(apc.tally({"a": "failed", "b": "not-attempted"})) == 2
+
+
+def test_exit_code_three_when_a_failure_followed_a_successful_apply(apc):
+    assert apc.exit_code_for(
+        apc.tally({"a": "applied", "b": "failed", "c": "not-attempted"})) == 3
+
+
+def test_exit_code_three_when_the_only_outcome_is_unknown(apc):
+    """SPEC 8.1: an entry whose call raised a timeout did not tell us whether Cloudflare
+    committed it.  Counting that as unchanged would let the process claim "nothing was changed"
+    about a production DNS rewrite it cannot account for."""
+    assert apc.exit_code_for(apc.tally({"a": "unknown", "b": "not-attempted"})) == 3
+
+
+def test_exit_code_one_beats_zero_but_never_masks_a_failure(apc):
+    assert apc.exit_code_for(
+        apc.tally({"a": "already-applied", "b": "failed"})) == 2
+
+
+def test_summary_says_entries_are_fqdns_not_sites(apc):
+    """SPEC R8.2: the plan file carries no site information, and several FQDNs can belong to one
+    Pantheon site.  Printing an FQDN count under the word "sites" would be a wrong number in an
+    operator's incident notes."""
+    lines = apc.summary_lines(
+        direction="plan", source="p.json", source_generated_at="2026-08-01T00:22:23Z",
+        for_real=False, entries_in_file=217, selected=217,
+        counts=apc.tally({"a": "planned"}), record_path="p-run-X.json")
+    text = "\n".join(lines)
+    assert "entries are FQDNs, not Pantheon sites" in text
+    assert "217" in text
+
+
+def test_summary_names_the_mode_unmistakably(apc):
+    dry = "\n".join(apc.summary_lines(
+        direction="plan", source="p.json", source_generated_at="x", for_real=False,
+        entries_in_file=1, selected=1, counts=apc.tally({"a": "planned"}),
+        record_path="r.json"))
+    real = "\n".join(apc.summary_lines(
+        direction="plan", source="p.json", source_generated_at="x", for_real=True,
+        entries_in_file=1, selected=1, counts=apc.tally({"a": "applied"}),
+        record_path="r.json"))
+    assert "DRY RUN -- no changes were made" in dry
+    assert "FOR REAL" in real
+    assert "DRY RUN" not in real
+
+
+def test_summary_prints_the_source_files_own_timestamp(apc):
+    """SPEC 11.3: this spec deliberately does not re-resolve targets, so the age of the file is
+    the operator's only staleness signal -- and mtime survives neither a copy nor `git add`."""
+    lines = apc.summary_lines(
+        direction="revert", source="r.json", source_generated_at="2026-08-01T00:22:23Z",
+        for_real=True, entries_in_file=1, selected=1,
+        counts=apc.tally({"a": "applied"}), record_path="x.json")
+    assert any("2026-08-01T00:22:23Z" in line for line in lines)
+
