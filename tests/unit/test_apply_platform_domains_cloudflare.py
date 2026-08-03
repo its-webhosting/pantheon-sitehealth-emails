@@ -16,6 +16,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -507,3 +508,109 @@ def test_api_error_text_bounds_the_total_message_length(apc):
     error = api_status_error(cloudflare.BadRequestError, 400, {"errors": errors})
     text = apc.api_error_text(error)
     assert len(text) < 2000
+
+
+def row(rtype="CNAME", name="a.umich.edu", content="live-umich-x.pantheonsite.io",
+        identifier="rec-1"):
+    """A stand-in for one SDK record object as dns.records.list returns it."""
+    return types.SimpleNamespace(id=identifier, type=rtype, name=name, content=content)
+
+
+def cname_rows():
+    return [row()]
+
+
+def address_rows():
+    return [row("A", content="23.185.0.4", identifier="rec-a"),
+            row("AAAA", content="2620:12a:8000::4", identifier="rec-b")]
+
+
+def test_record_key_treats_two_spellings_of_one_ipv6_address_as_one_record(apc):
+    """A string comparison would call these two records and invent a partially-applied verdict
+    on a healthy zone."""
+    assert (apc.record_key("AAAA", "a.umich.edu", "2620:12a:8000::4")
+            == apc.record_key("AAAA", "a.umich.edu", "2620:12A:8000:0:0:0:0:4"))
+
+
+def test_record_key_ignores_case_and_a_trailing_dot(apc):
+    assert (apc.record_key("CNAME", "A.Umich.EDU.", "Live-X.PantheonSite.io.")
+            == apc.record_key("cname", "a.umich.edu", "live-x.pantheonsite.io"))
+
+
+def test_governed_records_drops_unrelated_types(apc):
+    """SPEC R1.1: a TXT/MX/CAA at the same name is none of this script's business."""
+    rows = [row(), row("TXT", content="v=spf1 -all", identifier="rec-t"),
+            row("MX", content="mx.umich.edu", identifier="rec-m")]
+    assert [r.id for r in apc.governed_records(rows)] == ["rec-1"]
+
+
+def test_verdict_ready_when_cloudflare_holds_exactly_the_delete_match(apc):
+    verdict, detail = apc.verdict_for(plan_entry(), cname_rows())
+    assert verdict == "ready"
+    assert detail == ""
+
+
+def test_verdict_already_applied_when_cloudflare_holds_exactly_the_posts(apc):
+    """SPEC R4.3: established affirmatively (R == P), NEVER inferred from the absence of D."""
+    verdict, _ = apc.verdict_for(plan_entry(), address_rows())
+    assert verdict == "already-applied"
+
+
+def test_verdict_record_ambiguous_when_a_key_occurs_twice(apc):
+    rows = [row(), row(identifier="rec-2")]
+    verdict, detail = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "record-ambiguous"
+    assert "rec-1" in detail or "CNAME" in detail
+
+
+def test_verdict_partially_applied_on_a_mix_of_both_sides(apc):
+    rows = [*cname_rows(), row("A", content="23.185.0.4", identifier="rec-a")]
+    verdict, _ = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "partially-applied"
+
+
+def test_verdict_unexpected_records_on_a_proper_superset(apc):
+    """SPEC 7.3 row 5 -- this is util3 SPEC 5.4's "known and accepted" hazard (an unrelated
+    fourth A record at the name), caught at validation time instead of as a rollback."""
+    rows = [*address_rows(), row("A", content="23.185.0.99", identifier="rec-extra")]
+    verdict, detail = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "unexpected-records"
+    assert "23.185.0.99" in detail
+
+
+def test_verdict_records_missing_when_nothing_governed_is_there(apc):
+    """SPEC 7.4's empty shadow: NOT silently treated as already-applied."""
+    verdict, _ = apc.verdict_for(plan_entry(), [])
+    assert verdict == "records-missing"
+
+
+def test_verdict_records_missing_on_a_strict_subset(apc):
+    rows = [row("A", content="23.185.0.4", identifier="rec-a")]
+    verdict, _ = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "records-missing"
+
+
+def test_verdict_ambiguity_is_evaluated_before_the_set_comparisons(apc):
+    """SPEC 7.3: row 1 first, so a duplicated key can never make a set comparison accidentally
+    succeed -- a set() of [X, X] equals a set() of [X]."""
+    rows = [*cname_rows(), row(identifier="rec-dup")]
+    verdict, _ = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "record-ambiguous"
+
+
+def test_verdict_ignores_an_unrelated_txt_record_at_the_same_name(apc):
+    rows = [*cname_rows(), row("TXT", content="v=spf1 -all", identifier="rec-t")]
+    verdict, _ = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "ready"
+
+
+def test_a_revert_entry_is_ready_when_the_addresses_are_present(apc):
+    """The same engine, both directions: a revert's D is the A/AAAA set and its P is the CNAME."""
+    entry = plan_entry()
+    entry["delete_match"], entry["body"]["posts"] = (
+        [{"type": "A", "name": "a.umich.edu", "content": "23.185.0.4"},
+         {"type": "AAAA", "name": "a.umich.edu", "content": "2620:12a:8000::4"}],
+        [{"type": "CNAME", "name": "a.umich.edu",
+          "content": "live-umich-x.pantheonsite.io", "proxied": True, "ttl": 1}])
+    verdict, _ = apc.verdict_for(entry, address_rows())
+    assert verdict == "ready"

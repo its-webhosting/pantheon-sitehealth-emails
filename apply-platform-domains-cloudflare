@@ -25,6 +25,7 @@ import argparse
 import contextlib
 import datetime
 import io
+import ipaddress
 import json
 import os
 import re
@@ -341,6 +342,87 @@ def select_entries(entries, only):
             + ("an FQDN that is not" if len(missing) == 1 else "FQDNs that are not")
             + " in this file: " + ", ".join(sorted(missing)))
     return {fqdn: entries[fqdn] for fqdn in entries if fqdn in set(wanted)}
+
+
+def record_key(rtype, name, content):
+    """The comparison key for one DNS record (SPEC 7.1).
+
+    Addresses are compared as ipaddress VALUES, not strings: 2620:12a:8000::4 and
+    2620:12A:8000:0:0:0:0:4 are one address written two ways, and a string comparison would call
+    them two records -- inventing a partially-applied verdict on a healthy zone.  Names and CNAME
+    targets go through normalize(), so case and a trailing dot never split a key.  Cloudflare's
+    own name/content list filters are documented CASE-INSENSITIVE, so what the filter returns is
+    re-checked here regardless of what it matched.
+    """
+    rtype = str(rtype).upper()
+    if rtype in ("A", "AAAA"):
+        try:
+            canonical = str(ipaddress.ip_address(str(content).strip()))
+        except ValueError:
+            # Not an address at all.  Keep it as text rather than raising: this is a comparison
+            # key, and a record Cloudflare returned with unparseable content must still be
+            # comparable (it will simply not equal anything the file describes, which is the
+            # correct outcome -- an invalid verdict naming it).
+            canonical = normalize(content)
+    else:
+        canonical = normalize(content)
+    return (rtype, normalize(name), canonical)
+
+
+def governed_records(rows):
+    """The records at a name that this script reasons about (SPEC R1.1).
+
+    Everything else -- TXT, MX, CAA -- is ignored entirely: never read as state, never deleted,
+    never counted.  A site's SPF record must not be able to make a rewrite look drifted.
+    """
+    return [r for r in rows if str(getattr(r, "type", "")).upper() in GOVERNED_TYPES]
+
+
+def describe_keys(keys):
+    """Render record keys for an operator message."""
+    return ", ".join(f"{rtype} {content}" for rtype, _name, content in keys)
+
+
+def verdict_for(entry, rows):
+    """Classify one entry against Cloudflare's current state (SPEC 7.3).  Returns (verdict,
+    detail); detail is "" only for the two valid verdicts.
+
+    The whole decision is WHICH SET R equals.  Evaluation order is the table's order and row 1 is
+    first for a reason: set() collapses duplicates, so a duplicated key would let R == D succeed
+    on a name that actually holds the record twice.
+    """
+    present = governed_records(rows)
+    keys = [record_key(r.type, r.name, r.content) for r in present]
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicates:
+        return ("record-ambiguous",
+                f"more than one record at this name with the same type and content: "
+                f"{describe_keys(duplicates)}")
+
+    have = set(keys)
+    want_delete = {record_key(item["type"], item["name"], item["content"])
+                   for item in entry["delete_match"]}
+    want_post = {record_key(item["type"], item["name"], item["content"])
+                 for item in entry["body"]["posts"]}
+
+    if have == want_delete:
+        return ("ready", "")
+    if have == want_post:
+        return ("already-applied", "")
+    if have & want_delete and have & want_post:
+        return ("partially-applied",
+                f"Cloudflare holds a MIX of the records to delete and the records to create: "
+                f"{describe_keys(sorted(have))}")
+    for expected, side in ((want_delete, "to delete"), (want_post, "to create")):
+        if have > expected:
+            return ("unexpected-records",
+                    f"Cloudflare holds every record {side} plus "
+                    f"{describe_keys(sorted(have - expected))}, which this entry does not "
+                    "describe")
+    return ("records-missing",
+            f"Cloudflare holds {describe_keys(sorted(have)) or 'no CNAME/A/AAAA record'} at this "
+            f"name; expected either {describe_keys(sorted(want_delete))} (not yet applied) or "
+            f"{describe_keys(sorted(want_post))} (already applied)")
 
 
 def resolve_env_marker(expr, where):
