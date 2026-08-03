@@ -604,6 +604,7 @@ stream at `/dev/null`.
 | Message | Verbosity | Stream |
 |---|---|---|
 | `FOR REAL -- changes WILL be made to Cloudflare` banner, before the first call | always | stderr |
+| pass-1 progress: `<fqdn>: <verdict>` — the verdict word **only**, never the detail | `-v` | stdout |
 | per-entry change line (§11.4) | always, both modes | stdout |
 | `POST /zones/<id>/dns_records/batch` + the exact merged JSON body | `-v` | stdout |
 | per-entry result in pass 3: `applied` / `failed` + reason | always | stdout |
@@ -709,11 +710,23 @@ monkeypatching module attributes safe and leak-free.
 | `FakeCloudflareClient` | test fixture, adapted from the sibling's | **all** Cloudflare I/O: `dns.records.list` (honoring the `name`/`type` filters) and `dns.records.batch`, recording every call with its arguments |
 | `now_utc()` | module attribute | every timestamp and the run-record filename |
 | `sleep` | module attribute | R6.2's verification retry — no test may take 2 real seconds |
-| an autouse **teardown-asserted** guard | conftest-level in the test module | fails the test if a real `Cloudflare` client was constructed or any real network call attempted |
+| an autouse **teardown-asserted** guard | module-level in `tests/unit/test_apply_platform_domains_cloudflare.py` (this module only — it makes no promise about any other test file) | fails the test if any **real outbound HTTP request** is attempted |
 
 *Intent for the teardown-asserted guard:* the sibling shipped two tests that were green while
 silently reaching real DNS, and then a replacement guard that could be satisfied by accident once
 `main()` grew a catch-all. Asserting at teardown, not inside the run, is the shape that survived.
+**Measured here, and it is why teardown is not a stylistic choice:** the Cloudflare SDK's own retry
+loop (`cloudflare/_base_client.py`, `except Exception as err:`) swallows an inline `AssertionError`
+and retries — three times — before converting it to an `APIConnectionError`. An in-run assertion is
+eaten by the library under test.
+
+*Intent for narrowing to outbound requests only:* the earlier wording also banned **constructing** a
+real `Cloudflare` object. That is deliberately permitted. A constructed-but-unused client performs
+no I/O, so banning it buys nothing the request interception does not already buy — and §16 requires
+a real client to assert the environment pin against a real built request, which is the one thing a
+construction ban would make impossible. The guard MUST additionally carry a **self-test** proving it
+can still fire: it hooks the SDK's transport, so a transport change would otherwise make it
+**silently inert**, which is CLAUDE.md's two-`sitecustomize.py` failure exactly.
 
 **Pure helpers to extract** (no I/O, unit-testable directly — the discipline that produced
 `overage_blocks`, `plan_costs`, `sites_from_resume_point` in the main program and `classify`,
