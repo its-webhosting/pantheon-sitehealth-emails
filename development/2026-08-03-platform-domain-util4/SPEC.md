@@ -411,6 +411,14 @@ at validation time, named on stderr, hours earlier, with nothing written.
 versus what was expected, in `record_key` terms. It is the only thing the operator has to work
 from, so it is not optional and it is not `-v`-gated (§11).
 
+**`record-ambiguous` is the one exception, and it MUST also name the colliding record ids.**
+*Intent:* by construction the two records share a `record_key` — that is what makes the FQDN
+ambiguous — so a detail in `record_key` terms alone **cannot tell them apart**, and this verdict
+aborts the entire run and hands the operator a manual Cloudflare cleanup. The id is the only field
+that distinguishes the rows in the dashboard or the API. This does **not** widen `record_key`,
+which stays deliberately id-less for the set comparison (§7.1): `verdict_for` already holds the
+raw rows as a local, so the ids are a same-scope lookup, not a signature change.
+
 ### 7.4 Shadow paths for the validation flow (PD#3), all four traced
 
 | Shadow | Condition | Outcome |
