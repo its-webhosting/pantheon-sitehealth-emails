@@ -14,6 +14,7 @@ development/2026-08-03-platform-domain-util4/SPEC.md section 19.
 """
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import types
@@ -27,6 +28,10 @@ import pytest
 pytestmark = pytest.mark.unit
 
 SCRIPT = Path(__file__).resolve().parent.parent.parent / "apply-platform-domains-cloudflare"
+
+DEV_FULL = "/dev/full"
+needs_dev_full = pytest.mark.skipif(not os.path.exists(DEV_FULL),  # noqa: PTH110 -- a device
+                                    reason="/dev/full is Linux-only")   # node, not a repo path
 
 
 @pytest.fixture
@@ -156,15 +161,72 @@ def test_the_exception_spine_keeps_startup_errors_at_exit_two(apc):
     assert not issubclass(apc.ApplyError, apc.StartupError)
 
 
-def test_a_doomed_stdout_is_a_named_exit_two_not_the_interpreters_120(apc):
-    """CPython's shutdown flush of a doomed stream overrides the exit code with 120, which is
-    outside this program's taxonomy entirely.  Measured on the sibling before its guards existed.
+def run_apc_in_a_subprocess(tmp_path, argv, *, stdout, stderr):
+    """Drive the REAL main() in a real interpreter, so the shutdown flush that produces exit 120
+    actually runs.  An in-process test cannot observe it: pytest never tears the interpreter down
+    between tests, so the whole 120 mechanism is invisible to one (SPEC 11.1).
+
+    The fake client is a plain class embedded in the driver source (not FakeCloudflareClient --
+    that class lives in THIS process, not the subprocess's fresh interpreter) returning rows that
+    make the one entry `already-applied`, so main() reaches pass 2's report and the summary
+    without ever needing a real Cloudflare credential.
     """
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--only", "nope", "missing.json"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=False,
-        cwd=str(SCRIPT.parent))
-    assert result.returncode != 120
+    driver = tmp_path / "driver.py"
+    driver.write_text(f"""
+import sys
+import types
+from importlib.machinery import SourceFileLoader
+import importlib.util
+loader = SourceFileLoader("apc_subprocess", {str(SCRIPT)!r})
+spec = importlib.util.spec_from_loader("apc_subprocess", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+
+
+class FakeClient:
+    def __init__(self):
+        rows = [types.SimpleNamespace(id="rec-a", type="A", name="a.umich.edu",
+                                      content="23.185.0.4"),
+                types.SimpleNamespace(id="rec-b", type="AAAA", name="a.umich.edu",
+                                      content="2620:12a:8000::4")]
+        self.dns = types.SimpleNamespace(
+            records=types.SimpleNamespace(list=lambda **kw: rows, batch=lambda **kw: None))
+
+
+m.cloudflare_client = lambda path: FakeClient()
+sys.exit(m.main(sys.argv[1:]))
+""")
+    return subprocess.run([sys.executable, str(driver), *argv],
+                          stdout=stdout, stderr=stderr, check=False, cwd=str(tmp_path))
+
+
+@needs_dev_full
+def test_a_doomed_stdout_exits_2_not_120_in_a_real_subprocess(tmp_path):
+    """SPEC 11.1, as amended by the task 7 review: the false predecessor of this test used
+    stdout=subprocess.DEVNULL (which accepts every write -- never doomed) and a FILE argument
+    that made read_apply_file abort before a single stdout byte was written, so it could never
+    fail no matter what main() did.  Real bug it should have caught, measured before the fix:
+    main() wrote six un-guarded stdout prints, and a doomed stdout there overrode this program's
+    own `except OSError: return 2` with the interpreter's shutdown-flush 120."""
+    path = write_doc(tmp_path, plan_doc())
+    with Path(DEV_FULL).open("w") as doomed_out:
+        completed = run_apc_in_a_subprocess(tmp_path, [path], stdout=doomed_out,
+                                            stderr=subprocess.PIPE)
+    assert completed.returncode == 2
+    assert b"cannot write the report to standard output" in completed.stderr
+
+
+@needs_dev_full
+def test_write_report_detaches_and_raises_on_a_doomed_stdout(apc, monkeypatch):
+    """Direct proof of write_report's own mechanism (SPEC 11.1), independent of which call site
+    happens to reach it first in a given run -- the subprocess test above proves the end-to-end
+    exit code for one such run; this pins the seam itself: a doomed write is detached
+    IMMEDIATELY and raises a named StartupError, never swallowed and never left for the
+    interpreter's shutdown flush to convert into exit 120."""
+    with Path(DEV_FULL).open("w") as doomed:
+        monkeypatch.setattr(sys, "stdout", doomed)
+        with pytest.raises(apc.StartupError, match="cannot write the report to standard output"):
+            apc.write_report("a line of the report")
 
 
 def plan_entry(zone_id="zone-a", fqdn="a.umich.edu",
@@ -1023,6 +1085,26 @@ def test_summary_names_the_mode_unmistakably(apc):
     assert "DRY RUN" not in real
 
 
+def test_summary_for_real_mode_line_is_derived_from_the_tally_not_the_flag(apc):
+    """SPEC 11.3 (amended, task 7 review, important 2): 'FOR REAL -- changes were made' is a
+    claim about production DNS.  Measured before this fix: a --for-real run that reached no
+    entry (every one already-applied, or an abort in validation) printed that claim while
+    `batch_calls == []` -- a for-real run that changed nothing must say so honestly."""
+    zero_changed = "\n".join(apc.summary_lines(
+        direction="plan", source="p.json", source_generated_at="x", for_real=True,
+        entries_in_file=1, selected=1, counts=apc.tally({"a": "already-applied"}),
+        record_path="r.json"))
+    assert "FOR REAL -- 0 of 1 entries changed" in zero_changed
+    assert "changes were made" not in zero_changed
+
+    some_changed = "\n".join(apc.summary_lines(
+        direction="plan", source="p.json", source_generated_at="x", for_real=True,
+        entries_in_file=3, selected=3,
+        counts=apc.tally({"a": "applied", "b": "unknown", "c": "already-applied"}),
+        record_path="r.json"))
+    assert "FOR REAL -- 2 of 3 entries changed" in some_changed   # applied + unknown, per SPEC 8.1
+
+
 def test_summary_prints_the_source_files_own_timestamp(apc):
     """SPEC 11.3: this spec deliberately does not re-resolve targets, so the age of the file is
     the operator's only staleness signal -- and mtime survives neither a copy nor `git add`."""
@@ -1054,15 +1136,85 @@ def test_merge_body_never_mutates_the_entry(apc):
     assert "deletes" not in entry["body"]
 
 
+def test_merge_body_raises_invariant_error_on_missing_or_empty_posts(apc):
+    """SPEC 9.1: section 6 check 7 should already have made an empty/missing body.posts fatal
+    before pass 1 ever ran.  Task 7 review, important 4: measured on HEAD before this guard
+    existed, merge_body(entry-without-posts, ids) raised a bare, unnamed `KeyError: 'posts'`."""
+    entry = plan_entry()
+    entry["body"]["posts"] = []
+    with pytest.raises(apc.InvariantError):
+        apc.merge_body(entry, ["rec-1"])
+
+    missing_body = plan_entry()
+    del missing_body["body"]
+    with pytest.raises(apc.InvariantError):
+        apc.merge_body(missing_body, ["rec-1"])
+
+
+def test_merge_body_raises_invariant_error_on_empty_delete_ids(apc):
+    """SPEC 9.1's own trigger list names 'a delete id pass 1 never resolved'.  Task 7 review,
+    important 4: measured on HEAD before this guard existed, merge_body(entry, []) silently
+    returned {"deletes": [], "posts": [...]} -- posting the new records while deleting NOTHING,
+    the exact partial-write shape section 3 exists to prevent (Task 8's apply would then leave
+    the CNAME standing beside the new A/AAAA records)."""
+    with pytest.raises(apc.InvariantError):
+        apc.merge_body(plan_entry(), [])
+
+
 def test_describe_change_shows_both_sides_and_the_zone_id(apc):
     """SPEC 11.4: the zone ID, not a zone name -- the plan entry carries zone_id and nothing
-    else about the zone, and looking up a name would be a second API read for cosmetics."""
+    else about the zone, and looking up a name would be a second API read for cosmetics.
+
+    Task 7 review, minor 6: (proxied, ttl N) is deletable from describe_change with the whole
+    suite still green (measured) unless something asserts it -- this does."""
     line = apc.describe_change("a.umich.edu", plan_entry())
     assert "a.umich.edu" in line
     assert "zone-a" in line
     assert "live-umich-x.pantheonsite.io" in line
     assert "23.185.0.4" in line
     assert "2620:12a:8000::4" in line
+    assert "(proxied, ttl 1)" in line
+
+
+def test_describe_change_groups_same_type_records_and_joins_types_with_plus(apc):
+    """SPEC 11.4's own example line groups same-TYPE contents with ', ' and joins DIFFERENT
+    types with ' + ': "A 23.185.0.4 + AAAA 2620:12a:8000::4, 2620:12a:8001::4".  Task 7 review,
+    minor 9: the shipped code used ", ".join throughout, which cannot express that distinction
+    (two A records would render indistinguishably from one A and one AAAA)."""
+    entry = plan_entry(addresses=("23.185.0.4", "23.185.0.5", "2620:12a:8000::4"))
+    line = apc.describe_change("a.umich.edu", entry)
+    assert "A 23.185.0.4, 23.185.0.5 + AAAA 2620:12a:8000::4" in line
+
+
+def test_describe_change_renders_a_revert_entry_correctly(apc):
+    """Task 7 review, minor 7: revert is the EMERGENCY path and the one direction where
+    posts[0] is a different record type (CNAME) than delete_match (A/AAAA) -- rendered correctly
+    by hand-inspection in the review, but with no test pinning it before this one."""
+    entry = plan_entry()
+    entry["delete_match"], entry["body"]["posts"] = (
+        [{"type": "A", "name": "a.umich.edu", "content": "23.185.0.4"},
+         {"type": "AAAA", "name": "a.umich.edu", "content": "2620:12a:8000::4"}],
+        [{"type": "CNAME", "name": "a.umich.edu",
+          "content": "live-umich-x.pantheonsite.io", "proxied": True, "ttl": 1}])
+    line = apc.describe_change("a.umich.edu", entry)
+    assert "A 23.185.0.4 + AAAA 2620:12a:8000::4 -> CNAME live-umich-x.pantheonsite.io" in line
+
+
+def test_describe_change_raises_invariant_error_on_the_impossible_empty_shape(apc):
+    """SPEC 9.1: an entry reaching describe_change with an empty/missing delete_match or
+    body.posts is a defect in this script's own reasoning (section 6 checks 7/8 should already
+    have made it fatal), not a shape to render.  Task 7 review, important 4: measured on HEAD
+    before this guard existed, describe_change(empty posts) raised a bare, unnamed
+    `IndexError: list index out of range` from `posts[0]` -- PD#2 requires a name."""
+    entry = plan_entry()
+    entry["body"]["posts"] = []
+    with pytest.raises(apc.InvariantError):
+        apc.describe_change("a.umich.edu", entry)
+
+    missing_delete_match = plan_entry()
+    del missing_delete_match["delete_match"]
+    with pytest.raises(apc.InvariantError):
+        apc.describe_change("a.umich.edu", missing_delete_match)
 
 
 def run_main(apc, argv, tmp_path, client, monkeypatch):
@@ -1093,6 +1245,26 @@ def test_a_dry_run_reports_the_change_it_would_make(apc, tmp_path, monkeypatch, 
     assert "23.185.0.4" in out
 
 
+def test_a_dry_run_reports_a_revert_entrys_change_correctly(
+        apc, tmp_path, monkeypatch, capsys):
+    """Task 7 review, minor 7: report_entries/describe_change had zero revert-direction coverage
+    through main() before this test -- revert is the emergency path."""
+    entry = plan_entry()
+    entry["delete_match"], entry["body"]["posts"] = (
+        [{"type": "A", "name": "a.umich.edu", "content": "23.185.0.4"},
+         {"type": "AAAA", "name": "a.umich.edu", "content": "2620:12a:8000::4"}],
+        [{"type": "CNAME", "name": "a.umich.edu",
+          "content": "live-umich-x.pantheonsite.io", "proxied": True, "ttl": 1}])
+    doc = plan_doc(entries={"a.umich.edu": entry}, direction="revert")
+    path = write_doc(tmp_path, doc, name="platform-domains-cloudflare-revert.json")
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "A 23.185.0.4 + AAAA 2620:12a:8000::4 -> CNAME live-umich-x.pantheonsite.io" in out
+    assert "direction=revert" in out
+
+
 def test_verbose_prints_the_exact_request_body(apc, tmp_path, monkeypatch, capsys):
     path = write_doc(tmp_path, plan_doc())
     client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
@@ -1110,7 +1282,11 @@ def test_an_invalid_entry_aborts_the_run_at_exit_two_with_nothing_applied(
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
     assert code == 2
     assert client.batch_calls == []
-    assert "ATTENTION" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "ATTENTION" in captured.err
+    # Task 7 review, minor 8: a bare `"ATTENTION" in out` assertion would still pass if the line
+    # were duplicated onto stdout -- SPEC 11.2 puts it on stderr ONLY.
+    assert "ATTENTION" not in captured.out
 
 
 def test_every_invalid_entry_is_named_on_stderr_never_v_gated(
@@ -1121,10 +1297,11 @@ def test_every_invalid_entry_is_named_on_stderr_never_v_gated(
     path = write_doc(tmp_path, doc)
     client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]], "b.umich.edu": [[]]})
     run_main(apc, [path], tmp_path, client, monkeypatch)
-    err = capsys.readouterr().err
-    assert "a.umich.edu" in err
-    assert "b.umich.edu" in err
-    assert "records-missing" in err
+    captured = capsys.readouterr()
+    assert "a.umich.edu" in captured.err
+    assert "b.umich.edu" in captured.err
+    assert "records-missing" in captured.err
+    assert "records-missing" not in captured.out
 
 
 def test_an_already_applied_run_exits_one_and_calls_nothing(
@@ -1134,6 +1311,9 @@ def test_an_already_applied_run_exits_one_and_calls_nothing(
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
     assert code == 1
     assert client.batch_calls == []
+    # Task 7 review, minor 6: deleting report_entries' already-applied line entirely left the
+    # whole suite green (measured) because no test called readouterr() here -- this does.
+    assert "a.umich.edu  already applied -- nothing to do" in capsys.readouterr().out
 
 
 def test_a_subset_run_warns_how_much_of_the_file_it_covers(
@@ -1143,7 +1323,9 @@ def test_a_subset_run_warns_how_much_of_the_file_it_covers(
     path = write_doc(tmp_path, doc)
     client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
     run_main(apc, ["--only", "a.umich.edu", path], tmp_path, client, monkeypatch)
-    assert "ATTENTION: applying 1 of 2 entries" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert "ATTENTION: applying 1 of 2 entries" in captured.err
+    assert "ATTENTION" not in captured.out
 
 
 def test_an_unselected_entry_is_never_validated(apc, tmp_path, monkeypatch):
@@ -1156,4 +1338,41 @@ def test_an_unselected_entry_is_never_validated(apc, tmp_path, monkeypatch):
     code = run_main(apc, ["--only", "a.umich.edu", path], tmp_path, client, monkeypatch)
     assert code == 0
     assert [call["name"]["exact"] for call in client.list_calls] == ["a.umich.edu"]
+
+
+def test_a_for_real_run_prints_the_warning_banner_on_stderr_only(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC 11.2's `FOR REAL -- changes WILL be made to Cloudflare` banner.  Task 7 review,
+    important 2: absent before this fix, so the operator got the misleading `mode:` line with no
+    warning beside it.  stderr only -- Task 7 review, minor 8: a stream assertion that only
+    checks `in out` cannot tell a correctly-placed banner from one duplicated onto stdout."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert "FOR REAL -- changes WILL be made to Cloudflare" in captured.err
+    assert "FOR REAL -- changes WILL be made to Cloudflare" not in captured.out
+
+
+def test_a_dry_run_never_prints_the_for_real_banner(apc, tmp_path, monkeypatch, capsys):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, [path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert "FOR REAL" not in captured.err
+    assert "FOR REAL" not in captured.out
+
+
+def test_a_validation_failure_still_prints_the_summary_block(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC R8.1: 'On every exit path -- normal, fatal, or interrupted -- the run MUST print the
+    summary block.'  Task 7 review, important 3: measured on HEAD before this fix, the
+    validation-failure path wrote ZERO bytes to stdout -- exit 2 with no report at all."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "apply-platform-domains-cloudflare: direction=plan" in out
+    assert "not attempted 1" in out
 

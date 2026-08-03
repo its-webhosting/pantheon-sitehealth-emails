@@ -125,6 +125,30 @@ def report_line(text) -> None:
         point_at_devnull(sys.stdout if sys.stderr is None else sys.stderr)
 
 
+def write_report(text) -> None:
+    """One line of the report -- EVERY stdout write in this script MUST go through this, not a
+    bare print() (SPEC 11.1, added by the task 7 review).
+
+    `report_line` is stdout's counterpart on stderr; this is stdout's own.  CPython's shutdown
+    flush covers BOTH standard streams and turns a failure of EITHER into exit 120, overriding
+    whatever main() returned -- so an `except OSError` arm that correctly computes exit 2 is
+    silently overridden by the interpreter unless the doomed stream is detached FIRST.  Unlike
+    report_line (the end of the road, where swallowing is the point), a failed report write is
+    NOT swallowed: it is detached immediately, right here, and re-raised as a StartupError so
+    main()'s existing handler names it and returns 2 -- the interpreter's later shutdown flush
+    then hits an already-devnull-backed fd and succeeds, so 2 is what survives.  This is the
+    THIRD appearance of this exact bug class in this script family; CLAUDE.md records the other
+    two (find-platform-domains-dns's report_line, find-platform-domains-cloudflare's
+    write_json_stdout).
+    """
+    try:
+        print(text, flush=True)
+    except OSError as e:
+        point_at_devnull(sys.stdout)
+        raise StartupError(
+            f"cannot write the report to standard output: {type(e).__name__}: {e}") from e
+
+
 class PlanFileError(StartupError):
     """The input file is not a plan or revert file this script knows how to apply (SPEC 6).
 
@@ -534,7 +558,7 @@ def validate_entries(client, entries, *, verbose):
                     f"{expected} delete_match records -- verdict_for and validate_entries have "
                     "diverged on what D is")
         if verbose:
-            print(f"{fqdn}: {verdict}", flush=True)   # SPEC 11.2: verdict word ONLY, never the
+            write_report(f"{fqdn}: {verdict}")   # SPEC 11.2: verdict word ONLY, never the
             # detail -- the detail belongs to the unconditional stderr ATTENTION line (Task 7),
             # and printing both would put the same fact on two streams under -v.
         result[fqdn] = Validation(verdict, detail, delete_ids)
@@ -793,9 +817,20 @@ def summary_lines(*, direction, source, source_generated_at, for_real, entries_i
     Iterates OUTCOMES rather than a hardcoded name list, so a future addition to that tuple
     cannot silently vanish from the operator's only report -- the same reasoning as tally's
     zero-fill.
+
+    The `mode:` line is derived from the TALLY, never from `for_real` alone (SPEC 11.3, amended
+    by the task 7 review, important 2): "FOR REAL -- changes were made" is a claim about
+    production DNS, and a for-real run that reached no entry -- every one already-applied, or an
+    abort in validation -- would assert a rewrite that never happened.  `changed` is SPEC 8.1's
+    own definition (applied + unknown), so this stays true on every path, including the
+    transitional state where pass 3 (Task 8) is not yet wired and a for-real run can only ever
+    read "0 of N entries changed".
     """
-    mode = ("FOR REAL -- changes were made" if for_real
-            else "DRY RUN -- no changes were made")
+    if for_real:
+        changed = counts["applied"] + counts["unknown"]
+        mode = f"FOR REAL -- {changed} of {selected} entries changed"
+    else:
+        mode = "DRY RUN -- no changes were made"
     return [
         f"apply-platform-domains-cloudflare: direction={direction}",
         f"  source: {source} (generated {source_generated_at})",
@@ -816,9 +851,41 @@ def merge_body(entry, delete_ids):
 
     Cloudflare executes Deletes before Posts inside one database transaction, which is what lets
     a CNAME and its replacement A records -- which cannot coexist -- be swapped in one step.
+
+    Raises InvariantError (SPEC 9.1) on either of two malformed-input shapes, so both fail LOUD
+    and NAMED rather than as an anonymous KeyError or a silent partial write (task 7 review,
+    important 4 -- the same nil-shadow class verdict_for already guards, re-opened here in two
+    fresh instances; "fix the class, not the instance"):
+      - an entry whose body.posts is missing or empty -- section 6 check 7 should already have
+        made this fatal before pass 1 ever ran;
+      - a call with no delete ids at all.  Only a `ready` verdict's resolved ids may reach this
+        function; posting the new records while deleting NOTHING would leave the old record
+        standing beside them, exactly the partial write section 3 exists to prevent.
     """
-    return {"deletes": [{"id": identifier} for identifier in delete_ids],
-            "posts": entry["body"]["posts"]}
+    posts = entry.get("body", {}).get("posts")
+    if not posts:
+        raise InvariantError(
+            "merge_body: entry has an empty or missing body.posts -- section 6 check 7 should "
+            "have made this fatal before pass 1 ever ran")
+    if not delete_ids:
+        raise InvariantError(
+            "merge_body: called with no delete ids -- posting these records while deleting "
+            "nothing would leave the old record standing beside them, the partial write section "
+            "3 exists to prevent")
+    return {"deletes": [{"id": identifier} for identifier in delete_ids], "posts": posts}
+
+
+def render_records(items):
+    """SPEC 11.4's grouping rule: same-TYPE contents joined with ', ', different types joined
+    with ' + ' -- e.g. "A 23.185.0.4, 23.185.0.5 + AAAA 2620:12a:8000::4".  Task 7 review, minor
+    9: the original code used ", ".join throughout, which cannot express the distinction (two A
+    records would render indistinguishably from one A and one AAAA).  Groups in first-seen order
+    (dict preserves insertion order), matching the file's own posts/delete_match ordering.
+    """
+    groups = {}
+    for item in items:
+        groups.setdefault(item["type"], []).append(item["content"])
+    return " + ".join(f"{rtype} {', '.join(contents)}" for rtype, contents in groups.items())
 
 
 def describe_change(fqdn, entry):
@@ -827,13 +894,22 @@ def describe_change(fqdn, entry):
     It shows the zone ID rather than a zone name because a plan/revert entry carries zone_id and
     nothing else about the zone (zone_name lives only in the inventory, which this script never
     reads).  Looking a name up would be a second Cloudflare read per entry, for cosmetics.
+
+    Raises InvariantError (SPEC 9.1) on the same nil shadow verdict_for's guard already names --
+    an empty/missing delete_match or body.posts, which section 6 checks 7/8 should already have
+    made fatal before pass 1 ever ran.  Task 7 review, important 4: measured before this guard
+    existed, describe_change(empty posts) raised a bare, unnamed `IndexError` from `posts[0]`.
     """
-    before = ", ".join(f"{item['type']} {item['content']}" for item in entry["delete_match"])
-    after = ", ".join(f"{item['type']} {item['content']}" for item in entry["body"]["posts"])
-    first = entry["body"]["posts"][0]
+    deletes = entry.get("delete_match")
+    posts = entry.get("body", {}).get("posts")
+    if not deletes or not posts:
+        raise InvariantError(
+            "describe_change: entry has an empty or missing delete_match/body.posts -- section "
+            "6 checks 7 and 8 should have made this fatal before pass 1 ever ran")
+    first = posts[0]
     flags = "proxied" if first.get("proxied") else "DNS-only"
-    return (f"{fqdn}  zone {entry['zone_id']}  {before} -> {after}  "
-            f"({flags}, ttl {first.get('ttl')})")
+    return (f"{fqdn}  zone {entry['zone_id']}  {render_records(deletes)} -> "
+            f"{render_records(posts)}  ({flags}, ttl {first.get('ttl')})")
 
 
 def report_entries(entries, validations, *, verbose) -> None:
@@ -841,14 +917,14 @@ def report_entries(entries, validations, *, verbose) -> None:
     for fqdn, entry in sorted(entries.items()):
         validation = validations[fqdn]
         if validation.verdict == "already-applied":
-            print(f"{fqdn}  already applied -- nothing to do", flush=True)
+            write_report(f"{fqdn}  already applied -- nothing to do")
             continue
-        print(describe_change(fqdn, entry), flush=True)
+        write_report(describe_change(fqdn, entry))
         if verbose:
             body = merge_body(entry, validation.delete_ids)
-            print(f"    POST {entry['path']}", flush=True)
-            print("    " + json.dumps(body, indent=4, sort_keys=True).replace("\n", "\n    "),
-                  flush=True)
+            write_report(f"    POST {entry['path']}")
+            write_report("    " + json.dumps(body, indent=4, sort_keys=True).replace(
+                "\n", "\n    "))
 
 
 def build_arg_parser():
@@ -897,6 +973,39 @@ def build_arg_parser():
     return parser
 
 
+def abort_on_invalid_entries(validations, entries, *, direction, source, source_generated_at,  # noqa: PLR0913 -- every argument is a distinct SPEC 11.3 summary-block field main() already has in hand; bundling them into a second data structure just to shrink this list would not reduce what the caller passes
+                             for_real, entries_in_file) -> bool:
+    """SPEC R3.2/R8.1: name every invalid entry, print the summary block, and report the abort --
+    returns True when main() must stop at exit 2 having changed nothing.  Split out of main() as
+    a mechanical extraction (task 7 review's ruff C901 gate), not a behavior change: the messages
+    and their order are unchanged.
+
+    Nothing happened to ANY selected entry when this fires, valid or invalid -- pass 2/3 was
+    never reached -- so `not-attempted` is the only one of the six outcomes that fits (task 7
+    review, important 3; measured before this existed, the validation-failure path wrote ZERO
+    bytes to stdout, violating R8.1's "on every exit path").
+    """
+    invalid = {fqdn: v for fqdn, v in validations.items()
+               if v.verdict not in ("ready", "already-applied")}
+    for fqdn, validation in sorted(invalid.items()):
+        # NEVER -v-gated (SPEC R7.3): the only signal that a destructive run was refused.
+        print(f"ATTENTION: {fqdn} {validation.verdict}: {validation.detail}",
+              file=sys.stderr, flush=True)
+    if not invalid:
+        return False
+    abort_counts = tally(dict.fromkeys(entries, "not-attempted"))
+    for line in summary_lines(
+            direction=direction, source=source, source_generated_at=source_generated_at,
+            for_real=for_real, entries_in_file=entries_in_file, selected=len(entries),
+            counts=abort_counts, record_path="(none yet)"):
+        write_report(line)
+    report_line(
+        f"ERROR: {len(invalid)} of {len(entries)} selected entries did not match "
+        "Cloudflare's current state; NOTHING was changed.  Re-generate the baseline "
+        "with find-platform-domains-cloudflare and try again.")
+    return True
+
+
 def main(argv):
     """Exit 0/1/2/3/130 -- see the module docstring and SPEC section 8.
 
@@ -923,20 +1032,18 @@ def main(argv):
         client = cloudflare_client(options.config)
         validations = validate_entries(client, entries, verbose=options.verbose)
 
-        invalid = {fqdn: v for fqdn, v in validations.items()
-                   if v.verdict not in ("ready", "already-applied")}
-        for fqdn, validation in sorted(invalid.items()):
-            # NEVER -v-gated (SPEC R7.3): the only signal that a destructive run was refused.
-            print(f"ATTENTION: {fqdn} {validation.verdict}: {validation.detail}",
-                  file=sys.stderr, flush=True)
-        if invalid:
-            report_line(
-                f"ERROR: {len(invalid)} of {len(entries)} selected entries did not match "
-                "Cloudflare's current state; NOTHING was changed.  Re-generate the baseline "
-                "with find-platform-domains-cloudflare and try again.")
+        if abort_on_invalid_entries(
+                validations, entries, direction=direction, source=options.file,
+                source_generated_at=doc["generated"].get("at", "unknown"),
+                for_real=options.for_real, entries_in_file=len(doc["entries"])):
             return 2
 
         report_entries(entries, validations, verbose=options.verbose)
+        if options.for_real:
+            # SPEC 11.2: printed before the first batch call.  Pass 3 (the calls themselves) is
+            # wired in Task 8; until then this banner precedes a for-real run that changes
+            # nothing, which the tally-derived mode line below (SPEC 11.3) states honestly.
+            report_line("FOR REAL -- changes WILL be made to Cloudflare")
         outcomes = {fqdn: ("already-applied" if v.verdict == "already-applied" else "planned")
                     for fqdn, v in validations.items()}
         counts = tally(outcomes)
@@ -945,7 +1052,7 @@ def main(argv):
                 source_generated_at=doc["generated"].get("at", "unknown"),
                 for_real=options.for_real, entries_in_file=len(doc["entries"]),
                 selected=len(entries), counts=counts, record_path="(none yet)"):
-            print(line, flush=True)
+            write_report(line)
         return exit_code_for(counts)
     except StartupError as e:
         report_line(f"ERROR: {e}")
