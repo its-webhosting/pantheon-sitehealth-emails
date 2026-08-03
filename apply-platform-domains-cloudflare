@@ -807,6 +807,50 @@ def summary_lines(*, direction, source, source_generated_at, for_real, entries_i
     ]
 
 
+def merge_body(entry, delete_ids):
+    """The postable batch body (SPEC R5.1).
+
+    `posts` is the file's own list, passed through UNMODIFIED -- the whole value of the plan file
+    is that its body is "the exact JSON body to be used for the API call".  A shallow copy of the
+    envelope keeps this from mutating the entry, which is written to the run record afterwards.
+
+    Cloudflare executes Deletes before Posts inside one database transaction, which is what lets
+    a CNAME and its replacement A records -- which cannot coexist -- be swapped in one step.
+    """
+    return {"deletes": [{"id": identifier} for identifier in delete_ids],
+            "posts": entry["body"]["posts"]}
+
+
+def describe_change(fqdn, entry):
+    """One human line for one entry (SPEC 11.4), derived ENTIRELY from the entry.
+
+    It shows the zone ID rather than a zone name because a plan/revert entry carries zone_id and
+    nothing else about the zone (zone_name lives only in the inventory, which this script never
+    reads).  Looking a name up would be a second Cloudflare read per entry, for cosmetics.
+    """
+    before = ", ".join(f"{item['type']} {item['content']}" for item in entry["delete_match"])
+    after = ", ".join(f"{item['type']} {item['content']}" for item in entry["body"]["posts"])
+    first = entry["body"]["posts"][0]
+    flags = "proxied" if first.get("proxied") else "DNS-only"
+    return (f"{fqdn}  zone {entry['zone_id']}  {before} -> {after}  "
+            f"({flags}, ttl {first.get('ttl')})")
+
+
+def report_entries(entries, validations, *, verbose) -> None:
+    """Pass 2 (SPEC R3.3): identical in both modes, from the data pass 1 produced."""
+    for fqdn, entry in sorted(entries.items()):
+        validation = validations[fqdn]
+        if validation.verdict == "already-applied":
+            print(f"{fqdn}  already applied -- nothing to do", flush=True)
+            continue
+        print(describe_change(fqdn, entry), flush=True)
+        if verbose:
+            body = merge_body(entry, validation.delete_ids)
+            print(f"    POST {entry['path']}", flush=True)
+            print("    " + json.dumps(body, indent=4, sort_keys=True).replace("\n", "\n    "),
+                  flush=True)
+
+
 def build_arg_parser():
     """The CLI (SPEC R2).
 
@@ -866,14 +910,43 @@ def main(argv):
 
     Later tasks fill in the body between require_usable_streams() and the return.
     """
-    options = build_arg_parser().parse_args(argv)  # noqa: F841 -- unused until Task 2 reads
-    # options.file/.config/.only/.for_real/.verbose to drive the three passes
+    options = build_arg_parser().parse_args(argv)
     try:
         require_usable_streams()
-        return 0    # noqa: TRY300 -- replaced in Task 7 (pass 2/report).  This must stay inside
-        # try, not move to an else clause: every pass 1-3 call Task 2 onward inserts between
-        # require_usable_streams() and this return can raise StartupError/ApplyError/
-        # KeyboardInterrupt, and only code inside try is reachable by the except clauses below.
+
+        doc = read_apply_file(options.file)
+        direction = check_file_contract(doc, options.file)
+        entries = select_entries(doc["entries"], options.only)
+        if len(entries) != len(doc["entries"]):
+            print(f"ATTENTION: applying {len(entries)} of {len(doc['entries'])} entries in "
+                  f"this file", file=sys.stderr, flush=True)
+        client = cloudflare_client(options.config)
+        validations = validate_entries(client, entries, verbose=options.verbose)
+
+        invalid = {fqdn: v for fqdn, v in validations.items()
+                   if v.verdict not in ("ready", "already-applied")}
+        for fqdn, validation in sorted(invalid.items()):
+            # NEVER -v-gated (SPEC R7.3): the only signal that a destructive run was refused.
+            print(f"ATTENTION: {fqdn} {validation.verdict}: {validation.detail}",
+                  file=sys.stderr, flush=True)
+        if invalid:
+            report_line(
+                f"ERROR: {len(invalid)} of {len(entries)} selected entries did not match "
+                "Cloudflare's current state; NOTHING was changed.  Re-generate the baseline "
+                "with find-platform-domains-cloudflare and try again.")
+            return 2
+
+        report_entries(entries, validations, verbose=options.verbose)
+        outcomes = {fqdn: ("already-applied" if v.verdict == "already-applied" else "planned")
+                    for fqdn, v in validations.items()}
+        counts = tally(outcomes)
+        for line in summary_lines(
+                direction=direction, source=options.file,
+                source_generated_at=doc["generated"].get("at", "unknown"),
+                for_real=options.for_real, entries_in_file=len(doc["entries"]),
+                selected=len(entries), counts=counts, record_path="(none yet)"):
+            print(line, flush=True)
+        return exit_code_for(counts)
     except StartupError as e:
         report_line(f"ERROR: {e}")
         return 2

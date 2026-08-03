@@ -1032,3 +1032,128 @@ def test_summary_prints_the_source_files_own_timestamp(apc):
         counts=apc.tally({"a": "applied"}), record_path="x.json")
     assert any("2026-08-01T00:22:23Z" in line for line in lines)
 
+
+# ---------------------------------------------------------------------------------------------
+# Task 7: pass 2 (the report) and the dry run end to end (SPEC R3.3, R2.6, section 11).
+# ---------------------------------------------------------------------------------------------
+
+
+def test_merge_body_puts_deletes_beside_the_files_posts_unchanged(apc):
+    entry = plan_entry()
+    body = apc.merge_body(entry, ["rec-1"])
+    assert body["deletes"] == [{"id": "rec-1"}]
+    assert body["posts"] == entry["body"]["posts"]
+    assert set(body) == {"deletes", "posts"}
+
+
+def test_merge_body_never_mutates_the_entry(apc):
+    """The entry is written to the run record afterwards; a mutated body would misreport what
+    the file said."""
+    entry = plan_entry()
+    apc.merge_body(entry, ["rec-1"])
+    assert "deletes" not in entry["body"]
+
+
+def test_describe_change_shows_both_sides_and_the_zone_id(apc):
+    """SPEC 11.4: the zone ID, not a zone name -- the plan entry carries zone_id and nothing
+    else about the zone, and looking up a name would be a second API read for cosmetics."""
+    line = apc.describe_change("a.umich.edu", plan_entry())
+    assert "a.umich.edu" in line
+    assert "zone-a" in line
+    assert "live-umich-x.pantheonsite.io" in line
+    assert "23.185.0.4" in line
+    assert "2620:12a:8000::4" in line
+
+
+def run_main(apc, argv, tmp_path, client, monkeypatch):
+    """Drive main() with a fake client and a frozen clock."""
+    monkeypatch.setattr(apc, "cloudflare_client", lambda path: client)
+    monkeypatch.setattr(apc, "now_utc", lambda: "2026-08-03T14:22:11Z")
+    monkeypatch.chdir(tmp_path)
+    return apc.main(argv)
+
+
+def test_a_dry_run_makes_zero_batch_calls(apc, tmp_path, monkeypatch, capsys):
+    """SPEC R2.6, the primary blast-radius control.  Asserted against the fake client's RECORDED
+    calls, never inferred from the absence of an error."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert client.batch_calls == []
+    assert code == 0
+    assert "DRY RUN" in capsys.readouterr().out
+
+
+def test_a_dry_run_reports_the_change_it_would_make(apc, tmp_path, monkeypatch, capsys):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, [path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert "a.umich.edu" in out
+    assert "23.185.0.4" in out
+
+
+def test_verbose_prints_the_exact_request_body(apc, tmp_path, monkeypatch, capsys):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, ["-v", path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert "/zones/zone-a/dns_records/batch" in out
+    assert '"deletes"' in out
+    assert '"rec-1"' in out
+
+
+def test_an_invalid_entry_aborts_the_run_at_exit_two_with_nothing_applied(
+        apc, tmp_path, monkeypatch, capsys):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 2
+    assert client.batch_calls == []
+    assert "ATTENTION" in capsys.readouterr().err
+
+
+def test_every_invalid_entry_is_named_on_stderr_never_v_gated(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC R7.3 / 11.2: these are the only signal that a destructive run was refused."""
+    doc = plan_doc(entries={"a.umich.edu": plan_entry(),
+                            "b.umich.edu": plan_entry(fqdn="b.umich.edu")})
+    path = write_doc(tmp_path, doc)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]], "b.umich.edu": [[]]})
+    run_main(apc, [path], tmp_path, client, monkeypatch)
+    err = capsys.readouterr().err
+    assert "a.umich.edu" in err
+    assert "b.umich.edu" in err
+    assert "records-missing" in err
+
+
+def test_an_already_applied_run_exits_one_and_calls_nothing(
+        apc, tmp_path, monkeypatch, capsys):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 1
+    assert client.batch_calls == []
+
+
+def test_a_subset_run_warns_how_much_of_the_file_it_covers(
+        apc, tmp_path, monkeypatch, capsys):
+    doc = plan_doc(entries={"a.umich.edu": plan_entry(),
+                            "b.umich.edu": plan_entry(fqdn="b.umich.edu")})
+    path = write_doc(tmp_path, doc)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, ["--only", "a.umich.edu", path], tmp_path, client, monkeypatch)
+    assert "ATTENTION: applying 1 of 2 entries" in capsys.readouterr().err
+
+
+def test_an_unselected_entry_is_never_validated(apc, tmp_path, monkeypatch):
+    """SPEC R7.2a: validating an entry the run will not touch would let an unrelated FQDN's
+    drift abort a deliberately narrow, safe run."""
+    doc = plan_doc(entries={"a.umich.edu": plan_entry(),
+                            "b.umich.edu": plan_entry(fqdn="b.umich.edu")})
+    path = write_doc(tmp_path, doc)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, ["--only", "a.umich.edu", path], tmp_path, client, monkeypatch)
+    assert code == 0
+    assert [call["name"]["exact"] for call in client.list_calls] == ["a.umich.edu"]
+
