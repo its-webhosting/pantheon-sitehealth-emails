@@ -637,7 +637,7 @@ really fails (`/dev/full`), never `subprocess.DEVNULL`, which accepts every writ
 | pass-1 progress: `<fqdn>: <verdict>` — the verdict word **only**, never the detail | `-v` | stdout |
 | per-entry change line (§11.4) | always, both modes | stdout |
 | `POST /zones/<id>/dns_records/batch` + the exact merged JSON body | `-v` | stdout |
-| per-entry result in pass 3: `applied` / `failed` + reason | always | stdout |
+| per-entry result in pass 3: `<fqdn>  applied`, or `<fqdn>  FAILED -- <reason>` / `<fqdn>  UNVERIFIED -- <reason>` / `<fqdn>  UNKNOWN -- <reason>` | always | stdout |
 | per-entry, when the verdict is `already-applied`: `<fqdn>  already applied -- nothing to do` | always, both modes | stdout |
 | every invalid verdict: `ATTENTION: <fqdn> <code>: <detail>` | **always, never `-v`-gated** | stderr |
 | the validation-failure abort: `ERROR: N of M selected entries did not match Cloudflare's current state; NOTHING was changed. …` | always (that path only) | stderr |
@@ -648,6 +648,14 @@ really fails (`/dev/full`), never `subprocess.DEVNULL`, which accepts every writ
 *Intent for the `already-applied` row:* it is what tells an operator which entries a re-run skipped
 — the affordance R4.2's carve-out exists to provide. It is deliberately **not** the §11.4 change
 line, because there is no change to describe.
+
+*Intent for the reason appearing on **both** streams:* a failing entry's reason is written to stdout
+as part of its result line **and** to stderr as the `ERROR:` line. This is the one deliberate
+duplication in this table, and it is not an oversight. §11.1's stated purpose for stdout is that
+`> apply.log` captures the account of the change — a log recording *that* an entry failed and never
+*why*, for a run that left production DNS partially rewritten, is not an account of anything. The
+stderr copy exists for the different audience §11.1 names: the operator watching a terminal, who
+must not have to scroll a 217-entry report to find out something broke.
 
 ### 11.3 The summary block
 
