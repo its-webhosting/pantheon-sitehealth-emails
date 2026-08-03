@@ -28,16 +28,16 @@ import io
 import json
 import os
 import re
-import shlex  # noqa: F401 -- unused until Task 9's run-record rerun command
+import shlex
 import signal  # noqa: F401 -- unused until Task 9's SIGINT-during-flush guard
 import sys
 import tempfile
 import time
-import tomllib  # noqa: F401 -- unused until Task 3 reads --config's TOML
+import tomllib
 from pathlib import Path
 
 import cloudflare  # noqa: F401 -- for cloudflare.CloudflareError, unused until Task 5 (pass 1)
-from cloudflare import Cloudflare  # noqa: F401 -- unused until Task 3's pinned client
+from cloudflare import Cloudflare
 
 DEFAULT_CONFIG = "pantheon-sitehealth-emails.toml"
 API_BASE_URL = "https://api.cloudflare.com/client/v4"   # pinned; see build_client
@@ -338,6 +338,202 @@ def select_entries(entries, only):
             + ("an FQDN that is not" if len(missing) == 1 else "FQDNs that are not")
             + " in this file: " + ", ".join(sorted(missing)))
     return {fqdn: entries[fqdn] for fqdn in entries if fqdn in set(wanted)}
+
+
+def resolve_env_marker(expr, where):
+    """Resolve the body of ONE `<{ ... }` marker.  Only the env forms this script needs.
+
+    Accepts `env NAME [DEFAULT]` and `secret env NAME [DEFAULT]` -- the two forms
+    plugin/env/__init__.py registers.  Anything else (`secret aws ...`, `umich ...`) raises,
+    rather than passing the literal marker through: a literal "<{secret aws ...}" handed to the
+    API as a token would surface as a baffling 401 instead of a config error.
+
+    Tokenizing deliberately uses shlex.split() rather than the config engine's
+    list(shlex.shlex(expr, posix=True)), which ALSO splits on punctuation and so turns
+    "env FOO some-default" into five tokens; the engine then scores 3 of 5 and reports "no match
+    found for configuration file value".  The two agree on every marker the main program can
+    actually resolve; this one is marginally more permissive about defaults containing
+    punctuation.
+    """
+    try:
+        argv = shlex.split(expr)
+    except ValueError as e:
+        # shlex raises on an unbalanced quote, e.g. <{env FOO don't}.  Without this the
+        # ValueError escapes main() as a raw traceback at exit 1 -- a code SPEC R6 does not use.
+        # The body is NOT echoed: the <{env NAME DEFAULT} form can carry a literal credential
+        # as its default, and this message reaches stderr and any operator log.
+        raise StartupError(f"{where}: malformed substitution ({e})") from e
+    # The FORM only (the leading keywords, never an argument): "secret aws", "umich", "env".
+    # argv[:2] AFTER the strip below would still carry the secret's path.
+    form = " ".join(argv[:2]) or "(empty)"
+    if argv[:1] == ["secret"]:
+        argv = argv[1:]
+    if argv[:1] != ["env"] or not 2 <= len(argv) <= 3:  # noqa: PLR2004 -- NAME, or NAME + DEFAULT
+        raise StartupError(
+            f"{where}: this script resolves only <{{env NAME}} and <{{secret env NAME}} "
+            f"substitutions (each with an optional default), not '{form}'.  Put a literal or "
+            "an environment-backed value there.  (The rest of the body is withheld: an inline "
+            "default can be a credential.)")
+    name = argv[1]
+    if name in os.environ:
+        return os.environ[name]
+    if len(argv) == 3:  # noqa: PLR2004 -- the DEFAULT is present
+        return argv[2]
+    raise StartupError(f"{where}: environment variable '{name}' is not set")
+
+
+def resolve_config_value(value, where):
+    """Resolve every `<{ ... }` marker inside one config value.  Non-strings pass through."""
+    if not isinstance(value, str):
+        return value
+    return MARKER_RE.sub(lambda match: resolve_env_marker(match.group(1), where), value)
+
+
+def build_client(**creds):
+    """Build a Cloudflare client that uses EXACTLY the credentials the config supplied.
+
+    Measured on cloudflare 5.4.0: the SDK back-fills every credential argument left None from the
+    environment.  It reads SIX variables, and ambient values reach the wire by FOUR routes --
+
+      1. `auth_headers` returns the FIRST of email -> key -> token -> user_service_key that is
+         set, and only that one -- so an ambient CLOUDFLARE_EMAIL beats a configured token;
+      2. `default_headers` separately adds X-Auth-Key / X-Auth-Email whenever those attributes
+         are not None;
+      3. $CLOUDFLARE_CUSTOM_HEADERS is merged LAST into default_headers, overriding 1 and 2; and
+      4. $CLOUDFLARE_BASE_URL redirects every request, sending the configured credential to an
+         arbitrary host.
+
+    Routes 1 and 2 are closed by nulling the fields the config did not supply (both read these
+    attributes at request-build time); route 3 by clearing _custom_headers; route 4 by pinning
+    base_url.  Routes 3 and 4 were missed on the first pass -- and 4 is worse than the defect
+    this function was written for, because the credential LEAVES THE MACHINE rather than merely
+    failing to authenticate.  This pin is SDK-version-sensitive: measured against cloudflare
+    5.4.0, and pyproject declares the dependency unpinned as "cloudflare".
+
+    The main program carries the SAME pin, by the same mechanism, in
+    plugin/cloudflare/client.py's pinned_client() (added 2026-07-30, commit befb913).
+    find-platform-domains-cloudflare carries a second, independent copy for the same reason (it
+    imports nothing from plugin/, so it stays `git rm`-deletable). This is a deliberate THIRD
+    COPY, not a fork: this utility also imports nothing from plugin/ or find-platform-domains-
+    cloudflare, so deleting it stays `git rm` of this file and its .py symlink.  An SDK upgrade
+    must re-verify ALL THREE -- each has its own test asserting a REAL built request rather than
+    these attribute assignments, so a change that breaks any one goes red rather than silently
+    reopening the route.
+
+    THIS copy is the only one of the three that performs WRITES.  That raises route 4
+    ($CLOUDFLARE_BASE_URL) from "the credential leaves the machine" to "the credential leaves the
+    machine AND a destructive rewrite is aimed at whatever host answers".  The pin is therefore
+    load-bearing here in a way it is not in the two read-only siblings.
+    """
+    try:
+        client = Cloudflare(**creds, base_url=API_BASE_URL)
+    except OSError as e:
+        # httpx builds its SSL context from the ambient environment (trust_env=True), so an
+        # $SSL_CERT_FILE pointing at a missing path raises here -- another unnamed escape to
+        # exit 1 if left alone (SPEC section R2a, residual routes).
+        raise StartupError(f"could not build the Cloudflare client: {e}") from e
+    for field in ("api_token", "api_key", "api_email", "user_service_key"):
+        if field not in creds:
+            setattr(client, field, None)
+    client._custom_headers = {}  # noqa: SLF001 -- $CLOUDFLARE_CUSTOM_HEADERS is merged LAST
+    # into default_headers, so it overrides the pinned Omit()s above; there is no public API
+    # for "ignore that variable".  Measured: without this line and the base_url pin above,
+    # exporting CLOUDFLARE_BASE_URL pointed at an attacker host, together with a
+    # CLOUDFLARE_CUSTOM_HEADERS value supplying X-Auth-Email and X-Auth-Key, sends
+    # `Authorization: Bearer <the real token>` to that host -- the pinned credential leaves the
+    # machine.  That is strictly worse than the defect the field pinning above fixes.
+    return client
+
+
+def cloudflare_client(config_path):
+    """Build the Cloudflare client from the [Cloudflare] table of the TOML at `config_path`.
+
+    api_token wins when present; otherwise email + api_key, both required -- the same precedence
+    plugin/cloudflare/client.py uses.  `enabled` is deliberately NOT consulted: that flag governs
+    the main program's per-site Cloudflare work, and refusing to run this utility because of it
+    would be a surprise to an operator who invoked it on purpose.
+    """
+    try:
+        with Path(config_path).open("rb") as handle:
+            config = tomllib.load(handle)
+    except OSError as e:
+        raise StartupError(f"cannot read {config_path}: {e}") from e
+    except ValueError as e:
+        # ValueError, not TOMLDecodeError: tomllib.load decodes the bytes itself, so a config
+        # file that is not valid UTF-8 raises UnicodeDecodeError -- which is NOT a
+        # TOMLDecodeError, and escaped as a raw traceback at exit 1 (a code SPEC R6 does not
+        # use).  Both are ValueError subclasses, so one clause closes the class rather than the
+        # instance -- the third time this defect class appeared (SPEC section 13).
+        raise StartupError(f"{config_path} is not valid TOML: {e}") from e
+
+    section = config.get("Cloudflare")
+    if not isinstance(section, dict):
+        raise StartupError(f"{config_path} has no [Cloudflare] section")
+
+    def value(key):
+        """One credential, type-checked where it is read then marker-resolved.
+
+        TOML is a typed format, so `api_token = true` (an unquoted value -- an ordinary typo) is
+        a bool, which `if api_token:` accepts and the SDK stringifies into
+        `Authorization: Bearer True` -- exactly the confusing 401 that resolve_env_marker refuses
+        to cause for an unresolvable marker.  The check belongs here, where the value is read.
+        """
+        raw = section.get(key)
+        where = f"{config_path} [Cloudflare].{key}"
+        if raw is not None and not isinstance(raw, str):
+            raise StartupError(f"{where} must be a string, got {type(raw).__name__}")
+        return resolve_config_value(raw, where)
+
+    api_token = value("api_token")
+    if api_token:
+        return build_client(api_token=api_token)
+    email = value("email")
+    api_key = value("api_key")
+    if not email or not api_key:
+        raise StartupError(
+            f"{config_path} [Cloudflare] needs either api_token, or both email and api_key")
+    return build_client(api_email=email, api_key=api_key)
+
+
+def api_error_text(e):
+    """A message for a Cloudflare API failure (SPEC 9.1).
+
+    Adapted from find-platform-domains-cloudflare's function of the same name, which NEVER admits
+    a response body.  Its docstring gives two reasons: "a DNS-record body echoes record contents
+    and an auth-failure body can echo the credential."  The first does not apply here -- this
+    script's operator already holds the file describing those exact records, and a failed WRITE is
+    undiagnosable without Cloudflare's own reason for it.  The second is real, and rule 2 below is
+    what keeps it closed.
+
+    Three rules, exhaustive:
+      1. Only the structured errors[].code and errors[].message.  NEVER str(e), never the raw
+         body, never headers, never error_chain or any other nested member.
+      2. NOTHING but the class and the status on HTTP 401/403 -- exactly the response class the
+         sibling's warning is about.  An auth failure needs no per-record diagnosis anyway: the
+         run is misconfigured, not drifted.
+      3. Each message truncated to ERROR_MESSAGE_LIMIT characters, and the error count reported,
+         so a large or repeating array cannot fill a terminal or a log.
+    """
+    status = getattr(e, "status_code", None)
+    if status is None:
+        return f"{type(e).__name__}: {e}"
+    if status in (401, 403):
+        return (f"{type(e).__name__}: HTTP {status} (authentication or authorization failed; "
+                "the response is withheld because it can echo the credential)")
+    body = getattr(e, "body", None)
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, list) or not errors:
+        return f"{type(e).__name__}: HTTP {status}"
+    parts = []
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        code = item.get("code")
+        message = str(item.get("message", ""))[:ERROR_MESSAGE_LIMIT]
+        parts.append(f"{code} {message}".strip())
+    if not parts:
+        return f"{type(e).__name__}: HTTP {status}"
+    return f"{type(e).__name__}: HTTP {status} ({len(parts)} error(s)): " + "; ".join(parts)
 
 
 def build_arg_parser():

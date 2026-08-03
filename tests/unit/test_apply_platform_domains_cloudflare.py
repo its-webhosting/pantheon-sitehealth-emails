@@ -16,6 +16,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -263,3 +264,121 @@ def test_select_entries_names_every_miss(apc):
     message = str(excinfo.value)
     assert "nope.umich.edu" in message
     assert "also-nope.umich.edu" in message
+
+
+def config_file(tmp_path, body):
+    path = tmp_path / "config.toml"
+    path.write_text(body)
+    return str(path)
+
+
+def test_cloudflare_client_prefers_the_api_token(apc, tmp_path, monkeypatch):
+    monkeypatch.delenv("CLOUDFLARE_EMAIL", raising=False)
+    path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
+    client = apc.cloudflare_client(path)
+    request = client._build_request(
+        types.SimpleNamespace(method="get", url="/zones", headers={}, json_data=None,
+                              files=None, params={}, extra_json=None, timeout=None,
+                              follow_redirects=None, idempotency_key=None, post_parser=None))
+    assert request.headers["Authorization"] == "Bearer tok-123"
+
+
+def test_cloudflare_client_ignores_an_ambient_base_url(apc, tmp_path, monkeypatch):
+    """The worst of the four routes: an ambient CLOUDFLARE_BASE_URL sends the CONFIGURED
+    credential to an arbitrary host.  Asserted against a REAL BUILT REQUEST, not against the
+    attribute assignments that implement the pin -- the sibling's set-intersection version of
+    this assertion silently missed the _custom_headers route."""
+    monkeypatch.setenv("CLOUDFLARE_BASE_URL", "https://attacker.example/")
+    path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
+    client = apc.cloudflare_client(path)
+    assert str(client.base_url).startswith(apc.API_BASE_URL)
+
+
+def test_cloudflare_client_ignores_ambient_custom_headers(apc, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_CUSTOM_HEADERS", "X-Auth-Email: leak@example.com")
+    path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
+    client = apc.cloudflare_client(path)
+    assert client._custom_headers == {}
+
+
+def test_cloudflare_client_ignores_an_ambient_email(apc, tmp_path, monkeypatch):
+    """auth_headers returns the FIRST of email -> key -> token, so an ambient CLOUDFLARE_EMAIL
+    beats a configured api_token and the token is never sent."""
+    monkeypatch.setenv("CLOUDFLARE_EMAIL", "ambient@example.com")
+    monkeypatch.setenv("CLOUDFLARE_API_KEY", "ambient-key")
+    path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
+    client = apc.cloudflare_client(path)
+    assert client.api_email is None
+    assert client.api_key is None
+
+
+def test_cloudflare_client_falls_back_to_email_and_key(apc, tmp_path):
+    path = config_file(tmp_path,
+                       '[Cloudflare]\nemail = "a@b.edu"\napi_key = "k"\n')
+    client = apc.cloudflare_client(path)
+    assert client.api_email == "a@b.edu"
+    assert client.api_token is None
+
+
+def test_cloudflare_client_refuses_a_non_string_credential(apc, tmp_path):
+    """TOML is typed: `api_token = true` is an ordinary unquoted-value typo, and the SDK would
+    stringify it into `Authorization: Bearer True` -- a baffling 401."""
+    path = config_file(tmp_path, "[Cloudflare]\napi_token = true\n")
+    with pytest.raises(apc.StartupError, match="must be a string"):
+        apc.cloudflare_client(path)
+
+
+def test_resolve_env_marker_refuses_a_form_it_cannot_resolve(apc):
+    """A literal "<{secret aws ...}" handed to the API as a token surfaces as a baffling 401
+    instead of a config error.  The body is withheld: an inline default can be a credential."""
+    with pytest.raises(apc.StartupError) as excinfo:
+        apc.resolve_env_marker("secret aws prod/key", "cfg [Cloudflare].api_token")
+    assert "prod/key" not in str(excinfo.value)
+
+
+def fake_api_status_error(status_code, body):
+    """A fake matching the shape api_error_text() reads: status_code + body, class name
+    "APIStatusError".
+
+    NOT `types.SimpleNamespace(...)` with `__class__` reassigned afterwards: SimpleNamespace is
+    not a CPython heap type (`__flags__ & Py_TPFLAGS_HEAPTYPE == 0`), so that reassignment always
+    raises "TypeError: __class__ assignment only supported for mutable types..." -- reproducible
+    on plain SimpleNamespace with no api_error_text involved at all.  The sibling's own
+    `test_api_error_text_never_includes_a_real_response_body` sidesteps the same trap by
+    constructing a real `cloudflare.PermissionDeniedError` instead.  Building the dynamic class
+    and instantiating it directly (rather than grafting it onto an existing instance) gets the
+    same "class name is APIStatusError" fake without hitting that restriction.
+    """
+    error_cls = type("APIStatusError", (Exception,), {})
+    error = error_cls()
+    error.status_code = status_code
+    error.body = body
+    return error
+
+
+def test_api_error_text_says_nothing_but_the_status_on_an_auth_failure(apc):
+    """SPEC 9.1 rule 2.  The sibling's docstring: "an auth-failure body can echo the credential".
+    401 and 403 report the class and status ALONE."""
+    for status in (401, 403):
+        error = fake_api_status_error(
+            status, {"errors": [{"code": 10000, "message": "SECRET-TOKEN"}]})
+        text = apc.api_error_text(error)
+        assert str(status) in text
+        assert "SECRET-TOKEN" not in text
+
+
+def test_api_error_text_admits_structured_errors_on_a_non_auth_failure(apc):
+    error = fake_api_status_error(
+        400, {"errors": [{"code": 81058, "message": "An identical record already exists."}]})
+    text = apc.api_error_text(error)
+    assert "81058" in text
+    assert "identical record already exists" in text
+
+
+def test_api_error_text_truncates_a_long_message(apc):
+    """SPEC 9.1 rule 3: an unexpectedly large or repeating error array must not become a dump of
+    arbitrary server-supplied text in an operator's log."""
+    error = fake_api_status_error(400, {"errors": [{"code": 1, "message": "x" * 300}]})
+    text = apc.api_error_text(error)
+    assert "x" * apc.ERROR_MESSAGE_LIMIT in text
+    assert "x" * (apc.ERROR_MESSAGE_LIMIT + 1) not in text
