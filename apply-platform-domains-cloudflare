@@ -34,7 +34,7 @@ import sys
 import tempfile
 import time
 import tomllib  # noqa: F401 -- unused until Task 3 reads --config's TOML
-from pathlib import Path  # noqa: F401 -- unused until Task 9's run-record path
+from pathlib import Path
 
 import cloudflare  # noqa: F401 -- for cloudflare.CloudflareError, unused until Task 5 (pass 1)
 from cloudflare import Cloudflare  # noqa: F401 -- unused until Task 3's pinned client
@@ -223,6 +223,121 @@ def write_json_atomic(path, data) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def read_apply_file(path):
+    """Parse the input file.  Every failure is a PlanFileError naming the path (SPEC 6, 1)."""
+    try:
+        with Path(path).open("rb") as handle:
+            doc = json.load(handle)
+    except OSError as e:
+        raise PlanFileError(f"cannot read {path}: {e}") from e
+    except ValueError as e:
+        # ValueError, not JSONDecodeError: json.load decodes the bytes itself, so a file that is
+        # not valid UTF-8 raises UnicodeDecodeError -- NOT a JSONDecodeError.  Both are
+        # ValueError subclasses, so one clause closes the CLASS rather than the instance.  The
+        # sibling shipped this exact defect three times before closing it the same way.
+        raise PlanFileError(f"{path} is not valid JSON: {e}") from e
+    if not isinstance(doc, dict):
+        raise PlanFileError(f"{path} is not a JSON object (got {type(doc).__name__})")
+    return doc
+
+
+def check_record_list(items, where):
+    """SPEC section 6 checks 7 and 8: a non-empty list of {type, name, content} in scope."""
+    if not isinstance(items, list) or not items:
+        raise PlanFileError(f"{where}: must be a non-empty list")
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise PlanFileError(f"{where}[{index}]: not an object")
+        for field in ("type", "name", "content"):
+            if not item.get(field):
+                raise PlanFileError(f"{where}[{index}]: missing '{field}'")
+        if item["type"] not in GOVERNED_TYPES:
+            raise PlanFileError(
+                f"{where}[{index}]: type must be one of {', '.join(GOVERNED_TYPES)}, got "
+                f"{item['type']!r}")
+
+
+def check_entry_contract(fqdn, entry, path):
+    """SPEC section 6 checks 4-8, for one entry.
+
+    Split out of check_file_contract so the per-file checks (2-3) and the per-entry checks
+    (4-8) each stay under ruff's C901 complexity cap -- a mechanical split, not a behavior
+    change: the messages and the `path entry fqdn` prefix are unchanged.
+    """
+    where = f"{path} entry {fqdn}"
+    if not isinstance(entry, dict):
+        raise PlanFileError(f"{where}: not an object")
+    for field in ("zone_id", "method", "path", "body", "delete_match"):
+        if field not in entry:
+            raise PlanFileError(f"{where}: missing required field '{field}'")
+    if entry["method"] != "POST":
+        raise PlanFileError(
+            f"{where}: method must be 'POST', got {entry['method']!r}")
+    expected_path = f"/zones/{entry['zone_id']}/dns_records/batch"
+    if entry["path"] != expected_path:
+        raise PlanFileError(
+            f"{where}: path must be {expected_path!r} (built from this entry's own "
+            f"zone_id), got {entry['path']!r}")
+    body = entry["body"]
+    if not isinstance(body, dict):
+        raise PlanFileError(f"{where}: body must be an object")
+    if "deletes" in body:
+        raise PlanFileError(
+            f"{where}: body must not contain 'deletes' -- record ids are resolved against "
+            "Cloudflare at apply time, so any ids baked into the file cannot be correct")
+    check_record_list(body.get("posts"), f"{where} body.posts")
+    check_record_list(entry["delete_match"], f"{where} delete_match")
+
+
+def check_file_contract(doc, path):
+    """SPEC section 6's eight checks, in order.  Returns the direction.
+
+    Fatal rather than per-entry: a file malformed in one entry is a file whose provenance is in
+    question.  After this returns, every entry is known to carry zone_id/method/path/body/
+    delete_match, a POST to its own zone's batch path, a non-empty `posts` with no `deletes`
+    beside it, and only CNAME/A/AAAA types -- which is what makes GOVERNED_TYPES total downstream.
+    """
+    generated = doc.get("generated")
+    direction = generated.get("direction") if isinstance(generated, dict) else None
+    if direction == "excluded":
+        raise PlanFileError(
+            f"{path} is an EXCLUDED file (generated.direction is 'excluded'), not a plan or a "
+            "revert.  An excluded file records why FQDNs got no rewrite instructions; it carries "
+            "no request body and there is nothing to apply.")
+    if direction not in ("plan", "revert"):
+        raise PlanFileError(
+            f"{path}: generated.direction must be 'plan' or 'revert', got {direction!r}")
+
+    entries = doc.get("entries")
+    if not isinstance(entries, dict) or not entries:
+        raise PlanFileError(f"{path} has no entries to apply")
+
+    for fqdn, entry in sorted(entries.items()):
+        check_entry_contract(fqdn, entry, path)
+    return direction
+
+
+def select_entries(entries, only):
+    """SPEC R7.  Without --only, everything; with it, exactly the named FQDNs.
+
+    EVERY unmatched name is named, not just the first: a typo that silently narrows a destructive
+    run is the under-reporting failure this family of scripts refuses to have (R7.3).  Unselected
+    entries are never validated and never counted as anything but "in the file" (R7.2a) --
+    validating an entry the run will not touch would let an unrelated FQDN's drift abort a
+    deliberately narrow, safe run.
+    """
+    if only is None:
+        return dict(entries)
+    wanted = [normalize(name) for name in only]
+    missing = [name for name in wanted if name not in entries]
+    if missing:
+        raise StartupError(
+            "--only named "
+            + ("an FQDN that is not" if len(missing) == 1 else "FQDNs that are not")
+            + " in this file: " + ", ".join(sorted(missing)))
+    return {fqdn: entries[fqdn] for fqdn in entries if fqdn in set(wanted)}
 
 
 def build_arg_parser():
