@@ -16,10 +16,11 @@ import importlib.util
 import json
 import subprocess
 import sys
-import types
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
+import cloudflare
+import httpx
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -272,15 +273,66 @@ def config_file(tmp_path, body):
     return str(path)
 
 
-def test_cloudflare_client_prefers_the_api_token(apc, tmp_path, monkeypatch):
-    monkeypatch.delenv("CLOUDFLARE_EMAIL", raising=False)
+def sent_request(client):
+    """The request the SDK would actually send.  Offline: _build_request performs no I/O.
+
+    Review round 1, finding 1: the ORIGINAL version of this test file asserted against attribute
+    state (`client.base_url`, `client._custom_headers`, `client.api_email`) for three of the four
+    pinned routes, and SPEC section 16 / section 14 group 13 are explicit that this is not a
+    substitute for a real built request -- an SDK refactor that kept the same public attribute
+    names but snapshotted credentials at __init__ time left all three attribute assertions green
+    while the ambient credential still reached the wire.  `cloudflare._models.FinalRequestOptions`
+    is the SDK's own request-options type, not a `types.SimpleNamespace` stand-in (the sibling's
+    idiom, ported here by name).
+    """
+    from cloudflare._models import FinalRequestOptions
+    return client._build_request(FinalRequestOptions(method="get", url="/zones"))
+
+
+# The SDK reads six ambient variables (cloudflare 5.4.0); exporting ALL of them is what makes
+# test_cloudflare_client_sends_only_the_configured_credential a real proof rather than a sample --
+# a regression that dropped any one field from the pin goes red.  Ported from the sibling's
+# AMBIENT_CLOUDFLARE_VARS (review round 1, finding 1).
+AMBIENT_CLOUDFLARE_VARS = {
+    "CLOUDFLARE_API_TOKEN": "ambient-token",
+    "CLOUDFLARE_API_KEY": "ambient-key",
+    "CLOUDFLARE_EMAIL": "ambient@example.edu",
+    "CLOUDFLARE_API_USER_SERVICE_KEY": "ambient-usk",
+    "CLOUDFLARE_BASE_URL": "https://attacker.example/v4",
+    "CLOUDFLARE_CUSTOM_HEADERS": "X-Auth-Email: attacker@attacker.example\nX-Auth-Key: evil-key",
+}
+
+
+def test_cloudflare_client_prefers_the_api_token(apc, tmp_path):
     path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
     client = apc.cloudflare_client(path)
-    request = client._build_request(
-        types.SimpleNamespace(method="get", url="/zones", headers={}, json_data=None,
-                              files=None, params={}, extra_json=None, timeout=None,
-                              follow_redirects=None, idempotency_key=None, post_parser=None))
+    request = sent_request(client)
     assert request.headers["Authorization"] == "Bearer tok-123"
+
+
+def test_cloudflare_client_sends_only_the_configured_credential(apc, tmp_path, monkeypatch):
+    """SPEC section 16, asserted as the security property itself rather than the attribute state
+    that implements it (review round 1, finding 1).  ALL SIX ambient variables the SDK reads are
+    exported, so a regression in any one of the four pinned routes goes red here -- proven by
+    mutation: with `client._custom_headers = {}` deleted, this test goes red while the three
+    attribute-only assertions it replaces stayed green (pasted in the task report)."""
+    for name, value in AMBIENT_CLOUDFLARE_VARS.items():
+        monkeypatch.setenv(name, value)
+    path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
+    client = apc.cloudflare_client(path)
+
+    request = sent_request(client)
+    assert str(request.url).startswith(apc.API_BASE_URL)
+    assert request.headers.get("authorization") == "Bearer tok-123"
+    # Each route named explicitly.  A set-intersection against the env var VALUES cannot see
+    # route 3 ($CLOUDFLARE_CUSTOM_HEADERS): its value is "X-Auth-Email: attacker@..." while the
+    # header it injects is just "attacker@...".
+    assert request.headers.get("x-auth-email") is None      # routes 1, 2 and 3
+    assert request.headers.get("x-auth-key") is None         # routes 2 and 3
+    assert "attacker.example" not in str(request.headers)    # route 3 payload
+    assert "attacker.example" not in str(request.url)        # route 4
+    assert "ambient-key" not in str(request.headers)
+    assert "ambient-token" not in str(request.headers)
 
 
 def test_cloudflare_client_ignores_an_ambient_base_url(apc, tmp_path, monkeypatch):
@@ -290,11 +342,14 @@ def test_cloudflare_client_ignores_an_ambient_base_url(apc, tmp_path, monkeypatc
     this assertion silently missed the _custom_headers route."""
     monkeypatch.setenv("CLOUDFLARE_BASE_URL", "https://attacker.example/")
     path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
-    client = apc.cloudflare_client(path)
-    assert str(client.base_url).startswith(apc.API_BASE_URL)
+    request = sent_request(apc.cloudflare_client(path))
+    assert "attacker.example" not in str(request.url)
+    assert str(request.url).startswith(apc.API_BASE_URL)
 
 
 def test_cloudflare_client_ignores_ambient_custom_headers(apc, tmp_path, monkeypatch):
+    """Attribute-state MECHANISM check, kept alongside the wire-level proof above -- SPEC section
+    16 / section 14 group 13 forbid this being the ONLY assertion, not that it may not exist."""
     monkeypatch.setenv("CLOUDFLARE_CUSTOM_HEADERS", "X-Auth-Email: leak@example.com")
     path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
     client = apc.cloudflare_client(path)
@@ -303,7 +358,8 @@ def test_cloudflare_client_ignores_ambient_custom_headers(apc, tmp_path, monkeyp
 
 def test_cloudflare_client_ignores_an_ambient_email(apc, tmp_path, monkeypatch):
     """auth_headers returns the FIRST of email -> key -> token, so an ambient CLOUDFLARE_EMAIL
-    beats a configured api_token and the token is never sent."""
+    beats a configured api_token and the token is never sent.  Attribute-state MECHANISM check,
+    kept alongside the wire-level proof above (same rationale as the custom-headers test)."""
     monkeypatch.setenv("CLOUDFLARE_EMAIL", "ambient@example.com")
     monkeypatch.setenv("CLOUDFLARE_API_KEY", "ambient-key")
     path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
@@ -328,6 +384,47 @@ def test_cloudflare_client_refuses_a_non_string_credential(apc, tmp_path):
         apc.cloudflare_client(path)
 
 
+# Ported from tests/unit/test_find_platform_domains_cloudflare.py (review round 1, finding 5):
+# the copied 43-line resolver had one test here vs. seven in the sibling.
+
+def test_resolve_config_value_passes_literals_and_non_strings_through(apc):
+    assert apc.resolve_config_value("plain-literal", "where") == "plain-literal"
+    assert apc.resolve_config_value(True, "where") is True
+    assert apc.resolve_config_value(None, "where") is None
+
+
+@pytest.mark.parametrize("marker", ["<{env CF_TEST_VAR}", "<{secret env CF_TEST_VAR}"])
+def test_resolve_config_value_reads_the_environment(apc, monkeypatch, marker):
+    monkeypatch.setenv("CF_TEST_VAR", "from-the-environment")
+    assert apc.resolve_config_value(marker, "where") == "from-the-environment"
+
+
+def test_resolve_config_value_substitutes_inside_a_larger_string(apc, monkeypatch):
+    monkeypatch.setenv("CF_TEST_VAR", "middle")
+    assert apc.resolve_config_value("a<{env CF_TEST_VAR}z", "where") == "amiddlez"
+
+
+def test_resolve_config_value_uses_the_default_when_the_variable_is_unset(apc, monkeypatch):
+    monkeypatch.delenv("CF_TEST_VAR", raising=False)
+    assert apc.resolve_config_value("<{secret env CF_TEST_VAR fallback}", "where") == "fallback"
+
+
+def test_resolve_config_value_reports_an_unset_variable_with_no_default(apc, monkeypatch):
+    monkeypatch.delenv("CF_TEST_VAR", raising=False)
+    with pytest.raises(apc.StartupError) as caught:
+        apc.resolve_config_value("<{env CF_TEST_VAR}", "config.toml [Cloudflare].api_key")
+    assert "CF_TEST_VAR" in str(caught.value)
+    assert "config.toml [Cloudflare].api_key" in str(caught.value)
+
+
+def test_resolve_config_value_names_a_malformed_substitution(apc):
+    """An unbalanced quote makes shlex raise ValueError, which escaped as a raw traceback at
+    exit 1 in the sibling before it was closed (adversarial review round 1, finding 3 there)."""
+    with pytest.raises(apc.StartupError) as caught:
+        apc.resolve_config_value("<{env FOO don't}", "config.toml [Cloudflare].api_key")
+    assert "config.toml [Cloudflare].api_key" in str(caught.value)
+
+
 def test_resolve_env_marker_refuses_a_form_it_cannot_resolve(apc):
     """A literal "<{secret aws ...}" handed to the API as a token surfaces as a baffling 401
     instead of a config error.  The body is withheld: an inline default can be a credential."""
@@ -336,40 +433,39 @@ def test_resolve_env_marker_refuses_a_form_it_cannot_resolve(apc):
     assert "prod/key" not in str(excinfo.value)
 
 
-def fake_api_status_error(status_code, body):
-    """A fake matching the shape api_error_text() reads: status_code + body, class name
-    "APIStatusError".
+def api_status_error(error_cls, status_code, body):
+    """A REAL cloudflare SDK exception -- not a stand-in.
 
-    NOT `types.SimpleNamespace(...)` with `__class__` reassigned afterwards: SimpleNamespace is
-    not a CPython heap type (`__flags__ & Py_TPFLAGS_HEAPTYPE == 0`), so that reassignment always
-    raises "TypeError: __class__ assignment only supported for mutable types..." -- reproducible
-    on plain SimpleNamespace with no api_error_text involved at all.  The sibling's own
-    `test_api_error_text_never_includes_a_real_response_body` sidesteps the same trap by
-    constructing a real `cloudflare.PermissionDeniedError` instead.  Building the dynamic class
-    and instantiating it directly (rather than grafting it onto an existing instance) gets the
-    same "class name is APIStatusError" fake without hitting that restriction.
+    Review round 1 (finding 4) rejected a `types.SimpleNamespace(...)` + `__class__`
+    reassignment fake (it always raises TypeError -- SimpleNamespace is not a CPython heap type,
+    `__flags__ & Py_TPFLAGS_HEAPTYPE == 0`) AND its dynamic-bare-`Exception`-subclass replacement
+    (str(e) == "" on that fake, which would make finding 2's "str(e) never appears" assertion
+    vacuous -- a check that cannot go red is not evidence, PD#14).  Constructing the exception the
+    way the SDK itself raises one keeps str(e) genuinely present, so a test that asserts it is
+    excluded is actually exercising something.
     """
-    error_cls = type("APIStatusError", (Exception,), {})
-    error = error_cls()
-    error.status_code = status_code
-    error.body = body
-    return error
+    request = httpx.Request("GET", "https://api.cloudflare.com/client/v4/zones")
+    response = httpx.Response(status_code, request=request, json=body)
+    return error_cls(f"Error code: {status_code} - {body}", response=response, body=body)
 
 
 def test_api_error_text_says_nothing_but_the_status_on_an_auth_failure(apc):
     """SPEC 9.1 rule 2.  The sibling's docstring: "an auth-failure body can echo the credential".
     401 and 403 report the class and status ALONE."""
-    for status in (401, 403):
-        error = fake_api_status_error(
-            status, {"errors": [{"code": 10000, "message": "SECRET-TOKEN"}]})
+    for status, error_cls in ((401, cloudflare.AuthenticationError),
+                              (403, cloudflare.PermissionDeniedError)):
+        error = api_status_error(
+            error_cls, status, {"errors": [{"code": 10000, "message": "SECRET-TOKEN"}]})
+        assert "SECRET-TOKEN" in str(error)   # sanity: the real exception DOES carry it
         text = apc.api_error_text(error)
         assert str(status) in text
         assert "SECRET-TOKEN" not in text
 
 
 def test_api_error_text_admits_structured_errors_on_a_non_auth_failure(apc):
-    error = fake_api_status_error(
-        400, {"errors": [{"code": 81058, "message": "An identical record already exists."}]})
+    error = api_status_error(
+        cloudflare.BadRequestError, 400,
+        {"errors": [{"code": 81058, "message": "An identical record already exists."}]})
     text = apc.api_error_text(error)
     assert "81058" in text
     assert "identical record already exists" in text
@@ -378,7 +474,36 @@ def test_api_error_text_admits_structured_errors_on_a_non_auth_failure(apc):
 def test_api_error_text_truncates_a_long_message(apc):
     """SPEC 9.1 rule 3: an unexpectedly large or repeating error array must not become a dump of
     arbitrary server-supplied text in an operator's log."""
-    error = fake_api_status_error(400, {"errors": [{"code": 1, "message": "x" * 300}]})
+    error = api_status_error(
+        cloudflare.BadRequestError, 400, {"errors": [{"code": 1, "message": "x" * 300}]})
     text = apc.api_error_text(error)
     assert "x" * apc.ERROR_MESSAGE_LIMIT in text
     assert "x" * (apc.ERROR_MESSAGE_LIMIT + 1) not in text
+
+
+def test_api_error_text_never_includes_str_e_when_there_is_no_status_code(apc):
+    """Review round 1, finding 2: SPEC 9.1 rule 1's fourth case ("str(e) never appears in any
+    message") had NO test, and it is exactly the one that would have caught the fallback branch
+    returning f"{type(e).__name__}: {e}".  A status_code-less exception (e.g. a connection
+    failure, which carries no response at all) can still carry credential material in its own
+    message -- str(cloudflare.APIConnectionError(...)) is exactly its `message` argument."""
+    request = httpx.Request("GET", "https://api.cloudflare.com/client/v4/zones")
+    error = cloudflare.APIConnectionError(
+        message="token BEARER-SECRET rejected during connect", request=request)
+    assert getattr(error, "status_code", None) is None
+    assert "BEARER-SECRET" in str(error)   # sanity: the real exception DOES carry it
+    text = apc.api_error_text(error)
+    assert "BEARER-SECRET" not in text
+    assert "APIConnectionError" in text
+
+
+def test_api_error_text_bounds_the_total_message_length(apc):
+    """SPEC 9.1 rule 3's INTENT, not just the per-message cap: an unexpectedly large or repeating
+    error array must not turn an operator's terminal or log into a dump of server-supplied text.
+    Review round 1, finding 3 -- measured pre-fix: a 5000-element array produced a message over
+    1,000,000 characters (truncating `message` bounded each entry but not the array's LENGTH),
+    and a single oversized `code` field (100k characters) was never truncated at all."""
+    errors = [{"code": "c" * 100_000, "message": "x" * 300} for _ in range(5000)]
+    error = api_status_error(cloudflare.BadRequestError, 400, {"errors": errors})
+    text = apc.api_error_text(error)
+    assert len(text) < 2000

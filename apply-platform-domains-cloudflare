@@ -43,7 +43,10 @@ DEFAULT_CONFIG = "pantheon-sitehealth-emails.toml"
 API_BASE_URL = "https://api.cloudflare.com/client/v4"   # pinned; see build_client
 GOVERNED_TYPES = ("CNAME", "A", "AAAA")   # SPEC R1.1: every other type at the name is ignored
 VERIFY_RETRY_SLEEP = 2.0                  # SPEC R6.2
-ERROR_MESSAGE_LIMIT = 200                 # SPEC 9.1 rule 3
+ERROR_MESSAGE_LIMIT = 200                 # SPEC 9.1 rule 3: per-message cap
+MAX_ADMITTED_ERRORS = 5                   # SPEC 9.1 rule 3: per-ARRAY cap (review round 1, finding 3
+# -- the per-message cap alone left the total length unbounded in the number of errors)
+MAX_CODE_LENGTH = 32                      # SPEC 9.1 rule 3: errors[].code was unbounded (finding 3)
 
 # Copied verbatim from find-platform-domains-cloudflare.  A marker is "<{ ... }" -- the trailing
 # ">" that appears in the sample config is decorative and NOT part of the syntax.
@@ -507,16 +510,22 @@ def api_error_text(e):
 
     Three rules, exhaustive:
       1. Only the structured errors[].code and errors[].message.  NEVER str(e), never the raw
-         body, never headers, never error_chain or any other nested member.
+         body, never headers, never error_chain or any other nested member -- including on the
+         no-status-code fallback path, which has nothing else to report but must not fall back to
+         str(e): a status_code-less exception (e.g. a connection failure) can still carry
+         credential material in its own message (review round 1, finding 2).
       2. NOTHING but the class and the status on HTTP 401/403 -- exactly the response class the
          sibling's warning is about.  An auth failure needs no per-record diagnosis anyway: the
          run is misconfigured, not drifted.
-      3. Each message truncated to ERROR_MESSAGE_LIMIT characters, and the error count reported,
-         so a large or repeating array cannot fill a terminal or a log.
+      3. Each message truncated to ERROR_MESSAGE_LIMIT characters and each code to
+         MAX_CODE_LENGTH, AND at most MAX_ADMITTED_ERRORS entries admitted at all -- the total
+         error count is still reported, with the remainder named as "… and N more".  Per-message
+         truncation alone bounds each entry but not an array's LENGTH: a 5000-entry array produced
+         a message over 1,000,000 characters before this cap existed (review round 1, finding 3).
     """
     status = getattr(e, "status_code", None)
     if status is None:
-        return f"{type(e).__name__}: {e}"
+        return f"{type(e).__name__}: (no HTTP status; the response is withheld)"
     if status in (401, 403):
         return (f"{type(e).__name__}: HTTP {status} (authentication or authorization failed; "
                 "the response is withheld because it can echo the credential)")
@@ -524,16 +533,20 @@ def api_error_text(e):
     errors = body.get("errors") if isinstance(body, dict) else None
     if not isinstance(errors, list) or not errors:
         return f"{type(e).__name__}: HTTP {status}"
+    admitted = errors[:MAX_ADMITTED_ERRORS]
     parts = []
-    for item in errors:
+    for item in admitted:
         if not isinstance(item, dict):
             continue
-        code = item.get("code")
+        code = str(item.get("code", ""))[:MAX_CODE_LENGTH]
         message = str(item.get("message", ""))[:ERROR_MESSAGE_LIMIT]
         parts.append(f"{code} {message}".strip())
     if not parts:
         return f"{type(e).__name__}: HTTP {status}"
-    return f"{type(e).__name__}: HTTP {status} ({len(parts)} error(s)): " + "; ".join(parts)
+    remaining = len(errors) - len(admitted)
+    suffix = f"; … and {remaining} more" if remaining else ""
+    return (f"{type(e).__name__}: HTTP {status} ({len(errors)} error(s)): "
+            + "; ".join(parts) + suffix)
 
 
 def build_arg_parser():
