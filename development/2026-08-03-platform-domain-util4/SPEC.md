@@ -714,7 +714,7 @@ silently reaching real DNS, and then a replacement guard that could be satisfied
 | Helper | Returns |
 |---|---|
 | `read_apply_file(path)` | the parsed document; raises `PlanFileError` |
-| `check_file_contract(doc, path)` | `None`; raises `PlanFileError` on any §6 check |
+| `check_file_contract(doc, path)` | the **direction** (`"plan"` or `"revert"`); raises `PlanFileError` on any §6 check. Returning it rather than `None` avoids re-deriving what §11.3 and §12.2 both require |
 | `select_entries(entries, only)` | the selected `{fqdn: entry}`; raises `StartupError` naming every miss (R7.3) |
 | `normalize(name)` | copied from the sibling |
 | `record_key(rtype, name, content)` | the §7.1 comparison key |
