@@ -499,14 +499,28 @@ returns 2 on. *Intent:* an invalid file is an expected outcome of a read-only pa
 condition, and modelling it as a raise would make §3's "nothing was changed" guarantee depend on
 an exception path rather than on control flow.
 
-**One deliberate reversal of a sibling rule.** The sibling's `api_error_text()` states that API
-error text **never** includes a response body, and CLAUDE.md repeats it. Here the operator needs
+**One deliberate, NARROWED reversal of a sibling rule.** The sibling's `api_error_text()` states
+that API error text **never** includes a response body, and CLAUDE.md repeats it. Its stated
+reasons are two, and only one of them is about usefulness: *"a DNS-record body echoes record
+contents **and an auth-failure body can echo the credential**."* Here the operator needs
 Cloudflare's own diagnosis of a failed write ("record already exists", "content for A record is
-invalid"). `ApplyError` and `CloudflareReadError` therefore include the SDK's **structured
-`errors[].code` and `errors[].message` fields only** — never a raw body dump, never response
-headers. *Intent:* the sibling suppressed the body because nothing in it helped and echoing an
-arbitrary response is a needless exposure; for a write path the two named fields are the entire
-diagnosis. The narrowing to two fields is what keeps that reasoning intact.
+invalid"), so `ApplyError` and `CloudflareReadError` re-admit it — under three rules, which
+together are exhaustive:
+
+1. **Only the SDK's structured `errors[].code` and `errors[].message` fields.** Never `str(e)`,
+   never the raw body, never response headers, never `error_chain` or any other nested member.
+2. **Never on an authentication or authorization failure.** On HTTP **401 or 403** the message is
+   the class and the status code alone, exactly as `api_error_text()` produces today. *Intent:*
+   this is precisely the response class the sibling's docstring warns can echo the credential, and
+   an auth failure needs no per-record diagnosis — the run is misconfigured, not drifted.
+3. **Each admitted `message` is truncated to 200 characters** and the count of errors is reported,
+   so an unexpectedly large or repeating error array cannot turn an operator's terminal or log
+   into a dump of arbitrary server-supplied text.
+
+*Intent:* the first record-content reason is not a concern here — this script's operator already
+holds the file describing those exact records. The credential reason is real, and rule 2 is what
+keeps it closed. The copied `api_error_text()` therefore gains a *branch*, and its docstring must
+say so; it is not replaced.
 
 ### 9.2 Run-record write failure — precedence rule
 
@@ -740,6 +754,7 @@ All offline, `unit` tier, in `tests/unit/test_apply_platform_domains_cloudflare.
 | 12 | run record | written on every exit path (success, validation failure, apply failure, interrupt); dry-run variant with `for_real: false`; both branches of the §9.2 precedence rule |
 | 13 | credentials | the copied `build_client()` pin asserted against a **real built request**: an ambient `CLOUDFLARE_BASE_URL`, `CLOUDFLARE_EMAIL` and `CLOUDFLARE_CUSTOM_HEADERS` are all ignored; the configured credential alone is sent |
 | 14 | streams and exit taxonomy | a doomed stdout and a doomed stderr each produce a named exit 2, not 120; `--help` still documents `--for-real` and `--only` |
+| 15 | error text (§9.1) | a 401 and a 403 report the class and status **only**, with no `errors[]` content; a 400 reports `errors[].code` and a truncated `message`; a 300-character message is truncated to 200; `str(e)` never appears in any message |
 
 **NEVER-block — tests are load-bearing (PD#14).** Every new test MUST be observed failing for the
 **right reason** before its implementation is written. NEVER weaken an assertion to make it pass,
@@ -853,7 +868,9 @@ practice.
   `argv`; `argv` carries a config **path** and FQDN names, never a secret, because credentials are
   only ever read from the config file.
 - **Error text is narrowed, not widened.** §9.1's reversal admits exactly two structured fields
-  from a Cloudflare error response and nothing else.
+  from a Cloudflare error response, truncated, and **nothing at all on an HTTP 401/403** — the
+  response class the sibling's own docstring identifies as able to echo the credential. §14
+  group 15 tests that a 401 and a 403 report the status code alone.
 - **No new outbound channel.** Unlike the sibling, this script performs **no DNS resolution at
   all** (§20). Its only network peer is the Cloudflare API.
 
