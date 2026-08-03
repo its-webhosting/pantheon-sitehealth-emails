@@ -941,6 +941,21 @@ def test_exit_code_one_when_anything_was_already_applied(apc):
     assert apc.exit_code_for(apc.tally({"a": "applied", "b": "already-applied"})) == 1
 
 
+def test_exit_code_one_when_everything_was_already_applied(apc):
+    """SPEC section 14 group 11 names the already-applied-ONLY case explicitly, distinct from
+    the mix above (which pairs already-applied with a fresh apply)."""
+    assert apc.exit_code_for(
+        apc.tally({"a": "already-applied", "b": "already-applied"})) == 1
+
+
+def test_tally_raises_invariant_error_on_an_unrecognized_outcome(apc):
+    """tally's closed vocabulary MUST be enforced the same way verdict_for's and
+    validate_entries's already are -- a typo'd outcome literal upstream must be named, not
+    silently dropped (PD#2)."""
+    with pytest.raises(apc.InvariantError):
+        apc.tally({"a": "bogus"})
+
+
 def test_exit_code_two_when_a_failure_changed_nothing(apc):
     """The first entry failed, so its batch never committed -- Cloudflare is untouched."""
     assert apc.exit_code_for(apc.tally({"a": "failed", "b": "not-attempted"})) == 2
@@ -973,7 +988,25 @@ def test_summary_says_entries_are_fqdns_not_sites(apc):
         counts=apc.tally({"a": "planned"}), record_path="p-run-X.json")
     text = "\n".join(lines)
     assert "entries are FQDNs, not Pantheon sites" in text
-    assert "217" in text
+    assert "entries in file: 217" in text
+    assert "selected: 217" in text
+
+
+def test_summary_never_swaps_entries_in_file_and_selected(apc):
+    """R7.2/R7.4: entries_in_file != selected is the NORMAL shape of any --only subset run --
+    exactly the scenario R8.2 exists to report correctly.  Using distinct, non-equal values (as
+    every other summary test in this file deliberately does NOT) is load-bearing here: a bare
+    `"217" in text` cannot tell the two fields apart when both happen to be 217, and a later task
+    passing the two arguments in the wrong order would ship silently against such a test."""
+    lines = apc.summary_lines(
+        direction="plan", source="p.json", source_generated_at="x", for_real=False,
+        entries_in_file=217, selected=3, counts=apc.tally({"a": "planned"}),
+        record_path="p-run-X.json")
+    text = "\n".join(lines)
+    assert "entries in file: 217" in text
+    assert "selected: 3" in text
+    assert "entries in file: 3" not in text
+    assert "selected: 217" not in text
 
 
 def test_summary_names_the_mode_unmistakably(apc):
