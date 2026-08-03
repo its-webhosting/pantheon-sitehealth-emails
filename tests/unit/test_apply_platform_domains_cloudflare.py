@@ -1376,3 +1376,162 @@ def test_a_validation_failure_still_prints_the_summary_block(
     assert "apply-platform-domains-cloudflare: direction=plan" in out
     assert "not attempted 1" in out
 
+
+# ---------------------------------------------------------------------------------------------
+# Task 8: pass 3 -- apply, verify, and stop at the first failure (SPEC R5, R6, 8.1, 9.1, 9.3/9.4).
+# ---------------------------------------------------------------------------------------------
+
+
+_STATUS_ERROR_CLASSES = {
+    400: cloudflare.BadRequestError,
+    401: cloudflare.AuthenticationError,
+    403: cloudflare.PermissionDeniedError,
+    404: cloudflare.NotFoundError,
+    409: cloudflare.ConflictError,
+    422: cloudflare.UnprocessableEntityError,
+    429: cloudflare.RateLimitError,
+    500: cloudflare.InternalServerError,
+}
+
+
+def cloudflare_error(status_code, code, message):
+    """A REAL cloudflare SDK exception for one error entry (SPEC 9.1), built via
+    `api_status_error`.
+
+    The task brief sketches a `cloudflare_error()` helper as a `types.SimpleNamespace` with its
+    `__class__` reassigned -- the exact defect class `api_status_error`'s own docstring above
+    already rejects (SimpleNamespace is not a CPython heap type, so the reassignment raises
+    TypeError on construction; `test_records_at_name_names_a_cloudflare_read_failure` records the
+    same substitution for an earlier task).  This maps `status_code` to the SAME exception class
+    `Cloudflare._make_status_error` picks (verified against cloudflare 5.4.0), so a test built
+    through this helper exercises the identical exception class the SDK would actually raise.
+    """
+    error_cls = _STATUS_ERROR_CLASSES.get(status_code, cloudflare.APIStatusError)
+    return api_status_error(error_cls, status_code,
+                            {"errors": [{"code": code, "message": message}]})
+
+
+def test_verify_records_accepts_exactly_the_posts(apc):
+    assert apc.verify_records(plan_entry(), address_rows()) is True
+
+
+def test_verify_records_rejects_a_leftover_record(apc):
+    rows = [*address_rows(), row(identifier="rec-leftover")]
+    assert apc.verify_records(plan_entry(), rows) is False
+
+
+def test_apply_entry_calls_batch_with_the_resolved_ids_and_the_files_posts(apc):
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    entry = plan_entry()
+    created = apc.apply_entry(client, "a.umich.edu", entry, ["rec-1"])
+    assert client.batch_calls == [{"zone_id": "zone-a", "deletes": [{"id": "rec-1"}],
+                                   "posts": entry["body"]["posts"]}]
+    assert sorted(created) == ["rec-a", "rec-b"]
+
+
+def test_apply_entry_retries_verification_once_before_failing(apc, monkeypatch):
+    """SPEC R6.2.  Cloudflare's own batch docs warn that "the propagation of changes is not
+    atomic", so an immediate re-read can legitimately lag."""
+    slept = []
+    monkeypatch.setattr(apc, "sleep", slept.append)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[], address_rows()]})
+    created = apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+    assert slept == [apc.VERIFY_RETRY_SLEEP]
+    assert sorted(created) == ["rec-a", "rec-b"]
+
+
+def test_apply_entry_fails_when_verification_never_matches(apc, monkeypatch):
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    with pytest.raises(apc.ApplyError, match=r"a\.umich\.edu"):
+        apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+
+
+def test_apply_entry_raises_apply_error_on_a_batch_failure(apc):
+    client = FakeCloudflareClient(batch_error=cloudflare_error(400, 81058, "already exists"))
+    with pytest.raises(apc.ApplyError, match="81058"):
+        apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+
+
+def three_entry_doc():
+    return plan_doc(entries={
+        "a.umich.edu": plan_entry(fqdn="a.umich.edu"),
+        "b.umich.edu": plan_entry(fqdn="b.umich.edu"),
+        "c.umich.edu": plan_entry(fqdn="c.umich.edu"),
+    })
+
+
+def three_entry_rows(applied=()):
+    """Pass-1 rows for three FQDNs; those in `applied` are already swapped."""
+    rows = {}
+    for name in ("a.umich.edu", "b.umich.edu", "c.umich.edu"):
+        base = address_rows() if name in applied else cname_rows()
+        rows[name] = [[row(r.type, name, r.content, r.id) for r in base]]
+    return rows
+
+
+def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC R3.4 and 8.1: stop immediately, revert nothing, attempt nothing further -- and exit 3
+    because the FIRST entry did commit."""
+    path = write_doc(tmp_path, three_entry_doc())
+
+    class FailOnSecond(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            if len(self.batch_calls) == 1:
+                self.batch_calls.append(kwargs)
+                raise cloudflare_error(400, 81058, "already exists")
+            return super()._batch(**kwargs)
+
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = FailOnSecond(rows_by_name=rows)
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 3
+    assert "applied 1" in out
+    assert "failed 1" in out
+    assert "not attempted 1" in out
+
+
+def test_a_failure_on_the_first_entry_exits_two_because_nothing_committed(
+        apc, tmp_path, monkeypatch):
+    path = write_doc(tmp_path, three_entry_doc())
+    client = FakeCloudflareClient(rows_by_name=three_entry_rows(),
+                                  batch_error=cloudflare_error(400, 81058, "already exists"))
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 2
+
+
+def test_a_connection_error_makes_the_outcome_unknown_and_exits_three(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC 8.1: the call did not tell us whether Cloudflare committed it, so "nothing was
+    changed" is a claim this run cannot make."""
+    path = write_doc(tmp_path, plan_doc())
+
+    class Dropped(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            self.batch_calls.append(kwargs)
+            raise cloudflare.APIConnectionError(request=None)
+
+    client = Dropped(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 3
+    assert "unknown 1" in capsys.readouterr().out
+
+
+def test_a_clean_for_real_run_applies_every_entry_and_exits_zero(
+        apc, tmp_path, monkeypatch):
+    path = write_doc(tmp_path, three_entry_doc())
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = FakeCloudflareClient(rows_by_name=rows)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 0
+    assert len(client.batch_calls) == 3
+

@@ -822,9 +822,9 @@ def summary_lines(*, direction, source, source_generated_at, for_real, entries_i
     by the task 7 review, important 2): "FOR REAL -- changes were made" is a claim about
     production DNS, and a for-real run that reached no entry -- every one already-applied, or an
     abort in validation -- would assert a rewrite that never happened.  `changed` is SPEC 8.1's
-    own definition (applied + unknown), so this stays true on every path, including the
-    transitional state where pass 3 (Task 8) is not yet wired and a for-real run can only ever
-    read "0 of N entries changed".
+    own definition (applied + unknown), so this stays true on every path: a clean --for-real run
+    (Task 8's apply_all) reads "N of N entries changed", and a --for-real run that reached no
+    entry (every one already-applied, or an abort in validation) reads "0 of N entries changed".
     """
     if for_real:
         changed = counts["applied"] + counts["unknown"]
@@ -873,6 +873,134 @@ def merge_body(entry, delete_ids):
             "nothing would leave the old record standing beside them, the partial write section "
             "3 exists to prevent")
     return {"deletes": [{"id": identifier} for identifier in delete_ids], "posts": posts}
+
+
+def verify_records(entry, rows):
+    """True when Cloudflare now holds exactly this entry's posts (SPEC R6.1).
+
+    Compared as `record_key()` SETS over the governed types only, the same rule pass 1's
+    `verdict_for` uses for R == P -- so a TXT/MX/CAA record at the name (never touched by this
+    script) cannot make a healthy apply look unverified.
+    """
+    have = {record_key(r.type, r.name, r.content) for r in governed_records(rows)}
+    want = {record_key(item["type"], item["name"], item["content"])
+            for item in entry["body"]["posts"]}
+    return have == want
+
+
+def apply_entry(client, fqdn, entry, delete_ids):
+    """One batch call, then the evidence (SPEC R5, R6).  Returns the created record ids.
+
+    A 200 from the batch endpoint is Cloudflare's CLAIM that the swap happened; the record list
+    is the EVIDENCE (PD#14).  The single retry exists because Cloudflare's own batch documentation
+    warns that "the propagation of changes is not atomic", so a read served before the change
+    lands would be a false mismatch on a healthy run (SPEC R6.2).
+
+    The typed client.dns.records.batch() is used rather than a raw POST of the file's body:
+    measured on cloudflare 5.4.0, its maybe_transform returns the body byte-identical (including a
+    key its schema does not define), so the file's exact body survives it, and check_file_contract
+    has already asserted that the file's method and path are the ones this call produces (SPEC
+    R5.3).
+
+    Exception ordering is load-bearing (SPEC 9.1, 8.1).  Measured against cloudflare 5.4.0:
+    `cloudflare.APIConnectionError` (and `APITimeoutError`, one of its subclasses) IS a
+    `cloudflare.CloudflareError` -- so the APIConnectionError clause MUST come first and MUST
+    bare-`raise` rather than wrap into ApplyError.  A dropped connection did not tell us whether
+    Cloudflare committed the write; recording it as an ordinary `failed` ApplyError would make
+    `exit_code_for` treat a rewrite of unknown fate as "nothing was changed" -- the exact silent
+    failure PD#1 forbids.  apply_all is the layer that turns the bare re-raise into the `unknown`
+    outcome; this function only distinguishes the two, it does not decide the outcome.
+    """
+    body = merge_body(entry, delete_ids)
+    try:
+        client.dns.records.batch(zone_id=entry["zone_id"],
+                                 deletes=body["deletes"], posts=body["posts"])
+    except cloudflare.APIConnectionError:
+        raise   # unknown fate -- apply_all records `unknown`, never wraps this into ApplyError
+    except cloudflare.CloudflareError as e:
+        raise ApplyError(f"{fqdn}: batch call failed: {api_error_text(e)}") from e
+
+    for attempt in (1, 2):
+        try:
+            rows = list(client.dns.records.list(zone_id=entry["zone_id"],
+                                                name={"exact": fqdn}))
+        except cloudflare.CloudflareError as e:
+            # The batch call above already succeeded -- Cloudflare committed SOMETHING -- so this
+            # is deliberately an ApplyError (a verification-read failure, SPEC 9.1's third ApplyError
+            # trigger), never re-raised bare like the batch clause above: only the batch call itself
+            # can leave Cloudflare's own COMMIT in doubt, and this one already happened.
+            raise ApplyError(
+                f"{fqdn}: the batch call succeeded but the verification read failed, so the "
+                f"result is unconfirmed: {api_error_text(e)}") from e
+        if verify_records(entry, rows):
+            return [r.id for r in governed_records(rows)]
+        if attempt == 1:
+            sleep(VERIFY_RETRY_SLEEP)
+    raise ApplyError(
+        f"{fqdn}: the batch call succeeded but Cloudflare does not hold the expected records "
+        f"afterwards, twice {VERIFY_RETRY_SLEEP}s apart; it now holds "
+        f"{describe_keys(sorted({record_key(r.type, r.name, r.content)
+                                 for r in governed_records(rows)}))}")
+
+
+def apply_all(client, entries, validations, *, verbose):
+    """Pass 3 (SPEC R3.4): in key order, one entry at a time, stopping at the first failure.
+
+    Nothing already applied is reverted and nothing further is attempted -- PROMPT.md is explicit
+    on both ("it should not attempt to revert any changes it has already made, and it should not
+    attempt to make the remaining changes specified in the file").  Every unattempted entry keeps
+    its `not-attempted` seed value from before this loop starts.
+
+    An entry whose call raised an unknown-outcome error (a dropped connection or a timeout, SPEC
+    9.1/8.1) is recorded as `unknown`, never `failed`: we do not know which it was, and
+    `exit_code_for` treats `unknown` as changed for exactly that reason -- printing "nothing was
+    changed" about a call whose fate is unconfirmed would be the silent failure PD#1 forbids.
+    `TimeoutError`/`OSError` are caught alongside `cloudflare.APIConnectionError` for the same
+    reason: a transport-level failure the SDK's own retry loop did not manage to wrap can reach
+    here as a raw stdlib exception rather than the SDK's own class (PD#3's upstream-error shadow).
+
+    Every stdout line goes through `write_report`, never a bare `print` (SPEC 11.1) -- the same
+    discipline `report_entries` already applies.
+    """
+    outcomes = dict.fromkeys(entries, "not-attempted")
+    details = {}
+    for fqdn, entry in sorted(entries.items()):
+        validation = validations[fqdn]
+        if validation.verdict == "already-applied":
+            outcomes[fqdn] = "already-applied"
+            continue
+        if validation.verdict != "ready":
+            raise InvariantError(
+                f"{fqdn} reached the apply pass with verdict {validation.verdict!r}; pass 1 "
+                "should have aborted the run")
+        if verbose:
+            write_report(f"    POST {entry['path']}")
+        try:
+            created = apply_entry(client, fqdn, entry, validation.delete_ids)
+        except (cloudflare.APIConnectionError, TimeoutError, OSError) as e:
+            # Listed BEFORE ApplyError: an unknown-fate transport failure (a dropped connection
+            # from the SDK, or -- belt and suspenders, PD#3's upstream-error shadow -- a raw
+            # stdlib TimeoutError/OSError the SDK's own retry loop did not manage to wrap) must
+            # never be caught by the broader ApplyError clause below and recorded as `failed`.
+            outcomes[fqdn] = "unknown"
+            details[fqdn] = {"error": f"{type(e).__name__}: {e}",
+                             "deleted_ids": validation.delete_ids}
+            write_report(f"{fqdn}  UNKNOWN -- the call did not complete")
+            report_line(
+                f"ERROR: {fqdn}: the batch call did not complete ({type(e).__name__}), so "
+                "whether Cloudflare applied it is UNKNOWN.  Check this FQDN by hand before "
+                "re-running.")
+            return outcomes, details
+        except ApplyError as e:
+            outcomes[fqdn] = "failed"
+            details[fqdn] = {"error": str(e), "deleted_ids": validation.delete_ids}
+            write_report(f"{fqdn}  FAILED")
+            report_line(f"ERROR: {e}")
+            return outcomes, details
+        outcomes[fqdn] = "applied"
+        details[fqdn] = {"deleted_ids": validation.delete_ids, "created_ids": created}
+        write_report(f"{fqdn}  applied")
+    return outcomes, details
 
 
 def render_records(items):
@@ -1040,12 +1168,17 @@ def main(argv):
 
         report_entries(entries, validations, verbose=options.verbose)
         if options.for_real:
-            # SPEC 11.2: printed before the first batch call.  Pass 3 (the calls themselves) is
-            # wired in Task 8; until then this banner precedes a for-real run that changes
-            # nothing, which the tally-derived mode line below (SPEC 11.3) states honestly.
-            report_line("FOR REAL -- changes WILL be made to Cloudflare")
-        outcomes = {fqdn: ("already-applied" if v.verdict == "already-applied" else "planned")
-                    for fqdn, v in validations.items()}
+            report_line("FOR REAL -- changes WILL be made to Cloudflare")  # SPEC 11.2: printed
+            # before the first batch call.
+            outcomes, _details = apply_all(client, entries, validations, verbose=options.verbose)
+            # `_details` (per-entry error/created-id detail) is not yet consumed -- Task 9 writes
+            # it into the run record.  Underscore-prefixed so it stays visibly unused rather than
+            # silently unread (ruff's dummy-variable convention), not because it is unneeded.
+        else:
+            outcomes = {fqdn: ("already-applied" if v.verdict == "already-applied"
+                               else "planned")
+                        for fqdn, v in validations.items()}
+            _details = {}
         counts = tally(outcomes)
         for line in summary_lines(
                 direction=direction, source=options.file,
