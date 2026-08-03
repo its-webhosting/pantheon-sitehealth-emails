@@ -544,6 +544,16 @@ def test_governed_records_drops_unrelated_types(apc):
     assert [r.id for r in apc.governed_records(rows)] == ["rec-1"]
 
 
+def test_governed_records_drops_a_row_with_a_missing_or_none_type(apc):
+    """Review round 1, finding 3: the defensive `str(getattr(r, "type", "")).upper()` read was
+    unproven by the suite.  A row missing `type` entirely, or carrying `type=None`, must never
+    raise and must never be counted as governed -- an unrelated malformed SDK row must not
+    silently qualify as an A/AAAA/CNAME."""
+    missing_type = types.SimpleNamespace(id="rec-missing", name="a.umich.edu", content="x")
+    none_type = types.SimpleNamespace(id="rec-none", type=None, name="a.umich.edu", content="x")
+    assert apc.governed_records([missing_type, none_type]) == []
+
+
 def test_verdict_ready_when_cloudflare_holds_exactly_the_delete_match(apc):
     verdict, detail = apc.verdict_for(plan_entry(), cname_rows())
     assert verdict == "ready"
@@ -557,10 +567,18 @@ def test_verdict_already_applied_when_cloudflare_holds_exactly_the_posts(apc):
 
 
 def test_verdict_record_ambiguous_when_a_key_occurs_twice(apc):
+    """Review round 1, finding 4: the original assertion (`"rec-1" in detail or "CNAME" in
+    detail`) was tautological -- describe_keys renders only type + content, NEVER record ids, so
+    the "rec-1" clause can never be true and "CNAME" alone always holds regardless of what the
+    detail actually says.  Pinned here to what the detail actually contains (type + content, no
+    ids) -- see the fix report for why omitting ids is flagged as a spec question rather than
+    changed."""
     rows = [row(), row(identifier="rec-2")]
     verdict, detail = apc.verdict_for(plan_entry(), rows)
     assert verdict == "record-ambiguous"
-    assert "rec-1" in detail or "CNAME" in detail
+    assert "CNAME live-umich-x.pantheonsite.io" in detail
+    assert "rec-1" not in detail
+    assert "rec-2" not in detail
 
 
 def test_verdict_partially_applied_on_a_mix_of_both_sides(apc):
@@ -576,6 +594,30 @@ def test_verdict_unexpected_records_on_a_proper_superset(apc):
     verdict, detail = apc.verdict_for(plan_entry(), rows)
     assert verdict == "unexpected-records"
     assert "23.185.0.99" in detail
+
+
+def test_verdict_unexpected_records_on_a_proper_superset_of_delete_match(apc):
+    """Review round 1, finding 2: the symmetric R > D branch (the OTHER iteration of the
+    `for expected, side in ((want_delete, ...), (want_post, ...))` loop) had no test -- only the
+    R > P case above did.  An unrelated extra AAAA that overlaps with neither D nor P."""
+    rows = [*cname_rows(), row("AAAA", content="2620:12a:8000::99", identifier="rec-extra")]
+    verdict, detail = apc.verdict_for(plan_entry(), rows)
+    assert verdict == "unexpected-records"
+    assert "2620:12a:8000::99" in detail
+
+
+def test_verdict_for_raises_invariant_error_on_the_impossible_empty_shape(apc):
+    """SPEC 7.4's nil shadow: section 6 checks 7 and 8 make an empty/absent delete_match or
+    body.posts FATAL before pass 1 ever runs, so this shape reaching verdict_for is a defect in
+    this script's own reasoning, not a file to classify -- asserted here, not assumed (PD#1/
+    PD#14).  Review round 1, finding 1: without this guard, empty D together with an empty R made
+    `have == want_delete` (both empty sets) return a false "ready", indistinguishable from a
+    healthy, fully-processed entry."""
+    entry = plan_entry()
+    entry["delete_match"] = []
+    entry["body"]["posts"] = []
+    with pytest.raises(apc.InvariantError):
+        apc.verdict_for(entry, [])
 
 
 def test_verdict_records_missing_when_nothing_governed_is_there(apc):

@@ -390,7 +390,18 @@ def verdict_for(entry, rows):
     The whole decision is WHICH SET R equals.  Evaluation order is the table's order and row 1 is
     first for a reason: set() collapses duplicates, so a duplicated key would let R == D succeed
     on a name that actually holds the record twice.
+
+    SPEC 7.4's nil shadow: an empty/absent `delete_match` or `body.posts` is supposed to be
+    UNREACHABLE, because section 6 checks 7 and 8 already made it fatal before pass 1 -- but that
+    is an invariant about the caller, not something this function can assume without checking.
+    Without this guard, an entry with both empty AND an empty `rows` (R) would fall through to
+    `have == want_delete` on two empty sets and return a false "ready" -- indistinguishable from a
+    healthy, fully-processed entry.  Asserted here, not assumed (PD#1/PD#14).
     """
+    if not entry["delete_match"] or not entry["body"]["posts"]:
+        raise InvariantError(
+            "verdict_for: entry has an empty or missing delete_match/body.posts -- section 6 "
+            "checks 7 and 8 should have made this fatal before pass 1 ever ran")
     present = governed_records(rows)
     keys = [record_key(r.type, r.name, r.content) for r in present]
     duplicates = sorted({key for key in keys if keys.count(key) > 1})
