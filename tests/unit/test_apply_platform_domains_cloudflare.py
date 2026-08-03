@@ -40,6 +40,50 @@ def apc():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _refuse_real_network(monkeypatch):
+    """SPEC section 13: fails the test if a real network call is attempted.
+
+    Task 3's credential tests build a REAL `Cloudflare` client by design -- that is the whole
+    point of asserting the environment pin against a real built request -- so this guard cannot
+    ban client CONSTRUCTION (SPEC section 13's wording literally reads "constructed OR any real
+    network call attempted"; construction is deliberately left out here, and that narrowing is
+    reported to the task's controller rather than silently applied). What must never happen is
+    an actual outbound HTTP request, so the guard targets that alone.
+
+    The seam: cloudflare._base_client.SyncAPIClient._request calls `self._client.send(request,
+    ...)` exactly once per outbound call -- an httpx.Client instance method -- for BOTH a read
+    (dns.records.list) and a write (dns.records.batch), regardless of which Cloudflare instance
+    made the call. Patching httpx.Client.send at the CLASS level intercepts every one of them.
+    Task 3's `sent_request()` helper instead calls `client._build_request(...)` directly, which
+    (per its own docstring) "performs no I/O" and never reaches `.send()` -- so those tests are
+    untouched by this guard, proven by test_cloudflare_client_prefers_the_api_token and its
+    siblings staying green with this fixture autouse.
+
+    THE ASSERTION LIVES AT TEARDOWN, NOT INSIDE THE PATCH -- the same shape as
+    tests/unit/test_find_platform_domains_cloudflare.py's `_refuse_real_dns` fixture, and for the
+    same reason (its docstring, quoted there): main()'s `except BaseException` last line of
+    defence would otherwise catch a raise-inside-the-patch AssertionError and convert it into
+    `report_line(...)` + `return 2`, so a test asserting only `main(...) == 2` would pass green
+    while this guard fired unread. `refuse` therefore only RECORDS the call; the raise and the
+    real assertion happen at teardown, unconditionally, whatever the code under test did with the
+    exception in between.
+    """
+    reached = []
+
+    def refuse(self, request, **kwargs):
+        reached.append(f"{request.method} {request.url}")
+        raise AssertionError(
+            f"real network call attempted: {request.method} {request.url} -- this test is "
+            "missing FakeCloudflareClient (SPEC section 13 forbids a real Cloudflare API call)")
+
+    monkeypatch.setattr(httpx.Client, "send", refuse)
+    yield
+    assert not reached, (
+        f"real network call(s) attempted: {reached} -- this test is missing "
+        "FakeCloudflareClient (SPEC section 13 forbids a real Cloudflare API call)")
+
+
 def test_the_symlink_points_at_the_real_file():
     """The .py symlink is what ruff, pyright and CodeGraph resolve the script through; a plain
     copy would silently drift.  CLAUDE.md records that the main program had ZERO symbols indexed
@@ -682,3 +726,90 @@ def test_a_revert_entry_is_ready_when_the_addresses_are_present(apc):
           "content": "live-umich-x.pantheonsite.io", "proxied": True, "ttl": 1}])
     verdict, _ = apc.verdict_for(entry, address_rows())
     assert verdict == "ready"
+
+
+class FakeCloudflareClient:
+    """The two calls this script makes: dns.records.list and dns.records.batch.
+
+    `rows_by_name` maps a normalized FQDN to the SEQUENCE of row-lists returned by successive
+    list() calls for that name (the last repeats), so a post-apply verification can be made to
+    agree or disagree with what pass 1 saw.  Every call is recorded, which is what lets a test
+    assert that a dry run made ZERO batch calls rather than inferring it.
+    """
+
+    def __init__(self, rows_by_name=None, list_error=None, batch_error=None):
+        self.rows_by_name = rows_by_name or {}
+        self.list_error = list_error
+        self.batch_error = batch_error
+        self.list_calls = []
+        self.batch_calls = []
+        self._served = {}
+        self.dns = types.SimpleNamespace(
+            records=types.SimpleNamespace(list=self._list, batch=self._batch))
+
+    def _list(self, *, zone_id, name=None, **kwargs):
+        self.list_calls.append({"zone_id": zone_id, "name": name, **kwargs})
+        if self.list_error is not None:
+            raise self.list_error
+        key = (name or {}).get("exact", "")
+        sequence = self.rows_by_name.get(key, [[]])
+        index = min(self._served.get(key, 0), len(sequence) - 1)
+        self._served[key] = index + 1
+        return sequence[index]
+
+    def _batch(self, *, zone_id, deletes=None, posts=None, **kwargs):
+        self.batch_calls.append({"zone_id": zone_id, "deletes": deletes, "posts": posts})
+        if self.batch_error is not None:
+            raise self.batch_error
+        return types.SimpleNamespace(deletes=deletes, posts=posts)
+
+
+def test_records_at_name_asks_cloudflare_for_exactly_that_name(apc):
+    """One filtered list per FQDN, NOT a whole-zone walk: util3 measured 2 duplicates and 2
+    misses in one walk of an 18,848-record zone, and a miss would be a FALSE validation
+    failure."""
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    rows = apc.records_at_name(client, "zone-a", "a.umich.edu")
+    assert [r.id for r in rows] == ["rec-1"]
+    assert client.list_calls[0]["zone_id"] == "zone-a"
+    assert client.list_calls[0]["name"] == {"exact": "a.umich.edu"}
+
+
+def test_records_at_name_names_a_cloudflare_read_failure(apc):
+    # NOTE: the task brief's literal `cloudflare_error()` helper (a types.SimpleNamespace with
+    # `__class__` reassigned) raises TypeError on construction -- SimpleNamespace is not a
+    # CPython heap type, exactly the defect review round 1 finding 4 (above, api_status_error's
+    # docstring) already rejected for this same file.  Using the sanctioned real-SDK builder
+    # instead, per this task's brief: "plus Task 3's real-SDK error builders."
+    error = api_status_error(cloudflare.InternalServerError, 500,
+                             {"errors": [{"code": 1000, "message": "boom"}]})
+    client = FakeCloudflareClient(list_error=error)
+    with pytest.raises(apc.CloudflareReadError):
+        apc.records_at_name(client, "zone-a", "a.umich.edu")
+
+
+def test_validate_entries_resolves_the_delete_ids_for_a_ready_entry(apc):
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    result = apc.validate_entries(client, {"a.umich.edu": plan_entry()}, verbose=False)
+    assert result["a.umich.edu"].verdict == "ready"
+    assert result["a.umich.edu"].delete_ids == ["rec-1"]
+
+
+def test_validate_entries_resolves_no_ids_for_an_already_applied_entry(apc):
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    result = apc.validate_entries(client, {"a.umich.edu": plan_entry()}, verbose=False)
+    assert result["a.umich.edu"].verdict == "already-applied"
+    assert result["a.umich.edu"].delete_ids == []
+
+
+def test_validate_entries_classifies_every_entry_not_just_the_first(apc):
+    """A first-failure-wins loop would hide the second problem and force a second full run."""
+    client = FakeCloudflareClient(rows_by_name={
+        "a.umich.edu": [cname_rows()],
+        "b.umich.edu": [[]],
+    })
+    entries = {"a.umich.edu": plan_entry(), "b.umich.edu": plan_entry(fqdn="b.umich.edu")}
+    result = apc.validate_entries(client, entries, verbose=False)
+    assert result["a.umich.edu"].verdict == "ready"
+    assert result["b.umich.edu"].verdict == "records-missing"
+

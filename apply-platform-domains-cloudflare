@@ -36,8 +36,9 @@ import tempfile
 import time
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
-import cloudflare  # noqa: F401 -- for cloudflare.CloudflareError, unused until Task 5 (pass 1)
+import cloudflare
 from cloudflare import Cloudflare
 
 DEFAULT_CONFIG = "pantheon-sitehealth-emails.toml"
@@ -451,6 +452,54 @@ def verdict_for(entry, rows):
             f"Cloudflare holds {describe_keys(sorted(have)) or 'no CNAME/A/AAAA record'} at this "
             f"name; expected either {describe_keys(sorted(want_delete))} (not yet applied) or "
             f"{describe_keys(sorted(want_post))} (already applied)")
+
+
+class Validation(NamedTuple):
+    """One entry's pass-1 result.  `delete_ids` is non-empty only for a `ready` verdict."""
+
+    verdict: str
+    detail: str
+    delete_ids: list
+
+
+def records_at_name(client, zone_id, fqdn):
+    """Every DNS record Cloudflare holds at one name (SPEC 7.1).
+
+    ONE filtered list call, not a walk of the zone: util3 measured 2 duplicates and 2 misses in a
+    single paginated walk of an 18,848-record zone, and a miss here would be a FALSE validation
+    failure on a healthy entry.  Filtering by name also keeps the response small enough that
+    pagination never arises, which is why none of the sibling's read_all/ListTally machinery is
+    copied into this script.
+    """
+    try:
+        page = client.dns.records.list(zone_id=zone_id, name={"exact": fqdn})
+        return list(page)
+    except cloudflare.CloudflareError as e:
+        raise CloudflareReadError(
+            f"cannot list DNS records for {fqdn} in zone {zone_id}: {api_error_text(e)}") from e
+
+
+def validate_entries(client, entries, *, verbose):
+    """Pass 1: classify EVERY selected entry before anything is written (SPEC R3.1).
+
+    Every entry is classified even after the first invalid one: a first-failure-wins loop would
+    hide the second problem and cost the operator another full run to find it.
+    """
+    result = {}
+    for fqdn, entry in sorted(entries.items()):
+        rows = records_at_name(client, entry["zone_id"], fqdn)
+        verdict, detail = verdict_for(entry, rows)
+        delete_ids = []
+        if verdict == "ready":
+            wanted = {record_key(item["type"], item["name"], item["content"])
+                      for item in entry["delete_match"]}
+            delete_ids = [r.id for r in governed_records(rows)
+                          if record_key(r.type, r.name, r.content) in wanted]
+        if verbose:
+            print(f"{fqdn}: {verdict}"
+                  + (f" -- {detail}" if detail else ""), flush=True)
+        result[fqdn] = Validation(verdict, detail, delete_ids)
+    return result
 
 
 def resolve_env_marker(expr, where):
