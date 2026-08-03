@@ -396,9 +396,11 @@ def verdict_for(entry, rows):
     is an invariant about the caller, not something this function can assume without checking.
     Without this guard, an entry with both empty AND an empty `rows` (R) would fall through to
     `have == want_delete` on two empty sets and return a false "ready" -- indistinguishable from a
-    healthy, fully-processed entry.  Asserted here, not assumed (PD#1/PD#14).
+    healthy, fully-processed entry.  Asserted here, not assumed (PD#1/PD#14).  `.get(...)`, not
+    `entry[...]`: a key ABSENT entirely (not merely empty) must raise this SAME named
+    InvariantError too, not a bare unnamed KeyError (review round 2, item 2).
     """
-    if not entry["delete_match"] or not entry["body"]["posts"]:
+    if not entry.get("delete_match") or not entry.get("body", {}).get("posts"):
         raise InvariantError(
             "verdict_for: entry has an empty or missing delete_match/body.posts -- section 6 "
             "checks 7 and 8 should have made this fatal before pass 1 ever ran")
@@ -406,9 +408,24 @@ def verdict_for(entry, rows):
     keys = [record_key(r.type, r.name, r.content) for r in present]
     duplicates = sorted({key for key in keys if keys.count(key) > 1})
     if duplicates:
+        # SPEC 7.3 (amended, review round 2 controller ruling): record-ambiguous is the ONE
+        # verdict whose detail must name record ids, not just record_key terms -- by
+        # construction the colliding records SHARE a record_key (that is what makes them
+        # ambiguous), so a detail in record_key terms alone cannot tell them apart, and the id
+        # is the only field that distinguishes them in the dashboard or API.  `present`/`keys`
+        # are already same-scope locals in parallel order, so this is a same-scope filter, not
+        # a signature change to record_key (which stays deliberately id-less for the set
+        # comparison, SPEC 7.1).
+        ids_by_key = {}
+        for record, key in zip(present, keys, strict=True):
+            if key in duplicates:
+                ids_by_key.setdefault(key, []).append(str(record.id))
+        collisions = "; ".join(
+            f"{describe_keys([key])} (record ids: {', '.join(ids_by_key[key])})"
+            for key in duplicates)
         return ("record-ambiguous",
                 f"more than one record at this name with the same type and content: "
-                f"{describe_keys(duplicates)}")
+                f"{collisions}")
 
     have = set(keys)
     want_delete = {record_key(item["type"], item["name"], item["content"])

@@ -567,18 +567,18 @@ def test_verdict_already_applied_when_cloudflare_holds_exactly_the_posts(apc):
 
 
 def test_verdict_record_ambiguous_when_a_key_occurs_twice(apc):
-    """Review round 1, finding 4: the original assertion (`"rec-1" in detail or "CNAME" in
-    detail`) was tautological -- describe_keys renders only type + content, NEVER record ids, so
-    the "rec-1" clause can never be true and "CNAME" alone always holds regardless of what the
-    detail actually says.  Pinned here to what the detail actually contains (type + content, no
-    ids) -- see the fix report for why omitting ids is flagged as a spec question rather than
-    changed."""
+    """Review round 1, finding 4 raised whether record-ambiguous's detail should name the
+    colliding record ids; review round 2's controller ruling (SPEC 7.3, amended) says it MUST --
+    by construction the two records share a record_key (that IS what makes them ambiguous), so a
+    detail in record_key terms alone cannot tell them apart, and the id is the only field that
+    distinguishes them in the dashboard or API.  Asserting BOTH ids present (not just one) is what
+    makes this non-vacuous: dropping either id from the detail would turn this red."""
     rows = [row(), row(identifier="rec-2")]
     verdict, detail = apc.verdict_for(plan_entry(), rows)
     assert verdict == "record-ambiguous"
     assert "CNAME live-umich-x.pantheonsite.io" in detail
-    assert "rec-1" not in detail
-    assert "rec-2" not in detail
+    assert "rec-1" in detail
+    assert "rec-2" in detail
 
 
 def test_verdict_partially_applied_on_a_mix_of_both_sides(apc):
@@ -612,12 +612,27 @@ def test_verdict_for_raises_invariant_error_on_the_impossible_empty_shape(apc):
     this script's own reasoning, not a file to classify -- asserted here, not assumed (PD#1/
     PD#14).  Review round 1, finding 1: without this guard, empty D together with an empty R made
     `have == want_delete` (both empty sets) return a false "ready", indistinguishable from a
-    healthy, fully-processed entry."""
+    healthy, fully-processed entry.
+
+    Review round 2, item 2: the guard's own message says "empty OR MISSING", so an entry from
+    which the key is ABSENT ENTIRELY (not merely empty) must raise the SAME named InvariantError
+    too, not a bare KeyError -- covered by the two del-the-key cases below.
+    """
     entry = plan_entry()
     entry["delete_match"] = []
     entry["body"]["posts"] = []
     with pytest.raises(apc.InvariantError):
         apc.verdict_for(entry, [])
+
+    missing_delete_match = plan_entry()
+    del missing_delete_match["delete_match"]
+    with pytest.raises(apc.InvariantError):
+        apc.verdict_for(missing_delete_match, [])
+
+    missing_posts = plan_entry()
+    del missing_posts["body"]["posts"]
+    with pytest.raises(apc.InvariantError):
+        apc.verdict_for(missing_posts, [])
 
 
 def test_verdict_records_missing_when_nothing_governed_is_there(apc):
