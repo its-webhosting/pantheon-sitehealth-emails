@@ -1,0 +1,1 @@
+apply-platform-domains-cloudflare

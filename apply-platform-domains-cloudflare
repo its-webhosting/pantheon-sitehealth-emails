@@ -1,0 +1,314 @@
+#!/usr/bin/env python
+"""Apply a plan or revert file produced by find-platform-domains-cloudflare.
+
+TEMPORARY.  Delete after Pantheon's CDN migration -- checklist in
+development/2026-07-30-platform-domain-util2/SPEC.md section 11, this script's share in
+development/2026-08-03-platform-domain-util4/SPEC.md section 19.
+
+Reads ONE file, in three passes:
+
+    parse + file contract  ->  PASS 1 validate (read-only)  ->  PASS 2 report  ->  PASS 3 apply
+
+Pass 3 runs only with --for-real.  If ANY selected entry fails validation, the run reports every
+failure and exits 2 having written nothing.  Pass 3 never re-decides anything pass 1 decided, so
+the dry run is a rehearsal of the real run rather than a parallel implementation of it.
+
+Standalone by design: it imports nothing from psh/, check/, plugin/ or script_context, so
+deletion stays `git rm` of this file and its .py symlink.  Code copied rather than imported is
+inventoried in development/2026-08-03-platform-domain-util4/SPEC.md section 17.
+
+Exit codes: 0 = everything applied (or a dry run that validated clean), 1 = completed with
+already-applied skips, 2 = could not complete and NOTHING was changed, 3 = failed mid-apply and
+Cloudflare was left PARTIALLY CHANGED, 130 = interrupted.
+"""
+import argparse
+import contextlib
+import datetime
+import io
+import json
+import os
+import re
+import shlex  # noqa: F401 -- unused until Task 9's run-record rerun command
+import signal  # noqa: F401 -- unused until Task 9's SIGINT-during-flush guard
+import sys
+import tempfile
+import time
+import tomllib  # noqa: F401 -- unused until Task 3 reads --config's TOML
+from pathlib import Path  # noqa: F401 -- unused until Task 9's run-record path
+
+import cloudflare  # noqa: F401 -- for cloudflare.CloudflareError, unused until Task 5 (pass 1)
+from cloudflare import Cloudflare  # noqa: F401 -- unused until Task 3's pinned client
+
+DEFAULT_CONFIG = "pantheon-sitehealth-emails.toml"
+API_BASE_URL = "https://api.cloudflare.com/client/v4"   # pinned; see build_client
+GOVERNED_TYPES = ("CNAME", "A", "AAAA")   # SPEC R1.1: every other type at the name is ignored
+VERIFY_RETRY_SLEEP = 2.0                  # SPEC R6.2
+ERROR_MESSAGE_LIMIT = 200                 # SPEC 9.1 rule 3
+
+# Copied verbatim from find-platform-domains-cloudflare.  A marker is "<{ ... }" -- the trailing
+# ">" that appears in the sample config is decorative and NOT part of the syntax.
+MARKER_RE = re.compile(r"<\{(.*?)(?<!\\)}")
+
+sleep = time.sleep   # the one sleep seam (SPEC section 13); tests monkeypatch it
+
+
+class StartupError(Exception):
+    """Anything that stops the run from starting or completing (exit 2)."""
+
+
+class InvariantError(StartupError):
+    """A mid-run INTERNAL INVARIANT violated -- not an operator error (SPEC 9.1).
+
+    Raised when an entry reaches pass 3 without a `ready` verdict, when a delete id pass 1
+    never resolved, or when a `delete_match`/`posts` shape the section 6 checks should already
+    have rejected reaches a body builder anyway.  A subclass of StartupError so main()'s existing
+    handler and the exit-2 taxonomy stay unchanged -- this adds a NAME, not a new code path
+    (PD#2): reaching this point means the upstream gate has a bug, and silently proceeding is
+    exactly the failure class PD#1 forbids.
+    """
+
+
+class OutputWriteError(StartupError):
+    """The run record could not be written or could not be serialized (SPEC 9.1/9.2).
+
+    A subclass of StartupError for the same reason InvariantError is: main()'s existing handler
+    and the exit-2 taxonomy stay unchanged -- this adds a NAME, not a code path.  Named rather
+    than reusing OSError because the failure is not always an OS-level one: json.dump raises
+    TypeError/ValueError on an unserializable value, and calling that an OSError would be exactly
+    the "handle errors" mis-naming PD#2 forbids.  Unlike the sibling's four-output-file version of
+    this class, this script writes exactly ONE artifact -- the run record beside FILE -- so there
+    is no partial-set report to relay; see SPEC 9.2 for the precedence rule this exception feeds.
+    """
+
+
+def point_at_devnull(stream) -> None:
+    """Repoint `stream`'s file descriptor at /dev/null, so nothing written to it can fail again.
+
+    Copied verbatim from find-platform-domains-dns; the recipe is Python's own, from the "Note on
+    SIGPIPE" in the library/signal docs.  Callers decide WHETHER a stream is doomed -- this only
+    carries it out, and it is NEVER called on a stream a real write has not already failed on.
+
+    suppress(), not try/except/pass: ruff SIM105.  Named exceptions only (PD#2) -- a broad
+    suppression would hide a real dup2 failure.  ValueError/io.UnsupportedOperation are the "not
+    backed by a real file descriptor" shapes (pytest's capture objects raise
+    io.UnsupportedOperation from fileno()), where there is no descriptor to replace at all.
+    """
+    with contextlib.suppress(OSError, ValueError, io.UnsupportedOperation):
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stream.fileno())
+        os.close(devnull)
+
+
+def report_line(text) -> None:
+    """One line of an abort report, written to a stderr that may itself be failing.
+
+    Every OTHER stderr write in this script is deliberately unguarded -- the progress notes, the
+    re-read warnings and the summary all let an OSError propagate, because main()'s handlers turn
+    it into a named abort at exit 2.  This is the end of that road: a failure HERE has nowhere
+    left to propagate, and CPython's shutdown flush of the same doomed stream would override the
+    exit code with 120.  Swallowing the OSError is the point -- there is nowhere to report "I
+    could not report", and the exit code is the only channel left.
+
+    The probe is the caller's own failed write, never a flush: sys.stderr is LINE-buffered, so its
+    buffer is empty at probe time and an empty flush succeeds even on a filesystem that is 100%
+    full -- it would report a doomed stream healthy.  With sys.stderr closed, CPython's
+    print(file=None) falls back to sys.stdout, so stdout is then the stream that just failed.
+    """
+    try:
+        print(text, file=sys.stderr, flush=True)
+    except OSError:
+        point_at_devnull(sys.stdout if sys.stderr is None else sys.stderr)
+
+
+class PlanFileError(StartupError):
+    """The input file is not a plan or revert file this script knows how to apply (SPEC 6).
+
+    A subclass of StartupError so main()'s existing handler and the exit-2 taxonomy stay
+    unchanged -- this adds a NAME, not a code path (PD#2).  Every one of SPEC section 6's eight
+    checks raises this, and every message names the file, the FQDN key where one applies, and
+    the offending field.  Fatal rather than per-entry-skippable BY DESIGN: a file malformed in
+    one entry is a file whose provenance is in question, and partially applying it is exactly
+    what SPEC section 3's first property exists to prevent.
+    """
+
+
+class CloudflareReadError(StartupError):
+    """A DNS-record LIST call failed during pass 1 (SPEC 9.1).
+
+    Pass 1 is read-only, so this always means nothing was changed -- hence exit 2 and a
+    StartupError subclass.  A list failure during POST-APPLY VERIFICATION is NOT this: by then
+    Cloudflare has been written to, so it is an ApplyError and the run exits 3.
+    """
+
+
+class ApplyError(Exception):
+    """A batch call failed, a post-apply verification did not match after one retry, or a
+    verification list call failed (SPEC 9.1).
+
+    Deliberately NOT a StartupError subclass: those all mean exit 2 ("nothing was changed"), and
+    this one usually means exit 3.  main() computes the code from the outcome tally
+    (exit_code_for), never from the exception class.
+    """
+
+
+def require_usable_streams() -> None:
+    """Refuse to run when either standard stream is closed.
+
+    Adapted from find-platform-domains-cloudflare's function of the same name, with its `output`
+    parameter REMOVED: that script writes its result to stdout only when -o is absent, so a
+    closed stdout is survivable there.  This script always writes the report to stdout and always
+    writes ATTENTION/ERROR lines to stderr, so both are unconditionally required.
+
+    The stderr case is the dangerous one, and it is measured: CPython's print(msg, file=None)
+    falls back to sys.stdout, so with `2>&-` every ATTENTION line -- the ONLY signal that a
+    destructive run was refused or narrowed -- would be interleaved into the report on stdout.
+
+    Raised as a StartupError so main()'s handler reports it at exit 2.
+    """
+    if sys.stdout is None:
+        raise StartupError(
+            "standard output is closed; there is nowhere to write the report of what this run "
+            "would change")
+    if sys.stderr is None:
+        raise StartupError(
+            "standard error is closed; every ATTENTION and ERROR line would fall back to stdout "
+            "and be mixed into the report there")
+
+
+def normalize(name):
+    """Lowercase, strip whitespace and the trailing root dot.  Copied from
+    find-platform-domains-dns."""
+    return str(name).strip().rstrip(".").lower()
+
+
+def dump_json(data, stream) -> None:
+    """The ONE serialization of the output mapping, so the -o file and stdout are byte-identical
+    (SPEC A1.5).  Two call sites formatting separately is how the two destinations drift."""
+    json.dump(data, stream, indent=4, sort_keys=True)
+    stream.write("\n")
+
+
+def now_utc():
+    """The one clock seam, as an ISO-8601 Z-suffixed string; tests monkeypatch it (SPEC 7).
+
+    A seam rather than a post-hoc normalization: a golden that strips the timestamp before
+    comparing is no longer comparing the bytes the program wrote (PD#14).
+    """
+    return datetime.datetime.now(tz=datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_json_atomic(path, data) -> None:
+    """Write data as JSON to a temp file in the same directory, then os.replace() it onto `path`.
+
+    Copied from plugin/cloudflare/fqdns.py's write_fqdns_atomic.  Atomic: an interrupted write
+    never leaves a half-written or truncated output file -- the previous one stays byte-intact.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."  # noqa: PTH120, PTH100 --
+    # feeds tempfile.mkstemp's dir=, load-bearing for the atomic-rename-needs-same-filesystem
+    # guarantee this docstring documents; Path.resolve() follows symlinks where
+    # os.path.abspath() does not, a real semantic difference for the symlink case
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".apply-platform-domains-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            dump_json(data, f)   # the SAME serializer stdout uses, so the two cannot drift
+        # mkstemp creates the temp file mode 0600, which os.replace would preserve; restore a
+        # normal umask-based mode (typically 0644) so other readers keep their access.
+        current_umask = os.umask(0)
+        os.umask(current_umask)
+        os.chmod(tmp, 0o666 & ~current_umask)  # noqa: PTH101 -- behavior surface, see above
+        os.replace(tmp, path)  # noqa: PTH105 -- THE atomic-replace call this docstring documents
+    except BaseException:  # incl. KeyboardInterrupt: drop the temp file, leave the old one intact
+        try:  # noqa: SIM105 -- not restructuring the BaseException cleanup handler's flow
+            os.unlink(tmp)  # noqa: PTH108 -- cleanup path of the same behavior surface
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def build_arg_parser():
+    """The CLI (SPEC R2).
+
+    --only is action="append", NOT nargs="+", and that is load-bearing: with one positional FILE,
+    `--only a b file.json` under nargs="+" would silently swallow the filename into the option.
+    The sibling documents the same argparse limitation in its own --help ("Give ZONE names AFTER
+    the options").  A repeatable single-value option has no such ambiguity.
+
+    allow_abbrev=False is the house rule: without it `--for` abbreviates to `--for-real` and a
+    dry run becomes a production rewrite.
+
+    formatter_class pins the wrap width to 100: argparse's default formatter wraps at
+    shutil.get_terminal_size(), so WITHOUT a pin the --for-real warning below ("WITHOUT THIS FLAG
+    NOTHING IS CHANGED") lands mid-phrase across two lines on an 80-column terminal -- the
+    default for any non-tty invocation (cron, a redirect, this test suite).  A safety warning
+    that can be silently split by the caller's terminal width is a real defect (PD#1), not just a
+    test nicety, so --help output is deterministic instead of ambient-width-dependent.
+    """
+    parser = argparse.ArgumentParser(
+        allow_abbrev=False,
+        formatter_class=lambda prog: argparse.HelpFormatter(prog, width=100),
+        description="Apply a plan or revert file produced by find-platform-domains-cloudflare.  "
+                    "Validates every selected entry against live Cloudflare state first and "
+                    "refuses to change anything if any entry fails.  WITHOUT --for-real this is "
+                    "a dry run: it reports what it would do and changes nothing.",
+        epilog="Exit codes: 0 = everything applied (or a dry run that validated clean), "
+               "1 = completed with already-applied entries skipped, 2 = could not complete and "
+               "NOTHING was changed, 3 = FAILED MID-APPLY and Cloudflare was left partially "
+               "changed, 130 = interrupted.  A run record naming every entry's outcome is "
+               "written beside FILE on every one of those paths.")
+    parser.add_argument("file", metavar="FILE",
+                        help="the -plan.json or -revert.json file to apply")
+    parser.add_argument("-c", "--config", default=DEFAULT_CONFIG,
+                        help=f"TOML file to read [Cloudflare] credentials from "
+                             f"(default: {DEFAULT_CONFIG})")
+    parser.add_argument("--only", action="append", default=None, metavar="FQDN",
+                        help="apply only this FQDN; repeat the option for more than one.  An "
+                             "FQDN that is not in FILE is an error")
+    parser.add_argument("--for-real", action="store_true",
+                        help="actually make the Cloudflare API calls.  WITHOUT THIS FLAG NOTHING "
+                             "IS CHANGED")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="also print each API call's method, path and exact request body")
+    return parser
+
+
+def main(argv):
+    """Exit 0/1/2/3/130 -- see the module docstring and SPEC section 8.
+
+    THE EXIT-CODE DISCIPLINE IS THE POINT OF THE STRUCTURE BELOW, ported in reasoning from
+    find-platform-domains-cloudflare's main().  CPython exits 1 on ANY uncaught traceback, and 1
+    here means "completed with already-applied skips" -- so an unexpected API shape or an internal
+    defect leaking out of here would be indistinguishable to an operator's `case $?` from a
+    healthy run.  Every other outcome is routed AWAY from 1.  The `except BaseException` arm is
+    the last line of defence; `except SystemExit: raise` sits above it so a deliberate exit keeps
+    its own code.  Neither swallows: the class is always named on stderr (PD#2).
+
+    Later tasks fill in the body between require_usable_streams() and the return.
+    """
+    options = build_arg_parser().parse_args(argv)  # noqa: F841 -- unused until Task 2 reads
+    # options.file/.config/.only/.for_real/.verbose to drive the three passes
+    try:
+        require_usable_streams()
+        return 0    # noqa: TRY300 -- replaced in Task 7 (pass 2/report).  This must stay inside
+        # try, not move to an else clause: every pass 1-3 call Task 2 onward inserts between
+        # require_usable_streams() and this return can raise StartupError/ApplyError/
+        # KeyboardInterrupt, and only code inside try is reachable by the except clauses below.
+    except StartupError as e:
+        report_line(f"ERROR: {e}")
+        return 2
+    except KeyboardInterrupt:
+        report_line("ERROR: interrupted")   # replaced in Task 9
+        return 130
+    except OSError as e:
+        report_line(f"ERROR: {e}")
+        return 2
+    except SystemExit:
+        raise
+    except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the
+        # docstring: without it CPython's exit 1 on an uncaught traceback would be
+        # indistinguishable from this program's own exit 1.
+        report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

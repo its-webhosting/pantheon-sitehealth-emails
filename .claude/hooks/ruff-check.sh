@@ -74,15 +74,17 @@ esac
 
 # --- Python only.  The main program is EXTENSION-LESS, so it needs its own arm; the
 # committed pantheon-sitehealth-emails.py symlink is what ruff/pyright/CodeGraph resolve
-# it through, but an edit lands on the real file.  The two temporary utilities --
-# find-platform-domains-dns (development/2026-07-28-platform-domain-util/SPEC.md) and
-# find-platform-domains-cloudflare (development/2026-07-30-platform-domain-util2/SPEC.md) --
+# it through, but an edit lands on the real file.  The three temporary utilities --
+# find-platform-domains-dns (development/2026-07-28-platform-domain-util/SPEC.md),
+# find-platform-domains-cloudflare (development/2026-07-30-platform-domain-util2/SPEC.md), and
+# apply-platform-domains-cloudflare (development/2026-08-03-platform-domain-util4/SPEC.md) --
 # are the same shape, and each is deleted with its script after the Pantheon CDN migration.
 case "$ABS" in
     *.py) ;;
     "$REPO_ROOT/pantheon-sitehealth-emails") ;;
     "$REPO_ROOT/find-platform-domains-dns") ;;
     "$REPO_ROOT/find-platform-domains-cloudflare") ;;
+    "$REPO_ROOT/apply-platform-domains-cloudflare") ;;
     *) exit 0 ;;
 esac
 
