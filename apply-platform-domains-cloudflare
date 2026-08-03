@@ -384,6 +384,21 @@ def describe_keys(keys):
     return ", ".join(f"{rtype} {content}" for rtype, _name, content in keys)
 
 
+def want_delete_keys(entry):
+    """SPEC 7.2's D, as `record_key()`s -- the ONE derivation, shared by `verdict_for` and
+    `validate_entries` (task 5 review, Important 4).
+
+    Before this helper existed, both functions computed D independently from `entry
+    ["delete_match"]`.  A hand-edit to one that missed the other could make a `ready` verdict
+    silently resolve fewer delete ids than `delete_match` actually names -- pass 3 would then
+    DELETE PART of D and POST P, exactly the partial write SPEC section 3 exists to prevent.
+    Routing both through this one function makes that class of drift structurally impossible
+    rather than merely unlikely.
+    """
+    return {record_key(item["type"], item["name"], item["content"])
+            for item in entry["delete_match"]}
+
+
 def verdict_for(entry, rows):
     """Classify one entry against Cloudflare's current state (SPEC 7.3).  Returns (verdict,
     detail); detail is "" only for the two valid verdicts.
@@ -429,8 +444,7 @@ def verdict_for(entry, rows):
                 f"{collisions}")
 
     have = set(keys)
-    want_delete = {record_key(item["type"], item["name"], item["content"])
-                   for item in entry["delete_match"]}
+    want_delete = want_delete_keys(entry)
     want_post = {record_key(item["type"], item["name"], item["content"])
                  for item in entry["body"]["posts"]}
 
@@ -465,11 +479,22 @@ class Validation(NamedTuple):
 def records_at_name(client, zone_id, fqdn):
     """Every DNS record Cloudflare holds at one name (SPEC 7.1).
 
-    ONE filtered list call, not a walk of the zone: util3 measured 2 duplicates and 2 misses in a
-    single paginated walk of an 18,848-record zone, and a miss here would be a FALSE validation
-    failure on a healthy entry.  Filtering by name also keeps the response small enough that
-    pagination never arises, which is why none of the sibling's read_all/ListTally machinery is
-    copied into this script.
+    ONE filtered list call per FQDN -- but NOT one HTTP request: measured against cloudflare
+    5.4.0 with an `httpx.MockTransport`, `dns.records.list(...)` returns a
+    `SyncV4PagePaginationArray`, whose `__iter__` auto-paginates, and `next_page_info()`
+    unconditionally returns a next page for any non-empty result -- so `list(page)` always
+    fetches one extra, empty page (2 HTTP calls per name, confirmed: `.../dns_records
+    ?name.exact=<fqdn>` then `.../dns_records?name.exact=<fqdn>&page=2`). A 218-entry plan
+    therefore costs 436 reads in pass 1, not 218.
+
+    Task 5 review, Important 2 (controller ruling): this is the auto-pager's correct behavior --
+    it would keep paging if a name ever DID hold more records than fit on one page -- and closing
+    the extra fetch would be performance work SPEC section 20 puts out of scope. The real reason
+    none of the sibling's read_all/ListTally completeness machinery is ported here is NOT "no
+    pagination arises" (it does, every call): a name-filtered query returns a handful of records,
+    so a SHORT read here is not the hazard a paginated walk of an 18,848-record zone is (util3
+    measured 2 duplicates and 2 misses in one such walk) -- there is no multi-thousand-row
+    response for a page to drop a row from.
     """
     try:
         page = client.dns.records.list(zone_id=zone_id, name={"exact": fqdn})
@@ -484,6 +509,16 @@ def validate_entries(client, entries, *, verbose):
 
     Every entry is classified even after the first invalid one: a first-failure-wins loop would
     hide the second problem and cost the operator another full run to find it.
+
+    `delete_ids` is resolved from `governed_records(rows)` directly, NOT by re-filtering rows
+    against `want_delete_keys(entry)` (task 5 review, Important 4): when `verdict` is `ready`,
+    `verdict_for` has already established `set(keys) == want_delete_keys(entry)` with no
+    duplicate keys (duplicates are diverted to `record-ambiguous` before this point), so
+    `governed_records(rows)` and `want_delete_keys(entry)` MUST be the same length -- an
+    INVARIANT, not a filter.  Checking the invariant here, and raising rather than silently
+    resolving a partial id list, is what keeps a future change to either derivation (or to the
+    `ready` condition itself) LOUD instead of shipping a partial delete: pass 3 would otherwise
+    delete PART of D and POST P, exactly the outcome SPEC section 3 exists to prevent.
     """
     result = {}
     for fqdn, entry in sorted(entries.items()):
@@ -491,13 +526,17 @@ def validate_entries(client, entries, *, verbose):
         verdict, detail = verdict_for(entry, rows)
         delete_ids = []
         if verdict == "ready":
-            wanted = {record_key(item["type"], item["name"], item["content"])
-                      for item in entry["delete_match"]}
-            delete_ids = [r.id for r in governed_records(rows)
-                          if record_key(r.type, r.name, r.content) in wanted]
+            delete_ids = [r.id for r in governed_records(rows)]
+            expected = len(want_delete_keys(entry))
+            if len(delete_ids) != expected:
+                raise InvariantError(
+                    f"{fqdn}: a `ready` verdict resolved {len(delete_ids)} delete ids for "
+                    f"{expected} delete_match records -- verdict_for and validate_entries have "
+                    "diverged on what D is")
         if verbose:
-            print(f"{fqdn}: {verdict}"
-                  + (f" -- {detail}" if detail else ""), flush=True)
+            print(f"{fqdn}: {verdict}", flush=True)   # SPEC 11.2: verdict word ONLY, never the
+            # detail -- the detail belongs to the unconditional stderr ATTENTION line (Task 7),
+            # and printing both would put the same fact on two streams under -v.
         result[fqdn] = Validation(verdict, detail, delete_ids)
     return result
 

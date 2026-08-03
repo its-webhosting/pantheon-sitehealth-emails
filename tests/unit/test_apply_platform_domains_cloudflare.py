@@ -41,15 +41,15 @@ def apc():
 
 
 @pytest.fixture(autouse=True)
-def _refuse_real_network(monkeypatch):
-    """SPEC section 13: fails the test if a real network call is attempted.
+def refuse_real_network(monkeypatch):
+    """SPEC section 13 (amended, task 5 review): fails the test if a real outbound HTTP request
+    is attempted -- module-scoped to this test file only, no promise about any other.
 
     Task 3's credential tests build a REAL `Cloudflare` client by design -- that is the whole
-    point of asserting the environment pin against a real built request -- so this guard cannot
-    ban client CONSTRUCTION (SPEC section 13's wording literally reads "constructed OR any real
-    network call attempted"; construction is deliberately left out here, and that narrowing is
-    reported to the task's controller rather than silently applied). What must never happen is
-    an actual outbound HTTP request, so the guard targets that alone.
+    point of asserting the environment pin against a real built request, and SPEC section 16
+    requires it -- so this guard does NOT ban client CONSTRUCTION, only the outbound request. A
+    constructed-but-unused client performs no I/O, so banning construction would buy nothing the
+    request interception below does not already buy.
 
     The seam: cloudflare._base_client.SyncAPIClient._request calls `self._client.send(request,
     ...)` exactly once per outbound call -- an httpx.Client instance method -- for BOTH a read
@@ -65,9 +65,20 @@ def _refuse_real_network(monkeypatch):
     same reason (its docstring, quoted there): main()'s `except BaseException` last line of
     defence would otherwise catch a raise-inside-the-patch AssertionError and convert it into
     `report_line(...)` + `return 2`, so a test asserting only `main(...) == 2` would pass green
-    while this guard fired unread. `refuse` therefore only RECORDS the call; the raise and the
+    while this guard fired unread. Measured directly (task 5 review): the Cloudflare SDK's OWN
+    retry loop (`except Exception as err:` in `cloudflare/_base_client.py`) swallows an inline
+    `AssertionError` from `refuse` and retries -- three times -- before converting it to
+    `cloudflare.APIConnectionError`, so an in-run assertion is eaten by the library under test
+    before the caller ever sees it. `refuse` therefore only RECORDS the call; the raise and the
     real assertion happen at teardown, unconditionally, whatever the code under test did with the
     exception in between.
+
+    Yields `reached` (not just `None`): SPEC section 13 mandates a guard self-test, since this
+    fixture hooks the SDK's transport and a future SDK upgrade that changes the request path
+    could otherwise leave it silently inert with no test noticing (CLAUDE.md's
+    two-`sitecustomize.py` failure shape). `test_the_network_guard_itself_can_fire` below depends
+    on this fixture explicitly (autouse does not prevent that) to read and then clear `reached`,
+    so proving the guard fires does not also trip THIS teardown assertion for an unrelated reason.
     """
     reached = []
 
@@ -78,7 +89,7 @@ def _refuse_real_network(monkeypatch):
             "missing FakeCloudflareClient (SPEC section 13 forbids a real Cloudflare API call)")
 
     monkeypatch.setattr(httpx.Client, "send", refuse)
-    yield
+    yield reached
     assert not reached, (
         f"real network call(s) attempted: {reached} -- this test is missing "
         "FakeCloudflareClient (SPEC section 13 forbids a real Cloudflare API call)")
@@ -747,15 +758,22 @@ class FakeCloudflareClient:
         self.dns = types.SimpleNamespace(
             records=types.SimpleNamespace(list=self._list, batch=self._batch))
 
-    def _list(self, *, zone_id, name=None, **kwargs):
-        self.list_calls.append({"zone_id": zone_id, "name": name, **kwargs})
+    def _list(self, *, zone_id, name=None, type=None, **kwargs):  # noqa: A002 -- mirrors the
+        # real SDK's dns.records.list(..., type=...) keyword verbatim (confirmed via
+        # inspect.signature(RecordsResource.list)), and this is a fake honoring that seam's shape,
+        # not a program-facing API that could confuse a caller with the builtin (task 5 review,
+        # Minor 6).
+        self.list_calls.append({"zone_id": zone_id, "name": name, "type": type, **kwargs})
         if self.list_error is not None:
             raise self.list_error
         key = (name or {}).get("exact", "")
         sequence = self.rows_by_name.get(key, [[]])
         index = min(self._served.get(key, 0), len(sequence) - 1)
         self._served[key] = index + 1
-        return sequence[index]
+        rows = sequence[index]
+        if type is not None:
+            rows = [r for r in rows if str(getattr(r, "type", "")).upper() == str(type).upper()]
+        return rows
 
     def _batch(self, *, zone_id, deletes=None, posts=None, **kwargs):
         self.batch_calls.append({"zone_id": zone_id, "deletes": deletes, "posts": posts})
@@ -803,13 +821,99 @@ def test_validate_entries_resolves_no_ids_for_an_already_applied_entry(apc):
 
 
 def test_validate_entries_classifies_every_entry_not_just_the_first(apc):
-    """A first-failure-wins loop would hide the second problem and force a second full run."""
+    """A first-failure-wins loop would hide the second problem and force a second full run.
+
+    Task 5 review, Critical 1: the ORIGINAL version of this test put the one invalid entry on the
+    LAST key in sort order ("b.umich.edu" after "a.umich.edu"), so a loop that stops at the first
+    invalid entry still produced both results -- proven measured: adding `if verdict not in
+    ("ready", "already-applied"): break` to validate_entries left the whole suite green, INCLUDING
+    this test. Putting the invalid entry FIRST in sort order ("a.umich.edu" before "b.umich.edu")
+    is what makes a first-failure-wins loop actually fail to reach the second entry.
+
+    NOTE on the review's suggested replacement: it reused `cname_rows()` (a row hardcoded to
+    `name="a.umich.edu"`, see `row()`'s default) for the "b.umich.edu" entry. Verified directly:
+    that combination does NOT produce "ready" -- `record_key` includes the name, so a row named
+    "a.umich.edu" can never match a "b.umich.edu" delete_match, and the entry falls through to
+    "records-missing" regardless of the break mutation. `row(name="b.umich.edu")` is used below
+    instead, so this entry's row genuinely matches its own delete_match.
+    """
     client = FakeCloudflareClient(rows_by_name={
-        "a.umich.edu": [cname_rows()],
-        "b.umich.edu": [[]],
+        "a.umich.edu": [[]],
+        "b.umich.edu": [[row(name="b.umich.edu")]],
     })
     entries = {"a.umich.edu": plan_entry(), "b.umich.edu": plan_entry(fqdn="b.umich.edu")}
     result = apc.validate_entries(client, entries, verbose=False)
-    assert result["a.umich.edu"].verdict == "ready"
-    assert result["b.umich.edu"].verdict == "records-missing"
+    assert result["a.umich.edu"].verdict == "records-missing"
+    assert result["b.umich.edu"].verdict == "ready"
+
+
+def test_validate_entries_prints_the_verdict_word_only_under_verbose(apc, capsys):
+    """SPEC 11.2 (amended, task 5 review, Important 3): the pass-1 progress line is `<fqdn>:
+    <verdict>` -- the verdict word ONLY, `-v`, stdout.  The detail belongs to the unconditional
+    stderr ATTENTION line a later task adds; printing both under -v would put the same fact on
+    two streams.  All four other validate_entries tests pass verbose=False, so before this test
+    the verbose=True branch had zero coverage."""
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    entry = plan_entry()
+    result = apc.validate_entries(client, {"a.umich.edu": entry}, verbose=True)
+    assert result["a.umich.edu"].verdict == "records-missing"
+    assert result["a.umich.edu"].detail   # the detail DOES exist on the Validation...
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "a.umich.edu: records-missing"   # ...but never on stdout
+    assert result["a.umich.edu"].detail not in captured.out
+
+
+def test_validate_entries_raises_invariant_error_when_delete_ids_diverge_from_delete_match(
+        apc, monkeypatch):
+    """Task 5 review, Important 4: verdict_for and validate_entries both derive D from
+    delete_match through the ONE shared want_delete_keys() helper -- this proves the two stay
+    wired together by forcing them apart and watching the shared-derivation guard catch it. If
+    the two derivations could silently drift, this shape would resolve a PARTIAL delete_ids list
+    (2 ids for a 1-item delete_match) instead of raising, and pass 3 would delete part of D while
+    posting P -- the partial write SPEC section 3 exists to prevent.
+
+    verdict_for is monkeypatched to force a `ready` verdict for rows that do NOT actually satisfy
+    R == D (plan_entry()'s delete_match names ONE CNAME; address_rows() is TWO A/AAAA records) --
+    a shape verdict_for itself would never produce, which is exactly why the check inside
+    validate_entries has to be a same-scope invariant assertion rather than trusted from the
+    verdict alone.
+    """
+    monkeypatch.setattr(apc, "verdict_for", lambda entry, rows: ("ready", ""))
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    with pytest.raises(apc.InvariantError) as excinfo:
+        apc.validate_entries(client, {"a.umich.edu": plan_entry()}, verbose=False)
+    assert "a.umich.edu" in str(excinfo.value)
+    assert "2 delete ids" in str(excinfo.value)
+    assert "1 delete_match" in str(excinfo.value)
+
+
+def test_the_network_guard_itself_can_fire(apc, tmp_path, refuse_real_network):
+    """SPEC section 13's mandated guard self-test (task 5 review, Minor 5): refuse_real_network
+    hooks httpx.Client.send, which is an implementation detail of the CURRENT cloudflare SDK's
+    request path -- if a future SDK upgrade changed that path, the guard would go silently inert
+    and every other test in this file would pass for the wrong reason (PD#14; CLAUDE.md's
+    two-sitecustomize.py failure shape).
+
+    Calls httpx.Client.send DIRECTLY, via client._client (the SAME `sent_request()` idiom this
+    file already uses for the credential tests, `from cloudflare._models import
+    FinalRequestOptions`), rather than through a full `client.zones.list()` round trip: the SDK's
+    OWN retry loop (see refuse_real_network's docstring) would catch the inline AssertionError
+    and re-raise it as `cloudflare.APIConnectionError` instead, which is exactly the swallowing
+    this guard's teardown placement exists to survive -- but that swallowing means asserting
+    `pytest.raises(AssertionError)` around `client.zones.list()` itself would raise the WRONG
+    exception here and fail this test for an uninformative reason.  Depends on
+    `refuse_real_network` explicitly (autouse does not prevent that) to read the fixture's own
+    `reached` list and then clear it, so proving the guard fired here does not ALSO trip the
+    fixture's teardown assertion for an unrelated test.
+    """
+    from cloudflare._models import FinalRequestOptions
+    path = config_file(tmp_path, '[Cloudflare]\napi_token = "tok-123"\n')
+    client = apc.cloudflare_client(path)
+    request = client._build_request(FinalRequestOptions(method="get", url="/zones"))
+    with pytest.raises(AssertionError, match="real network call attempted"):
+        httpx.Client.send(client._client, request)
+    assert refuse_real_network, (
+        "the guard never reached httpx.Client.send -- SPEC section 13's self-test requirement "
+        "exists for exactly this: prove it before trusting it")
+    refuse_real_network.clear()
 
