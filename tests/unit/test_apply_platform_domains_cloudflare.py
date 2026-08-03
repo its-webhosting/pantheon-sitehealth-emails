@@ -616,7 +616,13 @@ def test_verdict_for_raises_invariant_error_on_the_impossible_empty_shape(apc):
 
     Review round 2, item 2: the guard's own message says "empty OR MISSING", so an entry from
     which the key is ABSENT ENTIRELY (not merely empty) must raise the SAME named InvariantError
-    too, not a bare KeyError -- covered by the two del-the-key cases below.
+    too, not a bare KeyError -- covered by the three del-the-key cases below.  Review round 3:
+    the round-2 diff exercised only 2 of the 3 named shapes (missing delete_match, missing
+    body.posts with body present) -- missing `entry["body"]` ENTIRELY was untested, and the
+    re-reviewer demonstrated it is not academic: reverting ONLY the outer defensive read
+    (`entry.get("body", {}).get("posts")` -> `entry["body"].get("posts")`, leaving the other two
+    `.get`s intact) left every case the suite exercised at the time still green, while
+    `del entry["body"]` on that reverted module raised a bare `KeyError: 'body'`.
     """
     entry = plan_entry()
     entry["delete_match"] = []
@@ -633,6 +639,11 @@ def test_verdict_for_raises_invariant_error_on_the_impossible_empty_shape(apc):
     del missing_posts["body"]["posts"]
     with pytest.raises(apc.InvariantError):
         apc.verdict_for(missing_posts, [])
+
+    missing_body = plan_entry()
+    del missing_body["body"]
+    with pytest.raises(apc.InvariantError):
+        apc.verdict_for(missing_body, [])
 
 
 def test_verdict_records_missing_when_nothing_governed_is_there(apc):
