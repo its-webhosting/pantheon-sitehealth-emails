@@ -1070,10 +1070,27 @@ From `find-platform-domains-cloudflare`, copied verbatim or near-verbatim:
 | `normalize` | the FQDN comparison rule, shared with the file format |
 | `StartupError`, `InvariantError`, `OutputWriteError` | the exception spine |
 | `MARKER_RE`, `resolve_env_marker`, `resolve_config_value` | the `<{env …}` / `<{secret env …}` resolver |
-| `build_client`, `cloudflare_client` | credentials and the environment pin |
+| `build_client`, `cloudflare_client` | credentials and the environment pin. **One deliberate divergence from the sibling** — see below |
 | `api_error_text` | narrowed per §9.1 |
 | `dump_json`, `write_json_atomic` | the run-record serializer and atomic write |
 | `main()`'s handler-chain shape | the exit taxonomy (§8.3) |
+
+**`build_client`'s credential-nulling test diverges from both other copies, deliberately.** This
+copy nulls a field when `creds.get(field) is None`; the sibling and `plugin/cloudflare/client.py`
+both null it only when `field not in creds`. Measured: an **explicit** `api_email=None` is *in*
+`creds`, so the `not in` form leaves it for the SDK to back-fill, and an ambient
+`CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY` reaches a real built request — routes 1 and 2 of the
+four-route pin, reopened, on the one copy that performs writes.
+
+**It is latent in all three, not live in any:** every caller guards
+(`cloudflare_client` here, `build_client()` in the plugin) and exits before it can pass `None`. But
+`build_client`'s own docstring claims it "uses EXACTLY the credentials the config supplied", and
+under the `not in` form that claim is false for an explicit `None` — so the divergence makes the
+docstring true rather than merely intended, and is what lets §14's new
+`build_client(api_email=None, api_key=None)` test pin the idiom itself rather than the caller's
+guard. **The other two copies still carry the `not in` form**; the plugin's is the one worth
+revisiting, because unlike these two utilities it is not scheduled for deletion and it runs
+unattended against production monthly.
 
 **Not copied, deliberately:** `read_all`, `read_page_once`, `expected_record_count`, `ListTally`
 and the completeness cross-check (~120 lines). They exist to survive paginating a whole zone;

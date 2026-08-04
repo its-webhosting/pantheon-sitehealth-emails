@@ -660,6 +660,45 @@ def test_cloudflare_client_email_and_key_branch_sends_only_the_configured_creden
     # one, so the header must carry "a@b.edu", never the exported CLOUDFLARE_EMAIL value.
 
 
+def test_cloudflare_client_refuses_a_section_with_no_credentials(apc, tmp_path):
+    """Adversarial review finding 4: mutating this guard (`if not email or not api_key:` ->
+    `if False:`) left the whole suite green -- no test in this file ever drove `cloudflare_client`
+    with a `[Cloudflare]` section that supplies NEITHER api_token NOR email+api_key.  This is not
+    merely a message check: with the guard disabled, `cloudflare_client` would call
+    `build_client(api_email=None, api_key=None)` -- see the sibling test below for why that is a
+    credential-disclosure risk, not just a confusing error."""
+    path = config_file(tmp_path, "[Cloudflare]\n")
+    with pytest.raises(apc.StartupError, match="needs either api_token, or both email and api_key"):
+        apc.cloudflare_client(path)
+
+
+def test_build_client_sends_no_ambient_credential_when_none_are_configured(apc, monkeypatch):
+    """Adversarial review finding 4, the more important half of the pair: this pins the
+    `field not in creds` idiom in `build_client`'s pin ITSELF, independent of whether
+    `cloudflare_client`'s guard above ever gets bypassed (by a future refactor or a defect, not
+    just today's literal mutation) -- this is exactly the call `cloudflare_client` would make if
+    it were.  Measured against cloudflare 5.4.0, with all six ambient variables the SDK reads
+    exported: BEFORE this fix, `Cloudflare(api_email=None, api_key=None, ...)` reached the SDK's
+    own `__init__`, which back-fills any credential still `None` from the environment -- and the
+    ORIGINAL pin loop only re-nulled a field `not in creds`, so an EXPLICIT `api_email=None`/
+    `api_key=None` (present in creds, merely None-valued) was left holding whatever the SDK had
+    just back-filled: a REAL built request carried `x-auth-email: ambient@example.edu` /
+    `x-auth-key: ambient-key` (measured, pasted in the task report).  With the fix
+    (`creds.get(field) is None`, matching the SDK's own back-fill trigger), the client genuinely
+    holds NO credential on any field -- proven at the attribute level -- and the SDK's OWN
+    `_validate_headers` then refuses to build a request AT ALL (a real, independent safety net
+    this test also proves is actually reached, not merely assumed): no header, ambient or
+    otherwise, is ever sent."""
+    for name, value in AMBIENT_CLOUDFLARE_VARS.items():
+        monkeypatch.setenv(name, value)
+    client = apc.build_client(api_email=None, api_key=None)
+    assert client.api_email is None
+    assert client.api_key is None
+    assert client.api_token is None
+    with pytest.raises(TypeError, match="Could not resolve authentication method"):
+        sent_request(client)
+
+
 def test_cloudflare_client_refuses_a_non_string_credential(apc, tmp_path):
     """TOML is typed: `api_token = true` is an ordinary unquoted-value typo, and the SDK would
     stringify it into `Authorization: Bearer True` -- a baffling 401."""
@@ -1364,6 +1403,19 @@ def test_merge_body_puts_deletes_beside_the_files_posts_unchanged(apc):
     assert set(body) == {"deletes", "posts"}
 
 
+def test_merge_body_includes_every_delete_id_not_just_the_first(apc):
+    """Adversarial review finding 2: mutating merge_body to `[{"id": delete_ids[0]}]` (dropping
+    every id past the first) left the WHOLE suite green, because every existing merge_body/
+    apply_entry test in this file passed a single-id list -- a "delete only the first id" defect
+    was structurally invisible.  On the EMERGENCY ROLLBACK path (a revert, where D is the A+AAAA
+    pair), dropping the second id would leave one address record standing beside the restored
+    CNAME -- exactly the partial write section 3 exists to prevent.  Two DISTINCT ids, so a
+    transposition or an early-exit mutation fails too, not just a first-only one."""
+    entry = plan_entry()
+    body = apc.merge_body(entry, ["rec-a", "rec-b"])
+    assert body["deletes"] == [{"id": "rec-a"}, {"id": "rec-b"}]
+
+
 def test_merge_body_never_mutates_the_entry(apc):
     """The entry is written to the run record afterwards; a mutated body would misreport what
     the file said."""
@@ -1499,6 +1551,35 @@ def test_a_dry_run_reports_a_revert_entrys_change_correctly(
     out = capsys.readouterr().out
     assert "A 23.185.0.4 + AAAA 2620:12a:8000::4 -> CNAME live-umich-x.pantheonsite.io" in out
     assert "direction=revert" in out
+
+
+def test_a_for_real_revert_deletes_both_resolved_ids_and_posts_the_cname(
+        apc, tmp_path, monkeypatch):
+    """Adversarial review finding 2: no --for-real apply anywhere in this file exercised the
+    EMERGENCY ROLLBACK direction (D = the A/AAAA pair, P = the single CNAME) with more than one
+    delete id -- every apply_entry/merge_body test used a single-id ["rec-1"] list, so a "delete
+    only the first id" defect on the revert path (the path an operator reaches MID-INCIDENT) was
+    invisible.  The two delete ids here (`rec-a`, `rec-b`, from address_rows()) are DISTINCT, so a
+    transposition or an early-loop-exit mutation fails this test too, not just a first-only one.
+    Asserts the FULL client.batch_calls entry, both ids included, not just a count or a subset."""
+    entry = plan_entry()
+    entry["delete_match"], entry["body"]["posts"] = (
+        [{"type": "A", "name": "a.umich.edu", "content": "23.185.0.4"},
+         {"type": "AAAA", "name": "a.umich.edu", "content": "2620:12a:8000::4"}],
+        [{"type": "CNAME", "name": "a.umich.edu",
+          "content": "live-umich-x.pantheonsite.io", "proxied": True, "ttl": 1}])
+    doc = plan_doc(entries={"a.umich.edu": entry}, direction="revert")
+    path = write_doc(tmp_path, doc, name="platform-domains-cloudflare-revert.json")
+    # address_rows() gives the A/AAAA pair (D) with DISTINCT ids "rec-a"/"rec-b"; the verification
+    # read (after the batch call) must find exactly the posted CNAME (P), matching cname_rows().
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows(), cname_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 0
+    assert client.batch_calls == [{
+        "zone_id": "zone-a",
+        "deletes": [{"id": "rec-a"}, {"id": "rec-b"}],
+        "posts": entry["body"]["posts"],
+    }]
 
 
 def test_verbose_prints_the_exact_request_body(apc, tmp_path, monkeypatch, capsys):
@@ -1744,6 +1825,17 @@ def test_verify_records_accepts_exactly_the_posts(apc):
     assert apc.verify_records(plan_entry(), address_rows()) is True
 
 
+def test_verify_records_ignores_an_unrelated_txt_record_at_the_name(apc):
+    """Adversarial review finding 3: mutating verify_records' `have = {record_key(...) for r in
+    rows}` (dropping the governed_records() filter that scopes it to CNAME/A/AAAA) left the whole
+    suite green, because no verify_records fixture in this file ever carried a non-governed
+    record.  An apex CNAME/A record with an SPF (TXT) record beside it is an ORDINARY shape -- a
+    site's SPF record must not be able to make a HEALTHY apply look unverified (SPEC R1.1's
+    governed-type rule applies here exactly as it does to verdict_for's own TXT test above)."""
+    rows = [*address_rows(), row("TXT", content="v=spf1 -all", identifier="rec-t")]
+    assert apc.verify_records(plan_entry(), rows) is True
+
+
 def test_verify_records_rejects_a_leftover_record(apc):
     rows = [*address_rows(), row(identifier="rec-leftover")]
     assert apc.verify_records(plan_entry(), rows) is False
@@ -1820,6 +1912,26 @@ def test_apply_entry_raises_verify_error_when_the_verification_read_itself_fails
                              {"errors": [{"code": 1000, "message": "boom"}]})
     client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]},
                                   list_error=error)
+    with pytest.raises(apc.VerifyError, match="verification read failed"):
+        apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+
+
+@pytest.mark.parametrize("error_factory", [
+    lambda: TimeoutError("verification read timed out"),
+    lambda: OSError("verification read timed out"),
+])
+def test_apply_entry_raises_verify_error_when_the_verification_read_raises_a_bare_transport_error(
+        apc, error_factory):
+    """SPEC R6.3, amended after the adversarial review (finding 1): the batch call already
+    RETURNED 200 -- so Cloudflare committed something -- and only `cloudflare.CloudflareError` was
+    caught at the verification read.  A bare `TimeoutError`/`OSError` (not wrapped in the SDK's own
+    exception hierarchy) escaped `apply_entry` entirely and was left for `apply_all`'s unknown-fate
+    clause, which is listed for a DIFFERENT reason (the BATCH call's own dropped-connection
+    shadow) -- asserting the call "did not complete" for a write that, in fact, already had.  This
+    must be `VerifyError`/`unverified`, exactly like the `cloudflare.CloudflareError` case just
+    above."""
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]},
+                                  list_error=error_factory())
     with pytest.raises(apc.VerifyError, match="verification read failed"):
         apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
 
@@ -2049,6 +2161,35 @@ def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
     assert "ERROR: a.umich.edu:" in captured.err
 
 
+def test_a_bare_transport_error_on_the_verification_read_is_unverified_not_unknown(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC R6.3's amendment, end to end (adversarial review finding 1).  Measured on HEAD before
+    this fix: the batch call RETURNED 200 (Cloudflare committed), the verification read then
+    raised a bare TimeoutError, and the run reported `a.umich.edu  UNKNOWN -- the call did not
+    complete (TimeoutError: ...)` with `unknown 1`/exit 3 -- asserting the write's fate was
+    unknown when it was not: it had already committed, only OUR confirmation of it failed.  This
+    pins both the outcome word AND that the UNKNOWN line/count never appear."""
+    path = write_doc(tmp_path, plan_doc())
+
+    class VerifyReadTimesOut(FakeCloudflareClient):
+        def _list(self, **kwargs):
+            if len(self.list_calls) == 1:   # the SECOND list() call -- pass 1's own read (the
+                # first) must succeed normally; only the POST-BATCH verification read fails.
+                self.list_calls.append(kwargs)
+                raise TimeoutError("verification read timed out")
+            return super()._list(**kwargs)
+
+    client = VerifyReadTimesOut(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "unverified 1" in captured.out
+    assert "unknown 0" in captured.out
+    assert "a.umich.edu  UNVERIFIED --" in captured.out
+    assert "a.umich.edu  UNKNOWN --" not in captured.out
+    assert "ERROR: a.umich.edu:" in captured.err
+
+
 def test_exit_code_three_when_the_only_outcome_is_unverified(apc):
     """Item A (Task 8 review): the pure-function pin for R6.3's exit-3 rule, independent of any
     end-to-end run."""
@@ -2205,6 +2346,53 @@ def test_apply_all_raises_invariant_error_on_a_non_ready_verdict(apc):
         apc.apply_all(client, entries, validations, {"a.umich.edu": "not-attempted"}, {})
 
 
+def test_a_bare_apply_error_at_the_verification_position_yields_failed_not_unverified(
+        apc, monkeypatch):
+    """SPEC section 14 group 9's amendment (adversarial review finding 1): the whole reason
+    `VerifyError` is a NAMED SUBCLASS of `ApplyError`, and not a sibling, is that `apply_all`
+    catches it BEFORE the broader `ApplyError` clause -- so a bare `ApplyError` raised from the
+    verification position (a defect that would reintroduce SPEC 8.1's originally-shipped bug) must
+    still land on `failed`/exit 2 ("rejected, nothing committed"), never `unverified`/exit 3.
+    Proven directly against `apply_all`'s except-clause DISPATCH by monkeypatching `apply_entry`
+    itself -- independent of the real client mechanics `apply_entry`'s own tests already cover --
+    which is what makes this test able to fail if the clause order in `apply_all` is ever
+    reordered or collapsed, the exact regression this pair guards against (see the sibling test
+    just below for the other half)."""
+    def raises_apply_error(client, fqdn, entry, delete_ids):
+        raise apc.ApplyError(f"{fqdn}: contrived rejection")
+
+    monkeypatch.setattr(apc, "apply_entry", raises_apply_error)
+    client = FakeCloudflareClient()
+    entries = {"a.umich.edu": plan_entry()}
+    validations = {"a.umich.edu": apc.Validation("ready", "", ["rec-1"])}
+    outcomes = {"a.umich.edu": "not-attempted"}
+    details = {}
+    apc.apply_all(client, entries, validations, outcomes, details)
+    assert outcomes == {"a.umich.edu": "failed"}
+    assert apc.exit_code_for(apc.tally(outcomes)) == 2
+
+
+def test_a_verify_error_at_the_verification_position_yields_unverified_not_failed(
+        apc, monkeypatch):
+    """The other half of the pair above (SPEC section 14 group 9): a `VerifyError` raised from the
+    SAME position is `unverified`/exit 3, because Cloudflare's batch call already returned and
+    committed -- only our confirmation of it is in doubt.  Together with the test above, this pair
+    is the whole reason `VerifyError` exists as a distinct, subclassed exception rather than a
+    bare `ApplyError` raised at the verification site."""
+    def raises_verify_error(client, fqdn, entry, delete_ids):
+        raise apc.VerifyError(f"{fqdn}: contrived verification failure")
+
+    monkeypatch.setattr(apc, "apply_entry", raises_verify_error)
+    client = FakeCloudflareClient()
+    entries = {"a.umich.edu": plan_entry()}
+    validations = {"a.umich.edu": apc.Validation("ready", "", ["rec-1"])}
+    outcomes = {"a.umich.edu": "not-attempted"}
+    details = {}
+    apc.apply_all(client, entries, validations, outcomes, details)
+    assert outcomes == {"a.umich.edu": "unverified"}
+    assert apc.exit_code_for(apc.tally(outcomes)) == 3
+
+
 # ---------------------------------------------------------------------------------------------
 # Task 9: the run record and interruption (SPEC R8, R9, 9.2, 9.3, 9.4, 12).
 # ---------------------------------------------------------------------------------------------
@@ -2285,6 +2473,21 @@ def test_the_run_record_captures_created_and_deleted_ids(apc, tmp_path, monkeypa
     assert entry["outcome"] == "applied"
     assert entry["deleted_ids"] == ["rec-1"]
     assert sorted(entry["created_ids"]) == ["rec-a", "rec-b"]
+
+
+def test_created_ids_exclude_an_unrelated_txt_record_at_the_name(apc, tmp_path, monkeypatch):
+    """Adversarial review finding 3: mutating apply_entry's `return [r.id for r in rows]` (in
+    place of `governed_records(rows)`) at the post-apply verification read left the whole suite
+    green -- no --for-real apply fixture in this file carried a non-governed record at the
+    verification read. A TXT (SPF) row beside the newly-created A/AAAA pair -- an ordinary DNS
+    shape -- must never be reported as one of THIS entry's created ids in the run record."""
+    path = write_doc(tmp_path, plan_doc())
+    verify_rows = [*address_rows(), row("TXT", content="v=spf1 -all", identifier="rec-t")]
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), verify_rows]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 0
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert sorted(record["entries"]["a.umich.edu"]["created_ids"]) == ["rec-a", "rec-b"]
 
 
 def test_the_run_record_is_byte_exact_on_a_subset_for_real_run(apc, tmp_path, monkeypatch):

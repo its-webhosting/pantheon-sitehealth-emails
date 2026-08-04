@@ -753,7 +753,15 @@ def build_client(**creds):
         # exit 1 if left alone (SPEC section R2a, residual routes).
         raise StartupError(f"could not build the Cloudflare client: {e}") from e
     for field in ("api_token", "api_key", "api_email", "user_service_key"):
-        if field not in creds:
+        # `creds.get(field) is None`, NOT `field not in creds` (adversarial review finding 4):
+        # the SDK's own __init__ back-fills a credential from the environment whenever the value
+        # it receives `is None` -- an EXPLICIT `api_email=None` triggers that back-fill exactly
+        # like an omitted keyword does, before this loop ever runs.  A `field not in creds` guard
+        # only re-nulls the OMITTED case, so an explicit None left the SDK's own ambient
+        # back-fill standing -- measured: Cloudflare(api_email=None, ...) with CLOUDFLARE_EMAIL
+        # set reached the wire as that ambient address.  Matching the SDK's own `is None` trigger
+        # is what makes this pin correct regardless of how a caller spells "no credential".
+        if creds.get(field) is None:
             setattr(client, field, None)
     client._custom_headers = {}  # noqa: SLF001 -- $CLOUDFLARE_CUSTOM_HEADERS is merged LAST
     # into default_headers, so it overrides the pinned Omit()s above; there is no public API
@@ -1086,12 +1094,19 @@ def apply_entry(client, fqdn, entry, delete_ids):
         try:
             rows = list(client.dns.records.list(zone_id=entry["zone_id"],
                                                 name={"exact": fqdn}))
-        except cloudflare.CloudflareError as e:
+        except (cloudflare.CloudflareError, TimeoutError, OSError) as e:
             # The batch call above already succeeded -- Cloudflare committed SOMETHING -- so this
             # is deliberately a VerifyError (SPEC R6.3's second trigger: the verification READ
             # itself failed), never re-raised bare like the batch clause above: only the batch
             # call itself can leave Cloudflare's own COMMIT in doubt, and this one already
-            # happened.
+            # happened.  TimeoutError/OSError are caught alongside cloudflare.CloudflareError
+            # (SPEC R6.3, amended after the adversarial review): a transport failure here is NOT
+            # evidence the batch failed to commit -- it already returned 200 -- so routing a bare
+            # TimeoutError/OSError to apply_all's unknown-fate clause (which exists for the BATCH
+            # call's own dropped-connection shadow, above) would assert the call "did not
+            # complete" for a write that, in fact, already had.  api_error_text(e) is still safe
+            # to call on these: it withholds str(e) whenever status_code is absent (SPEC 9.1 rule
+            # 1), which a status-code-less transport exception always is.
             raise VerifyError(
                 f"{fqdn}: the batch call succeeded but the verification read failed, so the "
                 f"result is unconfirmed: {api_error_text(e)}") from e
