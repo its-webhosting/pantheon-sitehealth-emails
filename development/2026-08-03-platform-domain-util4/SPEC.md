@@ -963,13 +963,13 @@ practice.
 
 ```
 107 snapshots passed.
-========= 1625 passed, 3 skipped, 2 deselected, 15 warnings in 34.64s ==========
+========= 1639 passed, 3 skipped, 2 deselected, 15 warnings in 39.39s ==========
 Linting (ruff, campaign ratchet) ...
 Type-checking (pyright, campaign ratchet) ...
 exit=0
 ```
 
-**Item 2 — this utility's own file.** `150 passed in 4.34s`, ruff and pyright clean.
+**Item 2 — this utility's own file.** `164 passed`, ruff and pyright clean.
 
 **Item 3 — both siblings untouched.** `git diff --stat` over the whole branch for
 `find-platform-domains-dns`, `find-platform-domains-cloudflare` and both their test files:

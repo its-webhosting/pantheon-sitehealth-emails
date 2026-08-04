@@ -385,10 +385,13 @@ unconditionally, which would discard a buffered line and, under pytest's fd-leve
 the session's own stream at `/dev/null`. This script's `write_report()` is the stdout counterpart
 to its `report_line()`. **An in-process test cannot pin this at all** — pytest never tears the
 interpreter down, so the shutdown flush this guards against never runs in-process, and a test that
-only calls the function directly would stay green even if the guard were deleted. The cover is a
-real subprocess test (`test_a_doomed_stdout_exits_2_not_120_in_a_real_subprocess`, copying the
-pattern already in `tests/unit/test_find_platform_domains_cloudflare.py`) redirecting stdout at
-`/dev/full` — never `subprocess.DEVNULL`, which accepts every write and would prove nothing.
+only calls the function directly would stay green even if the guard were deleted. The cover is
+**three** real subprocess tests, copying the pattern already in
+`tests/unit/test_find_platform_domains_cloudflare.py`: `…doomed_stdout_exits_2_not_120…` and
+`…doomed_stderr_exits_2_not_120…` redirect at `/dev/full` — never `subprocess.DEVNULL`, which
+accepts every write and would prove nothing — and `…stdout_truly_closed…` uses `1>&-`, which makes
+`sys.stdout` **None**, where CPython's `print()` then silently does nothing and the whole report
+would vanish with no error at all.
 
 Also **the only one of the family's three independent `build_client()`/environment-pin copies that
 performs writes** (see the "three places to check" note in the `find-platform-domains-cloudflare`
