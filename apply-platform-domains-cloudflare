@@ -299,13 +299,48 @@ def write_json_atomic(path, data) -> None:
         raise
 
 
+class _DuplicateJsonKeyError(Exception):
+    """Internal signal only -- raised by `_reject_duplicate_keys`, caught and renamed by
+    `read_apply_file`'s own except clause into a PlanFileError naming the path.  Never surfaced
+    to a caller directly."""
+
+    def __init__(self, key):
+        self.key = key
+        super().__init__(key)
+
+
+def _reject_duplicate_keys(pairs):
+    """`object_pairs_hook` for `json.load` (final-batch review, item A1).
+
+    Plain `json.load` is silently LAST-WINS on a duplicate key within one JSON object: measured
+    with two entry objects sharing one FQDN key, naming different zones, `entries in file`
+    reported 1 -- not 2 -- and the operator got no signal one was discarded, exactly the
+    under-reporting shape R7.3 refuses to have for an unmatched `--only` name.  `object_pairs_hook`
+    is called for EVERY object in the document, nested or not, so applying this hook to the whole
+    parse (not a post-hoc walk of just `entries`) also catches a duplicated `generated` -- equally
+    silent under plain `json.load`.
+    """
+    seen = set()
+    result = {}
+    for key, value in pairs:
+        if key in seen:
+            raise _DuplicateJsonKeyError(key)
+        seen.add(key)
+        result[key] = value
+    return result
+
+
 def read_apply_file(path):
     """Parse the input file.  Every failure is a PlanFileError naming the path (SPEC 6, 1)."""
     try:
         with Path(path).open("rb") as handle:
-            doc = json.load(handle)
+            doc = json.load(handle, object_pairs_hook=_reject_duplicate_keys)
     except OSError as e:
         raise PlanFileError(f"cannot read {path}: {e}") from e
+    except _DuplicateJsonKeyError as e:
+        raise PlanFileError(
+            f"{path} has a duplicate JSON key {e.key!r} -- one of the two objects under it was "
+            "silently discarded; this file's provenance is in question") from e
     except ValueError as e:
         # ValueError, not JSONDecodeError: json.load decodes the bytes itself, so a file that is
         # not valid UTF-8 raises UnicodeDecodeError -- NOT a JSONDecodeError.  Both are
@@ -1268,6 +1303,18 @@ def describe_change(fqdn, entry):
     an empty/missing delete_match or body.posts, which section 6 checks 7/8 should already have
     made fatal before pass 1 ever ran.  Task 7 review, important 4: measured before this guard
     existed, describe_change(empty posts) raised a bare, unnamed `IndexError` from `posts[0]`.
+
+    ALSO raises InvariantError (final-batch review, A4) when the entry's posts do not all agree on
+    `proxied`/`ttl`: the trailing `(flags, ttl N)` block is read from `posts[0]` alone, so a
+    disagreeing post would be silently misreported on this line -- the operator's dry-run
+    authorization artifact (SPEC 11.4).  Chosen over rendering the flags per group in
+    render_records (the brief's other named option): SPEC 11.4's own example line pins exactly ONE
+    trailing flags block, and every existing format-pinning test in this file (the grouping test,
+    the revert-direction test) already depends on that single-block shape -- rendering per group
+    would need to change all of them to guard against a disagreement that, measured, has never
+    actually occurred (0 of 217 real entries, CLAUDE.md).  A loud, named defect for the
+    zero-instance case is the smaller diff; if mixed flags become common, that is a reason to
+    redesign SPEC 11.4's line format on purpose, not a side effect of this fix.
     """
     deletes = entry.get("delete_match")
     posts = entry.get("body", {}).get("posts")
@@ -1276,6 +1323,13 @@ def describe_change(fqdn, entry):
             "describe_change: entry has an empty or missing delete_match/body.posts -- section "
             "6 checks 7 and 8 should have made this fatal before pass 1 ever ran")
     first = posts[0]
+    flags_key = (bool(first.get("proxied")), first.get("ttl"))
+    for other in posts[1:]:
+        if (bool(other.get("proxied")), other.get("ttl")) != flags_key:
+            raise InvariantError(
+                f"describe_change: {fqdn}'s posts disagree on proxied/ttl -- {first!r} vs "
+                f"{other!r} -- there is no single (flags, ttl) block SPEC 11.4's line format "
+                "can show for the whole entry")
     flags = "proxied" if first.get("proxied") else "DNS-only"
     return (f"{fqdn}  zone {entry['zone_id']}  {render_records(deletes)} -> "
             f"{render_records(posts)}  ({flags}, ttl {first.get('ttl')})")
@@ -1450,8 +1504,11 @@ def abort_on_invalid_entries(validations) -> bool:
                if v.verdict not in ("ready", "already-applied")}
     for fqdn, validation in sorted(invalid.items()):
         # NEVER -v-gated (SPEC R7.3): the only signal that a destructive run was refused.
-        print(f"ATTENTION: {fqdn} {validation.verdict}: {validation.detail}",
-              file=sys.stderr, flush=True)
+        # Through report_line (final-batch review, A2), not a bare print: a bare print's OSError
+        # on a doomed stderr would escape this loop on the FIRST invalid entry, so no LATER
+        # invalid entry -- the exact under-reporting shape this whole function exists to avoid --
+        # would ever be named.  report_line swallows the write failure and this loop moves on.
+        report_line(f"ATTENTION: {fqdn} {validation.verdict}: {validation.detail}")
     if not invalid:
         return False
     report_line(
@@ -1518,7 +1575,17 @@ def finish(code, *, options, argv, state):
         # very run just rewrote -- the worse of the two lies PD#1 has to choose between.  A run
         # that changed NOTHING (a dry run, or an already-applied-only run) had the record as its
         # ONLY deliverable, so failing to write it IS the failure -- 2.
+        #
+        # 130 is exempt from that "changed nothing -> 2" collapse (final-batch review, A3): an
+        # INTERRUPT is not a failure to complete in the sense a validation/apply failure is -- the
+        # operator caused it and already knows why the run stopped.  Downgrading it to 2 just
+        # because nothing had changed yet (e.g. Ctrl-C during pass 1, before any entry was
+        # attempted) would erase that the operator, not the run, is the reason it stopped; SPEC
+        # 9.2's table only ever names "the earned code (0, 1 or 3)" for the changed>0 case, so
+        # 130 needed stating separately rather than silently falling into the else branch.
         report_line(f"ERROR: {e}")
+        if code == 130:  # noqa: PLR2004 -- the KeyboardInterrupt exit code, named in SPEC 8
+            return 130
         return code if changed_count(counts) else 2
     return code
 
@@ -1546,8 +1613,11 @@ def run_once(options, state):
     state["selected"] = len(entries)
     state["outcomes"] = dict.fromkeys(entries, "not-attempted")   # see the docstring above
     if len(entries) != len(doc["entries"]):
-        print(f"ATTENTION: applying {len(entries)} of {len(doc['entries'])} entries in "
-              f"this file", file=sys.stderr, flush=True)
+        # Through report_line (final-batch review, A2), not a bare print (SPEC 11.1): a bare
+        # print's OSError on a doomed stderr would otherwise escape run_once entirely, before
+        # validate_entries ever runs.
+        report_line(f"ATTENTION: applying {len(entries)} of {len(doc['entries'])} entries in "
+                    "this file")
     client = cloudflare_client(options.config)
     validations = validate_entries(client, entries, verbose=options.verbose)
     state["validations"] = validations
@@ -1613,6 +1683,15 @@ def main(argv):
         report_line(f"ERROR: {e}")
         return finish(failure_code(state), options=options, argv=argv, state=state)
     except SystemExit:
+        # B10 (final-batch review): unreachable TODAY, by measurement -- `parse_args(argv)` (the
+        # one call in this program that can raise SystemExit) runs ABOVE this try, and nothing
+        # inside it (run_once/finish/any helper they call) ever calls sys.exit() or raises
+        # SystemExit itself.  Kept anyway, ahead of the `except BaseException` last line of
+        # defence, for the same reason the sibling scripts carry the identical arm (SPEC 8.3):
+        # SystemExit is a BaseException, not an Exception, so the catch-all below WOULD absorb a
+        # future deliberate `sys.exit(...)` added inside the try into `failure_code(state)`
+        # unless this sits above it -- cheap insurance against a class of defect the two sibling
+        # scripts already document, not a claim that this line does anything today.
         raise
     except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the
         # docstring: without it CPython's exit 1 on an uncaught traceback would be

@@ -12,10 +12,12 @@ list.
 TEMPORARY, deleted with the script after the Pantheon CDN migration -- see
 development/2026-08-03-platform-domain-util4/SPEC.md section 19.
 """
+import datetime
 import importlib.util
 import io
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -325,6 +327,29 @@ def test_write_report_detaches_and_raises_on_a_doomed_stdout(apc, monkeypatch):
             apc.write_report("a line of the report")
 
 
+@needs_dev_full
+def test_report_line_detaches_stdout_not_stderr_when_stderr_is_none(apc, monkeypatch):
+    """B10 (final-batch review): `report_line`'s except-clause stream choice --
+    `point_at_devnull(sys.stdout if sys.stderr is None else sys.stderr)` -- was unpinned.  With
+    stderr CLOSED (`sys.stderr is None`, CPython's `2>&-` shape) and stdout doomed,
+    `print(text, file=sys.stderr, ...)` falls back to `sys.stdout` (report_line's own docstring)
+    and THAT write fails -- so a mutated form that targeted `sys.stderr` (None) instead of the
+    conditional would call `point_at_devnull(None)`, whose `AttributeError` (`None` has no
+    `.fileno`) is not in `point_at_devnull`'s suppress list and would escape from inside this
+    `except OSError` clause: an unnamed crash in the "nowhere left to report" path SPEC 11.1
+    exists to guard.  `monkeypatch.setattr(apc.sys, "stderr", None)` reproduces `2>&-` directly
+    in-process -- the same direct-seam idiom `test_write_report_detaches_and_raises_on_a_doomed_
+    stdout` above already uses for `write_report`'s mechanism, and the honest, observable cover:
+    it can confirm stdout was actually REPOINTED (a later write through the same file object
+    succeeds), not just that nothing raised."""
+    with Path(DEV_FULL).open("w") as doomed:
+        monkeypatch.setattr(apc.sys, "stdout", doomed)
+        monkeypatch.setattr(apc.sys, "stderr", None)
+        apc.report_line("nowhere to report this")   # must not raise -- report_line's own
+        # contract: it swallows an OSError here, there being nothing left to report to.
+        doomed.write("proof the fd was repointed at /dev/null, not merely that nothing raised")
+
+
 def plan_entry(zone_id="zone-a", fqdn="a.umich.edu",
                target="live-umich-x.pantheonsite.io",
                addresses=("23.185.0.4", "2620:12a:8000::4")):
@@ -374,6 +399,34 @@ def test_read_apply_file_rejects_a_json_array(apc, tmp_path):
         apc.read_apply_file(str(path))
 
 
+def test_read_apply_file_rejects_a_duplicate_top_level_key(apc, tmp_path):
+    """Final-batch review, A1: plain `json.load` is silently LAST-WINS on a duplicate JSON object
+    key, so a duplicated `generated` object is discarded without a trace rather than reported --
+    the same under-reporting shape R7.3 refuses to have for an unmatched --only name.  Applied to
+    the WHOLE document, not just `entries` (a duplicated `generated` is exactly as silent as a
+    duplicated entry key)."""
+    path = tmp_path / "dup-generated.json"
+    path.write_text(
+        '{"generated": {"direction": "plan", "at": "a"}, '
+        '"generated": {"direction": "revert", "at": "b"}, '
+        '"entries": {"a.umich.edu": {}}}')
+    with pytest.raises(apc.PlanFileError, match=r"duplicate.*generated"):
+        apc.read_apply_file(str(path))
+
+
+def test_read_apply_file_rejects_a_duplicate_entry_key(apc, tmp_path):
+    """Final-batch review, A1.  Measured: two entry objects for the SAME FQDN naming DIFFERENT
+    zones -- `entries in file` reported 1, not 2, and the operator got no signal a second entry
+    was silently discarded (the exact `zone-SECOND`-wins shape the review measured)."""
+    path = tmp_path / "dup-entry.json"
+    path.write_text(
+        '{"generated": {"direction": "plan", "at": "a"}, '
+        '"entries": {"a.umich.edu": {"zone_id": "zone-FIRST"}, '
+        '"a.umich.edu": {"zone_id": "zone-SECOND"}}}')
+    with pytest.raises(apc.PlanFileError, match=r"duplicate.*a\.umich\.edu"):
+        apc.read_apply_file(str(path))
+
+
 def test_check_file_contract_returns_the_direction(apc):
     assert apc.check_file_contract(plan_doc(), "p.json") == "plan"
     assert apc.check_file_contract(plan_doc(direction="revert"), "p.json") == "revert"
@@ -404,6 +457,16 @@ def test_check_file_contract_refuses_a_missing_direction(apc):
 def test_check_file_contract_refuses_an_empty_entries_object(apc):
     with pytest.raises(apc.PlanFileError, match="no entries"):
         apc.check_file_contract(plan_doc(entries={}), "p.json")
+
+
+def test_check_file_contract_refuses_a_json_array_for_entries(apc):
+    """B3 (final-batch review): `if not entries:` in place of `if not isinstance(entries, dict)
+    or not entries:` left 164 passing.  A non-empty JSON ARRAY for `entries` is TRUTHY, so it
+    would fall straight through a bare `if not entries:` guard and degrade section 6 check 3 to
+    an anonymous `AttributeError` the moment `sorted(entries.items())` runs a few lines down (a
+    list has no `.items()`) -- exactly the un-named failure PD#2 forbids."""
+    with pytest.raises(apc.PlanFileError, match="no entries"):
+        apc.check_file_contract(plan_doc(entries=[1, 2, 3]), "p.json")
 
 
 @pytest.mark.parametrize("field", ["zone_id", "method", "path", "body", "delete_match"])
@@ -459,6 +522,42 @@ def test_check_file_contract_refuses_an_out_of_scope_post_type(apc, bad_type):
         apc.check_file_contract(plan_doc(entries={"a.umich.edu": entry}), "p.json")
 
 
+@pytest.mark.parametrize("side", ["posts", "delete_match"])
+@pytest.mark.parametrize("field", ["type", "name", "content"])
+def test_check_record_list_names_a_missing_field_in_either_side(apc, side, field):
+    """B2 (final-batch review): `check_record_list`'s required-field loop was proven only for
+    `type` -- the out-of-scope-type test above exercises a BAD `type` VALUE, never a MISSING
+    field, and no existing test covers `name`/`content` at all.  `for field in ("type",):` in
+    place of `for field in ("type", "name", "content"):` left 164 passing: a post or
+    `delete_match` item missing `name`/`content` would then reach `record_key` downstream as an
+    anonymous `KeyError` instead of the named `PlanFileError` this loop exists to raise (PD#2).
+    Parametrized over BOTH `posts` and `delete_match`: `check_record_list` is called
+    independently for each."""
+    entry = plan_entry()
+    if side == "posts":
+        del entry["body"]["posts"][0][field]
+    else:
+        del entry["delete_match"][0][field]
+    with pytest.raises(apc.PlanFileError, match=rf"missing '{field}'"):
+        apc.check_file_contract(plan_doc(entries={"a.umich.edu": entry}), "p.json")
+
+
+@pytest.mark.parametrize("side", ["posts", "delete_match"])
+def test_check_record_list_refuses_a_non_dict_item(apc, side):
+    """B2 (final-batch review): the `if not isinstance(item, dict): raise PlanFileError(...)`
+    guard was DEAD to the suite -- `if False:  # not isinstance(item, dict)` in its place left
+    164 passing.  A non-dict item (a bare string, say) would otherwise reach `item.get(field)` /
+    `item["type"]` a few lines down as an anonymous `AttributeError`/`TypeError` instead of this
+    named check."""
+    entry = plan_entry()
+    if side == "posts":
+        entry["body"]["posts"] = ["not-a-dict", *entry["body"]["posts"]]
+    else:
+        entry["delete_match"] = ["not-a-dict", *entry["delete_match"]]
+    with pytest.raises(apc.PlanFileError, match="not an object"):
+        apc.check_file_contract(plan_doc(entries={"a.umich.edu": entry}), "p.json")
+
+
 def test_check_file_contract_refuses_an_empty_delete_match(apc):
     entry = plan_entry()
     entry["delete_match"] = []
@@ -501,6 +600,60 @@ def test_check_file_contract_accepts_a_post_name_that_only_differs_by_case_or_tr
     entry["delete_match"][0]["name"] = "a.umich.edu."
     assert apc.check_file_contract(
         plan_doc(entries={"a.umich.edu": entry}), "p.json") == "plan"
+
+
+def _malform_missing_zone_id(entry):
+    del entry["zone_id"]
+
+
+def _malform_non_post_method(entry):
+    entry["method"] = "PUT"
+
+
+def _malform_path_mismatch(entry):
+    entry["path"] = "/zones/SOMEWHERE-ELSE/dns_records/batch"
+
+
+def _malform_deletes_in_body(entry):
+    entry["body"]["deletes"] = [{"id": "stale"}]
+
+
+def _malform_empty_posts(entry):
+    entry["body"]["posts"] = []
+
+
+def _malform_out_of_scope_post_type(entry):
+    entry["body"]["posts"][0]["type"] = "TXT"
+
+
+def _malform_empty_delete_match(entry):
+    entry["delete_match"] = []
+
+
+@pytest.mark.parametrize(("mutate", "match"), [
+    (_malform_missing_zone_id, "zone_id"),
+    (_malform_non_post_method, "POST"),
+    (_malform_path_mismatch, "path"),
+    (_malform_deletes_in_body, "deletes"),
+    (_malform_empty_posts, "posts"),
+    (_malform_out_of_scope_post_type, "type"),
+    (_malform_empty_delete_match, "delete_match"),
+])
+def test_check_file_contract_checks_every_entry_not_just_the_first(apc, mutate, match):
+    """B1 (final-batch review): every EXISTING section 6 per-entry test above builds a ONE-entry
+    doc, so a `break` added to `check_file_contract`'s `for fqdn, entry in
+    sorted(entries.items()): check_entry_contract(...)` loop -- stopping after the FIRST entry --
+    left 164 passing: the path-vs-zone_id cross-check, and every other per-entry check, then never
+    ran for entries 2..N.  This parametrizes each check over a TWO-entry doc with the malformation
+    on the SECOND key in SORT order ("b.umich.edu"), well-formed "a.umich.edu" first -- a
+    first-entry-only loop passes the clean first entry and never reaches the malformed second
+    one, so only a loop that actually visits every entry can raise here."""
+    good = plan_entry(fqdn="a.umich.edu")
+    bad = plan_entry(fqdn="b.umich.edu")
+    mutate(bad)
+    with pytest.raises(apc.PlanFileError, match=match):
+        apc.check_file_contract(
+            plan_doc(entries={"a.umich.edu": good, "b.umich.edu": bad}), "p.json")
 
 
 def test_select_entries_returns_everything_without_only(apc):
@@ -1051,6 +1204,22 @@ def test_verdict_ignores_an_unrelated_txt_record_at_the_same_name(apc):
     assert verdict == "ready"
 
 
+def test_verdict_for_treats_a_different_name_as_records_missing_not_ready(apc):
+    """B7 (final-batch review): `record_key`'s NAME component was unpinned --
+    `test_record_key_ignores_case_and_a_trailing_dot` only compares two keys that stay EQUAL
+    under `return (rtype, "", canonical)`, since blanking the name out entirely leaves both sides
+    of that comparison identical too.  The demonstrated cross-name-write shape is now blocked
+    EARLIER, by `check_record_list`'s own file-contract name check, so this is a lower-severity
+    gap than when it was first found -- but `record_key`'s name component is still the guard that
+    Cloudflare's RETURNED rows are compared at the right name, and `verdict_for` is what reads it.
+    These rows carry a DIFFERENT host than the entry's own key; if `record_key` ignored `name`, R
+    would equal D by type+content alone and this would wrongly classify `ready`."""
+    entry = plan_entry()   # keyed a.umich.edu; delete_match also names a.umich.edu
+    wrong_host_rows = [row("CNAME", name="other.umich.edu")]
+    verdict, _detail = apc.verdict_for(entry, wrong_host_rows)
+    assert verdict == "records-missing"
+
+
 def test_a_revert_entry_is_ready_when_the_addresses_are_present(apc):
     """The same engine, both directions: a revert's D is the A/AAAA set and its P is the CNAME."""
     entry = plan_entry()
@@ -1126,7 +1295,12 @@ def test_records_at_name_names_a_cloudflare_read_failure(apc):
     error = api_status_error(cloudflare.InternalServerError, 500,
                              {"errors": [{"code": 1000, "message": "boom"}]})
     client = FakeCloudflareClient(list_error=error)
-    with pytest.raises(apc.CloudflareReadError):
+    # B10 (final-batch review): the error TEXT naming the FQDN and zone -- `f"cannot list DNS
+    # records for {fqdn} in zone {zone_id}: ..."` -- was unpinned; only the exception CLASS was
+    # asserted, so emptying the message down to just the api_error_text() tail left 164 passing.
+    # An operator staring at a bare "InternalServerError: HTTP 500" with no FQDN or zone has no
+    # way to know which of 217 entries pass 1 was reading when it failed.
+    with pytest.raises(apc.CloudflareReadError, match=r"a\.umich\.edu.*zone-a"):
         apc.records_at_name(client, "zone-a", "a.umich.edu")
 
 
@@ -1390,6 +1564,22 @@ def test_summary_prints_the_source_files_own_timestamp(apc):
     assert any("2026-08-01T00:22:23Z" in line for line in lines)
 
 
+def test_summary_prints_the_source_and_record_lines_by_name(apc):
+    """B10 (final-batch review): the summary's `source: <path>` line (the only pointer to WHICH
+    file this run read) and its `record: <path>` line (the only pointer to the audit artifact,
+    SPEC 12.1) were both deletable with the whole suite green -- no existing test asserted either
+    literal label, only that the source's OWN `generated.at` timestamp appeared somewhere in the
+    block (the test directly above)."""
+    lines = apc.summary_lines(
+        direction="plan", source="platform-domains-cloudflare-plan.json",
+        source_generated_at="2026-08-01T00:22:23Z", for_real=False,
+        entries_in_file=1, selected=1, counts=apc.tally({"a": "planned"}),
+        record_path="platform-domains-cloudflare-plan-run-20260803T142211Z.json")
+    text = "\n".join(lines)
+    assert "source: platform-domains-cloudflare-plan.json" in text
+    assert "record: platform-domains-cloudflare-plan-run-20260803T142211Z.json" in text
+
+
 # ---------------------------------------------------------------------------------------------
 # Task 7: pass 2 (the report) and the dry run end to end (SPEC R3.3, R2.6, section 11).
 # ---------------------------------------------------------------------------------------------
@@ -1464,6 +1654,21 @@ def test_describe_change_shows_both_sides_and_the_zone_id(apc):
     assert "(proxied, ttl 1)" in line
 
 
+def test_describe_change_renders_dns_only_flags_correctly(apc):
+    """B8 (final-batch review): every EXISTING describe_change/dry-run fixture in this file uses
+    `proxied: True, ttl: 1` uniformly -- `flags = "proxied"` and the `ttl 1)` literal both
+    survive with the whole suite green if hardcoded, and CLAUDE.md records 5 of 218 real records
+    as DNS-only.  Intersects A4: uses a UNIFORM `proxied=False, ttl=300` entry (every post agrees
+    -- not a disagreement, which A4's InvariantError now refuses), so this pins
+    `describe_change`'s actual DNS-only rendering path rather than A4's guard."""
+    entry = plan_entry()
+    for post in entry["body"]["posts"]:
+        post["proxied"] = False
+        post["ttl"] = 300
+    line = apc.describe_change("a.umich.edu", entry)
+    assert "(DNS-only, ttl 300)" in line
+
+
 def test_describe_change_groups_same_type_records_and_joins_types_with_plus(apc):
     """SPEC 11.4's own example line groups same-TYPE contents with ', ' and joins DIFFERENT
     types with ' + ': "A 23.185.0.4 + AAAA 2620:12a:8000::4, 2620:12a:8001::4".  Task 7 review,
@@ -1503,6 +1708,28 @@ def test_describe_change_raises_invariant_error_on_the_impossible_empty_shape(ap
     del missing_delete_match["delete_match"]
     with pytest.raises(apc.InvariantError):
         apc.describe_change("a.umich.edu", missing_delete_match)
+
+
+def test_describe_change_raises_invariant_error_when_posts_disagree_on_proxied_or_ttl(apc):
+    """A4 (final-batch review): `describe_change` read `proxied`/`ttl` from `posts[0]` ONLY, so an
+    entry whose posts genuinely differ in those fields was misreported on the dry run's only
+    change line -- the operator's authorization artifact (SPEC 11.4).  0 of 217 real entries are
+    affected today (CLAUDE.md), so this converts the silent misreport into a loud, named defect
+    (PD#1/PD#2) rather than redesigning SPEC 11.4's single-flags-block line format -- the option
+    this task's brief calls out as the alternative to per-group rendering.  Chosen over rendering
+    per group because SPEC 11.4's own example line pins ONE trailing `(flags, ttl N)` block, and
+    every existing format-pinning test in this file (grouping, revert-direction rendering) already
+    depends on that shape; rendering flags per group would need to change all of them for a
+    disagreement that, measured, has never actually occurred."""
+    entry = plan_entry(addresses=("23.185.0.4", "2620:12a:8000::4"))
+    entry["body"]["posts"][1]["proxied"] = False   # first post proxied, second is not
+    with pytest.raises(apc.InvariantError, match="disagree"):
+        apc.describe_change("a.umich.edu", entry)
+
+    entry2 = plan_entry(addresses=("23.185.0.4", "2620:12a:8000::4"))
+    entry2["body"]["posts"][1]["ttl"] = 300   # first post ttl 1, second ttl 300
+    with pytest.raises(apc.InvariantError, match="disagree"):
+        apc.describe_change("a.umich.edu", entry2)
 
 
 def run_main(apc, argv, tmp_path, client, monkeypatch):
@@ -1638,6 +1865,34 @@ def test_an_already_applied_run_exits_one_and_calls_nothing(
     assert "a.umich.edu  already applied -- nothing to do" in capsys.readouterr().out
 
 
+def test_a_dry_run_over_a_mixed_already_applied_and_ready_doc_reports_both_correctly(
+        apc, tmp_path, monkeypatch, capsys):
+    """B5 (final-batch review): every EXISTING already-applied test in this file uses
+    --for-real; a dry run over an already-applied entry was untested.  A mutation making the
+    dry-run outcome comprehension in `run_once` (`{fqdn: ("already-applied" if v.verdict ==
+    "already-applied" else "planned") for fqdn, v in validations.items()}`) unconditionally
+    `"planned"` left 164 passing: under that mutation the dry run reports `planned 2` and exits 0
+    where a --for-real run over the SAME file exits 1, while `report_entries` (pass 2, identical
+    in both modes, SPEC R3.3) still prints "already applied -- nothing to do" for the `a` entry --
+    the report and the tally disagreeing inside the SAME run, breaking "a dry run is a rehearsal
+    of the real run" and the run record SPEC 12.1 says an operator attaches to a change ticket."""
+    doc = plan_doc(entries={"a.umich.edu": plan_entry(fqdn="a.umich.edu"),
+                            "b.umich.edu": plan_entry(fqdn="b.umich.edu")})
+    path = write_doc(tmp_path, doc)
+    client = FakeCloudflareClient(rows_by_name={
+        "a.umich.edu": [address_rows()],   # already-applied: R == P
+        "b.umich.edu": [[row("CNAME", name="b.umich.edu")]],   # ready: R == D
+    })
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert ("applied 0   already applied 1   planned 1   failed 0   unverified 0   unknown 0   "
+            "not attempted 0") in out
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["entries"]["a.umich.edu"]["outcome"] == "already-applied"
+    assert record["entries"]["b.umich.edu"]["outcome"] == "planned"
+
+
 def test_a_subset_run_warns_how_much_of_the_file_it_covers(
         apc, tmp_path, monkeypatch, capsys):
     doc = plan_doc(entries={"a.umich.edu": plan_entry(),
@@ -1720,22 +1975,53 @@ class RaiseOnceStream:
         raise io.UnsupportedOperation("no real fd")
 
 
-def test_an_oserror_from_an_unguarded_stderr_write_reports_the_class_on_the_retry(
+def test_a_doomed_first_attention_write_no_longer_silences_every_later_one(
         apc, tmp_path, monkeypatch):
-    """I6 (whole-branch review): SPEC 9.1's `OSError` row -- `report_line(f"ERROR: {e}")` in
-    main()'s `except OSError` clause -- was deletable with the whole suite green.  A subset run's
-    unconditional `ATTENTION: applying N of M...` print (SPEC 11.2) is the UNGUARDED stderr write
-    that reaches this clause: `RaiseOnceStream` fails exactly that first write (raising the
-    OSError `main()` must catch) and then succeeds, so `report_line`'s own retried write -- the
-    thing this test pins -- is what ends up recorded."""
-    entries = {"a.umich.edu": plan_entry(), "b.umich.edu": plan_entry(fqdn="b.umich.edu")}
+    """Final-batch review, A2: both ATTENTION lines (the per-entry one here, and the --only
+    subset-coverage one) now go through `report_line`, which SWALLOWS an OSError internally
+    (SPEC 11.1) rather than letting it propagate.  BEFORE this fix, both were bare `print(...,
+    file=sys.stderr)` calls: a doomed stderr made the FIRST ATTENTION line raise, which escaped
+    `abort_on_invalid_entries`'s loop entirely -- so NONE of the invalid entries got named (not
+    even the second), and the run's validation-abort path was silently replaced by a generic
+    `except OSError` abort with an incomplete report.  `--only`ing both invalid entries makes the
+    subset-coverage line the doomed FIRST write; the second entry's own ATTENTION line is what
+    proves the loop kept going past the first failure rather than dying on it.
+    """
+    entries = {"a.umich.edu": plan_entry(), "b.umich.edu": plan_entry(fqdn="b.umich.edu"),
+              "c.umich.edu": plan_entry(fqdn="c.umich.edu")}
     path = write_doc(tmp_path, plan_doc(entries=entries))
-    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]], "b.umich.edu": [[]]})
     stream = RaiseOnceStream()
     monkeypatch.setattr(apc.sys, "stderr", stream)
-    code = run_main(apc, ["--only", "a.umich.edu", path], tmp_path, client, monkeypatch)
-    assert code == 2   # nothing applied (no --for-real); failure_code(state) with changed==0
-    assert any("simulated write failure" in text for text in stream.written)
+    code = run_main(apc, ["--only", "a.umich.edu", "--only", "b.umich.edu", path], tmp_path,
+                    client, monkeypatch)
+    assert code == 2
+    # The doomed FIRST write (the subset-coverage line) is lost, but BOTH invalid entries' own
+    # ATTENTION lines -- writes 2 and 3 on the same stream -- still made it through.
+    assert any("a.umich.edu" in text and "records-missing" in text for text in stream.written)
+    assert any("b.umich.edu" in text and "records-missing" in text for text in stream.written)
+
+
+def test_a_bare_oserror_mid_run_still_uses_failure_code(apc, tmp_path, monkeypatch, capsys):
+    """Final-batch review, A2 aftermath: routing both ATTENTION lines through `report_line`
+    removes the last UNGUARDED stderr write in this script, so main()'s bare `except OSError`
+    clause (SPEC 9.1) has no remaining live trigger through ordinary I/O today -- a consequence
+    of the A2 fix reported separately (out of this review pass's scope), not fixed here.  This
+    keeps the CLAUSE ITSELF under test -- its own `report_line` + `failure_code(state)` handling
+    -- for whatever future OSError source reaches it, by injecting one directly into
+    `select_entries` (an arbitrary point inside `run_once`'s try)."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+
+    def raise_oserror(entries, only):
+        raise OSError("simulated mid-run I/O failure")
+
+    monkeypatch.setattr(apc, "select_entries", raise_oserror)
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 2   # nothing changed yet -- failure_code(state) with changed_count == 0
+    assert "ERROR: simulated mid-run I/O failure" in capsys.readouterr().err
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 2
 
 
 def test_an_unselected_entry_is_never_validated(apc, tmp_path, monkeypatch):
@@ -2026,6 +2312,45 @@ def three_entry_rows(applied=()):
     return rows
 
 
+def test_apply_all_processes_entries_in_sorted_key_order_not_insertion_order(
+        apc, tmp_path, monkeypatch):
+    """B9 (final-batch review): SPEC R3.4 says pass 3 applies entries in the file's own SORTED
+    key order -- `apply_all` sorts `entries.items()` for exactly this reason.  Every fixture in
+    this file happens to insert its `entries` dict in already-sorted order (three_entry_doc's
+    a/b/c, plan_doc's single entry, ...), so `entries.items()` in place of
+    `sorted(entries.items())` left the whole suite green.  This builds a doc whose `entries` dict
+    is inserted c, a, b -- deliberately NOT sorted -- and stops at the first failure, so the
+    resulting outcome set can only match SORTED processing (a applied, b failed, c not-attempted)
+    or INSERTION-order processing (c applied, a failed, b not-attempted); the two are mutually
+    exclusive, so this is not merely "a" test but the one shape that tells them apart."""
+    doc = plan_doc(entries={
+        "c.umich.edu": plan_entry(zone_id="zone-c", fqdn="c.umich.edu"),
+        "a.umich.edu": plan_entry(zone_id="zone-a", fqdn="a.umich.edu"),
+        "b.umich.edu": plan_entry(zone_id="zone-b", fqdn="b.umich.edu"),
+    })
+    path = write_doc(tmp_path, doc)
+
+    class FailOnSecond(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            if len(self.batch_calls) == 1:
+                self.batch_calls.append(kwargs)
+                raise cloudflare_error(400, 81058, "already exists")
+            return super()._batch(**kwargs)
+
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = FailOnSecond(rows_by_name=rows)
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 3
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    outcomes = {k: v["outcome"] for k, v in record["entries"].items()}
+    assert outcomes == {"a.umich.edu": "applied", "b.umich.edu": "failed",
+                        "c.umich.edu": "not-attempted"}
+
+
 def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
         apc, tmp_path, monkeypatch, capsys):
     """SPEC R3.4 and 8.1: stop immediately, revert nothing, attempt nothing further -- and exit 3
@@ -2076,6 +2401,19 @@ def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
     # unknown arms, or emptying `item["detail"]` in outcome_document, left 145 passing.
     record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
     assert "81058" in record["entries"]["b.umich.edu"]["error"]
+    # B6 (final-batch review): the assertion above only proves SOME text made it through -- four
+    # mutations (dropping `deleted_ids` from the interrupt/unknown/unverified/failed arms, or
+    # dropping the per-entry `at`) each left 164 passing, because nothing compared the WHOLE
+    # per-entry dict the way the success-path byte-exact test already does.  `deleted_ids` on a
+    # failed entry is exactly the list an operator needs to hand-repair a stopped rewrite.
+    expected_error = "batch call rejected: " + apc.api_error_text(
+        cloudflare_error(400, 81058, "already exists"))
+    assert record["entries"]["b.umich.edu"] == {
+        "outcome": "failed",
+        "at": "2026-08-03T14:22:11Z",
+        "error": expected_error,
+        "deleted_ids": ["rec-b-cname"],
+    }
 
 
 def test_a_failure_on_the_first_entry_exits_two_because_nothing_committed(
@@ -2138,6 +2476,19 @@ def test_a_connection_error_makes_the_outcome_unknown_and_exits_three(
     assert "a.umich.edu  UNKNOWN -- the call did not complete (APIConnectionError" in captured.out
     assert "ERROR: a.umich.edu:" in captured.err
     assert "UNKNOWN" in captured.err
+    # B6 (final-batch review): the stdout/stderr assertions above only prove SOME text made it
+    # through -- dropping `deleted_ids` (or the per-entry `at`) from this UNKNOWN arm's own
+    # `details[fqdn] = {...}` left 164 passing, because nothing compared the run record's WHOLE
+    # per-entry dict.  `deleted_ids` here is exactly the list an operator needs to hand-repair an
+    # entry whose fate is genuinely unknown.
+    error = cloudflare.APIConnectionError(request=None)
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["entries"]["a.umich.edu"] == {
+        "outcome": "unknown",
+        "at": "2026-08-03T14:22:11Z",
+        "error": f"the call did not complete ({type(error).__name__}: {error})",
+        "deleted_ids": ["rec-1"],
+    }
 
 
 def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
@@ -2159,6 +2510,21 @@ def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
     assert "a.umich.edu  UNVERIFIED -- the batch call succeeded but" in captured.out
     assert "a.umich.edu  UNVERIFIED -- a.umich.edu:" not in captured.out  # no duplicated fqdn
     assert "ERROR: a.umich.edu:" in captured.err
+    # B6 (final-batch review): the stdout/stderr assertions above only prove SOME text made it
+    # through -- dropping `deleted_ids` (or the per-entry `at`) from this UNVERIFIED arm's own
+    # `details[fqdn] = {...}` left 164 passing.  `deleted_ids` here is exactly the list an
+    # operator needs to hand-repair an entry Cloudflare committed but never confirmed.
+    held = apc.describe_keys([]) or "no CNAME/A/AAAA record"
+    expected_error = (
+        "the batch call succeeded but Cloudflare does not hold the expected records "
+        f"afterwards, twice {apc.VERIFY_RETRY_SLEEP}s apart; it now holds {held}")
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["entries"]["a.umich.edu"] == {
+        "outcome": "unverified",
+        "at": "2026-08-03T14:22:11Z",
+        "error": expected_error,
+        "deleted_ids": ["rec-1"],
+    }
 
 
 def test_a_bare_transport_error_on_the_verification_read_is_unverified_not_unknown(
@@ -2398,6 +2764,19 @@ def test_a_verify_error_at_the_verification_position_yields_unverified_not_faile
 # ---------------------------------------------------------------------------------------------
 
 
+def test_now_utc_is_a_zulu_iso8601_timestamp_close_to_the_real_clock(apc):
+    """B4 (final-batch review): `now_utc()` -- a SPEC section 13-named seam covering "every
+    timestamp and the run-record filename" -- had NO test at all; every OTHER test in this file
+    replaces it.  Mutation to `datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")` left 164
+    passing: naive LOCAL time labelled Z in the only audit artifact of a destructive rewrite, and
+    a filename with a SPACE in it that no longer matches SPEC 12.1's documented shape."""
+    value = apc.now_utc()
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value)
+    parsed = datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.UTC)
+    assert abs((datetime.datetime.now(tz=datetime.UTC) - parsed).total_seconds()) < 5
+
+
 def test_outcome_path_is_named_run_not_applied(apc):
     """A DRY RUN writes one too, so "-applied-" would be a lie.  The timestamp makes a run
     incapable of clobbering a previous one."""
@@ -2565,6 +2944,32 @@ def test_a_record_write_failure_on_a_dry_run_is_exit_two(apc, tmp_path, monkeypa
     assert run_main(apc, [path], tmp_path, client, monkeypatch) == 2
 
 
+def test_an_interrupted_run_keeps_exit_130_even_when_the_record_write_fails(
+        apc, tmp_path, monkeypatch, capsys):
+    """A3 (final-batch review): `finish()`'s SPEC 9.2 precedence rule ends `return code if
+    changed_count(counts) else 2` -- with `code == 130` and NOTHING yet changed (a Ctrl-C during
+    pass 1, before any entry is attempted), that formula silently downgrades an INTERRUPTED run to
+    2, a code SPEC 9.2's table never names for this situation.  130 means the OPERATOR caused the
+    run to stop; 2 means the run could not complete on its own -- losing that distinction is a
+    real information loss even though both codes technically mean the run failed to finish
+    cleanly.  130 is exempt from the "changed nothing -> 2" rule because an interrupt is not a
+    failure to complete in the same sense a validation/apply failure is: the operator already
+    knows why the run stopped, and reporting 2 instead would erase that they are the reason."""
+    path = write_doc(tmp_path, plan_doc())
+
+    class Interrupting(FakeCloudflareClient):
+        def _list(self, **kwargs):
+            raise KeyboardInterrupt
+
+    def boom(record_path, document):
+        raise apc.OutputWriteError(f"cannot write {record_path}: disk full")
+
+    monkeypatch.setattr(apc, "write_run_record", boom)
+    code = run_main(apc, [path], tmp_path, Interrupting(), monkeypatch)
+    assert code == 130
+    assert "cannot write" in capsys.readouterr().err
+
+
 def test_a_real_unwritable_record_directory_is_named_not_swallowed(
         apc, tmp_path, monkeypatch, capsys):
     """Important 2 (review round 1): BOTH tests above monkeypatch write_run_record ITSELF,
@@ -2634,6 +3039,19 @@ def test_an_interrupt_during_a_batch_call_records_unknown_and_exits_130(
     assert outcomes["b.umich.edu"] == "unknown"
     assert outcomes["c.umich.edu"] == "not-attempted"
     assert "unknown 1" in capsys.readouterr().out
+    # B6 (final-batch review): the outcome-only comparison above only proves the WORD "unknown"
+    # made it through -- dropping `deleted_ids` (or the per-entry `at`) from this INTERRUPT arm's
+    # own `details[fqdn] = {...}` left 164 passing, because nothing compared the whole per-entry
+    # dict the way the success-path byte-exact test already does.  `deleted_ids` here is exactly
+    # the list an operator needs to hand-repair an interrupted rewrite; "c" gets none of this --
+    # `not-attempted` never reaches apply_all at all (SPEC 12.2's own example agrees).
+    assert record["entries"]["b.umich.edu"] == {
+        "outcome": "unknown",
+        "at": "2026-08-03T14:22:11Z",
+        "error": "interrupted",
+        "deleted_ids": ["rec-b-cname"],
+    }
+    assert record["entries"]["c.umich.edu"] == {"outcome": "not-attempted"}
 
 
 def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch, capsys):
