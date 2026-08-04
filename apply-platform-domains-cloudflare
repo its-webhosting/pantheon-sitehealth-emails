@@ -1115,6 +1115,17 @@ def apply_entry(client, fqdn, entry, delete_ids):
     not verify (`VerifyError`, a subclass) means Cloudflare committed SOMETHING -- only our
     confirmation of it is in doubt.  Collapsing the two into one exception class would leave
     `apply_all` unable to tell "nothing happened" from "something happened, go look" apart.
+
+    THE WHOLE POST-BATCH SECTION IS INSIDE ONE TRY, and anything unrecognised raised in it becomes
+    a `VerifyError` (fix-pass review, CRITICAL 1).  The enumerated clauses above are a closed list
+    of the failures somebody thought of; the exit-2 guarantee ("nothing in Cloudflare was
+    changed") cannot rest on that list being complete, because the ONE thing every exception
+    raised past the batch call has in common is that the batch already returned.  Measured: a
+    `ValueError` from the SDK's unguarded `response.json()` on a truncated 200 escaped every
+    clause, left the entry at its `not-attempted` seed, and exited 2 for an FQDN this run had just
+    rewritten.  The batch call's OWN clauses stay open-ended by contrast -- an unrecognised
+    exception there cannot be placed relative to the commit, so it propagates to `apply_all`,
+    which records the conservative `unknown`.
     """
     body = merge_body(entry, delete_ids)
     try:
@@ -1125,32 +1136,56 @@ def apply_entry(client, fqdn, entry, delete_ids):
     except cloudflare.CloudflareError as e:
         raise ApplyError(f"{fqdn}: batch call rejected: {api_error_text(e)}") from e
 
-    for attempt in (1, 2):
-        try:
-            rows = list(client.dns.records.list(zone_id=entry["zone_id"],
-                                                name={"exact": fqdn}))
-        except (cloudflare.CloudflareError, TimeoutError, OSError) as e:
-            # The batch call above already succeeded -- Cloudflare committed SOMETHING -- so this
-            # is deliberately a VerifyError (SPEC R6.3's second trigger: the verification READ
-            # itself failed), never re-raised bare like the batch clause above: only the batch
-            # call itself can leave Cloudflare's own COMMIT in doubt, and this one already
-            # happened.  TimeoutError/OSError are caught alongside cloudflare.CloudflareError
-            # (SPEC R6.3, amended after the adversarial review): a transport failure here is NOT
-            # evidence the batch failed to commit -- it already returned 200 -- so routing a bare
-            # TimeoutError/OSError to apply_all's unknown-fate clause (which exists for the BATCH
-            # call's own dropped-connection shadow, above) would assert the call "did not
-            # complete" for a write that, in fact, already had.  api_error_text(e) is still safe
-            # to call on these: it withholds str(e) whenever status_code is absent (SPEC 9.1 rule
-            # 1), which a status-code-less transport exception always is.
-            raise VerifyError(
-                f"{fqdn}: the batch call succeeded but the verification read failed, so the "
-                f"result is unconfirmed: {api_error_text(e)}") from e
-        if verify_records(entry, rows):
-            return [r.id for r in governed_records(rows)]
-        if attempt == 1:
-            sleep(VERIFY_RETRY_SLEEP)
-    held = describe_keys(sorted({record_key(r.type, r.name, r.content)
-                                 for r in governed_records(rows)})) or "no CNAME/A/AAAA record"
+    try:
+        for attempt in (1, 2):
+            try:
+                rows = list(client.dns.records.list(zone_id=entry["zone_id"],
+                                                    name={"exact": fqdn}))
+            except (cloudflare.CloudflareError, TimeoutError, OSError) as e:
+                # The batch call above already succeeded -- Cloudflare committed SOMETHING -- so
+                # this is deliberately a VerifyError (SPEC R6.3's second trigger: the verification
+                # READ itself failed), never re-raised bare like the batch clause above: only the
+                # batch call itself can leave Cloudflare's own COMMIT in doubt, and this one
+                # already happened.  TimeoutError/OSError are caught alongside
+                # cloudflare.CloudflareError (SPEC R6.3, amended after the adversarial review): a
+                # transport failure here is NOT evidence the batch failed to commit -- it already
+                # returned 200 -- so routing a bare TimeoutError/OSError to apply_all's
+                # unknown-fate clause (which exists for the BATCH call's own dropped-connection
+                # shadow, above) would assert the call "did not complete" for a write that, in
+                # fact, already had.  api_error_text(e) is still safe to call on these: it
+                # withholds str(e) whenever status_code is absent (SPEC 9.1 rule 1), which a
+                # status-code-less transport exception always is.
+                raise VerifyError(
+                    f"{fqdn}: the batch call succeeded but the verification read failed, so the "
+                    f"result is unconfirmed: {api_error_text(e)}") from e
+            if verify_records(entry, rows):
+                return [r.id for r in governed_records(rows)]
+            if attempt == 1:
+                sleep(VERIFY_RETRY_SLEEP)
+        held = describe_keys(sorted({record_key(r.type, r.name, r.content)
+                                     for r in governed_records(rows)})) or "no CNAME/A/AAAA record"
+    except ApplyError:
+        raise   # the VerifyError above -- already classified, must not be re-wrapped
+    # `Exception`, NOT `BaseException`: a KeyboardInterrupt here must keep reaching apply_all's
+    # own arm, which SPEC 9.3 pins to `unknown`.  Deliberate, and NARROW: everything in the try
+    # above runs AFTER the batch call returned, so nothing raised there is evidence the batch did
+    # not commit.  SPEC R6.3 already reasons that way for a transport failure ("the transport
+    # failing is not evidence the batch did not commit"); this generalizes it to the classes
+    # nobody enumerated.  Fix-pass review, CRITICAL 1, measured: the SDK calls `response.json()`
+    # unguarded (cloudflare/_response.py:266), so a truncated or non-JSON 200 on the verification
+    # read raises json.JSONDecodeError -- a ValueError, neither a CloudflareError nor an OSError
+    # -- and an AttributeError/KeyError from an SDK shape change at the `[r.id for r in
+    # governed_records(rows)]` line has the same shape (SPEC 8.3 names that scenario).  Every one
+    # of them escaped apply_all's handler chain, left the entry at its `not-attempted` seed, and
+    # produced exit 2: "nothing in Cloudflare was changed", about an FQDN this run had just
+    # rewritten.  The original class is NAMED in the message (PD#2) -- "the verification failed"
+    # alone cannot tell an SDK shape change from a truncated response.
+    except Exception as e:
+        raise VerifyError(
+            f"{fqdn}: the batch call succeeded but the verification step failed with an "
+            f"unexpected {type(e).__name__}: {e}, so the result is unconfirmed") from e
+    # OUTSIDE the try (TRY301): the mismatch itself is not an unexpected failure of the
+    # verification step, it is its RESULT, and `held` above is the last thing that can raise one.
     raise VerifyError(
         f"{fqdn}: the batch call succeeded but Cloudflare does not hold the expected records "
         f"afterwards, twice {VERIFY_RETRY_SLEEP}s apart; it now holds {held}")
@@ -1198,6 +1233,14 @@ def apply_all(client, entries, validations, outcomes, details):
         exception rather than the SDK's own class.
     Recording any of the three as `failed` (or vice versa) would make `exit_code_for` report the
     wrong thing happened to production DNS -- the exact silent failure PD#1 forbids.
+
+    A FOURTH stop exists and is deliberately NOT a named class: the trailing `except BaseException`
+    arm (fix-pass review, CRITICAL 1) records `unknown` for the in-flight entry and RE-RAISES, so
+    nothing unrecognised can leave an attempted entry at its `not-attempted` seed -- see that arm's
+    own comment for why a longer tuple is not the fix.  `except InvariantError` sits above it and
+    re-raises WITHOUT relabelling, because that one class is provably pre-batch.  The three arms
+    above `return`; these two `raise`, which stops the run just as firmly (R3.4) and lets main()'s
+    last line of defence name the class.
 
     Per entry's result line, the failure reason is written to BOTH streams (SPEC 11.2, ruling
     `f6639ad`): stdout as part of the `<fqdn>  <OUTCOME> -- <reason>` result line (so `> apply.log`
@@ -1273,6 +1316,39 @@ def apply_all(client, entries, validations, outcomes, details):
             write_report(f"{fqdn}  FAILED -- {reason}")
             report_line(f"ERROR: {e}")
             return
+        except InvariantError:
+            # ABOVE the catch-all below, and deliberately a bare re-raise that leaves this entry
+            # `not-attempted` -- the ONE state the catch-all must NOT relabel.  The only
+            # InvariantError `apply_entry` can raise is `merge_body`'s, which runs BEFORE the
+            # batch call, so nothing committed for this entry and exit 2 ("nothing in Cloudflare
+            # was changed") is TRUE of it.  (`verify_records`' InvariantError is post-batch, and
+            # `apply_entry` now converts everything raised after the batch returned into
+            # VerifyError, so it can never arrive here.)  Without this arm the catch-all would
+            # call a provably untouched entry `unknown` and turn a truthful 2 into a false 3,
+            # "Cloudflare was left partially changed" -- PD#1 in the other direction.
+            raise
+        # The writer half of SPEC 9.1's "no exit path may report 2 once changed_count > 0", and
+        # the fix for the fix-pass review's CRITICAL 1.  Review round 1 made all three of main()'s
+        # failure arms read the 2-vs-3 rule from one place (`failure_code`) -- but that corrected
+        # the READER of the tally and left the WRITER blind: an exception no clause above names
+        # propagated with this entry still at its `not-attempted` seed, so `changed_count()` saw 0
+        # and the run reported 2 for a batch call that may well have committed.  Enumerating
+        # classes here is exactly what failed the first time, which is why this is a catch-all and
+        # not a longer tuple: whatever it is, an entry `apply_entry` was in the middle of is not
+        # an entry that was never attempted.  `unknown`, not `unverified`: the batch call's own
+        # clauses re-raise unrecognised exceptions untouched, so this arm cannot tell a request
+        # built badly (nothing sent) from a response parsed badly (committed) -- `unknown` is the
+        # conservative label, and its operator action ("inspect this FQDN by hand") is the safe
+        # one.  RE-RAISED, never swallowed: main()'s last line of defence is what names the class
+        # on stderr (SPEC 8.3), and re-raising is also what stops the run, so R3.4's "attempt
+        # nothing further" needs no `return` here.
+        except BaseException as e:
+            reason = f"the call did not complete (unexpected {type(e).__name__}: {e})"
+            outcomes[fqdn] = "unknown"
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids,
+                             "at": now_utc()}
+            write_report(f"{fqdn}  UNKNOWN -- {reason}")
+            raise
         outcomes[fqdn] = "applied"
         details[fqdn] = {"deleted_ids": validation.delete_ids, "created_ids": created,
                          "at": now_utc()}

@@ -162,9 +162,6 @@ order** (sorted, since the file is written with sorted keys), and stops at the f
 should not attempt to revert any changes it has already made, and it should not attempt to make
 the remaining changes specified in the file."*
 
-R3.5 Pass 3 MUST NOT re-decide anything pass 1 decided. It sends the merged body built from pass
-1's resolved record ids, and verifies. An entry reaching pass 3 without a `ready` verdict is an
-`InvariantError` (§10.1).
 
 ### R4 — Deviation from util3 SPEC §5.4, stated explicitly
 
@@ -243,6 +240,25 @@ already happened, and only our confirmation of it did not. That covers a
 `cloudflare.CloudflareError` from the re-list **and** a bare `TimeoutError`/`OSError` from the same
 call — the transport failing is not evidence the batch did not commit, and routing it to `unknown`
 would have the run assert the call never completed when it returned 200.
+
+R6.3.1 **The whole post-batch section MUST be enclosed, and every exception raised in it that is
+not already an `ApplyError` MUST become a `VerifyError` naming the original class** — not only the
+three enumerated above. *Intent (fix-pass review, Critical 1):* an enumerated list is a list of the
+failures somebody thought of, and the exit-2 guarantee cannot rest on it being complete. What every
+exception raised past the batch call has in common is that the batch already returned, which is the
+whole of R6.3's reasoning. **Measured:** the SDK calls `response.json()` unguarded
+(`cloudflare/_response.py:266`), so a truncated or non-JSON 200 on the verification read raises
+`json.JSONDecodeError` — a `ValueError`, neither a `CloudflareError` nor an `OSError` — which
+escaped every clause, left the entry at its `not-attempted` seed, and produced **exit 2** for an
+FQDN the run had just rewritten. An `AttributeError`/`KeyError` from an SDK shape change while
+reading the listed rows (the scenario §8.3 names) has the identical shape.
+
+The enclosure MUST catch `Exception`, **never** `BaseException`: a `KeyboardInterrupt` here has to
+keep reaching `apply_all`'s own arm, which §9.3 pins to `unknown`.
+
+R6.3.2 By contrast, the **batch call's own** clauses stay open-ended: an unrecognised exception
+there propagates unwrapped, because it cannot be placed relative to the commit. §9.1's writer-side
+rule is what records it.
 
 *Intent, and why the class is named explicitly here:* `apply_all` catches `VerifyError` **before**
 the broader `ApplyError` clause, so a bare `ApplyError` raised in this position is recorded as
@@ -480,7 +496,7 @@ action.** A batch call ends in exactly one of:
 | `applied` | the batch returned **and** the records read back as expected | nothing |
 | `unverified` | the batch **returned** (so it committed), but the records do **not** read back as expected after §R6.2's retry, or could not be read at all | **inspect this FQDN by hand** — Cloudflare changed, but not verifiably into the intended state |
 | `failed` | the batch was **rejected** — a batch is one transaction, so nothing committed for this entry | fix the cause and re-run; this entry is untouched |
-| `unknown` | the call did not complete (dropped connection, timeout), so whether it committed is **not known** | inspect this FQDN by hand before re-running |
+| `unknown` | the call did not complete (dropped connection, timeout), **or it failed in a way this script does not recognise and cannot place relative to the commit**, so whether it committed is **not known** | inspect this FQDN by hand before re-running |
 
 **One known overstatement in `unverified`, measured and accepted.** The SDK raises only on HTTP
 status — verified against cloudflare 5.4.0, where neither `_base_client` nor `_response` inspects a
@@ -551,7 +567,7 @@ before any stream guard exists and outside every handler, so `--help >/dev/full`
 | `InvariantError` (subclass of `StartupError`) | an entry reaching pass 3 without a `ready` verdict; a delete id pass 1 never resolved; a `delete_match`/`posts` shape §6 should have rejected | `main()` | `ERROR: …`, named as a defect in this script's own reasoning (PD#2) | **2, or 3 if `changed_count > 0`** — see below |
 | `CloudflareReadError` (subclass of `StartupError`) | a record-list call in **pass 1** | `main()` | `ERROR: …` with the Cloudflare error codes | 2 |
 | `ApplyError` | a batch call the API **rejected** — one transaction, so nothing committed for that entry | `main()` | `ERROR: …` naming the FQDN and the Cloudflare error codes | outcome `failed`; 2 or 3 per §8.1 |
-| `VerifyError` (subclass of `ApplyError`) | the batch **returned**, but the post-apply verification did not match after §R6.2's retry, **or** the verification record-list call itself failed | `main()` | `ERROR: …` naming the FQDN and what Cloudflare actually holds | outcome **`unverified`**; 3 per §8.1 |
+| `VerifyError` (subclass of `ApplyError`) | the batch **returned**, but the post-apply verification did not match after §R6.2's retry, **or** the verification record-list call itself failed, **or** anything else was raised after the batch returned (R6.3.1) | `main()` | `ERROR: …` naming the FQDN and what Cloudflare actually holds — or, for R6.3.1, the unexpected class | outcome **`unverified`**; 3 per §8.1 |
 | `OutputWriteError` (subclass of `StartupError`) | the run record write | `main()` | `ERROR: cannot write <path>: <class>: <message>` | §9.2 |
 | `KeyboardInterrupt` | anywhere | `main()` | the summary, then the interrupt notice | 130 |
 | `OSError` | report/record writes | `main()` | `ERROR: …` | **2, or 3 if `changed_count > 0`** |
@@ -567,6 +583,33 @@ script's own reasoning is exactly when an operator most needs the exit code to b
 whether production DNS was touched, and "the code crashed" is not a reason to claim it did not.
 Rows above that can only fire **before** the first write (`StartupError`, `PlanFileError`,
 `CloudflareReadError` in pass 1) keep a flat 2, because for them the claim is true.
+
+**That rule has a reader half and a writer half, and BOTH are required.** Routing every failure arm
+through one `changed`-aware helper (`failure_code(state)`) is the reader half, and it is not
+sufficient on its own: the tally can only report an entry as changed if something *recorded* that
+the entry was in flight.
+
+- **Reader:** every exit path computes 2-vs-3 from `changed_count(counts)`, never from a literal.
+- **Writer:** `apply_all` MUST record an outcome for the in-flight entry on **every** way out of
+  `apply_entry`, including exceptions no clause names. Its handler chain therefore ends in a
+  catch-all that sets the entry's outcome to **`unknown`**, writes its result line, and
+  **re-raises** (so §8.3's last line of defence still names the class, and so R3.4's "attempt
+  nothing further" holds without a `return`).
+
+*Intent (fix-pass review, Critical 1):* review round 1 fixed the reader half for a `RuntimeError`
+out of `apply_entry` and left the writer half blind. **Reproduced:** a one-entry plan whose batch
+call returned and whose verification read then raised `ValueError` made 1 batch call, recorded the
+entry as `not-attempted`, and exited **2** — "nothing in Cloudflare was changed" — with a `mode:`
+line reading `0 of 1 entries changed`. Enumerating classes in that catch-all is exactly what failed
+the first time; whatever the exception is, an entry `apply_entry` was in the middle of is not an
+entry that was never attempted.
+
+**The one exception, and it is exhaustive:** `InvariantError` propagates through that arm
+**unrelabelled**, leaving the entry `not-attempted`. The only `InvariantError` `apply_entry` can
+raise is `merge_body`'s, which runs *before* the batch call (`verify_records`' is post-batch and
+R6.3.1 converts it to `VerifyError` first), so for that one class "nothing committed for this
+entry" is a true claim — and relabelling it `unknown` would turn a truthful 2 into a false 3,
+"Cloudflare was left partially changed", PD#1 in the other direction.
 
 **Validation failure is deliberately NOT an exception.** It is a tally of verdicts that `main()`
 returns 2 on. *Intent:* an invalid file is an expected outcome of a read-only pass, not an error
@@ -613,7 +656,9 @@ deliverable was the record has genuinely failed to deliver it.
 
 A `KeyboardInterrupt` during pass 3 leaves the in-flight entry's outcome **`unknown`** — never
 `failed`, never `not-attempted` — and every later entry `not-attempted`. The summary and the run
-record are written, then exit 130.
+record are written, then exit 130. This holds at **every** stage inside `apply_entry`, including
+after the batch call returned, which is why R6.3.1's enclosure catches `Exception` and not
+`BaseException`.
 
 During that final flush, SIGINT MUST be set to `SIG_IGN`, the same guard `abort_run()` uses in the
 main program, so a second Ctrl-C cannot truncate the only record of what a destructive run did.

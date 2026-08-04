@@ -333,8 +333,23 @@ production DNS, not a generic failure bucket. `changed_count()` (one shared help
 — and `failed` is deliberately excluded from it, because a batch is one transaction and a rejected
 call commits nothing. No failure path — not a validation abort, not an `InvariantError` from this
 script's own reasoning, not the `except BaseException` last line of defence — may report `2` once
-anything has actually changed; every one of them is routed through `changed_count()` first. Same
-documented exception as both siblings: argparse's own `--help`/usage-error text is written before
+anything has actually changed. **That takes a reader half AND a writer half, and shipping only the
+reader half is how it was false once already.** The reader half is that every arm computes the code
+from `changed_count()` rather than a literal; the writer half is that `apply_all`'s handler chain
+ends in a **catch-all** that records the in-flight entry `unknown` and re-raises, so an exception no
+clause names cannot leave an attempted entry at its `not-attempted` seed. Measured with only the
+reader half in place: a one-entry plan whose batch call **returned** and whose verification read
+then raised `ValueError` (the SDK calls `response.json()` unguarded, so a truncated 200 raises
+`json.JSONDecodeError` — neither a `CloudflareError` nor an `OSError`) made one batch call and
+exited **2**, "nothing in Cloudflare was changed", with a `mode:` line reading `0 of 1 entries
+changed`. The one class deliberately exempt from that catch-all is `InvariantError`, which stays
+`not-attempted`: `apply_entry`'s only pre-batch raiser is `merge_body`, so for it the "nothing
+committed" claim is true, and relabelling would turn a truthful `2` into a false `3`. The
+companion guard is in `apply_entry`: everything after the batch call returned sits inside one
+`try` that converts any unrecognised `Exception` (never `BaseException` — a Ctrl-C must still
+reach `apply_all`'s `unknown` arm, SPEC §9.3) into a `VerifyError` naming the original class,
+because the one thing every exception raised past the batch call has in common is that the batch
+already committed. Same documented exception as both siblings: argparse's own `--help`/usage-error text is written before
 any stream guard exists and outside every handler, so `--help >/dev/full` and
 `--bogus 2>/dev/full` still exit **120**.
 
@@ -342,9 +357,11 @@ There are **seven outcomes**, not six — `outcome` (what happened to one entry 
 different axis from `verdict` (what pass 1 decided about it): `applied`, `already-applied`,
 `planned` (the dry-run stand-in for `applied`), `failed` (the batch was rejected — nothing
 committed), `unverified` (the batch **returned**, so Cloudflare committed, but the post-apply
-re-list didn't confirm it after one 2-second retry, or the re-list itself failed), `unknown` (the
-call didn't complete at all — dropped connection, timeout, or a Ctrl-C mid-call — so whether it
-committed isn't known), and `not-attempted` (never reached, because an earlier entry failed).
+re-list didn't confirm it after one 2-second retry, or the re-list itself failed, **or anything at
+all was raised after the batch returned**), `unknown` (the call didn't complete at all — dropped
+connection, timeout, a Ctrl-C mid-call, **or a failure this script cannot place relative to the
+commit** — so whether it committed isn't known), and `not-attempted` (never reached, because an
+earlier entry failed).
 `unverified` and `unknown` both count toward `changed_count()`; `failed` does not. A `VerifyError`
 (subclass of `ApplyError`) is what pass 3 raises on a surviving verification mismatch or a failed
 verification read — it is what produces the `unverified` outcome and exit 3, never `failed`/exit

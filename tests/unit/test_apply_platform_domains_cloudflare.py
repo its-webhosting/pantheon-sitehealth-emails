@@ -2556,6 +2556,100 @@ def test_a_bare_transport_error_on_the_verification_read_is_unverified_not_unkno
     assert "ERROR: a.umich.edu:" in captured.err
 
 
+def test_an_unrecognised_exception_after_the_batch_returned_is_unverified_never_exit_two(
+        apc, tmp_path, monkeypatch, capsys):
+    """Fix-pass review, CRITICAL 1: exit 2 must never be reported once a batch call has RETURNED.
+
+    Reproduced by the reviewer on HEAD before this fix, with a ONE-entry plan so no earlier
+    `applied` entry can mask the arithmetic: the batch POST succeeded (Cloudflare swapped the
+    CNAME for the A records), the post-apply verification read then raised a bare `ValueError`
+    -- the SDK calls `response.json()` unguarded (`cloudflare/_response.py:266`), so a truncated
+    or non-JSON 200 on that read raises `json.JSONDecodeError`, which is a `ValueError`, NOT a
+    `cloudflare.CloudflareError` and NOT an `OSError`.  `apply_all` caught neither, so the entry
+    kept its `not-attempted` seed, `changed_count()` saw 0, and `failure_code()` returned **2** --
+    the code SPEC section 8 defines as "could not complete, and nothing in Cloudflare was
+    changed".  Three artifacts lied at once: the exit code, the `mode:` line ("0 of 1 entries
+    changed") and the run record.
+
+    The fix is in `apply_entry`, not here: everything after the batch call returned is now inside
+    a try that converts any unrecognised exception into `VerifyError`, on SPEC R6.3's existing
+    reasoning -- "the transport failing is not evidence the batch did not commit" generalizes to
+    anything raised after the commit.  So the outcome is `unverified` (inspect this FQDN by hand),
+    never `unknown` and never `not-attempted`.  The ORIGINAL class is named in the message: an
+    operator who is told only "the verification failed" cannot tell an SDK shape change from a
+    truncated response.
+    """
+    path = write_doc(tmp_path, plan_doc())
+
+    class VerifyReadReturnsGarbage(FakeCloudflareClient):
+        def _list(self, **kwargs):
+            if len(self.list_calls) == 1:   # the SECOND list() call -- pass 1's own read (the
+                # first) must succeed normally; only the POST-BATCH verification read fails.
+                self.list_calls.append(kwargs)
+                raise ValueError("Expecting value: line 1 column 1 (char 0)")
+            return super()._list(**kwargs)
+
+    client = VerifyReadReturnsGarbage(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    # The batch RETURNED -- this is what makes exit 2 a lie, and it is asserted against the fake
+    # client's recorded calls, never inferred.
+    assert len(client.batch_calls) == 1
+    assert code == 3
+    assert "unverified 1" in captured.out
+    assert "not attempted 0" in captured.out
+    assert "FOR REAL -- 1 of 1 entries changed" in captured.out
+    assert "a.umich.edu  UNVERIFIED --" in captured.out
+    assert "ValueError" in captured.out
+    assert "ERROR: a.umich.edu:" in captured.err
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 3
+    assert record["entries"]["a.umich.edu"]["outcome"] == "unverified"
+    assert "ValueError" in record["entries"]["a.umich.edu"]["error"]
+
+
+def test_an_unrecognised_exception_from_the_batch_call_itself_is_unknown_never_exit_two(
+        apc, tmp_path, monkeypatch, capsys):
+    """Fix-pass review, CRITICAL 1, the other half: an unrecognised exception raised from the
+    batch call ITSELF cannot be placed relative to the commit, so the entry's fate is `unknown`.
+
+    `apply_entry` re-raises anything that is not `cloudflare.APIConnectionError`/
+    `cloudflare.CloudflareError` from the batch clause untouched -- an `AttributeError` from an SDK
+    shape change while building the request (nothing sent) and a `json.JSONDecodeError` while
+    parsing a truncated 200 (committed) are indistinguishable from outside.  `apply_all`'s final
+    arm therefore records `unknown`, the conservative label whose operator action is "inspect this
+    FQDN by hand", and RE-RAISES so `main()`'s last line of defence still names the class on
+    stderr (SPEC 8.3: "the catch-all NEVER swallows").
+
+    ONE entry, deliberately: with the entry left at `not-attempted` (HEAD's behaviour) there is no
+    earlier `applied` to carry `changed_count()` above zero, so the run exited 2 -- "nothing in
+    Cloudflare was changed" -- about a call whose fate it could not account for.
+    """
+    path = write_doc(tmp_path, plan_doc())
+
+    class BatchReturnsGarbage(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            self.batch_calls.append(kwargs)
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    client = BatchReturnsGarbage(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert len(client.batch_calls) == 1
+    assert code == 3
+    assert "unknown 1" in captured.out
+    assert "not attempted 0" in captured.out
+    assert "FOR REAL -- 1 of 1 entries changed" in captured.out
+    assert "a.umich.edu  UNKNOWN --" in captured.out
+    # SPEC 8.3: the class is always named on stderr, by main()'s catch-all -- so the re-raise is
+    # load-bearing and is pinned here, not just the outcome word.
+    assert "ERROR: unexpected ValueError:" in captured.err
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 3
+    assert record["entries"]["a.umich.edu"]["outcome"] == "unknown"
+    assert "ValueError" in record["entries"]["a.umich.edu"]["error"]
+
+
 def test_exit_code_three_when_the_only_outcome_is_unverified(apc):
     """Item A (Task 8 review): the pure-function pin for R6.3's exit-3 rule, independent of any
     end-to-end run."""
