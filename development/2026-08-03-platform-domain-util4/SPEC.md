@@ -234,11 +234,22 @@ own batch documentation warns that *"Cloudflare's distributed KV store must trea
 change as a single key-value pair. This means that the propagation of changes is not atomic"* — a
 read served before the change lands would otherwise be a false mismatch on a healthy run.
 
-R6.3 A mismatch surviving the retry MUST raise `ApplyError` and stop the run. The entry's outcome
-is **`unverified`** — not `failed` — and the run exits 3, because the batch returned and therefore
-committed. A verification **read** that fails outright (a `cloudflare.CloudflareError` from the
-re-list) takes the same outcome, for the same reason: the write already happened, and only our
-confirmation of it did not. See §8.1's four-state table.
+R6.3 A mismatch surviving the retry MUST raise **`VerifyError`** — the `ApplyError` subclass, never
+a bare `ApplyError` — and stop the run. The entry's outcome is **`unverified`**, not `failed`, and
+the run exits 3, because the batch returned and therefore committed.
+
+A verification **read** that fails outright takes the same outcome, for the same reason: the write
+already happened, and only our confirmation of it did not. That covers a
+`cloudflare.CloudflareError` from the re-list **and** a bare `TimeoutError`/`OSError` from the same
+call — the transport failing is not evidence the batch did not commit, and routing it to `unknown`
+would have the run assert the call never completed when it returned 200.
+
+*Intent, and why the class is named explicitly here:* `apply_all` catches `VerifyError` **before**
+the broader `ApplyError` clause, so a bare `ApplyError` raised in this position is recorded as
+`failed` — "rejected, nothing committed" — for a batch that committed, which collapses to **exit 2,
+"nothing in Cloudflare was changed."** That is verbatim the defect §8.1 records having already
+shipped once, and an earlier revision of this very sentence said `ApplyError`, which is how it
+would have shipped a second time.
 
 ### R7 — Entry selection
 
@@ -859,7 +870,7 @@ All offline, `unit` tier, in `tests/unit/test_apply_platform_domains_cloudflare.
 | 6 | for-real happy path | `batch()` called once per entry with exactly the expected `zone_id`/`deletes`/`posts`; post-verify runs; exit 0 |
 | 7 | failure mid-apply | entry 3 fails → 1–2 `applied`, 3 `failed`, 4..N `not-attempted`, exit **3**; entry 1 fails → `changed == 0` → exit **2** |
 | 8 | unknown outcome | a connection error on entry 2 → outcome `unknown` → exit **3** (never 2) |
-| 9 | post-apply verification | mismatch → one `sleep` + one re-list (asserted), then `ApplyError`; a mismatch that resolves on the retry succeeds |
+| 9 | post-apply verification | mismatch → one `sleep` + one re-list (asserted), then **`VerifyError`**; a mismatch that resolves on the retry succeeds; a bare `ApplyError` in the same position yields `failed`/exit 2 while a `VerifyError` yields `unverified`/exit 3 — assert **both**, since that pair is the whole reason the subclass exists; a `TimeoutError`/`OSError` from the verification **read** yields `unverified`, never `unknown` (R6.3) |
 | 10 | interruption | Ctrl-C in pass 1 → exit 130, nothing changed; Ctrl-C during a batch → that entry `unknown`, rest `not-attempted`, summary and record still written; `signal.signal` monkeypatched (§9.3) |
 | 11 | `exit_code_for` | the full truth table: clean, already-applied-only, dry run, failure with and without prior applies, unknown-only |
 | 12 | run record | written on every exit path (success, validation failure, apply failure, interrupt); dry-run variant with `for_real: false`; both branches of the §9.2 precedence rule |
