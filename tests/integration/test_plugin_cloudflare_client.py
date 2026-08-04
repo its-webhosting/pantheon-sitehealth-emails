@@ -200,3 +200,53 @@ def test_build_client_sends_only_the_configured_credential(psh, monkeypatch):
     assert request.headers.get("x-auth-email") is None
     assert request.headers.get("x-auth-key") is None
     assert "evil.example" not in str(request.headers)
+
+
+def test_pinned_client_nulls_an_explicit_none_credential(psh, monkeypatch):
+    """`field not in creds` (the original loop condition) tests for the key's ABSENCE, not for
+    None-ness.  `build_client` never triggers this today -- it only calls pinned_client with
+    credentials it already validated non-empty -- but pinned_client's OWN contract (the
+    docstring: "uses EXACTLY the credentials the config supplied") should not depend on every
+    caller remembering that.  Called directly here, bypassing build_client's guard on purpose,
+    with an EXPLICIT api_email=None/api_key=None (present in creds, merely None-valued) and all
+    six ambient CLOUDFLARE_* variables the SDK reads (cloudflare 5.4.0) exported hostile.
+
+    Before the fix: `Cloudflare(api_email=None, api_key=None, ...)` reaches the SDK's own
+    __init__, which back-fills any credential still None from the environment -- so api_email/
+    api_key hold the ambient values at construction time, and because both keys ARE present in
+    creds (just None-valued), the `not in creds` loop leaves them untouched.  A REAL built
+    request then carries the ambient email/key.
+
+    After the fix (`creds.get(field) is None`): both fields are re-nulled after construction, so
+    the SDK's own `_validate_headers` refuses to build a request at all -- no credential, ambient
+    or otherwise, is ever sent.  That refusal is itself the proof of no leak, so it is asserted
+    directly (matching the identical pattern already used for the same case in the sibling
+    `apply-platform-domains-cloudflare` copy) rather than inspected on a request that can't be
+    built.  base_url is asserted separately since it is pinned before this loop runs and is
+    unaffected by the credential resolution failure.
+    """
+    pytest.importorskip("cloudflare")
+    from cloudflare._models import FinalRequestOptions
+
+    path = Path(psh.__file__).resolve().parents[1] / "plugin" / "cloudflare" / "client.py"
+    loader = SourceFileLoader("cloudflare_client_none_probe", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)          # the REAL cloudflare package, not the fake
+
+    ambient = {"CLOUDFLARE_API_TOKEN": "ambient-token", "CLOUDFLARE_API_KEY": "ambient-key",
+               "CLOUDFLARE_EMAIL": "ambient@example.edu",
+               "CLOUDFLARE_API_USER_SERVICE_KEY": "ambient-usk",
+               "CLOUDFLARE_BASE_URL": "https://evil.example/v4",
+               "CLOUDFLARE_CUSTOM_HEADERS": "X-Auth-Email: attacker@evil.example"}
+    for name, value in ambient.items():
+        monkeypatch.setenv(name, value)
+
+    client = module.pinned_client(api_email=None, api_key=None)
+
+    assert client.api_email is None
+    assert client.api_key is None
+    assert client.api_token is None
+    assert str(client.base_url) == module.API_BASE_URL + "/"
+    with pytest.raises(TypeError, match="Could not resolve authentication method"):
+        client._build_request(FinalRequestOptions(method="get", url="/zones"))

@@ -48,7 +48,14 @@ def pinned_client(**creds) -> Cloudflare:
     """
     client = Cloudflare(**creds, base_url=API_BASE_URL)
     for field in ('api_token', 'api_key', 'api_email', 'user_service_key'):
-        if field not in creds:
+        # `creds.get(field) is None`, NOT `field not in creds`: the SDK's own __init__ back-fills
+        # a credential from the environment whenever the value it receives IS None -- an EXPLICIT
+        # api_email=None triggers that back-fill exactly like an omitted keyword does, before
+        # this loop ever runs.  A `field not in creds` guard only re-nulls the OMITTED case, so
+        # an explicit None left the SDK's own ambient back-fill standing on the instance.
+        # Matching the SDK's own None-triggered back-fill is what makes this pin correct
+        # regardless of how a caller spells "no credential".
+        if creds.get(field) is None:
             setattr(client, field, None)
     client._custom_headers = {}  # noqa: SLF001 -- route 3 above; the SDK has no public API for
     # "ignore $CLOUDFLARE_CUSTOM_HEADERS", and it is merged after everything this function pins
