@@ -512,7 +512,7 @@ before any stream guard exists and outside every handler, so `--help >/dev/full`
 |---|---|---|---|---|
 | `StartupError` | argv, config file, credential resolution, stream guards — copied from the sibling | `main()` | `ERROR: …` via `report_line` | 2 |
 | `PlanFileError` (subclass of `StartupError`) | the eight §6 checks | `main()` | `ERROR: …` naming the file, the FQDN key and the field | 2 |
-| `InvariantError` (subclass of `StartupError`) | an entry reaching pass 3 without a `ready` verdict; a delete id pass 1 never resolved; a `delete_match`/`posts` shape §6 should have rejected | `main()` | `ERROR: …`, named as a defect in this script's own reasoning (PD#2) | 2 |
+| `InvariantError` (subclass of `StartupError`) | an entry reaching pass 3 without a `ready` verdict; a delete id pass 1 never resolved; a `delete_match`/`posts` shape §6 should have rejected | `main()` | `ERROR: …`, named as a defect in this script's own reasoning (PD#2) | **2, or 3 if `changed_count > 0`** — see below |
 | `CloudflareReadError` (subclass of `StartupError`) | a record-list call in **pass 1** | `main()` | `ERROR: …` with the Cloudflare error codes | 2 |
 | `ApplyError` | a batch call the API **rejected** — one transaction, so nothing committed for that entry | `main()` | `ERROR: …` naming the FQDN and the Cloudflare error codes | outcome `failed`; 2 or 3 per §8.1 |
 | `VerifyError` (subclass of `ApplyError`) | the batch **returned**, but the post-apply verification did not match after §R6.2's retry, **or** the verification record-list call itself failed | `main()` | `ERROR: …` naming the FQDN and what Cloudflare actually holds | outcome **`unverified`**; 3 per §8.1 |
@@ -520,6 +520,17 @@ before any stream guard exists and outside every handler, so `--help >/dev/full`
 | `KeyboardInterrupt` | anywhere | `main()` | the summary, then the interrupt notice | 130 |
 | `OSError` | report/record writes | `main()` | `ERROR: …` | 2 |
 | anything else | inside `main()`'s try | `main()`'s `except BaseException` (§8.3) | `ERROR: unexpected <class>: <message>` | 2 |
+
+**No exit path may report 2 once `changed_count(counts) > 0`.** Exit 2 means *"could not complete,
+and **nothing in Cloudflare was changed**"* (§8). Any exception escaping mid-run — an
+`InvariantError` from a defect, or anything reaching §8.3's last line of defence — must therefore
+be routed through the same `changed`-aware computation as the ordinary failure paths, yielding **3**
+when entries have already applied. *Intent:* this is the third face of one bug. §8.1's `unverified`
+amendment closed it for verification mismatches; this closes it for exceptions. A defect in this
+script's own reasoning is exactly when an operator most needs the exit code to be honest about
+whether production DNS was touched, and "the code crashed" is not a reason to claim it did not.
+Rows above that can only fire **before** the first write (`StartupError`, `PlanFileError`,
+`CloudflareReadError` in pass 1) keep a flat 2, because for them the claim is true.
 
 **Validation failure is deliberately NOT an exception.** It is a tally of verdicts that `main()`
 returns 2 on. *Intent:* an invalid file is an expected outcome of a read-only pass, not an error
