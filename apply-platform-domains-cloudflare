@@ -1187,8 +1187,24 @@ def failure_code(state):
     to a run-record write failure.  Three independently-written `2`s is exactly the shape that lets
     one arm get fixed and the other two silently drift, which is why this is now the ONE place all
     three failure arms read the rule from.
+
+    TOTAL, because of WHERE it is called from (adversarial review 2026-08-04, finding 7): every
+    call site is inside one of main()'s own `except` clauses, and a fresh exception raised there
+    is never redispatched to a sibling `except` of the same `try` -- it escapes main() and CPython
+    exits 1, the one code this whole structure exists to route away from.  `tally` raises
+    InvariantError on an out-of-vocabulary outcome, so the rule's own INPUT can be the broken
+    thing.  The fallback reads `state["for_real"]` rather than defaulting flat, because that is
+    the one fact still trustworthy when the tally is not: there is exactly ONE
+    `dns.records.batch` call site and it sits behind the `--for-real` branch, so a dry run
+    structurally cannot have changed anything (2 is TRUE of it) while a for-real run may have (3).
     """
-    return 3 if changed_count(tally(state["outcomes"])) else 2
+    try:
+        counts = tally(state["outcomes"])
+    except InvariantError as e:
+        report_line(f"ERROR: the outcome tally is corrupt ({e}), so this run's exit code is "
+                    "derived from --for-real alone; inspect the run record by hand")
+        return 3 if state["for_real"] else 2
+    return 3 if changed_count(counts) else 2
 
 
 def exit_code_for(counts):
@@ -1871,7 +1887,33 @@ def finish(code, *, options, argv, state):
     code is the only channel" reasoning report_line's own docstring states), and the run record
     write below is deliberately still attempted -- a doomed STDOUT says nothing about whether the
     JSON file can be written.
+
+    THE WHOLE BODY IS ALSO ENCLOSED, and returns `code` unchanged on anything unrecognised
+    (adversarial review 2026-08-04, finding 7).  The prologue below -- `signal.signal`,
+    `now_utc()`, `tally()`, `outcome_path()` -- used to sit outside both inner `try`s, and
+    `tally()` raises InvariantError on an out-of-vocabulary outcome.  Since finish() is itself
+    called from inside main()'s `except` clauses, a raise here escaped main() entirely and CPython
+    exited **1**, which in this program means "completed with already-applied skips" (SPEC 8.3).
+    `code` was computed by the caller before this function was reached, so returning it unchanged
+    is the honest answer: a bookkeeping failure while REPORTING what happened does not change what
+    happened.  `BaseException` and not `Exception` on purpose -- SIGINT is SIG_IGN by the first
+    statement, so the only KeyboardInterrupt that can reach here arrives in that one-statement
+    window, and swallowing it is exactly what the SIG_IGN line exists to do.
     """
+    try:
+        return finish_reporting(code, options=options, argv=argv, state=state)
+    except BaseException as e:  # noqa: BLE001 -- deliberate: see the paragraph above.  Every
+        # failure this can absorb is a defect in the REPORTING of a run that has already
+        # finished, and letting one escape hands the operator CPython's exit 1.
+        report_line(f"ERROR: the run could not be reported (unexpected {type(e).__name__}: {e}); "
+                    f"exiting {code}, the code the run itself earned")
+        return code
+
+
+def finish_reporting(code, *, options, argv, state):
+    """finish()'s body -- see its docstring for everything about this sequence; this split exists
+    only so the enclosure there needs no extra indentation level here (and so `finish` stays under
+    ruff's C901/PLR0915 caps)."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     at = now_utc()
     counts = tally(state["outcomes"])

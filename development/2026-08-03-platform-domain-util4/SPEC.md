@@ -273,6 +273,17 @@ reading the listed rows (the scenario §8.3 names) has the identical shape.
 The enclosure MUST catch `Exception`, **never** `BaseException`: a `KeyboardInterrupt` here has to
 keep reaching `apply_all`'s own arm, which §9.3 pins to `unknown`.
 
+R6.3.2a **`finish()`'s whole body, and `failure_code()`, MUST be total** (2026-08-04 adversarial
+review, finding 7). Both are reached from inside `main()`'s own `except` clauses, where Python never
+redispatches a fresh exception to a sibling `except` of the same `try` — so a raise in either
+escapes `main()` and CPython exits **1**, the code §8.3's whole handler chain exists to route away
+from. `tally()` raises `InvariantError` on an out-of-vocabulary outcome, and `finish()`'s prologue
+called it outside both of its inner `try` blocks. `finish()` now returns `code` unchanged on
+anything unrecognised — a bookkeeping failure while *reporting* a run does not change what the run
+did — and `failure_code()` falls back to `state["for_real"]`, the one fact still trustworthy when
+the tally is not: there is exactly one `dns.records.batch` call site and it is behind the
+`--for-real` branch, so a dry run structurally cannot have changed anything.
+
 R6.3.2 By contrast, the **batch call's own** clauses stay open-ended: an unrecognised exception
 there propagates unwrapped, because it cannot be placed relative to the commit. §9.1's writer-side
 rule is what records it.
@@ -857,6 +868,14 @@ really fails (`/dev/full`), never `subprocess.DEVNULL`, which accepts every writ
 *Intent for the `already-applied` row:* it is what tells an operator which entries a re-run skipped
 — the affordance R4.2's carve-out exists to provide. It is deliberately **not** the §11.4 change
 line, because there is no change to describe.
+
+**That `continue` MUST be pinned by an absence assertion** (2026-08-04 adversarial review, finding
+8): deleting it left the suite green, because every assertion over a mixed document was `in`-shaped
+and an extra stdout line is invisible to those. The mixed dry-run test now asserts the §11.4 line is
+**absent** for the already-applied entry and **present** for the ready one, and a `-v` variant
+covers the same document — under `-v` the missing `continue` additionally reaches
+`merge_body(entry, [])` (an already-applied verdict resolves no delete ids) and turns an exit-1 run
+into an `InvariantError` at exit 2.
 
 *Intent for the reason appearing on **both** streams:* a failing entry's reason is written to stdout
 as part of its result line **and** to stderr as the `ERROR:` line. This is the one deliberate

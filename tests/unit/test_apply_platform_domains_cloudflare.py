@@ -2083,6 +2083,36 @@ def test_a_dry_run_over_a_mixed_already_applied_and_ready_doc_reports_both_corre
     record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
     assert record["entries"]["a.umich.edu"]["outcome"] == "already-applied"
     assert record["entries"]["b.umich.edu"]["outcome"] == "planned"
+    # Adversarial review 2026-08-04, finding 8: every assertion above is `in`-shaped or reads the
+    # record, so deleting `report_entries`' `continue` -- which gives an already-applied entry
+    # BOTH the "nothing to do" line AND a section 11.4 change line describing a rewrite that will
+    # not happen -- left the suite green.  SPEC 11.2 states the intent: the change line is
+    # "deliberately NOT" printed there, "because there is no change to describe".
+    assert "a.umich.edu  already applied -- nothing to do" in out
+    assert "a.umich.edu  zone " not in out          # no section 11.4 change line for `a`
+    assert "b.umich.edu  zone " in out              # ...but `b` (ready) still gets one
+
+
+def test_a_verbose_dry_run_prints_no_post_body_for_an_already_applied_entry(
+        apc, tmp_path, monkeypatch, capsys):
+    """The other half of finding 8: there was no `-v` test over an already-applied entry at all.
+    Under `-v` the missing `continue` reaches `merge_body(entry, [])` -- `validation.delete_ids`
+    is empty for an already-applied verdict -- and raises `InvariantError`, so a run that should
+    exit 1 aborts at exit 2 instead.  The `b` entry's POST body must still be printed, or a
+    mutation that simply stopped printing bodies would pass this too."""
+    doc = plan_doc(entries={"a.umich.edu": plan_entry(fqdn="a.umich.edu"),
+                            "b.umich.edu": plan_entry(fqdn="b.umich.edu", zone_id="zone-b")})
+    path = write_doc(tmp_path, doc)
+    client = FakeCloudflareClient(rows_by_name={
+        "a.umich.edu": [address_rows()],                        # already-applied: R == P
+        "b.umich.edu": [[row("CNAME", name="b.umich.edu")]],    # ready: R == D
+    })
+    code = run_main(apc, ["-v", path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "a.umich.edu  already applied -- nothing to do" in out
+    assert "POST /zones/zone-a/dns_records/batch" not in out
+    assert "POST /zones/zone-b/dns_records/batch" in out
 
 
 def test_a_file_whose_posts_disagree_is_refused_before_any_cloudflare_call(
@@ -3328,6 +3358,55 @@ def test_the_run_record_is_written_when_validation_fails(apc, tmp_path, monkeypa
     # (the same function that produced it), not a hand-copied literal that could drift from it.
     expected_detail = apc.verdict_for(plan_entry(), [])[1]
     assert record["entries"]["a.umich.edu"]["detail"] == expected_detail
+
+
+def test_a_raise_from_finishs_own_prologue_never_exits_one(apc, tmp_path, monkeypatch, capsys):
+    """Adversarial review 2026-08-04, finding 7.  `finish()`'s prologue -- `signal.signal`,
+    `now_utc()`, `tally()`, `outcome_path()` -- sat OUTSIDE both of its `try` blocks, and
+    `failure_code(state)` calls `tally` AGAIN from inside `main()`'s own `except` clause, where
+    Python never redispatches a fresh exception to a sibling `except` of the same `try`.  So an
+    `InvariantError` out of `tally` escaped `main()` entirely and CPython exited **1** -- the one
+    code SPEC 8.3's whole handler chain exists to route away from, because 1 here means "completed
+    with already-applied skips".
+
+    Latent, requiring an upstream defect -- which is exactly what `InvariantError` is for, and
+    exactly when an operator most needs the exit code to be honest.  A dry run changed nothing, so
+    2 is the truthful code."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+
+    def corrupt(outcomes):
+        raise apc.InvariantError("contrived bookkeeping defect")
+
+    monkeypatch.setattr(apc, "tally", corrupt)
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "contrived bookkeeping defect" in err
+
+
+def test_a_corrupt_tally_after_a_for_real_apply_reports_three_not_two(
+        apc, tmp_path, monkeypatch, capsys):
+    """The other half of finding 7, and the reason `failure_code`'s fallback is not a flat 2:
+    this run really did POST a batch, so "nothing in Cloudflare was changed" would be a lie.  The
+    tally that would normally prove it is the thing that broke, so the fallback reads
+    `state["for_real"]` instead -- structurally, a dry run cannot have changed anything (there is
+    one `dns.records.batch` call site and it is behind the `--for-real` branch), and a for-real run
+    that reached pass 3 may have."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), address_rows()]})
+    real_tally = apc.tally
+
+    def corrupt_after_the_apply(outcomes):
+        if any(outcome == "applied" for outcome in outcomes.values()):
+            raise apc.InvariantError("contrived bookkeeping defect")
+        return real_tally(outcomes)
+
+    monkeypatch.setattr(apc, "tally", corrupt_after_the_apply)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert client.batch_calls != []
+    assert code == 3
+    assert "contrived bookkeeping defect" in capsys.readouterr().err
 
 
 def test_the_run_record_captures_created_and_deleted_ids(apc, tmp_path, monkeypatch):
