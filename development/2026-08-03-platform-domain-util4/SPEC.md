@@ -1145,7 +1145,86 @@ spec and the diff, reviews before merge, per `prompts/adversarial-review.md`.
 
 ---
 
-## 22. Closing audit questions (answered after implementation)
+## 22. Closing audit questions — ANSWERED 2026-08-04
+
+Evidence: the ten per-task reports and reviews in `.superpowers/sdd/PLAN/`, the whole-branch review
+and its fix wave (`final-fix-report.md`), the ledger (`progress.md`), and the code at `HEAD`
+(`a039384..250e517`, 37 commits, no branch created per `CLAUDE.md`).
+
+**The dominant finding across all ten tasks: the production code was almost always right, and the
+tests proving it were repeatedly wrong.** Every Critical and Important finding on this branch —
+without exception — was located by a reviewer mutating the implementation and watching the suite
+stay green. Two sub-shapes recurred often enough to be named as classes: a fixture whose entries
+are homogeneous or whose two numbers are equal (so a transposition or an early loop exit is
+undetectable), and an assertion on a failure path that can be deleted with the suite green. The
+second appeared in seven of the ten tasks.
+
+1. **Was every new test observed failing for the right reason before its implementation existed?**
+
+   Yes for every task's initial submission — each report pastes the RED run, and the reviewers
+   re-ran a sample rather than trusting the paste. **Two disclosed exceptions, neither papered
+   over.** Task 1's honest RED was a collection error (the script did not exist yet), stated as such
+   rather than dressed as a per-assertion failure. And the ~40 tests added during *fix* rounds were
+   necessarily written after the code they cover — for those the discipline was inverted and
+   arguably stronger: each was proven by re-applying the reviewer's own mutation, watching the new
+   test go red, and pasting it. Several fix rounds existed *only* because a test could not fail.
+
+2. **Was group 5's "a dry run makes zero write calls" shown red under a deliberate mutation?**
+
+   Yes, three times by three parties: the Task 7 implementer (mandatory Step 6), the Task 7
+   reviewer (which additionally ran the gate *inverted* and the gate *correct*, and swept `--only`
+   on already-applied, ready, mixed, `-v`, invalid-beside-ready, plan and revert — `batch_calls ==
+   []` in every one), and the final reviewer. The property holds structurally too: there is exactly
+   one `dns.records.batch` call site in 1560 lines.
+
+3. **Was each of the three environment pins mutation-tested independently?**
+
+   Yes — and the first attempt was a **dead instrument**, which is the substantive answer. Task 3
+   shipped attribute-state assertions (`client._custom_headers == {}` asserted immediately after the
+   line that assigns it). The reviewer simulated the SDK refactor `build_client`'s docstring warns
+   about and showed **all four assertions green while `x-auth-email: attacker@evil.example` reached
+   the wire**. The replacement asserts a real built request; each pin was then reddened
+   independently, twice more in later rounds. The email+key branch was wire-asserted only in the
+   final fix wave (finding M7).
+
+4. **Does `exit_code_for` have a test per row of §8, each with a distinct tally?**
+
+   Yes, verified by the Task 6 reviewer running a mutation per return value and by the final
+   reviewer. The `unknown`-only row exists and is distinct. Note §8 grew a row *during*
+   implementation: `unverified` (§8.1), added after Task 8's implementer escalated a contradiction
+   between R6.3 and the old `changed` formula — a lone verification mismatch produced `{failed: 1}`,
+   `changed == 0`, and **exit 2, the code meaning "nothing was changed", for a batch that had
+   returned 200 and therefore committed.** `failed` was carrying two opposite meanings.
+
+5. **Did the live canary confirm or refute the stale-delete-id assumption (§9.4)?**
+
+   **Unanswered — blocked on STOP 2, which has not been unlocked.** §15 items 7–13 are unrun. The
+   assumption stands as written, with R6's post-apply verification as the actual guard. This is the
+   one place the design still rests on an unverified claim, and it is disclosed rather than closed.
+
+6. **Is the script free of any DNS resolution (§20)?**
+
+   Yes. `git grep -n "dns\.\|resolve("` returns three matches, all prose: two docstring references
+   to the sibling `find-platform-domains-dns` and one `# Path.resolve() follows symlinks` comment.
+   No resolver import, no lookup. The script's only network peer is the Cloudflare API.
+
+7. **Line count, and did "copy, don't modularize" start costing more than it saves?**
+
+   `apply-platform-domains-cloudflare` is **1560** lines with 53 top-level defs/classes; its test
+   file is **2449** lines / 164 tests. For scale, the sibling it copies from is **1620** lines. So
+   the third copy did not make the rule more expensive than it already was — the shared surface is
+   eight small helpers (§17), each verified byte-identical in behavior by the final reviewer, and
+   deletion stays `git rm` of two files plus four textual edits. **Recorded, not acted on, per the
+   question's own instruction.** The one real cost is that an SDK upgrade now has three pin sites to
+   re-verify instead of two; `CLAUDE.md` says so explicitly.
+
+8. **Did any test in the two sibling test files change?**
+
+   No. `git diff --stat 33b2ba8..HEAD` over `find-platform-domains-dns`,
+   `find-platform-domains-cloudflare` and both their test files is **empty** — byte-identical across
+   all 37 commits, checked at every task boundary and again at merge.
+
+### Closing audit questions (original list, for reference)
 
 1. Was every new test observed failing for the **right reason** before its implementation existed?
    Which ones were not, and why — quoted from the task reports, not summarized?
