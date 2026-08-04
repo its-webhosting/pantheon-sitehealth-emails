@@ -119,7 +119,7 @@
   </tbody>
   </table>
   </div>
-  <p>ITS will make these changes for you during an upcoming maintenance, which we will schedule and announce.  If you would rather make the changes yourself before then, you are welcome to.</p>
+  <p><a href="https://status.its.umich.edu/report.php?id=163776">ITS will make these changes for you at 6 am Wednesday, August 5</a>.  If you would rather make the changes yourself before then, you are welcome to.</p>
   '''
 # ---
 # name: test_notice_message_and_text_snapshot[umich-before-cutoff].1
@@ -151,9 +151,9 @@
     unresolvable.example.org  (change it in DNS)
         unavailable -- please contact us
   
-  ITS will make these changes for you during an upcoming maintenance, which we
-  will schedule and announce.  If you would rather make the changes yourself
-  before then, you are welcome to.
+  ITS will make these changes for you at 6 am Wednesday, August 5
+  <https://status.its.umich.edu/report.php?id=163776>.  If you would rather
+  make the changes yourself before then, you are welcome to.
   
   '''
 # ---

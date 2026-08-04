@@ -19,9 +19,10 @@ independent booleans -- umich (terminology) x before_cutoff (who does the work).
 states ONLY what the owner must change; it deliberately does not explain Pantheon's migration,
 Orange-to-Orange, or Pantheon-versus-our-Cloudflare.
 
-Every hostname and address here is remotely derived -> html.escape on every text node.  The one
-href is the constant DOCS_URL, so sc.escape_url is not needed; if a per-domain link is ever added
-it MUST go through sc.escape_url (the check/dns/notices.py convention).
+Every hostname and address here is remotely derived -> html.escape on every text node.  Both
+hrefs are the constants DOCS_URL and MAINTENANCE_URL, so sc.escape_url is not needed; if a
+per-domain link is ever added it MUST go through sc.escape_url (the check/dns/notices.py
+convention).
 
 The HTML table reuses the markup the core's existing notices use (pantheon-sitehealth-emails
 :2521), so it inherits email_template.html's mobile-stacking styles and survives the Emogrifier +
@@ -62,15 +63,17 @@ INTRO_TEXT = (
     # and a legacy-GCDN name is long enough to blow past that on the same line.
     "These domains for {site} still use a CNAME record pointing at\n{targets}:")
 
+MAINTENANCE_URL = "https://status.its.umich.edu/report.php?id=163776"
+
 MAINTENANCE_HTML = (
-    "<p>ITS will make these changes for you during an upcoming maintenance, which we will "
-    "schedule and announce.  If you would rather make the changes yourself before then, you "
+    '<p><a href="{maintenance}">ITS will make these changes for you at 6 am Wednesday, '
+    "August 5</a>.  If you would rather make the changes yourself before then, you "
     "are welcome to.</p>")
 
 MAINTENANCE_TEXT = (
-    "ITS will make these changes for you during an upcoming maintenance, which we\n"
-    "will schedule and announce.  If you would rather make the changes yourself\n"
-    "before then, you are welcome to.")
+    "ITS will make these changes for you at 6 am Wednesday, August 5\n"
+    "<{maintenance}>.  If you would rather\n"
+    "make the changes yourself before then, you are welcome to.")
 
 # "the records shown", not "the A and AAAA records shown": a site Pantheon has ALREADY migrated
 # answers domain:dns with a CNAME and no A/AAAA (F14), so its row shows a CNAME.  Naming the record
@@ -200,8 +203,9 @@ def cdn_change_notice(
         f"{_records_text(f, umich=umich)}"
         for f in findings)
 
-    closing_html = MAINTENANCE_HTML if (umich and before_cutoff) else SELF_SERVE_HTML
-    closing_text = MAINTENANCE_TEXT if (umich and before_cutoff) else SELF_SERVE_TEXT
+    maintenance = umich and before_cutoff
+    closing_html = MAINTENANCE_HTML.format(maintenance=MAINTENANCE_URL) if maintenance else SELF_SERVE_HTML
+    closing_text = MAINTENANCE_TEXT.format(maintenance=MAINTENANCE_URL) if maintenance else SELF_SERVE_TEXT
 
     message = (
         f"{INTRO_HTML.format(docs=DOCS_URL, site=site, targets=_target_phrase(findings, escape=True))}\n"
