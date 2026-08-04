@@ -514,7 +514,8 @@ before any stream guard exists and outside every handler, so `--help >/dev/full`
 | `PlanFileError` (subclass of `StartupError`) | the eight §6 checks | `main()` | `ERROR: …` naming the file, the FQDN key and the field | 2 |
 | `InvariantError` (subclass of `StartupError`) | an entry reaching pass 3 without a `ready` verdict; a delete id pass 1 never resolved; a `delete_match`/`posts` shape §6 should have rejected | `main()` | `ERROR: …`, named as a defect in this script's own reasoning (PD#2) | 2 |
 | `CloudflareReadError` (subclass of `StartupError`) | a record-list call in **pass 1** | `main()` | `ERROR: …` with the Cloudflare error codes | 2 |
-| `ApplyError` | a batch call that failed; a post-apply verification that did not match after one retry; **or a record-list call that failed during post-apply verification** | `main()` | `ERROR: …` naming the FQDN and the Cloudflare error codes | 2 or 3 per §8.1 |
+| `ApplyError` | a batch call the API **rejected** — one transaction, so nothing committed for that entry | `main()` | `ERROR: …` naming the FQDN and the Cloudflare error codes | outcome `failed`; 2 or 3 per §8.1 |
+| `VerifyError` (subclass of `ApplyError`) | the batch **returned**, but the post-apply verification did not match after §R6.2's retry, **or** the verification record-list call itself failed | `main()` | `ERROR: …` naming the FQDN and what Cloudflare actually holds | outcome **`unverified`**; 3 per §8.1 |
 | `OutputWriteError` (subclass of `StartupError`) | the run record write | `main()` | `ERROR: cannot write <path>: <class>: <message>` | §9.2 |
 | `KeyboardInterrupt` | anywhere | `main()` | the summary, then the interrupt notice | 130 |
 | `OSError` | report/record writes | `main()` | `ERROR: …` | 2 |
@@ -664,7 +665,7 @@ apply-platform-domains-cloudflare: direction=plan
   source: platform-domains-cloudflare-plan.json (generated 2026-08-01T00:22:23Z)
   mode:   DRY RUN -- no changes were made
   entries in file: 217   selected: 217   (entries are FQDNs, not Pantheon sites)
-  applied 0   already applied 0   planned 217   failed 0   unknown 0   not attempted 0
+  applied 0   already applied 0   planned 217   failed 0   unverified 0   unknown 0   not attempted 0
   record: platform-domains-cloudflare-plan-run-20260803T142211Z.json
 ```
 
@@ -799,6 +800,7 @@ can still fire: it hooks the SDK's transport, so a transport change would otherw
 | `outcome_document(...)` | the §12.2 document |
 | `outcome_path(input_path, at)` | the §12.1 path |
 | `summary_lines(tally, ...)` | the §11.3 block |
+| `changed_count(counts)` | §8.1's `changed` — `applied + unverified + unknown`. **One definition**, called by both `exit_code_for` and `summary_lines`, which each computed it separately until the Task 8 review |
 | `exit_code_for(tally, failed)` | §8's code, from the tally alone |
 
 `apply_entry(client, fqdn, entry, delete_ids)` and `records_at_name(client, zone_id, fqdn)` are
