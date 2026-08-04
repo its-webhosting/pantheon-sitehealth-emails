@@ -152,9 +152,10 @@ an unwritable destination is caught at second zero, not after the ~2-minute swee
 
 Only the inventory exists in stdout mode — resolution, classification and exclusion still run in
 both modes, so the inventory is byte-identical between them and only its destination differs.
-**This utility NEVER calls the Cloudflare API to write anything**: a separate, not-yet-written
-*applier* script is meant to read a plan or revert file and perform the actual batch calls
-(SPEC §5.4 is its normative contract).
+**This utility NEVER calls the Cloudflare API to write anything**: `apply-platform-domains-
+cloudflare` (below) is the applier that reads a plan or revert file and performs the actual batch
+calls (SPEC §5.4 is its normative contract, superseded in one respect by the applier's own SPEC
+R4 — see that subsection).
 
 **Two traps when comparing the inventory to `fqdns.json`:** that file keys by the **raw**
 `record.name` (normalize both sides, or you invent phantom entries), and its `origins` means
@@ -243,8 +244,12 @@ four routes, by the same mechanism, as the main program's `pinned_client()` — 
 auth + shared client** under *Architecture* for the one full description of what those routes are
 and why the pin is load-bearing. This is a **second, independent copy** of that pin (the utility
 imports nothing from `plugin/`, so it can be deleted with `git rm`), and both are measured against
-cloudflare 5.4.0 while `pyproject` declares the dependency unpinned — so an SDK upgrade has **two**
-places to check, each with its own real-built-request test.
+cloudflare 5.4.0 while `pyproject` declares the dependency unpinned — so an SDK upgrade has
+**three** places to check (the main program's `pinned_client()`, this utility's `build_client()`,
+and `apply-platform-domains-cloudflare`'s own copy, below), each with its own real-built-request
+test. **This third copy is the only one of the three that performs writes** — an upgrade that
+silently breaks the pin here is a credential-disclosure-plus-rewrite risk, not just a
+disclosure risk (see that subsection's Security note).
 
 ```bash
 # refresh the org-wide baseline (~2 minutes) -- do this immediately before any rewrite.
@@ -271,6 +276,131 @@ CodeGraph key off the `.py` extension and would otherwise be blind to the extens
 file. **Delete this script after Pantheon's CDN migration** — checklist in
 `development/2026-07-30-platform-domain-util2/SPEC.md` §11 (amended, glob only, by
 `development/2026-07-31-platform-domain-util3/SPEC.md` §13).
+
+### `apply-platform-domains-cloudflare` (temporary utility)
+
+A standalone, deletable script — **not** part of the main program and importing nothing from
+`psh/`/`check/`/`plugin/` — that reads the **one** plan-or-revert file
+`find-platform-domains-cloudflare` writes and performs the Cloudflare DNS batch calls it
+describes, or — by default — reports exactly what it would do and changes nothing. It is the
+**applier** whose contract was written but not implemented as §5.4 of
+`development/2026-07-31-platform-domain-util3/SPEC.md` (that section's per-entry tolerance is now
+**superseded** — see below). Full spec: `development/2026-08-03-platform-domain-util4/SPEC.md`.
+
+**It takes exactly one file: a `<basename>-plan.json` or `<basename>-revert.json`.** Not the
+inventory (`<basename>.json` — this script never reads it, only the sibling writes it), not both
+directions, not a config-driven set. An `-excluded.json` is **refused by name**: it carries no
+`body` at all (`generated.direction` is `"excluded"`, not `"plan"`/`"revert"`), and the file
+contract's check 2 names that explicitly rather than failing on a missing key several checks
+later.
+
+**Three passes, strictly ordered, no interleaving: validate → report → apply.** Pass 1 lists each
+selected entry's live Cloudflare records (read-only) and classifies it into one of six verdicts
+(below). If **any** selected entry is invalid, the run reports every invalid one and exits 2
+having written nothing — **the whole file**, not just the bad entries. Pass 2 (the report) runs
+**identically in both modes**, from the same data pass 1 produced, so a dry run is a rehearsal of
+the real run rather than a second implementation of it — any divergence between what a dry run
+prints and what `--for-real` does would be a first-order defect in a destructive tool. Pass 3
+(apply) runs only with `--for-real`, processes entries in the file's own sorted key order, and
+stops at the **first** failure — it never reverts what it already applied and never continues past
+a failure to the remaining entries. This is the **all-or-nothing property**: a run either passes
+validation entirely and then applies, or fails validation and touches nothing at all.
+
+**Six verdicts; two are valid.** `ready` (records match what's meant to be deleted — applied in
+pass 3) and `already-applied` (records already match the target state — skipped, reported, and
+counted, contributing to exit 1) are valid. `record-ambiguous`, `partially-applied`,
+`unexpected-records` and `records-missing` are invalid and abort the whole run. This is a
+**deliberate narrowing** of util3 SPEC §5.4's original applier contract, on `PROMPT.md`'s explicit
+instruction: §5.4 said a zero-match `delete_match` should be *skipped and reported*, and a
+multi-match one *refused and reported*, with the rest of the file still applied — per-entry
+tolerance. Here a zero-match entry is skipped **only** when it is affirmatively `already-applied`
+(records equal what would be posted, never merely inferred from what's missing); every other
+invalid state, including the multi-match case, aborts the **entire** run before anything is
+written. Without the `already-applied` carve-out a run that died at entry 12 of 217 could never be
+safely re-run — re-running the same file to finish an interrupted job, and applying a file that is
+already fully applied, are both meant to be safe, cheap, and call zero Cloudflare write endpoints.
+
+**The exit taxonomy adds a code the siblings don't have.** Both siblings use `0 / 1 / 2 / 130`;
+this script adds **3**: `0` completed clean (or a dry run that validated clean), `1` completed
+with ≥1 `already-applied` skip, `2` could not complete and **nothing in Cloudflare was changed**,
+`3` **failed mid-apply and Cloudflare was left partially changed**, `130` interrupted. The new code
+exists because folding a half-finished rewrite into `2` would make it indistinguishable, to an
+operator's `case $?`, from a clean refusal that touched nothing — after a destructive run the
+first question is "did it change anything?", and `2` is a promise this script makes about
+production DNS, not a generic failure bucket. `changed_count()` (one shared helper, read by both
+`exit_code_for` and the summary's `mode:` line) counts an entry as changed when its outcome is
+`applied`, `unverified` **or** `unknown` — every state where Cloudflare may or does hold a change
+— and `failed` is deliberately excluded from it, because a batch is one transaction and a rejected
+call commits nothing. No failure path — not a validation abort, not an `InvariantError` from this
+script's own reasoning, not the `except BaseException` last line of defence — may report `2` once
+anything has actually changed; every one of them is routed through `changed_count()` first. Same
+documented exception as both siblings: argparse's own `--help`/usage-error text is written before
+any stream guard exists and outside every handler, so `--help >/dev/full` and
+`--bogus 2>/dev/full` still exit **120**.
+
+There are **seven outcomes**, not six — `outcome` (what happened to one entry this run) is a
+different axis from `verdict` (what pass 1 decided about it): `applied`, `already-applied`,
+`planned` (the dry-run stand-in for `applied`), `failed` (the batch was rejected — nothing
+committed), `unverified` (the batch **returned**, so Cloudflare committed, but the post-apply
+re-list didn't confirm it after one 2-second retry, or the re-list itself failed), `unknown` (the
+call didn't complete at all — dropped connection, timeout, or a Ctrl-C mid-call — so whether it
+committed isn't known), and `not-attempted` (never reached, because an earlier entry failed).
+`unverified` and `unknown` both count toward `changed_count()`; `failed` does not. A `VerifyError`
+(subclass of `ApplyError`) is what pass 3 raises on a surviving verification mismatch or a failed
+verification read — it is what produces the `unverified` outcome and exit 3, never `failed`/exit
+2, because the write already happened.
+
+**`--for-real` is the blast-radius gate**, same role as the main program's own `--for-real`
+(without it, mail goes to the operator, not to owners) — here, without it, no batch call is ever
+made at all (asserted against the fake client's recorded calls, not inferred; neither sibling
+needs an equivalent, since neither ever writes to Cloudflare). **`--only FQDN` is repeatable
+(`action="append"`),
+deliberately NOT `nargs="+"`**: with one positional `FILE` and a variadic `--only`,
+`--only a b file.json` would silently swallow the filename into the option — the same
+positional-vs-variadic ambiguity the Cloudflare sibling's `ZONE` arguments avoid by going *after*
+the flags. A repeatable single-value option has no such ambiguity, at the cost of typing `--only`
+twice. Explicit over clever. An `--only` name matching no key in the file is fatal (exit 2) and
+every miss is named, same reasoning as the sibling's unmatched `ZONE` names — a typo that silently
+narrows a destructive run is the under-reporting failure this script family refuses to have.
+Unselected entries are never validated and never counted as anything but "in the file" — validating
+an entry the run won't touch would let an unrelated FQDN's drift abort a deliberately narrow run.
+
+**The run record is written on every exit path, dry runs included** —
+`<input-stem>-run-<YYYYMMDDThhmmssZ>.json`, beside the input file, named `-run-` and not
+`-applied-` for exactly that reason. It carries `for_real: false` on a dry run, because a dry run
+*is* the validation report and the thing an operator attaches to a change ticket before the
+change. A run-record write failure is reported on stderr but does not, by itself, downgrade an
+earned exit code back to 2 once something was actually changed (same PD#1 reasoning as the exit
+taxonomy above) — it only forces exit 2 when the run had changed nothing anyway. **One documented
+exception, shared with the summary block:** argparse's `--help` and usage-error exits happen
+inside `parse_args`, before `options.file` even exists, so neither the summary nor the run record
+is produced on those two paths — structurally, not as an oversight.
+
+**This is the third appearance, in this script family, of the exit-120 stream-guard class.** Both
+siblings' subsections above record it once each (`find-platform-domains-dns`'s `report_line`;
+`find-platform-domains-cloudflare`'s `write_json_stdout`): CPython's shutdown flush covers **both**
+standard streams and turns a failure of *either* into exit 120, silently overriding whatever
+`main()` returned, unless the doomed stream is detached **before** interpreter shutdown — never
+unconditionally, which would discard a buffered line and, under pytest's fd-level capture, repoint
+the session's own stream at `/dev/null`. This script's `write_report()` is the stdout counterpart
+to its `report_line()`. **An in-process test cannot pin this at all** — pytest never tears the
+interpreter down, so the shutdown flush this guards against never runs in-process, and a test that
+only calls the function directly would stay green even if the guard were deleted. The cover is a
+real subprocess test (`test_a_doomed_stdout_exits_2_not_120_in_a_real_subprocess`, copying the
+pattern already in `tests/unit/test_find_platform_domains_cloudflare.py`) redirecting stdout at
+`/dev/full` — never `subprocess.DEVNULL`, which accepts every write and would prove nothing.
+
+Also **the only one of the family's three independent `build_client()`/environment-pin copies that
+performs writes** (see the "three places to check" note in the `find-platform-domains-cloudflare`
+subsection above) — an SDK upgrade that silently breaks the pin here is a
+credential-disclosure-**plus**-rewrite-aimed-at-an-attacker-chosen-host risk, not just a
+disclosure risk, because `$CLOUDFLARE_BASE_URL` redirects every request including the batch calls.
+
+`apply-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
+as its siblings: ruff, pyright, and CodeGraph key off the `.py` extension. **Delete this script
+after Pantheon's CDN migration** — checklist in
+`development/2026-07-30-platform-domain-util2/SPEC.md` §11 (this script's six-item delta is §11
+item 9, added by `development/2026-08-03-platform-domain-util4/SPEC.md` §19).
 
 ## Required runtime credentials / external tools
 

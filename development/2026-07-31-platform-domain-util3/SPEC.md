@@ -445,6 +445,18 @@ this increment).** For each entry:
 4. Build `body["deletes"] = [{"id": …}, …]` from the ids found, keeping `body["posts"]` as-is.
 5. `POST` the merged body to `path`.
 
+**Superseded note (added by `apply-platform-domains-cloudflare`, 2026-08-03).** Step 3's
+per-entry tolerance — a zero-match entry is skipped and reported, a multi-match entry is refused
+and reported, and the rest of the file still applies — is **superseded** by
+`development/2026-08-03-platform-domain-util4/SPEC.md` R4, on that increment's `PROMPT.md`'s
+explicit instruction. R4 replaces "skip and report, keep going" with all-or-nothing: a zero-match
+entry is skipped **only** when it is affirmatively `already-applied` (R == P, not merely D
+absent); every other zero-match state, and every multi-match state, aborts the **whole run**
+before anything is written. *Why:* per-entry tolerance means a file that is half-stale gets
+half-applied, and the operator discovers which half only afterwards — a run that died at entry 12
+of 217 could otherwise never be safely re-run at all. This paragraph is left in place as the
+historical record of what was originally specified; the implemented behavior is util4 R4.
+
 Cloudflare's documented execution order is Deletes → Patches → Puts → Posts inside one database
 transaction, which is what keeps the name from ever being record-less: *"Although Cloudflare will
 execute the batched operations in a single database transaction, Cloudflare's distributed KV

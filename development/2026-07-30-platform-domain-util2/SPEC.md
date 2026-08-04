@@ -2472,6 +2472,10 @@ Recorded with the reasoning so a later session does not re-litigate them.
 > **Superseded in part by `development/2026-07-31-platform-domain-util3/SPEC.md` §13** — that
 > increment adds the plan/revert/excluded files. The checklist below is still the canonical one;
 > only item 6's glob changed.
+>
+> **Extended by `development/2026-08-03-platform-domain-util4/SPEC.md` §19** — that increment adds
+> `apply-platform-domains-cloudflare`, the applier. This checklist is still the canonical one; its
+> six-item delta is item 9 below.
 
 1. `git rm find-platform-domains-cloudflare find-platform-domains-cloudflare.py`
 2. `git rm tests/unit/test_find_platform_domains_cloudflare.py`
@@ -2484,6 +2488,22 @@ Recorded with the reasoning so a later session does not re-litigate them.
 8. Delete any leftover `platform-domains-cloudflare*.json` from working checkouts — the glob
    matters: the util3 increment made this **four** files (the inventory plus `-plan`, `-revert`
    and `-excluded`), and item 6's `.gitignore` entry was globbed for the same reason.
+9. **This script's share, added by `development/2026-08-03-platform-domain-util4/SPEC.md` §19**
+   (six items — do these alongside 1–8, not instead of them):
+   1. `git rm apply-platform-domains-cloudflare apply-platform-domains-cloudflare.py`
+   2. `git rm tests/unit/test_apply_platform_domains_cloudflare.py`
+   3. `pyproject.toml`: remove the **two** `[tool.ruff.lint.per-file-ignores]` entries for
+      `apply-platform-domains-cloudflare.py` and its extension-less twin, plus the
+      `[tool.pyright].include` entry.
+   4. `.claude/hooks/ruff-check.sh`: remove the `"$REPO_ROOT/apply-platform-domains-cloudflare"`
+      case arm.
+   5. `CLAUDE.md`: remove the `### apply-platform-domains-cloudflare (temporary utility)`
+      subsection, and revert "three places to check on a Cloudflare SDK upgrade" to "two" — all
+      three scripts in this family go together, so by the time this item applies the other two
+      will already be gone too.
+   6. **No new `.gitignore` change is needed** for this script: `/platform-domains-cloudflare*.json`
+      (item 6 above) already covers the `-run-<timestamp>.json` records this script writes beside
+      the conventional baseline.
 
 This folder stays — it is the historical record.
 

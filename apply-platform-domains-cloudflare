@@ -2,24 +2,48 @@
 """Apply a plan or revert file produced by find-platform-domains-cloudflare.
 
 TEMPORARY.  Delete after Pantheon's CDN migration -- checklist in
-development/2026-07-30-platform-domain-util2/SPEC.md section 11, this script's share in
+development/2026-07-30-platform-domain-util2/SPEC.md section 11, this script's share (six items,
+including reverting CLAUDE.md's "three places to check" back to "two") in
 development/2026-08-03-platform-domain-util4/SPEC.md section 19.
 
-Reads ONE file, in three passes:
+Reads exactly ONE file -- a plan or a revert, never the inventory, never both directions -- in
+three strictly-ordered passes:
 
     parse + file contract  ->  PASS 1 validate (read-only)  ->  PASS 2 report  ->  PASS 3 apply
 
-Pass 3 runs only with --for-real.  If ANY selected entry fails validation, the run reports every
-failure and exits 2 having written nothing.  Pass 3 never re-decides anything pass 1 decided, so
-the dry run is a rehearsal of the real run rather than a parallel implementation of it.
+Pass 1 classifies every selected entry into one of six verdicts (ready / already-applied are
+valid; record-ambiguous / partially-applied / unexpected-records / records-missing are not).  If
+ANY selected entry is invalid, the run reports every one of them and exits 2 having written
+nothing -- the WHOLE file, not just the bad entries (a deliberate narrowing of util3 SPEC section
+5.4's original per-entry-tolerant contract; see section R4 of this script's own SPEC for why).
+Pass 2 (the report) runs IDENTICALLY in both modes, from the same data pass 1 produced, so a dry
+run is a rehearsal of the real run rather than a parallel implementation of it.  Pass 3 runs only
+with --for-real, applies entries in the file's own sorted key order, and stops at the first
+failure: it never reverts what it already applied and never continues to the rest of the file.
+Every entry's outcome -- applied / already-applied / planned / failed / unverified / unknown /
+not-attempted, seven in all -- is reported and written to a run record
+(<input-stem>-run-<timestamp>.json, beside the input file) on EVERY exit path, dry runs included.
 
 Standalone by design: it imports nothing from psh/, check/, plugin/ or script_context, so
-deletion stays `git rm` of this file and its .py symlink.  Code copied rather than imported is
-inventoried in development/2026-08-03-platform-domain-util4/SPEC.md section 17.
+deletion stays `git rm` of this file, its .py symlink and its test file.  The doomed-stream
+guards, the exception spine, the <{env ...}>/<{secret env ...}> resolver, build_client()'s
+environment pin, api_error_text() and normalize() are COPIES of find-platform-domains-cloudflare
+-- prefer copying code written for that script over importing or modularizing it, so this script
+stays deletable as two files plus a handful of textual edits elsewhere.  This is the only one of
+the family's three independent build_client() copies that actually performs writes, which is why
+its own real-built-request test (SPEC section 14 group 13) is not optional.  The full copied-code
+inventory, with what was deliberately NOT copied (whole-zone pagination, DNS resolution -- this
+script does neither), is development/2026-08-03-platform-domain-util4/SPEC.md section 17.
 
 Exit codes: 0 = everything applied (or a dry run that validated clean), 1 = completed with
 already-applied skips, 2 = could not complete and NOTHING was changed, 3 = failed mid-apply and
-Cloudflare was left PARTIALLY CHANGED, 130 = interrupted.
+Cloudflare was left PARTIALLY CHANGED, 130 = interrupted.  The two siblings use only 0/1/2/130;
+this script adds 3 because folding a half-finished rewrite into 2 would make it indistinguishable
+from a clean refusal that touched nothing (changed_count() is the one shared rule that keeps every
+failure path honest about this).  Same documented exception as both siblings: argparse's own
+--help/usage-error text is written before any stream guard exists, so `--help >/dev/full` and
+`--bogus 2>/dev/full` still exit 120 -- and on that same path, before options.file exists, neither
+the summary nor the run record is written at all.
 """
 import argparse
 import contextlib
