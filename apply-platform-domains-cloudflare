@@ -1023,7 +1023,10 @@ def apply_all(client, entries, validations, outcomes, details):
     caller still constructs them as `dict.fromkeys(entries, "not-attempted")` / `{}`, exactly what
     this function built internally before; only who OWNS the object changed.  The `except
     KeyboardInterrupt` arm below is the other half: it marks the in-flight entry before re-raising,
-    so a Ctrl-C mid-batch-call or mid-verification-retry is never silently lost.
+    so a Ctrl-C mid-batch-call or mid-verification-retry is never silently lost.  This function
+    returns NOTHING (Task 8 re-review, minor 8): every caller already holds `outcomes`/`details` by
+    reference, so a `return outcomes, details` alongside "mutated in place" was a second,
+    unnecessary way to read the same state, and `main()` never used the value it stood for.
 
     Dropped the `verbose` keyword this function took at Task 8's first pass: SPEC 11.2's message
     table has no pass-3-only `-v` line -- the `POST <path>` + exact body row belongs entirely to
@@ -1087,26 +1090,32 @@ def apply_all(client, entries, validations, outcomes, details):
             report_line(
                 f"ERROR: {fqdn}: {reason}, so whether Cloudflare applied it is UNKNOWN.  Check "
                 "this FQDN by hand before re-running.")
-            return outcomes, details
+            return
         except VerifyError as e:
             # Listed BEFORE the plain ApplyError clause: VerifyError IS an ApplyError (SPEC 8.1),
             # and the broader clause below would otherwise catch it first and record `failed`,
-            # collapsing "committed but unconfirmed" into "nothing committed".
+            # collapsing "committed but unconfirmed" into "nothing committed".  `reason` strips the
+            # `apply_entry`-added "<fqdn>: " prefix for the stdout result line and the run-record
+            # detail (Task 8 re-review, minor 6: without this, the result line read the FQDN
+            # twice -- once as the line's own leading column, once again inside `str(e)`); stderr
+            # keeps the FULL `str(e)`, fqdn prefix included, since it is not printed beside a
+            # per-entry column.
+            reason = str(e).removeprefix(f"{fqdn}: ")
             outcomes[fqdn] = "unverified"
-            details[fqdn] = {"error": str(e), "deleted_ids": validation.delete_ids}
-            write_report(f"{fqdn}  UNVERIFIED -- {e}")
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids}
+            write_report(f"{fqdn}  UNVERIFIED -- {reason}")
             report_line(f"ERROR: {e}")
-            return outcomes, details
+            return
         except ApplyError as e:
+            reason = str(e).removeprefix(f"{fqdn}: ")  # see the VerifyError arm above
             outcomes[fqdn] = "failed"
-            details[fqdn] = {"error": str(e), "deleted_ids": validation.delete_ids}
-            write_report(f"{fqdn}  FAILED -- {e}")
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids}
+            write_report(f"{fqdn}  FAILED -- {reason}")
             report_line(f"ERROR: {e}")
-            return outcomes, details
+            return
         outcomes[fqdn] = "applied"
         details[fqdn] = {"deleted_ids": validation.delete_ids, "created_ids": created}
         write_report(f"{fqdn}  applied")
-    return outcomes, details
 
 
 def render_records(items):

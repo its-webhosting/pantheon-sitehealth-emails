@@ -1493,10 +1493,16 @@ def test_apply_entry_raises_apply_error_not_verify_error_on_a_batch_rejection(ap
 
 
 def three_entry_doc():
+    """Task 8 re-review, Important 2: each entry carries a DISTINCT `zone_id`
+    ("zone-a"/"zone-b"/"zone-c") rather than the three sharing "zone-a" -- Critical 1's fix closed
+    the class for `deletes` (distinct ids in `three_entry_rows`) but left it open for `zone_id`:
+    a full `batch_calls ==` assertion built from entries that all share one zone cannot tell "this
+    entry's zone" from "any entry's zone", and a wrong `zone_id` also silently steers the
+    post-apply verification read at a DIFFERENT zone than the one just written to."""
     return plan_doc(entries={
-        "a.umich.edu": plan_entry(fqdn="a.umich.edu"),
-        "b.umich.edu": plan_entry(fqdn="b.umich.edu"),
-        "c.umich.edu": plan_entry(fqdn="c.umich.edu"),
+        "a.umich.edu": plan_entry(zone_id="zone-a", fqdn="a.umich.edu"),
+        "b.umich.edu": plan_entry(zone_id="zone-b", fqdn="b.umich.edu"),
+        "c.umich.edu": plan_entry(zone_id="zone-c", fqdn="c.umich.edu"),
     })
 
 
@@ -1509,13 +1515,19 @@ def three_entry_rows(applied=()):
     (Task 8 review): with every entry resolving the SAME delete id, `apply_all` could hand
     `apply_entry` a wrong -- even a hardcoded literal -- id and the whole suite stayed green,
     because nothing distinguished "the id THIS entry resolved" from "the id ANY entry resolved".
+
+    The `applied` branch re-ids `address_rows()` rather than hardcoding "23.185.0.4"/
+    "2620:12a:8000::4" a second time (Task 8 re-review, minor 7): `plan_entry()`'s own posts come
+    from that SAME default, and a hand-maintained second copy of those two literals would silently
+    stop meaning "already applied" the moment either drifted from the other -- the verdict compares
+    against the entry's actual posts, not against this fixture's literals.
     """
     rows = {}
     for name in ("a.umich.edu", "b.umich.edu", "c.umich.edu"):
         letter = name[0]
         if name in applied:
-            base = [row("A", name, "23.185.0.4", f"rec-{letter}-a"),
-                   row("AAAA", name, "2620:12a:8000::4", f"rec-{letter}-aaaa")]
+            base = [row(r.type, name, r.content, f"rec-{letter}-{r.type.lower()}")
+                   for r in address_rows()]
         else:
             base = [row("CNAME", name, "live-umich-x.pantheonsite.io", f"rec-{letter}-cname")]
         rows[name] = [base]
@@ -1529,7 +1541,16 @@ def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
 
     Minor 10 (Task 8 review): `"applied 1" in out` also matches `already applied 1` -- harmless
     today only because this fixture's already-applied count happens to be 0.  Asserting the WHOLE
-    counts line is what makes the check actually pin the shape rather than get lucky."""
+    counts line is what makes the check actually pin the shape rather than get lucky.
+
+    Important 1 (Task 8 re-review): the `FAILED` result line was the ONE of SPEC 11.2's four
+    result-line shapes with no cover at all -- `write_report(f"{fqdn}  FAILED -- {e}")` could be
+    reduced to `write_report(f"{fqdn}  FAILED")`, or the whole `report_line(f"ERROR: {e}")` call
+    deleted, with 135/135 still green, exactly the "a log recording that an entry failed and never
+    why... is not an account of anything" gap `f6639ad`'s ruling exists to close.  The reason is
+    asserted on BOTH streams here.  It appears ONCE, not twice, in the stdout line (minor 6: `str(e)`
+    already begins "b.umich.edu: ...", and `apply_all` strips that redundant prefix before printing
+    the result line -- see the `except ApplyError`/`except VerifyError` arms)."""
     path = write_doc(tmp_path, three_entry_doc())
 
     class FailOnSecond(FakeCloudflareClient):
@@ -1546,11 +1567,17 @@ def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
     client = FailOnSecond(rows_by_name=rows)
     monkeypatch.setattr(apc, "sleep", lambda seconds: None)
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
-    out = capsys.readouterr().out
+    captured = capsys.readouterr()
+    out, err = captured.out, captured.err
     assert code == 3
     assert ("applied 1   already applied 0   planned 0   failed 1   unverified 0   unknown 0   "
             "not attempted 1") in out
     assert len(client.batch_calls) == 2  # stop-at-first-failure: entry c never reached
+    assert "b.umich.edu  FAILED -- batch call rejected:" in out
+    assert "81058" in out
+    assert "b.umich.edu  FAILED -- b.umich.edu:" not in out  # minor 6: no duplicated fqdn
+    assert "ERROR: b.umich.edu:" in err
+    assert "81058" in err
 
 
 def test_a_failure_on_the_first_entry_exits_two_because_nothing_committed(
@@ -1622,7 +1649,8 @@ def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
     (it committed), so the outcome is `unverified`, never `failed`, and `changed_count` must
     count it or `exit_code_for` reports exit 2 ("nothing was changed") about a write it cannot
     fully account for.  Also pins the result line's UNVERIFIED shape and the both-streams reason
-    (SPEC 11.2, ruling f6639ad)."""
+    (SPEC 11.2, ruling f6639ad) -- the reason appears ONCE, not twice, on stdout (minor 6: `str(e)`
+    already begins "a.umich.edu: ...", and `apply_all` strips that redundant prefix)."""
     path = write_doc(tmp_path, plan_doc())
     client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), []]})
     monkeypatch.setattr(apc, "sleep", lambda seconds: None)
@@ -1630,7 +1658,8 @@ def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
     captured = capsys.readouterr()
     assert code == 3
     assert "unverified 1" in captured.out
-    assert "a.umich.edu  UNVERIFIED -- a.umich.edu:" in captured.out
+    assert "a.umich.edu  UNVERIFIED -- the batch call succeeded but" in captured.out
+    assert "a.umich.edu  UNVERIFIED -- a.umich.edu:" not in captured.out  # no duplicated fqdn
     assert "ERROR: a.umich.edu:" in captured.err
 
 
@@ -1650,13 +1679,17 @@ def test_changed_count_sums_applied_unverified_and_unknown(apc):
 
 
 def test_a_clean_for_real_run_applies_every_entry_and_exits_zero(
-        apc, tmp_path, monkeypatch):
+        apc, tmp_path, monkeypatch, capsys):
     """Critical 1 (Task 8 review): asserting only `len(client.batch_calls) == 3` (as this test did
     before the fix) proves `apply_entry` was called three times, never that it was called with the
     id PASS 1 actually resolved for THAT entry -- mutating `apply_all`'s call site to
     `apply_entry(client, fqdn, entry, ["WRONG-ID"])` left the whole suite green.  `three_entry_rows`
-    now gives each FQDN a distinct delete id, so asserting the full `batch_calls` list (matched per
-    entry against the file's own `zone_id`/`deletes`/`posts`) actually catches a cross-wired id."""
+    now gives each FQDN a distinct delete id, and `three_entry_doc` a distinct `zone_id` (Important
+    2, Task 8 re-review: Critical 1's fix closed the class for `deletes` but left it open for
+    `zone_id`, which every fixture still shared), so asserting the full `batch_calls` list (matched
+    per entry against the file's own `zone_id`/`deletes`/`posts`) actually catches a cross-wired id
+    OR a cross-wired zone.  Also asserts the `applied` result line (Important 1): the only one of
+    SPEC 11.2's four result-line shapes with no cover at all before this."""
     doc = three_entry_doc()
     path = write_doc(tmp_path, doc)
     rows = three_entry_rows()
@@ -1667,13 +1700,14 @@ def test_a_clean_for_real_run_applies_every_entry_and_exits_zero(
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
     assert code == 0
     assert client.batch_calls == [
-        {"zone_id": "zone-a", "deletes": [{"id": "rec-a-cname"}],
+        {"zone_id": doc["entries"]["a.umich.edu"]["zone_id"], "deletes": [{"id": "rec-a-cname"}],
          "posts": doc["entries"]["a.umich.edu"]["body"]["posts"]},
-        {"zone_id": "zone-a", "deletes": [{"id": "rec-b-cname"}],
+        {"zone_id": doc["entries"]["b.umich.edu"]["zone_id"], "deletes": [{"id": "rec-b-cname"}],
          "posts": doc["entries"]["b.umich.edu"]["body"]["posts"]},
-        {"zone_id": "zone-a", "deletes": [{"id": "rec-c-cname"}],
+        {"zone_id": doc["entries"]["c.umich.edu"]["zone_id"], "deletes": [{"id": "rec-c-cname"}],
          "posts": doc["entries"]["c.umich.edu"]["body"]["posts"]},
     ]
+    assert "a.umich.edu  applied" in capsys.readouterr().out
 
 
 def test_a_mixed_already_applied_and_ready_run_applies_only_the_ready_entries(
@@ -1736,17 +1770,37 @@ def test_apply_all_marks_the_in_flight_entry_unknown_on_a_keyboard_interrupt(apc
     summary+run-record write cannot honor unless the caller can still see this state AFTER the
     exception propagates.  Fixed by making the caller own `outcomes`/`details` (mutated in place,
     never returned as the only copy) and catching `KeyboardInterrupt` around the in-flight call to
-    mark it before re-raising."""
-    def boom(*args, **kwargs):
-        raise KeyboardInterrupt
-    monkeypatch.setattr(apc, "apply_entry", boom)
-    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
-    entries = {"a.umich.edu": plan_entry()}
+    mark it before re-raising.
+
+    Minor 5 (Task 8 re-review): a SINGLE-entry fixture only proves "in-flight -> unknown" -- it
+    cannot distinguish that from a bug that clobbers EVERY outcome to `unknown` on interrupt, which
+    would also pass a single-entry check.  SPEC 9.3's actual claim ("the in-flight entry unknown,
+    the REST not-attempted") needs entries on both sides of the interrupted one: three entries, the
+    interrupt lands on the second, and the assertion covers the WHOLE `outcomes` dict plus the
+    batch call the first entry actually made (proving it was not reverted, PROMPT.md/R3.4)."""
+    real_apply_entry = apc.apply_entry
+
+    def flaky(client, fqdn, entry, delete_ids):
+        if fqdn == "b.umich.edu":
+            raise KeyboardInterrupt
+        return real_apply_entry(client, fqdn, entry, delete_ids)
+
+    monkeypatch.setattr(apc, "apply_entry", flaky)
+    entries = three_entry_doc()["entries"]
+    rows = three_entry_rows()
+    rows["a.umich.edu"] = [rows["a.umich.edu"][0],
+                           [row(r.type, "a.umich.edu", r.content, r.id) for r in address_rows()]]
+    client = FakeCloudflareClient(rows_by_name=rows)
     validations = apc.validate_entries(client, entries, verbose=False)
     outcomes = dict.fromkeys(entries, "not-attempted")
     details = {}
     with pytest.raises(KeyboardInterrupt):
         apc.apply_all(client, entries, validations, outcomes, details)
-    assert outcomes["a.umich.edu"] == "unknown"
-    assert details["a.umich.edu"]["error"] == "interrupted"
+    assert outcomes == {"a.umich.edu": "applied", "b.umich.edu": "unknown",
+                        "c.umich.edu": "not-attempted"}
+    assert details["b.umich.edu"]["error"] == "interrupted"
+    assert client.batch_calls == [
+        {"zone_id": entries["a.umich.edu"]["zone_id"], "deletes": [{"id": "rec-a-cname"}],
+         "posts": entries["a.umich.edu"]["body"]["posts"]},
+    ]
 
