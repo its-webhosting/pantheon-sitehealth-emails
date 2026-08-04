@@ -107,6 +107,14 @@ def test_scrub_redacts_a_pem_private_key_block_including_its_body(fs):
     ("api_token = cf.get('api_token')", "source code referencing the field name is not a value"),
     ("the SMTP_PASSWORD variable is documented in docs/env-and-smtp-configuration.md",
      "a prose mention with no = or : separator carries no value"),
+    # 32-lowercase-hex shapes that are NOT Cloudflare ids.  A blanket \b[0-9a-f]{32}\b rule
+    # would eat all three; the id rule is anchored precisely so it does not.
+    ("md5sum b68ec92d16467c767152ac42a085acfe  transcript.md",
+     "a 32-hex md5sum with no Cloudflare anchor is content whose whole value is the exact digest"),
+    ("zone 6389e08a1b2c3d4e5f60718293a4b5c6d7e8f9a0 is not an id",
+     "40 hex is a git SHA, not a 32-hex Cloudflare id, even sitting right after `zone`"),
+    ("the zone_id column is documented in the sweep output",
+     "prose naming the field with no value carries nothing to scrub"),
 ])
 def test_scrub_leaves_readable_text_alone(fs, text, why):
     assert fs.scrub(text) == text, why
@@ -163,6 +171,116 @@ def test_scrub_never_leaves_a_token_shaped_secret_behind_an_env_var_name(secret)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     assert secret not in module.scrub(f"SMTP_PASSWORD={secret}")
+
+
+# --- scrub(): Cloudflare zone / record ids ----------------------------------------------------
+#
+# This repo is public, so a session that drove the Cloudflare utilities must not publish
+# infrastructure identifiers.  Cloudflare ids are 32 LOWERCASE hex, which is exactly the class the
+# high-entropy rule above spares on purpose (git SHAs must stay readable), so the id rule is
+# ANCHORED: only a 32-hex value in one of the six contexts actually observed in a
+# Cloudflare-touching session counts.  Expected values here are hand-derived from the placeholder
+# scheme the already-committed development/2026-08-03-platform-domain-util4/transcript.md was
+# hand-scrubbed with -- «cf-zone-id-NN» / «cf-record-id-NN», numbered from 01 per kind by first
+# appearance -- never from running the script.
+
+CF_ZONE = "1a2b3c4d5e6f708192a3b4c5d6e7f809"
+CF_ZONE2 = "00112233445566778899aabbccddeeff"
+CF_RECORD = "fedcba98765432100123456789abcdef"
+MD5SUM = "b68ec92d16467c767152ac42a085acfe"
+
+
+@pytest.mark.parametrize(("text", "placeholder", "anchor"), [
+    (f"dev.news.example.edu  zone {CF_ZONE}  CNAME x.pantheonsite.io  (proxied, ttl 1)",
+     "«cf-zone-id-01»", "the applier's per-entry report line"),
+    (f'    "zone_id": "{CF_ZONE}",', "«cf-zone-id-01»", "inventory / plan JSON"),
+    (f"    POST /zones/{CF_ZONE}/dns_records/batch", "«cf-zone-id-01»",
+     "the POST path printed by -v"),
+    (f'    "record_id": "{CF_RECORD}",', "«cf-record-id-01»", "inventory JSON"),
+    (f'            "id": "{CF_RECORD}"', "«cf-record-id-01»", "a batch `deletes` item"),
+    (f"id={CF_RECORD}", "«cf-record-id-01»", "SDK object output, print(f'id={r.id}')"),
+])
+def test_scrub_replaces_a_cloudflare_id_under_each_anchor(fs, text, placeholder, anchor):
+    """Each of the six anchors, and the zone-vs-record classification each one implies."""
+    out = fs.scrub(text)
+    assert CF_ZONE not in out, f"{anchor}: the id survived"
+    assert CF_RECORD not in out, f"{anchor}: the id survived"
+    assert placeholder in out, f"{anchor}: replaced, but not as the expected kind and number"
+
+
+def test_scrub_replaces_a_mapped_id_in_bare_prose_on_both_sides_of_its_anchor(fs):
+    """The anchor IDENTIFIES an id; once identified it must go everywhere it appears.
+
+    A single anchored re.sub leaves the prose mentions ("the record id was X, is now Y") behind,
+    which is why the rule is anchor-detect then replace-globally -- two passes.
+    """
+    text = (f"before, in prose: {CF_RECORD}\n"
+            f'        "record_id": "{CF_RECORD}"\n'
+            f"after, in prose: {CF_RECORD}\n")
+    out = fs.scrub(text)
+    assert CF_RECORD not in out
+    assert out.count("«cf-record-id-01»") == 3, "the anchored one and both prose mentions"
+
+
+def test_scrub_gives_one_id_one_placeholder_and_two_ids_two_placeholders(fs):
+    """Stability is what keeps the transcript readable as a narrative: the same id must read as
+    the same thing at line 1 and line 17,000, and two ids must never collapse into one."""
+    out = fs.scrub(f"zone {CF_ZONE}\nzone {CF_ZONE2}\nzone {CF_ZONE}\n")
+    assert out.count("«cf-zone-id-01»") == 2, "first-appearing id, twice"
+    assert out.count("«cf-zone-id-02»") == 1
+    assert "«cf-zone-id-03»" not in out, "the repeat must not take a new number"
+
+
+def test_scrub_numbers_zone_and_record_ids_on_separate_counters(fs):
+    out = fs.scrub(f'zone {CF_ZONE} then "record_id": "{CF_RECORD}"')
+    assert "«cf-zone-id-01»" in out
+    assert "«cf-record-id-01»" in out, "one counter per kind: the record is 01, not 02"
+
+
+def test_scrub_settles_an_id_matching_two_anchor_kinds_on_the_one_seen_first(fs):
+    """One id, one placeholder -- so a value reachable by both a zone and a record anchor is
+    decided by first appearance, not by whichever pattern happens to be listed first."""
+    out = fs.scrub(f'zone {CF_ZONE} ... "record_id": "{CF_ZONE}"')
+    assert CF_ZONE not in out
+    assert out.count("«cf-zone-id-01»") == 2
+    assert "cf-record-id" not in out
+
+
+def test_scrub_is_idempotent_over_cloudflare_ids(fs):
+    """finalize-session scrubs the statistics document too, which may already quote scrubbed
+    transcript text -- re-scrubbing must not renumber or chew its own markers."""
+    text = (f"zone {CF_ZONE}\n"
+            f"    POST /zones/{CF_ZONE}/dns_records/batch\n"
+            f'            "id": "{CF_RECORD}"\n'
+            f"    bare mention {CF_RECORD}\n")
+    once = fs.scrub(text)
+    assert "«cf-zone-id-01»" in once
+    assert "«cf-record-id-01»" in once
+    assert fs.scrub(once) == once
+
+
+def test_scrub_treats_a_credential_and_a_cloudflare_id_in_the_same_text(fs):
+    """The two rules must not interfere: the credential is redacted, the ids are placeholdered,
+    and the md5sum -- neither of those things -- survives both."""
+    text = ("SMTP_PASSWORD=hunter2-correct-horse\n"
+            f'    "zone_id": "{CF_ZONE}"  # zone {CF_ZONE}\n'
+            f"    md5sum {MD5SUM}\n")
+    out = fs.scrub(text)
+    assert "hunter2-correct-horse" not in out
+    assert "«REDACTED:SMTP_PASSWORD»" in out
+    assert CF_ZONE not in out
+    assert out.count("«cf-zone-id-01»") == 2
+    assert MD5SUM in out, "an md5sum is neither a credential nor an anchored id"
+
+
+def test_every_cloudflare_id_anchor_compiles_with_one_capture_group_and_a_known_kind(fs):
+    """Pass 1 reads the id from group 1 and the kind from the pair's first element; an anchor
+    added with two groups (or a typo'd kind) would fail only on the session that carried a
+    matching line, i.e. possibly never until it mattered."""
+    assert fs._CF_ID_ANCHORS, "the id scrubber must not be empty"
+    for kind, pattern in fs._CF_ID_ANCHORS:
+        assert kind in ("zone", "record"), f"unknown id kind: {kind}"
+        assert re.compile(pattern).groups == 1
 
 
 # --- load(): JSONL reading --------------------------------------------------------------------

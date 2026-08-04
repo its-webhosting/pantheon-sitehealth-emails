@@ -111,7 +111,75 @@ _SECRET_PATTERNS = [
 ]
 
 
+# --- Cloudflare infrastructure ids ------------------------------------------
+# This repo is PUBLIC, so a session that drove the Cloudflare utilities must not publish zone and
+# record ids.  Those are 32 LOWERCASE hex -- precisely the class the high-entropy rule above
+# spares ON PURPOSE (see its comment: all-lowercase hex is excluded so git SHAs stay readable).
+# So this carves a narrow, ANCHORED hole in that considered exclusion rather than overriding it:
+# a bare \b[0-9a-f]{32}\b rule would also destroy an md5sum quoted in a report -- content whose
+# whole value is being the exact digest -- and a synthetic all-zero test fixture in a code
+# snippet, both measured in a real transcript.  A 40-hex git SHA is a different length and is
+# untouched either way.
+#
+# The six anchors below are the contexts in which a 32-hex value was actually OBSERVED to be a
+# Cloudflare id; they are not generalized beyond that.
+#
+# Known and accepted: a SYNTHETIC id sitting under a real anchor inside a quoted code snippet
+# (`"record_id": "9f1c0000000000000000000000000000"`) WILL be scrubbed.  That is the correct
+# trade, not an oversight -- over-scrubbing invented data costs a little transcript fidelity,
+# while under-scrubbing a real id publishes infrastructure.
+_CF_ID_ANCHORS = [
+    # `zone 05adeb96...` -- apply-platform-domains-cloudflare's per-entry report line
+    ("zone", r"\bzone\s+([0-9a-f]{32})\b"),
+    # `"zone_id": "..."` -- inventory and plan JSON
+    ("zone", r'"zone_id"\s*:\s*"([0-9a-f]{32})"'),
+    # `/zones/<id>/dns_records/batch` -- the POST path printed by -v
+    ("zone", r"/zones/([0-9a-f]{32})\b"),
+    # `"record_id": "..."` -- inventory JSON
+    ("record", r'"record_id"\s*:\s*"([0-9a-f]{32})"'),
+    # `"id": "..."` -- a batch `deletes` item.  The leading quote is load-bearing: it is what
+    # keeps this from also matching the `"zone_id"` / `"record_id"` keys above.
+    ("record", r'"id"\s*:\s*"([0-9a-f]{32})"'),
+    # `id=<id>` -- SDK object output, e.g. print(f"id={r.id}")
+    ("record", r"\bid=([0-9a-f]{32})\b"),
+]
+_CF_ID_PLACEHOLDER = "«cf-{}-id-{:02d}»"
+
+
+def _scrub_cloudflare_ids(text):
+    """Replace Cloudflare zone/record ids with stable, numbered placeholders.
+
+    TWO passes, and the second one is the whole point: an id appears under an anchor once and
+    then in bare prose ("the record id was X, is now Y"), and a single anchored re.sub leaves
+    every prose mention behind.  Pass 1 walks the anchors in TEXT order to build
+    {id -> placeholder}, numbering from 01 per kind by first appearance -- so the same id reads
+    as the same thing at line 1 and line 17,000, which is what keeps the transcript readable as
+    a narrative.  Pass 2 replaces every occurrence of each mapped id anywhere in the text.
+
+    First-seen wins when one id matches both a zone and a record anchor.  The «…» placeholders
+    contain no 32-hex, so re-scrubbing an already-scrubbed document finds nothing and changes
+    nothing (idempotent).
+    """
+    found = []
+    for kind, pattern in _CF_ID_ANCHORS:
+        found.extend((m.start(1), kind, m.group(1)) for m in re.finditer(pattern, text))
+
+    mapping = {}
+    counters = {"zone": 0, "record": 0}
+    for _pos, kind, cf_id in sorted(found, key=lambda f: f[0]):
+        if cf_id in mapping:
+            continue
+        counters[kind] += 1
+        mapping[cf_id] = _CF_ID_PLACEHOLDER.format(kind, counters[kind])
+
+    if not mapping:
+        return text
+    return re.sub("|".join(re.escape(cf_id) for cf_id in mapping),
+                  lambda m: mapping[m.group(0)], text)
+
+
 def scrub(text):
+    text = _scrub_cloudflare_ids(text)
     for pattern, repl in _SECRET_PATTERNS:
         text = re.sub(pattern, repl, text, flags=re.DOTALL)
     return text
