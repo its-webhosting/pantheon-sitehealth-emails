@@ -317,8 +317,24 @@ def read_apply_file(path):
     return doc
 
 
-def check_record_list(items, where):
-    """SPEC section 6 checks 7 and 8: a non-empty list of {type, name, content} in scope."""
+def check_record_list(items, where, fqdn):
+    """SPEC section 6 checks 7 and 8: a non-empty list of {type, name, content} in scope, every
+    item's `name` matching the entry's OWN fqdn.
+
+    CRITICAL 2 (whole-branch review): before the `name` check below existed, this validated only
+    that `type`/`name`/`content` were PRESENT -- never that `name` was the FQDN the entry is
+    keyed by.  Everything downstream assumes it: pass 1 lists Cloudflare's state at the entry's
+    key and computes the verdict there; pass 3 then POSTs whatever `posts[].name` says, and
+    deletes whatever `delete_match[].name` resolved to.  A post naming a DIFFERENT host would
+    validate against one FQDN's Cloudflare state and write at another -- SPEC property 1 broken
+    silently, and `describe_change` (SPEC 11.4, the dry-run rehearsal) renders type+content but
+    never the post name, so the pre-flight report could not have shown it either.  The delete
+    side is structurally safer -- R's names come from a `name.exact` listing at the entry's own
+    fqdn, so a mismatched `delete_match` name can only ever resolve zero delete ids, which
+    `verdict_for` already turns into an invalid `records-missing` verdict -- but it is guarded
+    here too, because a named `PlanFileError` at file-load time is a far clearer signal than a
+    confusing `records-missing` an operator has to puzzle out.
+    """
     if not isinstance(items, list) or not items:
         raise PlanFileError(f"{where}: must be a non-empty list")
     for index, item in enumerate(items):
@@ -331,6 +347,11 @@ def check_record_list(items, where):
             raise PlanFileError(
                 f"{where}[{index}]: type must be one of {', '.join(GOVERNED_TYPES)}, got "
                 f"{item['type']!r}")
+        if normalize(item["name"]) != fqdn:
+            raise PlanFileError(
+                f"{where}[{index}]: name {item['name']!r} does not match entry {fqdn!r} -- a "
+                "post or delete_match item naming a different host would be validated against "
+                "one FQDN's Cloudflare records and written at another")
 
 
 def check_entry_contract(fqdn, entry, path):
@@ -361,8 +382,8 @@ def check_entry_contract(fqdn, entry, path):
         raise PlanFileError(
             f"{where}: body must not contain 'deletes' -- record ids are resolved against "
             "Cloudflare at apply time, so any ids baked into the file cannot be correct")
-    check_record_list(body.get("posts"), f"{where} body.posts")
-    check_record_list(entry["delete_match"], f"{where} delete_match")
+    check_record_list(body.get("posts"), f"{where} body.posts", fqdn)
+    check_record_list(entry["delete_match"], f"{where} delete_match", fqdn)
 
 
 def check_file_contract(doc, path):
@@ -372,6 +393,9 @@ def check_file_contract(doc, path):
     question.  After this returns, every entry is known to carry zone_id/method/path/body/
     delete_match, a POST to its own zone's batch path, a non-empty `posts` with no `deletes`
     beside it, and only CNAME/A/AAAA types -- which is what makes GOVERNED_TYPES total downstream.
+    Every `posts`/`delete_match` item's `name` is also known to match the entry's own key
+    (CRITICAL 2, whole-branch review, `check_record_list`) -- so `verdict_for`'s R/D/P comparison
+    and `apply_entry`'s batch call are provably reasoning about and writing to the SAME FQDN.
     """
     generated = doc.get("generated")
     direction = generated.get("direction") if isinstance(generated, dict) else None
@@ -694,9 +718,35 @@ def build_client(**creds):
     ($CLOUDFLARE_BASE_URL) from "the credential leaves the machine" to "the credential leaves the
     machine AND a destructive rewrite is aimed at whatever host answers".  The pin is therefore
     load-bearing here in a way it is not in the two read-only siblings.
+
+    CRITICAL 1 (whole-branch review): `max_retries=0` is pinned for the SAME "this copy writes"
+    reason.  Measured on cloudflare 5.4.0: `BaseClient._should_retry` has NO HTTP-method check --
+    it retries 408/409/429/5xx and connection errors for a POST exactly as for a GET, with the
+    SDK's own default of 2 retries.  `POST .../dns_records/batch` is not idempotent (SPEC R5.4:
+    Cloudflare executes it as one transaction, Deletes then Posts) -- so a "failed" response the
+    SDK silently retried can mean the FIRST attempt already committed and the retry landed on an
+    already-changed state, which then answers with ITS OWN error (a duplicate-create 400, or a
+    transient 5xx) that this script would otherwise read as "nothing committed" (SPEC 8.1's
+    `failed` state) when the truth is closer to `unverified`.  Losing retries on pass-1 READS
+    (`records_at_name`) is the safe direction of that same change -- a lost read raises
+    `CloudflareReadError`, exit 2, nothing changed -- so `max_retries=0` is set for the ONE client
+    this script builds, not conditionally for reads vs. writes.
+
+    NEVER reach for `client.with_options(...)` or `client.copy(...)` to set a PER-CALL option
+    instead of threading it through this constructor.  Measured: both re-read the ambient
+    environment for exactly the fields this function nulls after construction --
+
+        pinned      : auth=Bearer REAL-TOKEN  x-auth-email=None                   max_retries=2
+        with_options: auth=None               x-auth-email=attacker@evil.example  max_retries=0
+
+    -- so a `.with_options(max_retries=0)` call SITE, applied to an already-pinned client, DROPS
+    the configured token and SENDS the ambient `x-auth-email`: routes 1 and 2 of the four-route
+    pin above, reopened, on the exact copy that performs the write. Every per-call option this
+    script ever needs MUST go through the constructor call inside this function, where the pin
+    is applied AFTER construction and stays in effect.
     """
     try:
-        client = Cloudflare(**creds, base_url=API_BASE_URL)
+        client = Cloudflare(**creds, base_url=API_BASE_URL, max_retries=0)
     except OSError as e:
         # httpx builds its SSL context from the ambient environment (trust_env=True), so an
         # $SSL_CERT_FILE pointing at a missing path raises here -- another unnamed escape to

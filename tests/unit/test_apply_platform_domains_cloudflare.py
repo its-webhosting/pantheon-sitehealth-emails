@@ -32,6 +32,16 @@ pytestmark = pytest.mark.unit
 
 SCRIPT = Path(__file__).resolve().parent.parent.parent / "apply-platform-domains-cloudflare"
 
+# Captured at IMPORT time, before `refuse_real_network` (below) ever monkeypatches
+# httpx.Client.send -- CRITICAL 1's real-retry test (test_apply_entry_sends_the_batch_post_
+# exactly_once_on_a_retryable_status) needs the SDK's own retry loop to run against a
+# MockTransport-backed client, which means going THROUGH httpx.Client.send, exactly what that
+# autouse guard exists to block for every OTHER test in this file.  A MockTransport never opens a
+# real socket -- interception happens at the transport layer -- so restoring the true `send` for
+# one test's duration is not a hole in the guard, it is the one place this file's own SPEC section
+# 13 seam (a real Cloudflare client) needs its request path to actually run.
+REAL_HTTPX_CLIENT_SEND = httpx.Client.send
+
 DEV_FULL = "/dev/full"
 needs_dev_full = pytest.mark.skipif(not os.path.exists(DEV_FULL),  # noqa: PTH110 -- a device
                                     reason="/dev/full is Linux-only")   # node, not a repo path
@@ -456,6 +466,43 @@ def test_check_file_contract_refuses_an_empty_delete_match(apc):
         apc.check_file_contract(plan_doc(entries={"a.umich.edu": entry}), "p.json")
 
 
+def test_check_file_contract_refuses_a_post_naming_a_different_fqdn(apc):
+    """CRITICAL 2 (whole-branch review): SPEC section 6 check 7 validated a post's type/name/
+    content are PRESENT, never that `name` is the FQDN the entry is keyed by.  Everything
+    downstream assumes it -- pass 1 lists and computes the verdict at the entry's key, pass 3
+    POSTs whatever `posts[].name` says.  Measured before this check existed: an entry keyed
+    a.umich.edu with a post naming another host reached apply_entry's batch call unnoticed --
+    the verdict had been computed at ONE name, the write would land at another whose records
+    were never read."""
+    entry = plan_entry()
+    entry["body"]["posts"][0]["name"] = "www.other-tenant.umich.edu"
+    with pytest.raises(apc.PlanFileError, match=r"a\.umich\.edu.*does not match"):
+        apc.check_file_contract(plan_doc(entries={"a.umich.edu": entry}), "p.json")
+
+
+def test_check_file_contract_refuses_a_delete_match_naming_a_different_fqdn(apc):
+    """The delete side is structurally safer than posts (R's names come from a `name.exact`
+    listing at the entry's own fqdn, so a mismatched `delete_match` name can only resolve zero
+    delete ids, which `verdict_for` already turns into an invalid `records-missing`) -- guarded
+    here too because a named PlanFileError at file-load time is a far clearer signal than the
+    confusing `records-missing` an operator would otherwise have to puzzle out."""
+    entry = plan_entry()
+    entry["delete_match"][0]["name"] = "www.other-tenant.umich.edu"
+    with pytest.raises(apc.PlanFileError, match=r"a\.umich\.edu.*does not match"):
+        apc.check_file_contract(plan_doc(entries={"a.umich.edu": entry}), "p.json")
+
+
+def test_check_file_contract_accepts_a_post_name_that_only_differs_by_case_or_trailing_dot(apc):
+    """The new name check normalizes both sides -- util3 SPEC section 5.1 states file keys are
+    already normalized, but a hand-edited plan (SPEC section 15 item 13 explicitly anticipates
+    one) could still carry a differently-cased or dotted name for the SAME host."""
+    entry = plan_entry()
+    entry["body"]["posts"][0]["name"] = "A.UMICH.EDU."
+    entry["delete_match"][0]["name"] = "a.umich.edu."
+    assert apc.check_file_contract(
+        plan_doc(entries={"a.umich.edu": entry}), "p.json") == "plan"
+
+
 def test_select_entries_returns_everything_without_only(apc):
     entries = {"a.umich.edu": plan_entry(), "b.umich.edu": plan_entry(fqdn="b.umich.edu")}
     assert apc.select_entries(entries, None) == entries
@@ -619,6 +666,36 @@ def test_cloudflare_client_refuses_a_non_string_credential(apc, tmp_path):
     path = config_file(tmp_path, "[Cloudflare]\napi_token = true\n")
     with pytest.raises(apc.StartupError, match="must be a string"):
         apc.cloudflare_client(path)
+
+
+def test_build_client_pins_max_retries_to_zero(apc):
+    """CRITICAL 1 (whole-branch review): cloudflare 5.4.0's `BaseClient._should_retry` has NO
+    HTTP-method check, so the SDK's own default of 2 retries applies to a destructive POST
+    exactly as to a GET.  `dns_records/batch` is one transaction (SPEC R5.4) -- a "failed"
+    response the SDK silently retried can mean the FIRST attempt already committed.  Attribute
+    check kept alongside the wire-level proof below (same rationale the other pin mechanism
+    checks in this file state)."""
+    assert apc.build_client(api_token="tok-123").max_retries == 0
+
+
+def test_build_client_pin_is_destroyed_by_with_options_or_copy(apc, monkeypatch):
+    """The `NEVER client.with_options(...)/client.copy(...)` line in `build_client`'s docstring,
+    pinned as the security property it exists to prevent, not just asserted as prose.  Measured:
+    both re-read the ambient environment for exactly the fields `build_client` nulls AFTER
+    construction, so applying either to an already-pinned client re-opens routes 1/2 of the
+    four-route pin (SPEC section 16) -- the configured token is DROPPED and the ambient
+    X-Auth-Email is SENT, on the exact client that performs the write.  This is not a defect in
+    `build_client` (which never calls `with_options`/`copy` itself) -- it pins the REASON the
+    docstring's NEVER line exists, so a future maintainer reaching for `.with_options(max_retries=
+    0)` as a "simpler" per-call spelling cannot ship that change with this suite green."""
+    monkeypatch.setenv("CLOUDFLARE_EMAIL", "attacker@evil.example")
+    client = apc.build_client(api_token="tok-123")
+
+    copy = client.with_options(max_retries=0)
+    request = sent_request(copy)
+
+    assert request.headers.get("authorization") is None          # the configured token: GONE
+    assert request.headers.get("x-auth-email") == "attacker@evil.example"   # the ambient one: SENT
 
 
 # Ported from tests/unit/test_find_platform_domains_cloudflare.py (review round 1, finding 5):
@@ -1492,6 +1569,48 @@ def test_a_subset_run_warns_how_much_of_the_file_it_covers(
     assert "ATTENTION" not in captured.out
 
 
+def test_a_mixed_ready_and_invalid_file_aborts_before_any_write(
+        apc, tmp_path, monkeypatch, capsys):
+    """CRITICAL 3 (whole-branch review): every OTHER invalid-entry fixture in this file is either
+    a single entry (test_an_invalid_entry_aborts_the_run_at_exit_two_with_nothing_applied) or ALL
+    invalid (test_every_invalid_entry_is_named_on_stderr_never_v_gated) -- so a mutation that
+    narrows `run_once`'s gate from "abort when ANY selected entry is invalid" to "abort only when
+    EVERY selected entry is invalid" left the whole 164-test suite green:
+
+        if abort_on_invalid_entries(validations) and not any(
+                v.verdict == "ready" for v in validations.values()):
+            return 2
+
+    Under that mutation, a file mixing a `ready` entry with an invalid one no longer returns 2 --
+    it falls through into `report_entries`/`apply_all`, which DOES apply the ready entry before
+    `apply_all`'s own `InvariantError` back-stop trips on the invalid one two entries later.  That
+    back-stop is real cover for an invalid-FIRST fixture, which is exactly why one is not enough:
+    the reviewer measured that an invalid-first fixture survives the SAME mutation (apply_all's
+    sorted loop reaches the invalid entry before ever calling batch(), so `changed_count` is still
+    0 and the mutated code still happens to return 2) -- proving nothing.  Alphabetical order
+    ("a" < "b" < "c") is what makes the READY entry sort first here, by construction rather than
+    by luck, so this test can only pass if the ORIGINAL "any invalid" gate is the one running.
+    """
+    doc = plan_doc(entries={
+        "a.umich.edu": plan_entry(fqdn="a.umich.edu"),   # sorts FIRST, and is READY
+        "b.umich.edu": plan_entry(fqdn="b.umich.edu"),   # invalid: records-missing
+        "c.umich.edu": plan_entry(fqdn="c.umich.edu"),   # invalid: records-missing
+    })
+    path = write_doc(tmp_path, doc)
+    client = FakeCloudflareClient(rows_by_name={
+        "a.umich.edu": [cname_rows()],
+        "b.umich.edu": [[]],
+        "c.umich.edu": [[]],
+    })
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert code == 2
+    assert client.batch_calls == []
+    assert "b.umich.edu" in captured.err
+    assert "c.umich.edu" in captured.err
+    assert "records-missing" in captured.err
+
+
 class RaiseOnceStream:
     """A stderr stand-in whose FIRST write raises OSError -- simulating one of SPEC 11.2's
     UNGUARDED stderr prints (the subset-coverage ATTENTION line here) landing on a doomed
@@ -1714,6 +1833,43 @@ def test_apply_entry_raises_apply_error_not_verify_error_on_a_batch_rejection(ap
     with pytest.raises(apc.ApplyError, match="81058") as excinfo:
         apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
     assert type(excinfo.value) is apc.ApplyError
+
+
+@pytest.mark.parametrize("status", [429, 500])
+def test_apply_entry_sends_the_batch_post_exactly_once_on_a_retryable_status(
+        apc, monkeypatch, status):
+    """CRITICAL 1 (whole-branch review): `FakeCloudflareClient` sits ABOVE HTTP and structurally
+    cannot see the SDK's own retry loop -- every other `apply_entry` test in this file uses it and
+    none of them can catch this.  cloudflare 5.4.0's `BaseClient._should_retry` has NO HTTP-method
+    check, so it retries 429/5xx for a POST exactly as for a GET, and the default `max_retries=2`
+    would silently RE-SEND `dns_records/batch` -- a call that is not idempotent (SPEC R5.4: one
+    transaction, Deletes then Posts).  A first attempt that committed and a retry that lands on
+    the now-changed state is exactly the shape that made a real two-entry live run report `EXIT:
+    2` ("nothing was changed") after Cloudflare actually rejected a SECOND, self-inflicted
+    duplicate-create.
+
+    A REAL `Cloudflare` client over `httpx.MockTransport`, built through `build_client` (the seam
+    this fix lives in), not `FakeCloudflareClient`.  `httpx.Client.send` is restored to the TRUE
+    implementation for this test only (captured at import time, before `refuse_real_network`
+    patches it) -- a `MockTransport` never opens a real socket, so this does not weaken that
+    guard, it is the one place this file's real-client seam needs its actual request path to run;
+    see the module-level comment by `REAL_HTTPX_CLIENT_SEND`.
+    """
+    monkeypatch.setattr(httpx.Client, "send", REAL_HTTPX_CLIENT_SEND)
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, str(request.url)))
+        return httpx.Response(status, json={"errors": [{"code": 1000, "message": "boom"}]})
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = apc.build_client(api_token="tok-123", http_client=http_client)
+    with pytest.raises(apc.ApplyError):
+        apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+
+    posts = [call for call in calls if call[0] == "POST"]
+    assert posts == [("POST", f"{apc.API_BASE_URL}/zones/zone-a/dns_records/batch")], (
+        f"expected exactly ONE POST, the SDK sent {len(posts)}: {posts}")
 
 
 def three_entry_doc():
