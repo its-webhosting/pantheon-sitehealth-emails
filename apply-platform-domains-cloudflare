@@ -11,9 +11,10 @@ three strictly-ordered passes:
 
     parse + file contract  ->  PASS 1 validate (read-only)  ->  PASS 2 report  ->  PASS 3 apply
 
-Pass 1 classifies every selected entry into one of six verdicts (ready / already-applied are
-valid; record-ambiguous / partially-applied / unexpected-records / records-missing are not).  If
-ANY selected entry is invalid, the run reports every one of them and exits 2 having written
+Pass 1 classifies every selected entry into one of seven verdicts (ready / already-applied are
+valid; record-ambiguous / partially-applied / unexpected-records / records-missing /
+proxy-status-drift are not).  If ANY selected entry is invalid, the run reports every one of them
+and exits 2 having written
 nothing -- the WHOLE file, not just the bad entries (a deliberate narrowing of util3 SPEC section
 5.4's original per-entry-tolerant contract; see section R4 of this script's own SPEC for why).
 Pass 2 (the report) runs IDENTICALLY in both modes, from the same data pass 1 produced, so a dry
@@ -177,7 +178,7 @@ class PlanFileError(StartupError):
     """The input file is not a plan or revert file this script knows how to apply (SPEC 6).
 
     A subclass of StartupError so main()'s existing handler and the exit-2 taxonomy stay
-    unchanged -- this adds a NAME, not a code path (PD#2).  Every one of SPEC section 6's eight
+    unchanged -- this adds a NAME, not a code path (PD#2).  Every one of SPEC section 6's nine
     checks raises this, and every message names the file, the FQDN key where one applies, and
     the offending field.  Fatal rather than per-entry-skippable BY DESIGN: a file malformed in
     one entry is a file whose provenance is in question, and partially applying it is exactly
@@ -389,11 +390,39 @@ def check_record_list(items, where, fqdn):
                 "one FQDN's Cloudflare records and written at another")
 
 
+def check_post_flags(posts, where):
+    """SPEC section 6 check 9: every post in one entry MUST agree on `proxied` and `ttl`.
+
+    Adversarial review 2026-08-04, finding 11.  This condition used to be `describe_change`'s
+    second InvariantError -- a class whose own docstring says it is "not an operator error" --
+    raised in PASS 2, after pass 1 had already read every selected entry from Cloudflare.  It is a
+    property of the operator-supplied FILE, so PD#2 wants the name to say so (`PlanFileError`
+    names the file, the entry and the offending post index) and PD#5 wants it said before a
+    hundred read calls rather than after them.  The loud behavior is unchanged: the alternative --
+    rendering the flags per group in `render_records` -- was and remains rejected, because SPEC
+    11.4's line format pins exactly ONE trailing `(flags, ttl N)` block.
+
+    Unreachable with files the current sibling writes (`record_body` derives proxied/ttl once per
+    entry, so all of an entry's posts share them), which is why it is a contract check rather than
+    a redesign of SPEC 11.4: 0 of 217 real entries are affected.
+    """
+    first = posts[0]
+    expected = (bool(first.get("proxied")), first.get("ttl"))
+    for index, item in enumerate(posts[1:], start=1):
+        if (bool(item.get("proxied")), item.get("ttl")) != expected:
+            raise PlanFileError(
+                f"{where}[{index}]: proxied={item.get('proxied')!r} ttl={item.get('ttl')!r} "
+                f"disagree with {where}[0] (proxied={first.get('proxied')!r} "
+                f"ttl={first.get('ttl')!r}) -- SPEC 11.4's change line shows ONE (flags, ttl) "
+                "block for the whole entry, so an entry whose posts disagree cannot be reported "
+                "honestly on the dry run an operator authorizes the change from")
+
+
 def check_entry_contract(fqdn, entry, path):
-    """SPEC section 6 checks 4-8, for one entry.
+    """SPEC section 6 checks 4-9, for one entry.
 
     Split out of check_file_contract so the per-file checks (2-3) and the per-entry checks
-    (4-8) each stay under ruff's C901 complexity cap -- a mechanical split, not a behavior
+    (4-9) each stay under ruff's C901 complexity cap -- a mechanical split, not a behavior
     change: the messages and the `path entry fqdn` prefix are unchanged.
     """
     where = f"{path} entry {fqdn}"
@@ -419,10 +448,11 @@ def check_entry_contract(fqdn, entry, path):
             "Cloudflare at apply time, so any ids baked into the file cannot be correct")
     check_record_list(body.get("posts"), f"{where} body.posts", fqdn)
     check_record_list(entry["delete_match"], f"{where} delete_match", fqdn)
+    check_post_flags(body["posts"], f"{where} body.posts")
 
 
 def check_file_contract(doc, path):
-    """SPEC section 6's eight checks, in order.  Returns the direction.
+    """SPEC section 6's nine checks, in order.  Returns the direction.
 
     Fatal rather than per-entry: a file malformed in one entry is a file whose provenance is in
     question.  After this returns, every entry is known to carry zone_id/method/path/body/
@@ -431,6 +461,8 @@ def check_file_contract(doc, path):
     Every `posts`/`delete_match` item's `name` is also known to match the entry's own key
     (CRITICAL 2, whole-branch review, `check_record_list`) -- so `verdict_for`'s R/D/P comparison
     and `apply_entry`'s batch call are provably reasoning about and writing to the SAME FQDN.
+    Every entry's posts are also known to agree on proxied/ttl (check 9, `check_post_flags`), so
+    `describe_change` has one honest (flags, ttl) block to render.
     """
     generated = doc.get("generated")
     direction = generated.get("direction") if isinstance(generated, dict) else None
@@ -512,6 +544,59 @@ def describe_keys(keys):
     return ", ".join(f"{rtype} {content}" for rtype, _name, content in keys)
 
 
+def proxy_word(value):
+    """The operator-facing name for one proxy status.  `None` never reaches here -- an unknown
+    status has its own sentence, because "DNS-only" would be a claim this script cannot make."""
+    return "proxied" if value else "DNS-only"
+
+
+def proxy_status_mismatches(posts, rows):
+    """Every post whose live record is NOT in the proxy status the file asks for (SPEC 7.1a).
+
+    Adversarial review 2026-08-04, finding 3.  `record_key` is `(TYPE, name, content)` and
+    deliberately carries NO proxy state -- it has to stay comparable against `delete_match`, whose
+    items are `{type, name, content}` only (util3 SPEC 5.3) -- so `proxied`, the field whose loss
+    is this migration's worst outcome, was read by nobody.  Measured: with Cloudflare holding
+    exactly the plan's A record but `proxied=False`, `verdict_for` returned `already-applied` and
+    `verify_records` returned True.  The script that WRITES these files states the stakes: "a
+    replacement created DNS-only would take the hostname out of certificate service" -- an HTTPS
+    outage plus origin-IP exposure.  The check therefore sits BESIDE the set comparison, in both
+    places that compare R against P (`verdict_for`'s already-applied row and `verify_records`),
+    rather than inside the key.
+
+    THE DELETE SIDE IS DELIBERATELY NOT CHECKED.  A `ready` verdict means R == D, and D's records
+    are about to be deleted; their proxy status is not a property the file asserts and cannot be
+    matched against anything (`delete_match` items carry no `proxied`).
+
+    A live `proxied` of `None` is a MISMATCH, not a pass: `Optional[bool]` is the SDK's own type,
+    and the sibling excludes an entry whose swept status is null as `unknown-proxy-status`
+    precisely because "whether the replacement records must be created proxied cannot be
+    determined, and guessing either way is unsafe".  Reading one back is the same problem.
+
+    Only posts whose key is actually PRESENT live are reported.  A post with no live record at all
+    is a CONTENT difference, which the caller's own set comparison already names -- reporting it
+    here too would put one fact on two lines and, worse, describe a missing record's proxy status.
+    """
+    live = {}
+    for record in governed_records(rows):
+        key = record_key(record.type, record.name, record.content)
+        live.setdefault(key, []).append(getattr(record, "proxied", None))
+    problems = []
+    for item in posts:
+        key = record_key(item["type"], item["name"], item["content"])
+        want = bool(item.get("proxied"))
+        for held in live.get(key, []):
+            if held is None:
+                problems.append(
+                    f"{describe_keys([key])} has an UNKNOWN (null) proxy status where the file "
+                    f"asks for {proxy_word(want)}")
+            elif bool(held) != want:
+                problems.append(
+                    f"{describe_keys([key])} is {proxy_word(held)} where the file asks for "
+                    f"{proxy_word(want)}")
+    return problems
+
+
 def want_delete_keys(entry):
     """SPEC 7.2's D, as `record_key()`s -- the ONE derivation, shared by `verdict_for` and
     `validate_entries` (task 5 review, Important 4).
@@ -525,6 +610,58 @@ def want_delete_keys(entry):
     """
     return {record_key(item["type"], item["name"], item["content"])
             for item in entry["delete_match"]}
+
+
+def duplicate_key_detail(present, keys):
+    """SPEC 7.3 row 1's detail, or "" when no `record_key` occurs more than once in R.
+
+    Split out of `verdict_for` when row 3a (the proxy-status check) pushed that function past
+    ruff's C901/PLR0911 caps -- a mechanical extraction, message unchanged.  `present` and `keys`
+    are parallel lists (record, its key), which is what lets the ids be looked up in the caller's
+    own scope.
+
+    record-ambiguous is the ONE verdict whose detail must name record IDS, not just record_key
+    terms (review round 2 controller ruling): by construction the colliding records SHARE a
+    record_key -- that is what makes them ambiguous -- so a detail in record_key terms alone
+    cannot tell them apart, and the id is the only field that distinguishes them in the dashboard
+    or API.  This does NOT widen record_key, which stays deliberately id-less for the set
+    comparison (SPEC 7.1).
+    """
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    if not duplicates:
+        return ""
+    ids_by_key = {}
+    for record, key in zip(present, keys, strict=True):
+        if key in duplicates:
+            ids_by_key.setdefault(key, []).append(str(record.id))
+    collisions = "; ".join(
+        f"{describe_keys([key])} (record ids: {', '.join(ids_by_key[key])})"
+        for key in duplicates)
+    return f"more than one record at this name with the same type and content: {collisions}"
+
+
+def mismatch_verdict(have, want_delete, want_post):
+    """SPEC 7.3's rows 4-6: R equals neither D nor P.  Returns (verdict, detail).
+
+    Split out of `verdict_for` for the same C901/PLR0911 reason `duplicate_key_detail` is, and
+    for the same reason `check_entry_contract` was split out of `check_file_contract` -- the
+    messages are unchanged.  The remaining `verdict_for` is exactly "which set does R equal",
+    which is what SPEC 7.2 says the decision is.
+    """
+    if have & want_delete and have & want_post:
+        return ("partially-applied",
+                f"Cloudflare holds a MIX of the records to delete and the records to create: "
+                f"{describe_keys(sorted(have))}")
+    for expected, side in ((want_delete, "to delete"), (want_post, "to create")):
+        if have > expected:
+            return ("unexpected-records",
+                    f"Cloudflare holds every record {side} plus "
+                    f"{describe_keys(sorted(have - expected))}, which this entry does not "
+                    "describe")
+    return ("records-missing",
+            f"Cloudflare holds {describe_keys(sorted(have)) or 'no CNAME/A/AAAA record'} at this "
+            f"name; expected either {describe_keys(sorted(want_delete))} (not yet applied) or "
+            f"{describe_keys(sorted(want_post))} (already applied)")
 
 
 def verdict_for(entry, rows):
@@ -550,26 +687,9 @@ def verdict_for(entry, rows):
             "checks 7 and 8 should have made this fatal before pass 1 ever ran")
     present = governed_records(rows)
     keys = [record_key(r.type, r.name, r.content) for r in present]
-    duplicates = sorted({key for key in keys if keys.count(key) > 1})
-    if duplicates:
-        # SPEC 7.3 (amended, review round 2 controller ruling): record-ambiguous is the ONE
-        # verdict whose detail must name record ids, not just record_key terms -- by
-        # construction the colliding records SHARE a record_key (that is what makes them
-        # ambiguous), so a detail in record_key terms alone cannot tell them apart, and the id
-        # is the only field that distinguishes them in the dashboard or API.  `present`/`keys`
-        # are already same-scope locals in parallel order, so this is a same-scope filter, not
-        # a signature change to record_key (which stays deliberately id-less for the set
-        # comparison, SPEC 7.1).
-        ids_by_key = {}
-        for record, key in zip(present, keys, strict=True):
-            if key in duplicates:
-                ids_by_key.setdefault(key, []).append(str(record.id))
-        collisions = "; ".join(
-            f"{describe_keys([key])} (record ids: {', '.join(ids_by_key[key])})"
-            for key in duplicates)
-        return ("record-ambiguous",
-                f"more than one record at this name with the same type and content: "
-                f"{collisions}")
+    collisions = duplicate_key_detail(present, keys)
+    if collisions:
+        return ("record-ambiguous", collisions)
 
     have = set(keys)
     want_delete = want_delete_keys(entry)
@@ -579,21 +699,17 @@ def verdict_for(entry, rows):
     if have == want_delete:
         return ("ready", "")
     if have == want_post:
+        # SPEC 7.3 row 3a (adversarial review 2026-08-04, finding 3).  R == P settles the
+        # CONTENTS; the proxy status is the other half of "already applied", and getting it wrong
+        # is worse than getting the contents wrong -- a DNS-only replacement is out of certificate
+        # service.  Checked here and not inside record_key: see proxy_status_mismatches.
+        drift = proxy_status_mismatches(entry["body"]["posts"], rows)
+        if drift:
+            return ("proxy-status-drift",
+                    "Cloudflare holds exactly the records this entry would create, but not in "
+                    f"the proxy status the file asks for: {'; '.join(drift)}")
         return ("already-applied", "")
-    if have & want_delete and have & want_post:
-        return ("partially-applied",
-                f"Cloudflare holds a MIX of the records to delete and the records to create: "
-                f"{describe_keys(sorted(have))}")
-    for expected, side in ((want_delete, "to delete"), (want_post, "to create")):
-        if have > expected:
-            return ("unexpected-records",
-                    f"Cloudflare holds every record {side} plus "
-                    f"{describe_keys(sorted(have - expected))}, which this entry does not "
-                    "describe")
-    return ("records-missing",
-            f"Cloudflare holds {describe_keys(sorted(have)) or 'no CNAME/A/AAAA record'} at this "
-            f"name; expected either {describe_keys(sorted(want_delete))} (not yet applied) or "
-            f"{describe_keys(sorted(want_post))} (already applied)")
+    return mismatch_verdict(have, want_delete, want_post)
 
 
 class Validation(NamedTuple):
@@ -1082,7 +1198,13 @@ def verify_records(entry, rows):
             "should have made this fatal before pass 1 ever ran")
     have = {record_key(r.type, r.name, r.content) for r in governed_records(rows)}
     want = {record_key(item["type"], item["name"], item["content"]) for item in posts}
-    return have == want
+    if have != want:
+        return False
+    # R6.1's evidence includes the PROXY STATUS (adversarial review 2026-08-04, finding 3): a
+    # batch that created the records DNS-only holds exactly `want` and used to verify True, be
+    # reported `applied`, and exit 0 -- for a hostname that had just left certificate service.
+    # record_key deliberately cannot carry this; see proxy_status_mismatches.
+    return not proxy_status_mismatches(posts, rows)
 
 
 def apply_entry(client, fqdn, entry, delete_ids):
@@ -1164,6 +1286,11 @@ def apply_entry(client, fqdn, entry, delete_ids):
                 sleep(VERIFY_RETRY_SLEEP)
         held = describe_keys(sorted({record_key(r.type, r.name, r.content)
                                      for r in governed_records(rows)})) or "no CNAME/A/AAAA record"
+        # Recomputed rather than threaded out of verify_records (which answers a yes/no question
+        # per R6.1): the two failures need DIFFERENT sentences.  "does not hold the expected
+        # records" would be FALSE when Cloudflare holds exactly those records in the wrong proxy
+        # status, and would send an operator hunting a content difference that is not there.
+        drift = proxy_status_mismatches(entry["body"]["posts"], rows)
     except ApplyError:
         raise   # the VerifyError above -- already classified, must not be re-wrapped
     # `Exception`, NOT `BaseException`: a KeyboardInterrupt here must keep reaching apply_all's
@@ -1185,7 +1312,11 @@ def apply_entry(client, fqdn, entry, delete_ids):
             f"{fqdn}: the batch call succeeded but the verification step failed with an "
             f"unexpected {type(e).__name__}: {e}, so the result is unconfirmed") from e
     # OUTSIDE the try (TRY301): the mismatch itself is not an unexpected failure of the
-    # verification step, it is its RESULT, and `held` above is the last thing that can raise one.
+    # verification step, it is its RESULT, and `drift` above is the last thing that can raise one.
+    if drift:
+        raise VerifyError(
+            f"{fqdn}: the batch call succeeded but the records Cloudflare now holds are in the "
+            f"wrong proxy status, twice {VERIFY_RETRY_SLEEP}s apart: {'; '.join(drift)}")
     raise VerifyError(
         f"{fqdn}: the batch call succeeded but Cloudflare does not hold the expected records "
         f"afterwards, twice {VERIFY_RETRY_SLEEP}s apart; it now holds {held}")
@@ -1380,17 +1511,24 @@ def describe_change(fqdn, entry):
     made fatal before pass 1 ever ran.  Task 7 review, important 4: measured before this guard
     existed, describe_change(empty posts) raised a bare, unnamed `IndexError` from `posts[0]`.
 
-    ALSO raises InvariantError (final-batch review, A4) when the entry's posts do not all agree on
-    `proxied`/`ttl`: the trailing `(flags, ttl N)` block is read from `posts[0]` alone, so a
-    disagreeing post would be silently misreported on this line -- the operator's dry-run
-    authorization artifact (SPEC 11.4).  Chosen over rendering the flags per group in
-    render_records (the brief's other named option): SPEC 11.4's own example line pins exactly ONE
-    trailing flags block, and every existing format-pinning test in this file (the grouping test,
-    the revert-direction test) already depends on that single-block shape -- rendering per group
-    would need to change all of them to guard against a disagreement that, measured, has never
-    actually occurred (0 of 217 real entries, CLAUDE.md).  A loud, named defect for the
-    zero-instance case is the smaller diff; if mixed flags become common, that is a reason to
-    redesign SPEC 11.4's line format on purpose, not a side effect of this fix.
+    ALSO raises InvariantError when the entry's posts do not all agree on `proxied`/`ttl`: the
+    trailing `(flags, ttl N)` block is read from `posts[0]` alone, so a disagreeing post would be
+    silently misreported on this line -- the operator's dry-run authorization artifact (SPEC 11.4).
+
+    That condition is now UNREACHABLE through the run's own path, and the class is correct
+    BECAUSE it is (adversarial review 2026-08-04, finding 11): SPEC section 6 check 9
+    (`check_post_flags`) rejects a disagreeing entry as a `PlanFileError` before any Cloudflare
+    call, which is where an operator-supplied file property belongs.  What is left here is an
+    assertion about the CALLER -- reaching this function with a shape the contract already made
+    fatal means the gate has a bug -- which is exactly what InvariantError is for, and the same
+    public-helper discipline `verify_records` applies to a shape `merge_body` already guards
+    ("fix the class, not the instance").
+
+    Rendering the flags per group in render_records remains rejected (it was the alternative
+    considered when this was still the only guard): SPEC 11.4's example line pins exactly ONE
+    trailing flags block, and every existing format-pinning test in this file already depends on
+    that single-block shape -- for a disagreement that, measured, has never actually occurred
+    (0 of 217 real entries, CLAUDE.md).
     """
     deletes = entry.get("delete_match")
     posts = entry.get("body", {}).get("posts")
@@ -1462,7 +1600,7 @@ def outcome_document(*, at, direction, source, source_generated_at, for_real, ar
     `entries` always has one object per selected entry, whatever the run's outcome, never only the
     entries pass 3 happened to reach.
 
-    A verdict/detail pair is added only for the invalid verdicts (SPEC 7.3's four INVALID rows):
+    A verdict/detail pair is added only for the invalid verdicts (SPEC 7.3's five INVALID rows):
     `ready` and `already-applied` are the two VALID verdicts, and repeating either of them here
     would just restate the `outcome` key one line down for every healthy entry in the file --
     `validations` still holds one Validation per SELECTED entry regardless (a dict `main()`

@@ -602,6 +602,26 @@ def test_check_file_contract_accepts_a_post_name_that_only_differs_by_case_or_tr
         plan_doc(entries={"a.umich.edu": entry}), "p.json") == "plan"
 
 
+def test_check_file_contract_refuses_posts_that_disagree_on_proxied_or_ttl(apc):
+    """Adversarial review 2026-08-04, finding 11: this was `describe_change`'s `InvariantError`
+    -- a class whose own docstring says it is "not an operator error" -- raised in PASS 2, after
+    pass 1 had already read every entry from Cloudflare.  It is a property of the operator-supplied
+    FILE, so it belongs in the section 6 contract (check 9): a named `PlanFileError`, before any
+    Cloudflare call, naming the file and the offending post index.
+
+    Both fields are exercised, and the disagreeing post is the SECOND of two, so a check that only
+    ever read `posts[0]` -- the exact defect this replaces -- cannot pass."""
+    proxied_disagrees = plan_entry(addresses=("23.185.0.4", "2620:12a:8000::4"))
+    proxied_disagrees["body"]["posts"][1]["proxied"] = False
+    with pytest.raises(apc.PlanFileError, match="disagree"):
+        apc.check_file_contract(plan_doc(entries={"a.umich.edu": proxied_disagrees}), "p.json")
+
+    ttl_disagrees = plan_entry(addresses=("23.185.0.4", "2620:12a:8000::4"))
+    ttl_disagrees["body"]["posts"][1]["ttl"] = 300
+    with pytest.raises(apc.PlanFileError, match="disagree"):
+        apc.check_file_contract(plan_doc(entries={"a.umich.edu": ttl_disagrees}), "p.json")
+
+
 def _malform_missing_zone_id(entry):
     del entry["zone_id"]
 
@@ -1043,18 +1063,28 @@ def test_api_error_text_computes_remaining_from_the_filtered_set(apc):
 
 
 def row(rtype="CNAME", name="a.umich.edu", content="live-umich-x.pantheonsite.io",
-        identifier="rec-1"):
-    """A stand-in for one SDK record object as dns.records.list returns it."""
-    return types.SimpleNamespace(id=identifier, type=rtype, name=name, content=content)
+        identifier="rec-1", *, proxied=True):
+    """A stand-in for one SDK record object as dns.records.list returns it.
+
+    `proxied` is a real field on every SDK record model (`Optional[bool]`), and until the
+    2026-08-04 adversarial review's finding 3 this helper omitted it entirely -- so no fixture in
+    this file could tell a proxied replacement from a DNS-only one, which is the state whose loss
+    the sibling calls "out of certificate service".  It defaults to True to match `plan_entry()`'s
+    posts; a fixture in which EVERY record is proxied cannot detect a proxy-status defect either,
+    so tests that care pass it explicitly, including `None` (the unknown status the sibling
+    excludes as `unknown-proxy-status`).
+    """
+    return types.SimpleNamespace(id=identifier, type=rtype, name=name, content=content,
+                                 proxied=proxied)
 
 
 def cname_rows():
     return [row()]
 
 
-def address_rows():
-    return [row("A", content="23.185.0.4", identifier="rec-a"),
-            row("AAAA", content="2620:12a:8000::4", identifier="rec-b")]
+def address_rows(*, proxied=True):
+    return [row("A", content="23.185.0.4", identifier="rec-a", proxied=proxied),
+            row("AAAA", content="2620:12a:8000::4", identifier="rec-b", proxied=proxied)]
 
 
 def test_record_key_treats_two_spellings_of_one_ipv6_address_as_one_record(apc):
@@ -1111,6 +1141,57 @@ def test_verdict_record_ambiguous_when_a_key_occurs_twice(apc):
     assert "CNAME live-umich-x.pantheonsite.io" in detail
     assert "rec-1" in detail
     assert "rec-2" in detail
+
+
+def test_verdict_already_applied_requires_every_records_proxy_status_to_match(apc):
+    """SPEC 7.3 row 3a, adversarial review 2026-08-04 finding 3.  `record_key` is
+    `(TYPE, name, content)` and carries no proxy state -- deliberately, because it must stay
+    comparable against `delete_match`, whose items are `{type, name, content}` only -- so a
+    DNS-only record whose ADDRESSES match used to classify `already-applied` and be reported to
+    the operator, in the run record they attach to a change ticket, as "nothing to do".  A
+    replacement created DNS-only is out of certificate service: an HTTPS outage plus origin-IP
+    exposure, which is the migration's worst outcome, invisible to the applier's strongest
+    instrument.
+
+    The fixture varies deliberately (SPEC 22's named failure class): only the SECOND of the two
+    records is DNS-only, so the detail must name the AAAA and must NOT name the A -- an
+    implementation that flags the whole entry from the first record it looks at, or one that only
+    ever checks `posts[0]`, cannot pass this.
+    """
+    verdict, detail = apc.verdict_for(plan_entry(), address_rows())
+    assert verdict == "already-applied"
+    assert detail == ""
+
+    mixed = [row("A", content="23.185.0.4", identifier="rec-a", proxied=True),
+             row("AAAA", content="2620:12a:8000::4", identifier="rec-b", proxied=False)]
+    verdict, detail = apc.verdict_for(plan_entry(), mixed)
+    assert verdict == "proxy-status-drift"
+    assert "2620:12a:8000::4" in detail
+    assert "23.185.0.4" not in detail
+    assert "DNS-only" in detail
+
+
+def test_verdict_proxy_status_drift_on_an_unknown_null_proxy_status(apc):
+    """PD#3's nil shadow for the new comparison, and a real input shape: `proxied` is
+    `Optional[bool]` on every SDK record model, and the sibling excludes an entry whose swept
+    proxy status is null as `unknown-proxy-status` precisely because "guessing either way is
+    unsafe".  Reading one back is the same problem -- a null must never pass for a match."""
+    verdict, detail = apc.verdict_for(plan_entry(), address_rows(proxied=None))
+    assert verdict == "proxy-status-drift"
+    assert "has an UNKNOWN (null) proxy status where the file asks for proxied" in detail
+    assert "DNS-only" not in detail   # an unknown status is not a claim that it is DNS-only
+
+
+def test_verdict_proxy_status_drift_when_the_file_asks_for_dns_only(apc):
+    """The symmetric direction: a revert file restoring a DNS-only CNAME must not accept a
+    PROXIED record as already-applied either.  Without this, a one-way `if not held` test would
+    look correct against every other test in this file, all of which ask for `proxied: True`."""
+    entry = plan_entry()
+    for post in entry["body"]["posts"]:
+        post["proxied"] = False
+    verdict, detail = apc.verdict_for(entry, address_rows(proxied=True))
+    assert verdict == "proxy-status-drift"
+    assert "is proxied where the file asks for DNS-only" in detail
 
 
 def test_verdict_partially_applied_on_a_mix_of_both_sides(apc):
@@ -1893,6 +1974,22 @@ def test_a_dry_run_over_a_mixed_already_applied_and_ready_doc_reports_both_corre
     assert record["entries"]["b.umich.edu"]["outcome"] == "planned"
 
 
+def test_a_file_whose_posts_disagree_is_refused_before_any_cloudflare_call(
+        apc, tmp_path, monkeypatch, capsys):
+    """The other half of adversarial review finding 11: the PLACEMENT, not just the class.  The
+    old guard fired from `report_entries` -- pass 2 -- so a file that could be rejected in
+    milliseconds first cost a full read-only validation pass against live Cloudflare.  Asserted
+    against the fake client's recorded LIST calls, not inferred from the exit code."""
+    entry = plan_entry(addresses=("23.185.0.4", "2620:12a:8000::4"))
+    entry["body"]["posts"][1]["proxied"] = False
+    path = write_doc(tmp_path, plan_doc(entries={"a.umich.edu": entry}))
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 2
+    assert client.list_calls == []
+    assert "disagree" in capsys.readouterr().err
+
+
 def test_a_subset_run_warns_how_much_of_the_file_it_covers(
         apc, tmp_path, monkeypatch, capsys):
     doc = plan_doc(entries={"a.umich.edu": plan_entry(),
@@ -2125,6 +2222,25 @@ def test_verify_records_ignores_an_unrelated_txt_record_at_the_name(apc):
 def test_verify_records_rejects_a_leftover_record(apc):
     rows = [*address_rows(), row(identifier="rec-leftover")]
     assert apc.verify_records(plan_entry(), rows) is False
+
+
+@pytest.mark.parametrize("held", [False, None])
+def test_verify_records_rejects_a_replacement_in_the_wrong_proxy_status(apc, held):
+    """R6.1, adversarial review 2026-08-04 finding 3.  R6.1 is justified by PD#14 -- "a 200 from
+    the batch endpoint is Cloudflare's CLAIM that the swap happened; the record list is the
+    EVIDENCE" -- but the evidence collected was `(TYPE, name, content)` only, so a batch that
+    created the records DNS-only verified True and was reported `applied`, exit 0.  `None` (the
+    SDK's unknown proxy status) must fail the same way: an unconfirmed state is not a confirmed
+    one."""
+    assert apc.verify_records(plan_entry(), address_rows(proxied=held)) is False
+
+
+def test_verify_records_rejects_a_proxied_record_where_the_file_asks_for_dns_only(apc):
+    """The symmetric direction, for the same reason the verdict has one."""
+    entry = plan_entry()
+    for post in entry["body"]["posts"]:
+        post["proxied"] = False
+    assert apc.verify_records(entry, address_rows(proxied=True)) is False
 
 
 def test_apply_entry_calls_batch_with_the_resolved_ids_and_the_files_posts(apc):
@@ -2525,6 +2641,54 @@ def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
         "error": expected_error,
         "deleted_ids": ["rec-1"],
     }
+
+
+def test_a_batch_that_leaves_the_records_dns_only_is_unverified_never_applied(
+        apc, tmp_path, monkeypatch, capsys):
+    """Adversarial review 2026-08-04 finding 3, scenario (b), end to end: the batch returns, the
+    verification read shows the right ADDRESSES in the wrong proxy status, and the run must not
+    report `applied`/exit 0.  It is `unverified`/exit 3, because Cloudflare committed something
+    and the something is not what the file asked for -- exactly the state R6.3 exists to name.
+
+    The message must say WHY: "does not hold the expected records" would be false here (it holds
+    exactly those records) and would send an operator hunting a content difference that is not
+    there."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(
+        rows_by_name={"a.umich.edu": [cname_rows(), address_rows(proxied=False)]})
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "unverified 1" in captured.out
+    assert "a.umich.edu  UNVERIFIED -- the batch call succeeded but" in captured.out
+    assert "proxy status" in captured.out
+    assert "DNS-only" in captured.out
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["entries"]["a.umich.edu"]["outcome"] == "unverified"
+
+
+def test_a_rerun_over_an_unproxied_record_refuses_instead_of_reporting_already_applied(
+        apc, tmp_path, monkeypatch, capsys):
+    """Adversarial review 2026-08-04 finding 3, scenario (a), end to end.  Re-running the same
+    plan file is the action R4.2's `already-applied` carve-out exists to make safe, and CLAUDE.md
+    advertises as "safe, cheap, and call zero Cloudflare write endpoints".  If someone has since
+    turned the orange cloud off, the honest answer is to REFUSE -- the whole file, per section 3's
+    all-or-nothing property -- not to tell the operator, and the run record they attach to the
+    change ticket, that the state is already correct.
+
+    Zero batch calls asserted against the fake client's record, and exit 2 ("nothing was
+    changed") is therefore true of this run."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows(proxied=False)]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert code == 2
+    assert client.batch_calls == []
+    assert "already applied -- nothing to do" not in captured.out
+    assert "ATTENTION: a.umich.edu proxy-status-drift" in captured.err
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["entries"]["a.umich.edu"]["verdict"] == "proxy-status-drift"
 
 
 def test_a_bare_transport_error_on_the_verification_read_is_unverified_not_unknown(

@@ -295,7 +295,7 @@ contract's check 2 names that explicitly rather than failing on a missing key se
 later.
 
 **Three passes, strictly ordered, no interleaving: validate → report → apply.** Pass 1 lists each
-selected entry's live Cloudflare records (read-only) and classifies it into one of six verdicts
+selected entry's live Cloudflare records (read-only) and classifies it into one of seven verdicts
 (below). If **any** selected entry is invalid, the run reports every invalid one and exits 2
 having written nothing — **the whole file**, not just the bad entries. Pass 2 (the report) runs
 **identically in both modes**, from the same data pass 1 produced, so a dry run is a rehearsal of
@@ -306,10 +306,11 @@ stops at the **first** failure — it never reverts what it already applied and 
 a failure to the remaining entries. This is the **all-or-nothing property**: a run either passes
 validation entirely and then applies, or fails validation and touches nothing at all.
 
-**Six verdicts; two are valid.** `ready` (records match what's meant to be deleted — applied in
+**Seven verdicts; two are valid.** `ready` (records match what's meant to be deleted — applied in
 pass 3) and `already-applied` (records already match the target state — skipped, reported, and
 counted, contributing to exit 1) are valid. `record-ambiguous`, `partially-applied`,
-`unexpected-records` and `records-missing` are invalid and abort the whole run. This is a
+`unexpected-records`, `records-missing` and `proxy-status-drift` are invalid and abort the whole
+run. This is a
 **deliberate narrowing** of util3 SPEC §5.4's original applier contract, on `PROMPT.md`'s explicit
 instruction: §5.4 said a zero-match `delete_match` should be *skipped and reported*, and a
 multi-match one *refused and reported*, with the rest of the file still applied — per-entry
@@ -319,6 +320,29 @@ invalid state, including the multi-match case, aborts the **entire** run before 
 written. Without the `already-applied` carve-out a run that died at entry 12 of 217 could never be
 safely re-run — re-running the same file to finish an interrupted job, and applying a file that is
 already fully applied, are both meant to be safe, cheap, and call zero Cloudflare write endpoints.
+
+**`proxy-status-drift`, and why the proxy status is checked BESIDE the comparison key rather than
+inside it.** `record_key` is `(TYPE, normalize(name), canonical_content)` and carries no `proxied`
+— it must stay comparable against `delete_match`, whose items are `{type, name, content}` only,
+because Cloudflare's batch `deletes` has no name/type/content form. So `proxied` was read by nobody:
+**measured**, with Cloudflare holding exactly the plan's A record but `proxied=False`, `verdict_for`
+returned `already-applied` and `verify_records` returned `True` — a DNS-only replacement is out of
+certificate service (an HTTPS outage plus origin-IP exposure), which is the migration's worst
+outcome. `proxy_status_mismatches(posts, rows)` is now a second comparison made in the two places
+that compare R against **P**: the `already-applied` row (a disagreement is `proxy-status-drift`,
+invalid, abort) and the post-apply verification (a disagreement is a `VerifyError` → `unverified` →
+exit 3). The **delete** side is deliberately unchecked — those records are about to be deleted and
+`delete_match` carries no `proxied`. A live `proxied` of **`None` is a mismatch, not a pass**: it is
+`Optional[bool]` on every SDK model and the sibling excludes a null swept status as
+`unknown-proxy-status` because "guessing either way is unsafe"; it gets its own "UNKNOWN (null)"
+wording, since "DNS-only" would be a claim the script cannot make.
+
+**The file contract has nine checks, not eight.** Check 9 — every post in one entry must agree on
+`proxied` and `ttl` — was `describe_change`'s second `InvariantError`, raised in *pass 2* after
+every entry had already been read from Cloudflare. It is a property of the operator's file, so it is
+a `PlanFileError` before the first API call; `InvariantError` is defined as "not an operator error".
+`describe_change` keeps the guard, where the class is now correct: with check 9 upstream, reaching
+it means the gate has a bug.
 
 **The exit taxonomy adds a code the siblings don't have.** Both siblings use `0 / 1 / 2 / 130`;
 this script adds **3**: `0` completed clean (or a dry run that validated clean), `1` completed

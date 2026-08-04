@@ -233,7 +233,11 @@ what lets a CNAME and its replacement A records — which cannot coexist — be 
 ### R6 — Post-apply verification
 
 R6.1 After each successful batch call, the applier MUST re-list the FQDN and require R == P
-exactly (§7.1's governed-type rule applies).
+exactly (§7.1's governed-type rule applies) **and** every matching live record's proxy status to
+equal its post's (§7.1a). A proxy disagreement surviving R6.2's retry is a `VerifyError` like any
+other mismatch, with its **own** message — "does not hold the expected records" would be false when
+Cloudflare holds exactly those records in the wrong proxy status, and would send an operator hunting
+a content difference that is not there.
 
 R6.2 On mismatch, the applier MUST wait `VERIFY_RETRY_SLEEP` (2.0 s, through the `sleep` seam)
 and re-list **once** before failing.
@@ -385,7 +389,7 @@ real-built-request test (§14 group 13). That sentence in CLAUDE.md MUST be upda
 
 ---
 
-## 6. File contract — the eight fatal checks
+## 6. File contract — the nine fatal checks
 
 Evaluated in this order, before any Cloudflare call. Each is fatal: `PlanFileError`, exit 2.
 This list is **exhaustive**.
@@ -400,9 +404,23 @@ This list is **exhaustive**.
 | 6 | `body` contains a `deletes` key | the FQDN key, and why (util3 R5.3: ids are resolved at apply time, so a baked-in `deletes` cannot be correct) |
 | 7 | `body.posts` absent or empty; a post missing `type`/`name`/`content`; a post `type` outside `{CNAME, A, AAAA}` | the FQDN key and the offending post index |
 | 8 | `delete_match` absent, empty, or an item missing `type`/`name`/`content`, or an item `type` outside `{CNAME, A, AAAA}` | the FQDN key and the offending item index |
+| 9 | An entry's `body.posts` do not all agree on `proxied` **and** `ttl` | the FQDN key, the offending post index, and both disagreeing `(proxied, ttl)` pairs |
 
 Check 5 is what makes R5.3's typed call honest. Checks 7 and 8 are what make R1.1's governed-type
-rule total: after them, D and P contain only governed types by construction.
+rule total: after them, D and P contain only governed types by construction. Check 9 is what makes
+§11.4's single trailing `(flags, ttl N)` block honest.
+
+**Check 9 was added by the 2026-08-04 adversarial review (finding 11), moved from `describe_change`.**
+It was an `InvariantError` raised in **pass 2** — after pass 1 had already read every selected entry
+from Cloudflare. *Intent:* `InvariantError`'s own definition is "a mid-run internal invariant
+violated — **not an operator error**" (§9.1), and disagreeing `proxied`/`ttl` across one entry's
+posts is operator-supplied *file content*. PD#2 wants the class to name who is at fault and PD#5
+wants it said before a hundred read calls rather than after them. The loud behaviour is unchanged
+and the alternative — rendering the flags per group in `render_records` — remains rejected, because
+§11.4's line format pins exactly one trailing block. `describe_change` keeps a guard for the same
+shape, and there the class **is** now correct: with check 9 upstream, reaching it means the gate has
+a bug, which is exactly what `InvariantError` is for (the same public-helper discipline
+`verify_records` applies to a shape `merge_body` already guards).
 
 *Intent for "fatal, not skipped":* every one of these means the file is not what this script knows
 how to apply. A file that is malformed in one entry is a file whose provenance is in question, and
@@ -431,6 +449,42 @@ healthy zone. Names and CNAME targets are compared case-insensitively with a tra
 matching `normalize()` in both siblings. The API's own `name` and `content` filters are documented
 **case-insensitive**, so what the filter returns is re-checked in code regardless.
 
+### 7.1a The proxy status, checked beside the key — never inside it
+
+`record_key` deliberately carries **no** `proxied`, and MUST NOT: it has to stay comparable against
+`delete_match`, whose items are `{type, name, content}` only (util3 §5.3), because Cloudflare's
+batch `deletes` has no name/type/content delete form and the ids are resolved at apply time.
+
+So the proxy status is a **second, separate comparison**, made by `proxy_status_mismatches(posts,
+rows)` in exactly the two places that compare **R against P**:
+
+| Place | Rule |
+|---|---|
+| §7.3 row 3a (`verdict_for`) | R == P **and** every matching live record's `proxied` equals `bool(post["proxied"])` → `already-applied`. Any disagreement → **`proxy-status-drift`**, invalid, abort |
+| R6.1 (`verify_records`) | the post-apply read must satisfy the same two conditions; a proxy disagreement is a `VerifyError` → outcome `unverified` → exit 3 |
+
+**The D side is deliberately NOT checked.** A `ready` verdict means R == D and D's records are about
+to be deleted; their proxy status is not a property the file asserts, and `delete_match` carries no
+`proxied` to compare against.
+
+**A live `proxied` of `None` is a mismatch, not a pass.** It is `Optional[bool]` on every SDK record
+model, and the sibling excludes an entry whose *swept* status is null as `unknown-proxy-status`
+precisely because *"whether the replacement records must be created proxied cannot be determined,
+and guessing either way is unsafe"*. Reading one back is the same problem, and it gets its own
+sentence in the detail — "UNKNOWN (null) proxy status" — because "DNS-only" would be a claim this
+script cannot make.
+
+*Intent (2026-08-04 adversarial review, finding 3):* R6.1 is justified by PD#14 — *"a 200 from the
+batch endpoint is Cloudflare's CLAIM that the swap happened; the record list is the EVIDENCE"* — but
+the evidence collected was the key alone. **Measured:** with Cloudflare holding exactly the plan's A
+record but `proxied=False`, `verdict_for` returned `already-applied` and `verify_records` returned
+`True`. The script that *writes* these files states the stakes: *"a replacement created DNS-only
+would take the hostname out of certificate service"* — an HTTPS outage plus origin-IP exposure, the
+migration's worst outcome, invisible to the applier's strongest instrument. Both failure scenarios
+are real: (a) someone turns the orange cloud off and a re-run — the action R4.2's carve-out exists to
+make safe — reports `already applied -- nothing to do`, exit 1; (b) a batch that creates the records
+DNS-only verifies `True` and is reported `applied`, exit 0.
+
 ### 7.2 The comparison
 
 Pass 1 computes `R`, `D` (from `delete_match`) and `P` (from `body.posts`) as **sets of
@@ -442,7 +496,8 @@ Pass 1 computes `R`, `D` (from `delete_match`) and `P` (from `body.posts`) as **
 |---|---|---|---|---|
 | 1 | `record-ambiguous` | some `record_key` occurs more than once in R | **invalid** | abort |
 | 2 | **`ready`** | R == D | valid | applied in pass 3 |
-| 3 | **`already-applied`** | R == P | valid | skipped, reported, counted; contributes exit 1 |
+| 3 | **`already-applied`** | R == P **and** every live record's proxy status matches its post's (§7.1a) | valid | skipped, reported, counted; contributes exit 1 |
+| 3a | `proxy-status-drift` | R == P but at least one live record's `proxied` is not `bool(post["proxied"])`, or is `None` (§7.1a) | **invalid** | abort |
 | 4 | `partially-applied` | R contains at least one member of D **and** at least one member of P | **invalid** | abort |
 | 5 | `unexpected-records` | R ⊃ D, or R ⊃ P (a proper superset — every expected record plus extra governed records) | **invalid** | abort |
 | 6 | `records-missing` | anything else (R is a strict subset of D or of P, R is empty, or R holds unrelated governed records) | **invalid** | abort |
@@ -476,6 +531,7 @@ raw rows as a local, so the ids are a same-scope lookup, not a signature change.
 | happy | R == D | `ready` |
 | **nil** | `delete_match` or `posts` absent/empty | **unreachable** — §6 checks 7 and 8 made it fatal before pass 1. Asserted in code (`InvariantError`), not assumed. |
 | **empty** | R is empty — no governed record at the name at all | `records-missing`; abort. *Not* silently treated as already-applied. |
+| **nil (proxy status)** | a live record's `proxied` is `None` — the SDK's unknown status | `proxy-status-drift` at validation, `VerifyError` at verification. Never treated as `False`, never as a match (§7.1a) |
 | **upstream error** | the list call raises `cloudflare.CloudflareError` | `CloudflareReadError`, exit 2, nothing changed |
 
 ---
@@ -899,9 +955,13 @@ can still fire: it hooks the SDK's transport, so a transport change would otherw
 | `record_key(rtype, name, content)` | the §7.1 comparison key |
 | `governed_records(rows)` | the subset of a list response that forms R |
 | `verdict_for(entry, rows)` | `(verdict, detail)` per §7.3 |
+| `duplicate_key_detail(present, keys)` | §7.3 row 1's detail, `""` when R holds no duplicate key |
+| `mismatch_verdict(have, want_delete, want_post)` | §7.3 rows 4–6, as `(verdict, detail)` |
+| `proxy_status_mismatches(posts, rows)` | §7.1a's list of human-readable proxy-status disagreements; `[]` when every matching live record agrees |
+| `check_post_flags(posts, where)` | §6 check 9; raises `PlanFileError` |
 | `merge_body(entry, delete_ids)` | the postable batch body (R5.1) |
 | `describe_change(fqdn, entry)` | the §11.4 line |
-| `verify_records(entry, rows)` | `True` when R == P (R6.1) |
+| `verify_records(entry, rows)` | `True` when R == P **and** every proxy status matches (R6.1/§7.1a) |
 | `outcome_document(...)` | the §12.2 document |
 | `outcome_path(input_path, at)` | the §12.1 path |
 | `summary_lines(*, direction, source, source_generated_at, for_real, entries_in_file, selected, counts, record_path)` | the §11.3 block. All **keyword-only** |
@@ -922,7 +982,7 @@ All offline, `unit` tier, in `tests/unit/test_apply_platform_domains_cloudflare.
 |---|---|---|
 | 1 | file contract | one test per §6 check (8), including an `-excluded.json` refused by name and a `deletes`-in-body refusal |
 | 2 | `--only` | selection; an unmatched name is fatal and **every** miss is named; the subset ATTENTION line; `--only` matching after `normalize()` |
-| 3 | `verdict_for` | one test per §7.3 row (6); plus: an IPv6 address written two ways is one record; a trailing dot and a case difference do not split a key; an unrelated `TXT` at the name blocks nothing; row 1 evaluated before the set comparisons |
+| 3 | `verdict_for` | one test per §7.3 row (7, including `proxy-status-drift` — with a **mixed** fixture in which only one of two records is DNS-only, both drift directions, and the `None` status); plus: an IPv6 address written two ways is one record; a trailing dot and a case difference do not split a key; an unrelated `TXT` at the name blocks nothing; row 1 evaluated before the set comparisons |
 | 4 | `merge_body` | `deletes` built from the resolved ids; `posts` passed through **byte-identical** to the file; nothing else added |
 | 5 | dry run | **zero** batch calls, asserted against the fake client's recorded calls; the report is printed; exit 0; a `planned` tally |
 | 6 | for-real happy path | `batch()` called once per entry with exactly the expected `zone_id`/`deletes`/`posts`; post-verify runs; exit 0 |
