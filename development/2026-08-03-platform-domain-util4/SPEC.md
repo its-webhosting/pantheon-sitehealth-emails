@@ -1161,45 +1161,89 @@ carried as an assumption and falsified here. If a stale id is silently ignored, 
 rewritten and R6's post-apply verification becomes the sole guard — which it already is in
 practice.
 
-### Results — items 1–6, run 2026-08-04 after Task 10
+### Results — items 1–6
 
-**Item 1 — full offline suite.**
+**Re-run 2026-08-04 at `1d7274d`, the head of the second adversarial-review fix pass.** The block
+this replaces was pasted at `250e517`/`d491b6a` and then went stale through **eight** code-bearing
+commits (`569d2b3`, `cd922e4`, `a1c960f`, `a09d520`, `5e4b4fd`, `3240466`, `3022585`, `6e4b350`,
+plus `1d7274d` itself) — the 2026-08-04 adversarial review's finding 6. *Intent:* the quality bar
+says acceptance criteria are *"exact commands + expected output, **run and pasted**"*, and an unrun
+acceptance suite is PD#14 exactly. Numbers below are pasted from the runs, never edited to what they
+ought to be.
+
+**Item 1 — full offline suite** (`./run-tests --fast`). ruff and pyright run **first** and gate:
 
 ```
+All checks passed!
+0 errors, 0 warnings, 0 informations
+============================= test session starts ==============================
+platform linux -- Python 3.13.14, pytest-9.1.1, pluggy-1.6.0
+collected 1730 items / 2 deselected / 1728 selected
+...
 107 snapshots passed.
-========= 1639 passed, 3 skipped, 2 deselected, 15 warnings in 39.39s ==========
+========= 1725 passed, 3 skipped, 2 deselected, 15 warnings in 41.23s ==========
+EXIT=0
+```
+
+**Item 2 — this utility's own file** (`./run-tests --fast tests/unit/test_apply_platform_domains_cloudflare.py`):
+
+```
+============================= 247 passed in 6.22s ==============================
 Linting (ruff, campaign ratchet) ...
 Type-checking (pyright, campaign ratchet) ...
-exit=0
 ```
 
-**Item 2 — this utility's own file.** `164 passed`, ruff and pyright clean.
+**Item 3 — both siblings untouched.** `git diff --stat` for `find-platform-domains-dns`,
+`find-platform-domains-cloudflare` and both their test files, against the working tree **and**
+against `33b2ba8..HEAD`: **empty output** in both cases.
 
-**Item 3 — both siblings untouched.** `git diff --stat` over the whole branch for
-`find-platform-domains-dns`, `find-platform-domains-cloudflare` and both their test files:
-**empty output**.
-
-**Item 4 — an excluded file is refused by name.** Note that the summary block and the run record
-are produced on this fatal path too (R8.1/R9.1):
+**Item 4 — an excluded file is refused by name.** Unchanged in shape by this fix pass: §6 check 2
+fires before the client is built, so §6a's provenance lines never run on this path and no Cloudflare
+call is made. The summary block and the run record are still produced (R8.1/R9.1):
 
 ```
-ERROR: platform-domains-cloudflare-excluded.json is an EXCLUDED file (generated.direction is
-'excluded'), not a plan or a revert.  An excluded file records why FQDNs got no rewrite
-instructions; it carries no request body and there is nothing to apply.
+ERROR: platform-domains-cloudflare-excluded.json is an EXCLUDED file (generated.direction is 'excluded'), not a plan or a revert.  An excluded file records why FQDNs got no rewrite instructions; it carries no request body and there is nothing to apply.
 apply-platform-domains-cloudflare: direction=unknown
   source: platform-domains-cloudflare-excluded.json (generated unknown)
   mode:   DRY RUN -- no changes were made
   entries in file: 0   selected: 0   (entries are FQDNs, not Pantheon sites)
   applied 0   already applied 0   planned 0   failed 0   unverified 0   unknown 0   not attempted 0
-  record: platform-domains-cloudflare-excluded-run-20260804T020342Z.json
+  record: platform-domains-cloudflare-excluded-run-20260804T155342Z.json
 exit=2
 ```
 
-**Item 5 — `--help`.** Documents `FILE`, `--only`, `--for-real` ("WITHOUT THIS FLAG NOTHING IS
-CHANGED") and all five exit codes.
+**Item 5 — `--help`,** pasted verbatim rather than summarized (the previous block described it):
 
-**Item 6 — a live dry run against the real 217-entry baseline plan.** Read-only; **zero batch
-calls**, by construction and by R2.6's test. Exit **0**:
+```
+usage: apply-platform-domains-cloudflare [-h] [-c CONFIG] [--only FQDN] [--for-real] [-v] FILE
+
+Apply a plan or revert file produced by find-platform-domains-cloudflare. Validates every selected
+entry against live Cloudflare state first and refuses to change anything if any entry fails. WITHOUT
+--for-real this is a dry run: it reports what it would do and changes nothing.
+
+positional arguments:
+  FILE                 the -plan.json or -revert.json file to apply
+
+options:
+  -h, --help           show this help message and exit
+  -c, --config CONFIG  TOML file to read [Cloudflare] credentials from (default: pantheon-
+                       sitehealth-emails.toml)
+  --only FQDN          apply only this FQDN; repeat the option for more than one. An FQDN that is
+                       not in FILE is an error
+  --for-real           actually make the Cloudflare API calls. WITHOUT THIS FLAG NOTHING IS CHANGED
+  -v, --verbose        also print each API call's method, path and exact request body
+
+Exit codes: 0 = everything applied (or a dry run that validated clean), 1 = completed with already-
+applied entries skipped, 2 = could not complete and NOTHING was changed, 3 = FAILED MID-APPLY and
+Cloudflare was left partially changed, 130 = interrupted. A run record naming every entry's outcome
+is written beside FILE on every one of those paths.
+exit=0
+```
+
+**Item 6 — NOT RE-RUN, and stated rather than implied.** It is a live dry run: read-only, but it
+makes real Cloudflare API calls, and the brief governing this fix pass forbids any live call. The
+result below therefore stands **as run on 2026-08-04 at `250e517`** — before `a1c960f`, `a09d520`,
+the fix-pass-1 commits and everything in this fix pass:
 
 ```
 apply-platform-domains-cloudflare: direction=plan
@@ -1210,22 +1254,27 @@ apply-platform-domains-cloudflare: direction=plan
   record: platform-domains-cloudflare-plan-run-20260804T020610Z.json
 ```
 
-**stderr was empty — all 217 entries validated `ready` against live Cloudflare state**, three days
-after the plan was generated. This is the strongest end-to-end signal available without STOP 2:
-217 real FQDNs across 187 zones, each read back through `records_at_name` and compared by
-`record_key`, with no `record-ambiguous`, `partially-applied`, `unexpected-records` or
-`records-missing` verdict anywhere.
-
-The run record it wrote carries all eleven `run` fields, `for_real: false`, `exit_code: 0`,
-`entries_in_file: 217`, `selected: 217`, a zero-filled seven-key `counts` with `planned: 217`, and
-one entry per FQDN. `git check-ignore -v` confirms §12.1's claim on the real filename:
+**stderr was empty — all 217 entries validated `ready`** against live Cloudflare state, three days
+after the plan was generated: 217 real FQDNs across 187 zones, each read through `records_at_name`
+and compared by `record_key`, with no invalid verdict anywhere. `git check-ignore -v` confirmed
+§12.1's claim on the real filename:
 
 ```
 .gitignore:11:/platform-domains-cloudflare*.json  platform-domains-cloudflare-plan-run-20260804T020610Z.json
 ```
 
-**Items 7–13 remain unrun** — they are destructive and gated behind STOP 2 (§21), which requires
-the exact phrase `RUN LIVE` **and** a named throwaway hostname.
+**Three things about that run are now known to be false of the current script**, and are recorded
+here rather than left for a reader to infer from an undated block:
+
+1. Its stderr would **not** be empty today: §6a's staleness line fires (the file was three days
+   old), and its coverage line would fire too if that baseline had come from a narrowed sweep.
+2. Its 217 `ready` verdicts say nothing about the **proxy status** — §7.1a did not exist, so a
+   `proxy-status-drift` entry among the 217 would have validated `ready`. Re-running it is the
+   cheapest available check of that, and it is read-only.
+3. Its run record has no `source_zones_swept`/`source_zones_total` (§12.2).
+
+**Items 7–13 remain unrun** — destructive, gated behind STOP 2 (§21), which requires the exact
+phrase `RUN LIVE` **and** a named throwaway hostname.
 
 ---
 
@@ -1263,12 +1312,34 @@ From `find-platform-domains-cloudflare`, copied verbatim or near-verbatim:
 | `normalize` | the FQDN comparison rule, shared with the file format |
 | `StartupError`, `InvariantError`, `OutputWriteError` | the exception spine |
 | `MARKER_RE`, `resolve_env_marker`, `resolve_config_value` | the `<{env …}` / `<{secret env …}` resolver |
-| `build_client`, `cloudflare_client` | credentials and the environment pin. **One deliberate divergence from the sibling** — see below |
+| `build_client`, `cloudflare_client` | credentials and the environment pin. **Two deliberate divergences from the sibling** — see below |
 | `api_error_text` | narrowed per §9.1 |
 | `dump_json`, `write_json_atomic` | the run-record serializer and atomic write |
 | `main()`'s handler-chain shape | the exit taxonomy (§8.3) |
 
-**`build_client`'s credential-nulling test diverges from both other copies, deliberately.** This
+**Divergence 1 — `max_retries=0` on the constructor, because this is the copy that WRITES.**
+Recorded here by the 2026-08-04 adversarial review (finding 4), which found the pin documented in no
+governing document at all: `grep -n max_retries` returned nothing in this spec and nothing in
+`CLAUDE.md`, while §17 still claimed *one* divergence and `CLAUDE.md` told a maintainer there were
+*"three places to check"* on an SDK upgrade without hinting the three differ.
+
+**Measured against cloudflare 5.4.0, read directly:** `_constants.DEFAULT_MAX_RETRIES` is **2**, and
+`BaseClient._should_retry` (`_base_client.py:815`) retries on 408/409/429/5xx and on connection
+errors **with no HTTP-method check** — a `POST` exactly like a `GET`. `POST /zones/{id}/
+dns_records/batch` is **not idempotent** (R5.4: Cloudflare executes it as one transaction, Deletes
+then Posts), so a "failed" response the SDK silently retried can mean the **first** attempt already
+committed and the retry landed on an already-changed state, answering with its own error (a
+duplicate-create 400) that this script would classify `failed` — "rejected, nothing committed" — for
+a write that committed. That is §8.1's own defect arriving by a different door. Losing retries on
+the pass-1 **reads** is the safe direction of the same change (a lost read is `CloudflareReadError`,
+exit 2, nothing changed), so the pin is unconditional on the single client this script builds rather
+than conditional on read-vs-write. Neither sibling sets it, and neither needs to: neither writes.
+
+Pinned by `test_build_client_pins_max_retries_to_zero` **and** by a real `httpx.MockTransport` test
+asserting exactly one POST on a 429/500 — the attribute assertion alone would not survive the SDK
+refactor §16's own pin tests were rewritten for.
+
+**Divergence 2 — `build_client`'s credential-nulling test diverges from both other copies.** This
 copy nulls a field when `creds.get(field) is None`; the sibling and `plugin/cloudflare/client.py`
 both null it only when `field not in creds`. Measured: an **explicit** `api_email=None` is *in*
 `creds`, so the `not in` form leaves it for the SDK to back-fill, and an ambient
@@ -1287,8 +1358,8 @@ guard.
 
 | Copy | Form | Why |
 |---|---|---|
-| `plugin/cloudflare/client.py` (`pinned_client`) | **fixed** — `creds.get(field) is None` | The main program's pin. Not scheduled for deletion, and it runs unattended against production monthly, so it got the same fix and its own real-SDK test (`test_pinned_client_nulls_an_explicit_none_credential`) |
-| `find-platform-domains-cloudflare` (`build_client`) | still `field not in creds` | **Deliberately left.** That utility is read-only — it never writes to Cloudflare — and is deleted with this one after the CDN migration. Fixing it would mean touching a script three reviews have verified byte-identical to its original, for a hole its own caller already guards, on a path that cannot write. Recorded here so the divergence is a decision rather than an oversight (PD#9) |
+| `plugin/cloudflare/client.py` (`pinned_client`) | **fixed** — `creds.get(field) is None`; no `max_retries` pin (it does not write) | The main program's pin. Not scheduled for deletion, and it runs unattended against production monthly, so it got the same fix and its own real-SDK test (`test_pinned_client_nulls_an_explicit_none_credential`) |
+| `find-platform-domains-cloudflare` (`build_client`) | still `field not in creds`; no `max_retries` pin (it does not write) | **Deliberately left.** That utility is read-only — it never writes to Cloudflare — and is deleted with this one after the CDN migration. Fixing it would mean touching a script three reviews have verified byte-identical to its original, for a hole its own caller already guards, on a path that cannot write. Recorded here so the divergence is a decision rather than an oversight (PD#9) |
 
 **Not copied, deliberately:** `read_all`, `read_page_once`, `expected_record_count`, `ListTally`
 and the completeness cross-check (~120 lines). They exist to survive paginating a whole zone;
@@ -1462,13 +1533,27 @@ second appeared in seven of the ten tasks.
 
 7. **Line count, and did "copy, don't modularize" start costing more than it saves?**
 
-   `apply-platform-domains-cloudflare` is **1560** lines with 53 top-level defs/classes; its test
-   file is **2449** lines / 164 tests. For scale, the sibling it copies from is **1620** lines. So
-   the third copy did not make the rule more expensive than it already was — the shared surface is
-   eight small helpers (§17), each verified byte-identical in behavior by the final reviewer, and
-   deletion stays `git rm` of three files plus three textual edits. **Recorded, not acted on, per the
-   question's own instruction.** The one real cost is that an SDK upgrade now has three pin sites to
-   re-verify instead of two; `CLAUDE.md` says so explicitly.
+   **Re-measured 2026-08-04 at `1d7274d`** (the numbers first pasted here — 1560 / 53 / 2449 / 164 —
+   described the tree at `250e517`, eight code commits earlier; the 2026-08-04 review's finding 6):
+
+   ```
+   $ wc -l apply-platform-domains-cloudflare tests/unit/test_apply_platform_domains_cloudflare.py
+     2082 apply-platform-domains-cloudflare
+     3794 tests/unit/test_apply_platform_domains_cloudflare.py
+   $ grep -c "^def \|^class " apply-platform-domains-cloudflare
+   65
+   $ .venv/bin/python -m pytest tests/unit/test_apply_platform_domains_cloudflare.py -q
+   247 passed
+   ```
+
+   So: **2082** lines with **65** top-level defs/classes; its test file is **3794** lines / **247**
+   tests. For scale, the sibling it copies from is **1620** lines. The growth since `250e517` is
+   entirely review-driven — three fix passes' worth of guards, and the tests that prove each one can
+   go red — not new features. The conclusion is unchanged: the shared surface is eight small helpers
+   (§17) and deletion stays `git rm` of three files plus three textual edits. **Recorded, not acted
+   on, per the question's own instruction.** The one real cost is that an SDK upgrade now has three
+   pin sites to re-verify instead of two, and — since finding 4 — those three are **no longer
+   identical** (§17 names both divergences); `CLAUDE.md` now says so too.
 
 8. **Did any test in the two sibling test files change?**
 

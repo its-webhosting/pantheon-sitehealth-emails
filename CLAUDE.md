@@ -454,18 +454,46 @@ the session's own stream at `/dev/null`. This script's `write_report()` is the s
 to its `report_line()`. **An in-process test cannot pin this at all** — pytest never tears the
 interpreter down, so the shutdown flush this guards against never runs in-process, and a test that
 only calls the function directly would stay green even if the guard were deleted. The cover is
-**three** real subprocess tests, copying the pattern already in
+**four** real subprocess tests, copying the pattern already in
 `tests/unit/test_find_platform_domains_cloudflare.py`: `…doomed_stdout_exits_2_not_120…` and
 `…doomed_stderr_exits_2_not_120…` redirect at `/dev/full` — never `subprocess.DEVNULL`, which
-accepts every write and would prove nothing — and `…stdout_truly_closed…` uses `1>&-`, which makes
+accepts every write and would prove nothing — `…stdout_truly_closed…` uses `1>&-`, which makes
 `sys.stdout` **None**, where CPython's `print()` then silently does nothing and the whole report
-would vanish with no error at all.
+would vanish with no error at all, and
+**`test_a_doomed_stdout_during_the_flush_still_exits_a_named_code_not_crashing`** covers the
+*flush* path — a doomed stdout hit for the first time **inside `finish()`**, itself called from
+inside one of `main()`'s own `except` clauses, where a fresh exception is never redispatched to a
+sibling `except`. It is reproduced with a nonexistent `FILE`, so `finish()`'s summary print is the
+first stdout write the run attempts. That fourth one is the instance a future maintainer is least
+likely to reconstruct, and it was omitted from this list until the 2026-08-04 review's finding 9.
 
 Also **the only one of the family's three independent `build_client()`/environment-pin copies that
 performs writes** (see the "three places to check" note in the `find-platform-domains-cloudflare`
 subsection above) — an SDK upgrade that silently breaks the pin here is a
 credential-disclosure-**plus**-rewrite-aimed-at-an-attacker-chosen-host risk, not just a
 disclosure risk, because `$CLOUDFLARE_BASE_URL` redirects every request including the batch calls.
+
+**Being the write copy, it also pins `max_retries=0` on the constructor — a second divergence, and
+the one an SDK upgrade is most likely to reopen silently.** Measured against cloudflare 5.4.0:
+`_constants.DEFAULT_MAX_RETRIES` is **2** and `BaseClient._should_retry` (`_base_client.py:815`)
+retries 408/409/429/5xx with **no HTTP-method check** — a `POST …/dns_records/batch` exactly like a
+`GET`. That POST is not idempotent (Cloudflare runs it as one transaction, Deletes then Posts), so a
+"failed" response the SDK silently retried can mean the *first* attempt committed and the retry
+landed on an already-changed state, answering with its own error (a duplicate-create 400) that this
+script would read as `failed` — "rejected, nothing committed" — for a write that committed. Losing
+retries on the pass-1 *reads* is the safe direction of the same change (a lost read is
+`CloudflareReadError`, exit 2, nothing changed), so the pin is unconditional on the one client this
+script builds. It is asserted by `test_build_client_pins_max_retries_to_zero` **and** by a real
+`httpx.MockTransport` test proving exactly one POST on a 429/500.
+
+**So the three `build_client()` copies are no longer identical, and an SDK upgrade must check all
+three separately.** This one pins `max_retries=0` (the other two do not — neither writes) and nulls
+a credential when `creds.get(field) is None`; `plugin/cloudflare/client.py` uses the same `is None`
+idiom; `find-platform-domains-cloudflare` is **deliberately** still on the older
+`field not in creds`, which only re-nulls an *omitted* keyword and leaves an explicit `None` for the
+SDK's own ambient back-fill — left alone because that utility is read-only, its caller guards, and
+it is deleted with this one (`development/2026-08-03-platform-domain-util4/SPEC.md` §17 records the
+decision).
 
 `apply-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
 as its siblings: ruff, pyright, and CodeGraph key off the `.py` extension **and would otherwise be
