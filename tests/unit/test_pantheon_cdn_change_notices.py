@@ -1,3 +1,6 @@
+import inspect
+import re
+
 import pytest
 from helpers.checkload import load_check_module
 
@@ -144,8 +147,37 @@ def test_umich_before_cutoff_promises_maintenance(notices, findings):
     n = notices.cdn_change_notice("s", findings, umich=True, before_cutoff=True)
     assert "ITS will make these changes for you" in n.html
     assert "ITS will make these changes for you" in n.text
-    # The internal cutoff DATE is never disclosed to owners.
-    assert "September" not in n.html and "2026-09-15" not in n.html
+
+
+def test_the_internal_cutoff_date_cannot_reach_either_rendering(notices, findings):
+    """The cutoff DATE is never disclosed to owners -- it only selects the copy variant.
+
+    The previous version of this assertion was `"September" not in n.html and "2026-09-15" not
+    in n.html`, and it was weak in three separate ways:
+
+      1. It hardcoded the spelling of ONE value of hook.UMICH_MAINTENANCE_CUTOFF, so moving the
+         constant (the edit docs/pantheon-cdn-change.md explicitly anticipates) left it guarding
+         nothing at all -- stale by construction.
+      2. `and` binds both operands to n.html, so the PLAINTEXT body was never checked.  That is
+         the body read without following links, and the one where a leaked date would be barest.
+      3. It tested a string where the real guarantee is structural, so it could not fail for the
+         reason it existed.
+
+    What actually makes the leak impossible is the module boundary: cdn_change_notice receives
+    `before_cutoff` as a BOOL and never sees a date at all, so there is nothing to interpolate.
+    That is what this pins, plus a value-independent sweep for any ISO-8601 date in either body.
+    The complement -- that the real constant's own rendering stays out of the copy even after
+    someone moves it -- is pinned where the constant is reachable, in
+    tests/integration/test_check_pantheon_cdn_change.py.
+    """
+    parameters = inspect.signature(notices.cdn_change_notice).parameters
+    assert "before_cutoff" in parameters
+    assert parameters["before_cutoff"].annotation is bool
+    assert not [name for name in parameters if "date" in name or "cutoff_" in name]
+
+    n = notices.cdn_change_notice("s", findings, umich=True, before_cutoff=True)
+    for body in (n.html, n.text):
+        assert not re.search(r"\d{4}-\d{2}-\d{2}", body)
 
 
 def test_umich_on_or_after_cutoff_gets_generic_instruction(notices, findings):

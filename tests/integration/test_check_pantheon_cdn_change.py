@@ -59,6 +59,37 @@ def test_hook_adds_exactly_one_notice(check, reset_sc, monkeypatch):
     assert "ITS will make these changes for you" in notice["message"]   # U-M, before the cutoff
 
 
+def test_the_real_cutoff_date_never_reaches_the_owner_copy(check, reset_sc, monkeypatch):
+    """hook.py: "The date itself is NEVER shown to site owners; it only selects the copy variant."
+
+    Pinned HERE rather than in the notices unit test because this is the only place
+    UMICH_MAINTENANCE_CUTOFF is reachable -- the unit test loads notices standalone, and the
+    cutoff never crosses that boundary (only the `before_cutoff` bool does, which is what
+    test_the_internal_cutoff_date_cannot_reach_either_rendering pins).
+
+    Every form is DERIVED from the constant, never spelled out: the assertion this replaces
+    hardcoded "September"/"2026-09-15", so the moment anyone performed the edit
+    docs/pantheon-cdn-change.md anticipates -- moving the cutoff -- it silently guarded nothing.
+    Both variants are checked, because `before_cutoff` selects which copy an owner sees and the
+    date must stay out of both.
+    """
+    cutoff = check.hook.UMICH_MAINTENANCE_CUTOFF
+    forms = {cutoff.isoformat(), cutoff.strftime("%B"), cutoff.strftime("%B %d"),
+             cutoff.strftime("%B %d, %Y"), cutoff.strftime("%m/%d/%Y"), str(cutoff.year)}
+    for when in (cutoff - datetime.timedelta(days=1), cutoff + datetime.timedelta(days=1)):
+        monkeypatch.setattr(check.hook, "today", lambda when=when: when)
+        ctx = _ctx(reset_sc, ["occb.bus.umich.edu"])
+        check.hook.check_pantheon_cdn_change(ctx)
+        notice = ctx["notices"][0]
+        # BOTH renderings.  Checking only ["message"] (the HTML) is the exact defect this test
+        # replaces -- a mutation that leaked the date into the plaintext half sailed past the
+        # first draft of this very assertion.
+        for body_key in ("message", "text"):
+            for form in forms:
+                assert form not in notice[body_key], \
+                    f"cutoff rendering {form!r} leaked into the owner copy ({body_key})"
+
+
 def test_terminus_is_called_with_the_live_environment_of_the_site_id(check, reset_sc, monkeypatch):
     # The command takes the UUID, not the site name (core: live_site = site["id"] + ".live").
     calls = []
