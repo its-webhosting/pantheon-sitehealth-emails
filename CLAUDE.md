@@ -367,6 +367,15 @@ earlier entry failed).
 verification read — it is what produces the `unverified` outcome and exit 3, never `failed`/exit
 2, because the write already happened.
 
+**Pass 3 stops at the first failure, and each of its four stop paths is pinned by its own
+three-entry test** asserting on the fake client's *recorded batch calls* that the third entry was
+never posted. The `failed` arm was pinned that way from the start and the `unverified`/`unknown`
+arms were not: every test reaching them used a one-entry document, where `return` and `continue`
+are indistinguishable, so `return` → `continue` in either left the whole suite green while the
+mutated run rewrote a third production zone past an entry of unknown fate — the one behavior
+`PROMPT.md` forbids most explicitly. Asserting outcome *labels* does not catch it; a `continue`
+leaves the later entries looking plausible.
+
 **`--for-real` is the blast-radius gate**, same role as the main program's own `--for-real`
 (without it, mail goes to the operator, not to owners) — here, without it, no batch call is ever
 made at all (asserted against the fake client's recorded calls, not inferred; neither sibling

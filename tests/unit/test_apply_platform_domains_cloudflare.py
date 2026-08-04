@@ -2650,6 +2650,73 @@ def test_an_unrecognised_exception_from_the_batch_call_itself_is_unknown_never_e
     assert "ValueError" in record["entries"]["a.umich.edu"]["error"]
 
 
+def test_an_unknown_fate_on_the_second_entry_leaves_the_third_never_posted(
+        apc, tmp_path, monkeypatch):
+    """Fix-pass review, IMPORTANT 2 (PD#14): `apply_all`'s UNKNOWN arm ends in `return`, and that
+    `return` was unpinned -- every test reaching it used a ONE-entry document, where `return` and
+    `continue` are indistinguishable.  Measured by the reviewer: changing it to `continue` left all
+    211 tests green while the mutated run went on to rewrite a THIRD production zone past an entry
+    whose fate was unknown -- the single behaviour `PROMPT.md` forbids most explicitly ("it should
+    not attempt to make the remaining changes specified in the file"; SPEC R3.4).
+
+    Asserted on the fake client's RECORDED batch calls, not on the outcome labels: a `continue`
+    would still leave `c.umich.edu` with a plausible-looking `applied`, so only "the third entry
+    was never POSTed" tells the two apart.
+    """
+    path = write_doc(tmp_path, three_entry_doc())
+
+    class DropOnSecond(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            if len(self.batch_calls) == 1:
+                self.batch_calls.append(kwargs)
+                raise cloudflare.APIConnectionError(request=None)
+            return super()._batch(**kwargs)
+
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = DropOnSecond(rows_by_name=rows)
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 3
+    assert len(client.batch_calls) == 2
+    assert [call["zone_id"] for call in client.batch_calls] == ["zone-a", "zone-b"]
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    outcomes = {k: v["outcome"] for k, v in record["entries"].items()}
+    assert outcomes == {"a.umich.edu": "applied", "b.umich.edu": "unknown",
+                        "c.umich.edu": "not-attempted"}
+
+
+def test_an_unverified_entry_on_the_second_entry_leaves_the_third_never_posted(
+        apc, tmp_path, monkeypatch):
+    """Fix-pass review, IMPORTANT 2 (PD#14), the UNVERIFIED arm's twin of the test above -- its
+    `return` was unpinned in exactly the same way and for exactly the same reason (one-entry
+    documents only), and `return` -> `continue` there also left all 211 tests green.
+
+    b.umich.edu's post-batch verification read returns NO records, twice `VERIFY_RETRY_SLEEP`
+    apart, so `apply_entry` raises `VerifyError` after a batch that RETURNED.  c.umich.edu must
+    never be POSTed."""
+    path = write_doc(tmp_path, three_entry_doc())
+    rows = three_entry_rows()
+    for name in rows:
+        if name == "b.umich.edu":
+            rows[name] = [rows[name][0], []]   # pass 1 sees the CNAME; verification sees nothing
+        else:
+            rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                          for r in address_rows()]]
+    client = FakeCloudflareClient(rows_by_name=rows)
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 3
+    assert len(client.batch_calls) == 2
+    assert [call["zone_id"] for call in client.batch_calls] == ["zone-a", "zone-b"]
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    outcomes = {k: v["outcome"] for k, v in record["entries"].items()}
+    assert outcomes == {"a.umich.edu": "applied", "b.umich.edu": "unverified",
+                        "c.umich.edu": "not-attempted"}
+
+
 def test_exit_code_three_when_the_only_outcome_is_unverified(apc):
     """Item A (Task 8 review): the pure-function pin for R6.3's exit-3 rule, independent of any
     end-to-end run."""

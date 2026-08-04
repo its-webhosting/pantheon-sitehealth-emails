@@ -162,6 +162,19 @@ order** (sorted, since the file is written with sorted keys), and stops at the f
 should not attempt to revert any changes it has already made, and it should not attempt to make
 the remaining changes specified in the file."*
 
+R3.4.1 **Every one of pass 3's stop paths MUST have a test that goes red when that path alone stops
+stopping** — a `three_entry_doc()`-shaped run failing on the *second* entry, asserting on the fake
+client's **recorded batch calls** that the third was never posted. *Intent (fix-pass review,
+Important 2, PD#14):* the `failed` arm was pinned that way and the `unverified` and `unknown` arms
+were not — every test reaching them used a one-entry document, where `return` and `continue` are
+indistinguishable. Measured: `return` → `continue` in either arm left all 211 tests green while the
+mutated run went on to rewrite a third production zone past an entry whose fate was unknown. An
+assertion on the outcome *labels* is not a substitute: a `continue` leaves the later entries with
+plausible-looking outcomes.
+
+R3.5 Pass 3 MUST NOT re-decide anything pass 1 decided. It sends the merged body built from pass
+1's resolved record ids, and verifies. An entry reaching pass 3 without a `ready` verdict is an
+`InvariantError` (§10.1).
 
 ### R4 — Deviation from util3 SPEC §5.4, stated explicitly
 
