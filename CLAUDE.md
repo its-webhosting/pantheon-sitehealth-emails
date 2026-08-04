@@ -397,8 +397,9 @@ credential-disclosure-**plus**-rewrite-aimed-at-an-attacker-chosen-host risk, no
 disclosure risk, because `$CLOUDFLARE_BASE_URL` redirects every request including the batch calls.
 
 `apply-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
-as its siblings: ruff, pyright, and CodeGraph key off the `.py` extension. **Delete this script
-after Pantheon's CDN migration** — checklist in
+as its siblings: ruff, pyright, and CodeGraph key off the `.py` extension **and would otherwise be
+blind to the extension-less real file**. **Delete this script after Pantheon's CDN migration** —
+checklist in
 `development/2026-07-30-platform-domain-util2/SPEC.md` §11 (this script's six-item delta is §11
 item 9, added by `development/2026-08-03-platform-domain-util4/SPEC.md` §19).
 

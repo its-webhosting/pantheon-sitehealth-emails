@@ -800,19 +800,26 @@ def api_error_text(e):
     errors = body.get("errors") if isinstance(body, dict) else None
     if not isinstance(errors, list) or not errors:
         return f"{type(e).__name__}: HTTP {status}"
-    admitted = errors[:MAX_ADMITTED_ERRORS]
+    # M1 (whole-branch review): filter to dicts FIRST, then slice -- slicing errors[:N] before
+    # filtering let non-dict junk entries occupy admitted slots a real error belonged in.
+    # Measured: five junk entries ahead of the one real error dropped it entirely (parts stayed
+    # empty, falling through to the bare "HTTP 400" branch below); with junk mixed among more
+    # real errors than the cap, fewer real errors were shown than MAX_ADMITTED_ERRORS promises,
+    # and `remaining` (computed from the RAW array length) then undercounted how many real
+    # errors were still hidden.  `dict_errors` is the one list every count below is measured
+    # against, so "N error(s)" and "and M more" both describe REAL errors, never junk.
+    dict_errors = [item for item in errors if isinstance(item, dict)]
+    admitted = dict_errors[:MAX_ADMITTED_ERRORS]
     parts = []
     for item in admitted:
-        if not isinstance(item, dict):
-            continue
         code = str(item.get("code", ""))[:MAX_CODE_LENGTH]
         message = str(item.get("message", ""))[:ERROR_MESSAGE_LIMIT]
         parts.append(f"{code} {message}".strip())
     if not parts:
         return f"{type(e).__name__}: HTTP {status}"
-    remaining = len(errors) - len(admitted)
+    remaining = len(dict_errors) - len(admitted)
     suffix = f"; … and {remaining} more" if remaining else ""
-    return (f"{type(e).__name__}: HTTP {status} ({len(errors)} error(s)): "
+    return (f"{type(e).__name__}: HTTP {status} ({len(dict_errors)} error(s)): "
             + "; ".join(parts) + suffix)
 
 
@@ -1234,10 +1241,21 @@ def outcome_path(input_path, at):
 
     The repository's existing .gitignore line /platform-domains-cloudflare*.json already covers
     records written beside the conventional baseline, so no new ignore entry is needed (SPEC 19).
+
+    TOTAL over every FILE shape (whole-branch review I1): `Path.with_name()` raises `ValueError:
+    ... has an empty name` for any path whose `.name` is empty -- `Path("")`, `Path(".")`,
+    `Path("/")` and `Path("./.")` all qualify (`./apply-platform-domains-cloudflare /` crashed
+    with exactly that, measured).  This is called from `finish()`, itself invoked from INSIDE
+    main()'s own `except` clauses -- a fresh exception raised there is never redispatched to a
+    sibling handler, so `outcome_path` must never raise.  `.parent` (unlike `.with_name`) is
+    total for every Path, so building the sibling path by hand from `.parent` and a `stem`
+    fallback of "run" avoids `with_name` entirely rather than special-casing each pathological
+    shape.
     """
     stamp = at.replace("-", "").replace(":", "")
     source = Path(input_path)
-    return str(source.with_name(f"{source.stem}-run-{stamp}.json"))
+    stem = source.stem or "run"
+    return str(source.parent / f"{stem}-run-{stamp}.json")
 
 
 def outcome_document(*, at, direction, source, source_generated_at, for_real, argv, exit_code,  # noqa: PLR0913 -- every argument is a distinct SPEC 12.2 run-record field; bundling them into a second data structure just to shrink this list would not reduce what finish() passes, the same reasoning summary_lines' own noqa above gives

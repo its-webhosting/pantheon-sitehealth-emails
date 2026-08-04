@@ -13,8 +13,10 @@ TEMPORARY, deleted with the script after the Pantheon CDN migration -- see
 development/2026-08-03-platform-domain-util4/SPEC.md section 19.
 """
 import importlib.util
+import io
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -191,17 +193,25 @@ def test_the_exception_spine_keeps_startup_errors_at_exit_two(apc):
     assert not issubclass(apc.ApplyError, apc.StartupError)
 
 
-def run_apc_in_a_subprocess(tmp_path, argv, *, stdout, stderr):
+def run_apc_in_a_subprocess(tmp_path, argv, *, stdout, stderr, empty_rows=False):
     """Drive the REAL main() in a real interpreter, so the shutdown flush that produces exit 120
     actually runs.  An in-process test cannot observe it: pytest never tears the interpreter down
     between tests, so the whole 120 mechanism is invisible to one (SPEC 11.1).
 
     The fake client is a plain class embedded in the driver source (not FakeCloudflareClient --
-    that class lives in THIS process, not the subprocess's fresh interpreter) returning rows that
-    make the one entry `already-applied`, so main() reaches pass 2's report and the summary
-    without ever needing a real Cloudflare credential.
+    that class lives in THIS process, not the subprocess's fresh interpreter).  By default it
+    returns rows that make the one entry `already-applied`, so main() reaches pass 2's report and
+    the summary without ever needing a real Cloudflare credential.  `empty_rows=True` (I2,
+    whole-branch review) makes it return NOTHING instead, so the entry classifies
+    `records-missing` -- the shape that reaches `abort_on_invalid_entries`' UNGUARDED stderr
+    ATTENTION print (SPEC 11.2), the one this file's doomed-stderr test needs to hit.
     """
     driver = tmp_path / "driver.py"
+    rows_literal = "[]" if empty_rows else """[
+                types.SimpleNamespace(id="rec-a", type="A", name="a.umich.edu",
+                                      content="23.185.0.4"),
+                types.SimpleNamespace(id="rec-b", type="AAAA", name="a.umich.edu",
+                                      content="2620:12a:8000::4")]"""
     driver.write_text(f"""
 import sys
 import types
@@ -215,10 +225,7 @@ loader.exec_module(m)
 
 class FakeClient:
     def __init__(self):
-        rows = [types.SimpleNamespace(id="rec-a", type="A", name="a.umich.edu",
-                                      content="23.185.0.4"),
-                types.SimpleNamespace(id="rec-b", type="AAAA", name="a.umich.edu",
-                                      content="2620:12a:8000::4")]
+        rows = {rows_literal}
         self.dns = types.SimpleNamespace(
             records=types.SimpleNamespace(list=lambda **kw: rows, batch=lambda **kw: None))
 
@@ -244,6 +251,55 @@ def test_a_doomed_stdout_exits_2_not_120_in_a_real_subprocess(tmp_path):
                                             stderr=subprocess.PIPE)
     assert completed.returncode == 2
     assert b"cannot write the report to standard output" in completed.stderr
+
+
+@needs_dev_full
+def test_a_doomed_stderr_exits_2_not_120_in_a_real_subprocess(tmp_path):
+    """I2 (whole-branch review): SPEC section 14 group 14 requires this counterpart to the
+    doomed-stdout test above, and it had none -- the reviewer verified BY HAND that
+    report_line()'s detach-on-failure guard already makes the behavior correct, so this closes a
+    missing INSTRUMENT (PD#14), not a defect.  `empty_rows=True` makes the one entry classify
+    `records-missing`, which is what reaches `abort_on_invalid_entries`' UNGUARDED stderr
+    ATTENTION print (SPEC 11.2) -- the first stderr write in this run, and one that happens
+    BEFORE `report_line`'s own guarded write ever gets a turn."""
+    path = write_doc(tmp_path, plan_doc())
+    with Path(DEV_FULL).open("w") as doomed_err:
+        completed = run_apc_in_a_subprocess(tmp_path, [path], stdout=subprocess.PIPE,
+                                            stderr=doomed_err, empty_rows=True)
+    assert completed.returncode == 2
+
+
+def test_require_usable_streams_exits_2_with_stdout_truly_closed_in_a_real_subprocess(tmp_path):
+    """I5 (whole-branch review): replacing run_once's `require_usable_streams()` call with `pass`
+    leaves the whole suite green -- the guard is load-bearing precisely because a subprocess with
+    stdout genuinely CLOSED (`>&-`), not merely doomed (`/dev/full`), needs it: measured directly
+    (see the bare `sys.stdout = None; print("hi")` probe in the task report), CPython's own
+    `print()` SILENTLY DOES NOTHING when `sys.stdout is None` -- no exception, no output at all --
+    so nothing short of this guard would ever report the failure.  `stdout=subprocess.DEVNULL`
+    cannot reproduce this: /dev/null accepts every write, so `sys.stdout` would stay a healthy
+    stream.  An in-process `monkeypatch.setattr(apc.sys, "stdout", None)` test already exists for
+    the FUNCTION (`test_require_usable_streams_refuses_a_closed_stdout`); this is its end-to-end
+    counterpart through a real interpreter, matching this file's other subprocess tests' reason
+    for existing (SPEC 11.1)."""
+    path = write_doc(tmp_path, plan_doc())
+    driver = tmp_path / "driver.py"
+    driver.write_text(f"""
+import sys
+from importlib.machinery import SourceFileLoader
+import importlib.util
+loader = SourceFileLoader("apc_closed_stdout", {str(SCRIPT)!r})
+spec = importlib.util.spec_from_loader("apc_closed_stdout", loader)
+m = importlib.util.module_from_spec(spec)
+loader.exec_module(m)
+sys.exit(m.main(sys.argv[1:]))
+""")
+    command = shlex.join([sys.executable, str(driver), path]) + " 1>&-"
+    completed = subprocess.run(["sh", "-c", command], stderr=subprocess.PIPE, check=False,  # noqa: S607 --
+                               # "sh" via PATH is deliberate: `1>&-` is POSIX shell redirection
+                               # syntax, not something subprocess.run can express without a shell.
+                               cwd=str(tmp_path))
+    assert completed.returncode == 2
+    assert b"standard output is closed" in completed.stderr
 
 
 @needs_dev_full
@@ -315,10 +371,17 @@ def test_check_file_contract_returns_the_direction(apc):
 
 def test_check_file_contract_refuses_an_excluded_file_by_name(apc):
     """SPEC section 6 check 2.  An -excluded.json has the same header shape and no `body`
-    anywhere, so it must be named, not merely rejected as malformed."""
+    anywhere, so it must be named, not merely rejected as malformed.
+
+    I3 (whole-branch review): `match="excluded"` also matches the FALL-THROUGH message
+    ("generated.direction must be 'plan' or 'revert', got 'excluded'") -- deleting the entire
+    by-name branch left the whole suite green.  Asserting the distinguishing "is an EXCLUDED
+    file" phrase, plus the "carries no request body" sentence that only the by-name branch
+    writes, is what makes this test able to fail."""
     doc = plan_doc(direction="excluded")
-    with pytest.raises(apc.PlanFileError, match="excluded"):
+    with pytest.raises(apc.PlanFileError, match="is an EXCLUDED file") as excinfo:
         apc.check_file_contract(doc, "p.json")
+    assert "carries no request body" in str(excinfo.value)
 
 
 def test_check_file_contract_refuses_a_missing_direction(apc):
@@ -524,6 +587,32 @@ def test_cloudflare_client_falls_back_to_email_and_key(apc, tmp_path):
     assert client.api_token is None
 
 
+def test_cloudflare_client_email_and_key_branch_sends_only_the_configured_credential(
+        apc, tmp_path, monkeypatch):
+    """M7 (whole-branch review): the email+api_key branch was asserted only against ATTRIBUTE
+    state (the test just above) -- `test_cloudflare_client_sends_only_the_configured_credential`
+    covers only the `api_token` branch, and SPEC section 16 calls the real-built-request proof
+    load-bearing precisely BECAUSE this script is the write-capable copy of the pin.  Same shape
+    as that test, all six ambient variables exported, this time with an email/api_key config."""
+    for name, value in AMBIENT_CLOUDFLARE_VARS.items():
+        monkeypatch.setenv(name, value)
+    path = config_file(tmp_path, '[Cloudflare]\nemail = "a@b.edu"\napi_key = "k-123"\n')
+    client = apc.cloudflare_client(path)
+
+    request = sent_request(client)
+    assert str(request.url).startswith(apc.API_BASE_URL)
+    assert request.headers.get("x-auth-email") == "a@b.edu"
+    assert request.headers.get("x-auth-key") == "k-123"
+    assert request.headers.get("authorization") is None   # no token configured
+    assert "attacker.example" not in str(request.headers)    # route 3 payload
+    assert "attacker.example" not in str(request.url)        # route 4
+    assert "ambient-key" not in str(request.headers)
+    assert "ambient-token" not in str(request.headers)
+    assert "ambient@example.edu" not in str(request.headers)   # the AMBIENT email, not the
+    # configured one -- route 1/2's whole hazard is an ambient credential beating a configured
+    # one, so the header must carry "a@b.edu", never the exported CLOUDFLARE_EMAIL value.
+
+
 def test_cloudflare_client_refuses_a_non_string_credential(apc, tmp_path):
     """TOML is typed: `api_token = true` is an ordinary unquoted-value typo, and the SDK would
     stringify it into `Authorization: Bearer True` -- a baffling 401."""
@@ -655,6 +744,33 @@ def test_api_error_text_bounds_the_total_message_length(apc):
     error = api_status_error(cloudflare.BadRequestError, 400, {"errors": errors})
     text = apc.api_error_text(error)
     assert len(text) < 2000
+
+
+def test_api_error_text_does_not_drop_a_real_error_hidden_behind_junk_entries(apc):
+    """M1 (whole-branch review): `api_error_text` sliced `errors[:MAX_ADMITTED_ERRORS]` BEFORE
+    filtering out non-dict junk entries -- five junk entries ahead of the one real error meant
+    the real diagnosis was silently dropped entirely (measured pre-fix: 'BadRequestError: HTTP
+    400', no code, no message at all).  Filtering to dicts FIRST, then slicing, is what keeps
+    it."""
+    junk = [None, "oops", 1, [], True]
+    error = api_status_error(
+        cloudflare.BadRequestError, 400,
+        {"errors": [*junk, {"code": 81058, "message": "An identical record already exists."}]})
+    text = apc.api_error_text(error)
+    assert "81058" in text
+    assert "identical record already exists" in text
+
+
+def test_api_error_text_computes_remaining_from_the_filtered_set(apc):
+    """M1: `remaining` must count REAL (dict) errors dropped by the cap, not the raw array
+    length including junk -- a mix of junk and more real errors than MAX_ADMITTED_ERRORS must
+    still report the correct number hidden."""
+    dict_errors = [{"code": i, "message": f"reason {i}"}
+                   for i in range(apc.MAX_ADMITTED_ERRORS + 2)]
+    errors = ["junk", "more junk", *dict_errors]
+    error = api_status_error(cloudflare.BadRequestError, 400, {"errors": errors})
+    text = apc.api_error_text(error)
+    assert f"and {len(dict_errors) - apc.MAX_ADMITTED_ERRORS} more" in text
 
 
 def row(rtype="CNAME", name="a.umich.edu", content="live-umich-x.pantheonsite.io",
@@ -903,6 +1019,19 @@ def test_validate_entries_resolves_the_delete_ids_for_a_ready_entry(apc):
     result = apc.validate_entries(client, {"a.umich.edu": plan_entry()}, verbose=False)
     assert result["a.umich.edu"].verdict == "ready"
     assert result["a.umich.edu"].delete_ids == ["rec-1"]
+
+
+def test_validate_entries_reads_the_entrys_own_zone(apc):
+    """I4 (whole-branch review): `FakeCloudflareClient` keys `rows_by_name` purely on NAME, so
+    neither read call was ever proven to use the entry's own `zone_id` -- mutating
+    `validate_entries`'s `records_at_name(client, entry["zone_id"], fqdn)` call to
+    `records_at_name(client, "WRONG", fqdn)` left the whole suite green.  A distinct zone_id
+    (not the "zone-a" every other fixture in this file shares) plus asserting the RECORDED call
+    is what catches it."""
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    entry = plan_entry(zone_id="zone-distinct")
+    apc.validate_entries(client, {"a.umich.edu": entry}, verbose=False)
+    assert client.list_calls[0]["zone_id"] == "zone-distinct"
 
 
 def test_validate_entries_resolves_no_ids_for_an_already_applied_entry(apc):
@@ -1317,6 +1446,11 @@ def test_an_invalid_entry_aborts_the_run_at_exit_two_with_nothing_applied(
     # Task 7 review, minor 8: a bare `"ATTENTION" in out` assertion would still pass if the line
     # were duplicated onto stdout -- SPEC 11.2 puts it on stderr ONLY.
     assert "ATTENTION" not in captured.out
+    # I6 (whole-branch review): SPEC 11.2's validation-failure abort line -- the sentence telling
+    # an operator a destructive run was refused AND that nothing changed -- was deletable with
+    # the whole suite green.
+    assert "1 of 1 selected entries did not match" in captured.err
+    assert "NOTHING was changed" in captured.err
 
 
 def test_every_invalid_entry_is_named_on_stderr_never_v_gated(
@@ -1356,6 +1490,52 @@ def test_a_subset_run_warns_how_much_of_the_file_it_covers(
     captured = capsys.readouterr()
     assert "ATTENTION: applying 1 of 2 entries" in captured.err
     assert "ATTENTION" not in captured.out
+
+
+class RaiseOnceStream:
+    """A stderr stand-in whose FIRST write raises OSError -- simulating one of SPEC 11.2's
+    UNGUARDED stderr prints (the subset-coverage ATTENTION line here) landing on a doomed
+    descriptor -- and every later write succeeds and is recorded.  `report_line`'s own retry is
+    what this test needs to observe, and `capsys` cannot see a stream the test replaced outright.
+    `fileno()` raises `io.UnsupportedOperation`, one of the three exceptions `point_at_devnull`
+    suppresses, so its own best-effort detach attempt is a harmless no-op here, matching a real
+    doomed stream that also has no usable fd to redirect.
+    """
+
+    def __init__(self):
+        self.calls = 0
+        self.written = []
+
+    def write(self, text):
+        self.calls += 1
+        if self.calls == 1:
+            raise OSError("simulated write failure")
+        self.written.append(text)
+        return len(text)
+
+    def flush(self):
+        pass
+
+    def fileno(self):
+        raise io.UnsupportedOperation("no real fd")
+
+
+def test_an_oserror_from_an_unguarded_stderr_write_reports_the_class_on_the_retry(
+        apc, tmp_path, monkeypatch):
+    """I6 (whole-branch review): SPEC 9.1's `OSError` row -- `report_line(f"ERROR: {e}")` in
+    main()'s `except OSError` clause -- was deletable with the whole suite green.  A subset run's
+    unconditional `ATTENTION: applying N of M...` print (SPEC 11.2) is the UNGUARDED stderr write
+    that reaches this clause: `RaiseOnceStream` fails exactly that first write (raising the
+    OSError `main()` must catch) and then succeeds, so `report_line`'s own retried write -- the
+    thing this test pins -- is what ends up recorded."""
+    entries = {"a.umich.edu": plan_entry(), "b.umich.edu": plan_entry(fqdn="b.umich.edu")}
+    path = write_doc(tmp_path, plan_doc(entries=entries))
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    stream = RaiseOnceStream()
+    monkeypatch.setattr(apc.sys, "stderr", stream)
+    code = run_main(apc, ["--only", "a.umich.edu", path], tmp_path, client, monkeypatch)
+    assert code == 2   # nothing applied (no --for-real); failure_code(state) with changed==0
+    assert any("simulated write failure" in text for text in stream.written)
 
 
 def test_an_unselected_entry_is_never_validated(apc, tmp_path, monkeypatch):
@@ -1457,6 +1637,20 @@ def test_apply_entry_calls_batch_with_the_resolved_ids_and_the_files_posts(apc):
     assert client.batch_calls == [{"zone_id": "zone-a", "deletes": [{"id": "rec-1"}],
                                    "posts": entry["body"]["posts"]}]
     assert sorted(created) == ["rec-a", "rec-b"]
+
+
+def test_apply_entry_verifies_against_the_entrys_own_zone(apc):
+    """I4 (whole-branch review): the R6.1 post-apply verification read -- the ONE instrument
+    between "Cloudflare claimed 200" and "the records really changed" -- was never proven to use
+    the entry's own zone either.  Mutating apply_entry's verification `client.dns.records.list
+    (zone_id=entry["zone_id"], ...)` call to `zone_id="WRONG"` left the whole suite green.  A
+    distinct zone_id plus asserting the recorded verification call is what catches it."""
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]})
+    entry = plan_entry(zone_id="zone-distinct")
+    apc.apply_entry(client, "a.umich.edu", entry, ["rec-1"])
+    # list_calls[0] is validate_entries' job in a real run; called directly here, index 0 IS the
+    # post-apply verification read (apply_entry never calls records_at_name itself).
+    assert client.list_calls[0]["zone_id"] == "zone-distinct"
 
 
 def test_apply_entry_retries_verification_once_before_failing(apc, monkeypatch):
@@ -1841,6 +2035,20 @@ def test_apply_all_marks_the_in_flight_entry_unknown_on_a_keyboard_interrupt(apc
     ]
 
 
+def test_apply_all_raises_invariant_error_on_a_non_ready_verdict(apc):
+    """M4 (whole-branch review): SPEC R3.5's pass-3 invariant -- "an entry reaching pass 3
+    without a `ready` verdict is an InvariantError" -- had no test; replacing the `if
+    validation.verdict != "ready":` guard with `if False:` left the whole suite green.  Pass 1
+    is supposed to have aborted the whole run before any invalid verdict ever reaches this
+    function, so this is a defect-in-this-script's-own-reasoning guard (PD#1/PD#14), asserted
+    here directly rather than trusted."""
+    client = FakeCloudflareClient()
+    entries = {"a.umich.edu": plan_entry()}
+    validations = {"a.umich.edu": apc.Validation("records-missing", "contrived detail", [])}
+    with pytest.raises(apc.InvariantError, match="records-missing"):
+        apc.apply_all(client, entries, validations, {"a.umich.edu": "not-attempted"}, {})
+
+
 # ---------------------------------------------------------------------------------------------
 # Task 9: the run record and interruption (SPEC R8, R9, 9.2, 9.3, 9.4, 12).
 # ---------------------------------------------------------------------------------------------
@@ -1855,6 +2063,33 @@ def test_outcome_path_is_named_run_not_applied(apc):
                             "2026-08-03T14:22:11Z")
     assert path.endswith("platform-domains-cloudflare-plan-run-20260803T142211Z.json")
     assert "-applied-" not in path
+
+
+@pytest.mark.parametrize("bad_path", ["", ".", "/", "./."])
+def test_outcome_path_is_total_even_for_a_pathological_file_argument(apc, bad_path):
+    """I1 (whole-branch review): `Path("").with_name(...)`, `Path(".")`, `Path("/")` and
+    `Path("./.")` all raise `ValueError: ... has an empty name` -- `outcome_path` used
+    `with_name()`, so `./apply-platform-domains-cloudflare /` crashed with a raw traceback
+    (measured on HEAD).  `outcome_path` is called from `finish()`, itself invoked from INSIDE
+    main()'s own `except` clauses, so a fresh exception raised there is never redispatched to a
+    sibling handler -- it must simply never raise.  This pins the pure function directly; the
+    next test drives the same shape through the real `main()`."""
+    result = apc.outcome_path(bad_path, "2026-08-03T14:22:11Z")
+    assert result.endswith("-run-20260803T142211Z.json")
+
+
+def test_a_pathological_file_argument_still_exits_named_not_crashing(apc, tmp_path, monkeypatch):
+    """I1, end to end: `./apply-platform-domains-cloudflare .` is a plausible operator slip (a
+    bare directory argument).  Before the fix this raised ValueError out of finish() -- called
+    from inside main()'s `except StartupError` clause -- past main() entirely: no exit code, no
+    summary, no run record.  reading "." raises IsADirectoryError (an OSError), so main() reaches
+    exactly that clause and must still finish cleanly."""
+    monkeypatch.setattr(apc, "now_utc", lambda: "2026-08-03T14:22:11Z")
+    monkeypatch.chdir(tmp_path)
+    code = apc.main(["."])
+    assert code == 2
+    record_path = apc.outcome_path(".", "2026-08-03T14:22:11Z")
+    assert Path(record_path).exists()
 
 
 def test_the_run_record_is_written_on_a_clean_dry_run(apc, tmp_path, monkeypatch):
@@ -2042,7 +2277,7 @@ def test_an_interrupt_during_a_batch_call_records_unknown_and_exits_130(
     assert "unknown 1" in capsys.readouterr().out
 
 
-def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch):
+def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch, capsys):
     """SPEC 9.3: a second Ctrl-C must not truncate the ONE record of what a destructive run
     did.  Asserted by observing the SIG_IGN call, since the real behavior cannot be provoked
     in-process.
@@ -2050,6 +2285,11 @@ def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch):
     Minor 6 (review round 1): this test asserted NEITHER the exit code nor that the record was
     actually written -- it proved SIG_IGN was requested, but not that the interrupted run still
     completed its SPEC R8.1/R9.1 obligations around that guard.  Both added below.
+
+    I6 (whole-branch review): SPEC 9.1's `KeyboardInterrupt` row -- `report_line("ERROR:
+    interrupted")` -- was deletable with the whole suite green.  This is a Ctrl-C during PASS 1
+    (raised straight out of `_list`, before `apply_all` ever runs), so it reaches main()'s
+    `except KeyboardInterrupt` clause directly, never `apply_all`'s own interrupt handling.
     """
     calls = []
     monkeypatch.setattr(apc.signal, "signal", lambda sig, handler: calls.append((sig, handler)))
@@ -2062,6 +2302,7 @@ def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch):
     code = run_main(apc, [path], tmp_path, Interrupting(), monkeypatch)
     assert (apc.signal.SIGINT, apc.signal.SIG_IGN) in calls
     assert code == 130
+    assert "ERROR: interrupted" in capsys.readouterr().err
     record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
     assert record["run"]["exit_code"] == 130
 
@@ -2146,7 +2387,7 @@ def test_a_mid_run_invariant_error_after_an_applied_entry_exits_three_not_two(
 
 
 def test_a_plain_exception_mid_apply_after_an_applied_entry_exits_three_not_two(
-        apc, tmp_path, monkeypatch):
+        apc, tmp_path, monkeypatch, capsys):
     """Review round 1, Critical 1: `except OSError` and `except BaseException` each still had
     their OWN independently-written flat `2`, even after the InvariantError test above fixed
     `except StartupError` alone.  Measured by the reviewer: a bare `RuntimeError` out of
@@ -2159,7 +2400,11 @@ def test_a_plain_exception_mid_apply_after_an_applied_entry_exits_three_not_two(
     BaseException` here: `apply_all` only catches KeyboardInterrupt/transport errors/ApplyError/
     VerifyError, so anything else -- including a plain RuntimeError -- propagates all the way past
     `run_once()` uncaught, past `except StartupError` (RuntimeError is not one), to the
-    catch-all."""
+    catch-all.
+
+    I6 (whole-branch review): `report_line(f"ERROR: unexpected {type(e).__name__}: {e}")` --
+    SPEC 8.3's "the catch-all NEVER swallows -- the class is always named on stderr" -- was
+    deletable with the whole suite green.  The stderr assertion below is what closes that."""
     path = write_doc(tmp_path, three_entry_doc())
     real_apply_entry = apc.apply_entry
 
@@ -2176,6 +2421,8 @@ def test_a_plain_exception_mid_apply_after_an_applied_entry_exits_three_not_two(
     client = FakeCloudflareClient(rows_by_name=rows)
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
     assert code == 3
+    assert ("ERROR: unexpected RuntimeError: contrived SDK-shape defect"
+            in capsys.readouterr().err)
     record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
     assert record["run"]["exit_code"] == 3
     assert record["entries"]["a.umich.edu"]["outcome"] == "applied"
