@@ -826,6 +826,25 @@ def changed_count(counts):
     return counts["applied"] + counts["unverified"] + counts["unknown"]
 
 
+def failure_code(state):
+    """SPEC 8.1's 2-vs-3 rule, shared by every FAILURE arm in main() -- a StartupError/
+    InvariantError, a bare OSError, and the `except BaseException` last line of defence alike.
+
+    Review round 1, Critical 1: before this existed, `except StartupError` alone was fixed to be
+    changed-aware (the InvariantError deferred defect); `except OSError` and `except BaseException`
+    each still had their OWN independently-written flat `return finish(2, ...)`.  Measured: a bare
+    `RuntimeError` raised out of `apply_entry` on the second of three entries -- an unexpected SDK
+    shape change, exactly what the `except BaseException` catch-all exists for (SPEC 8.3) -- landed
+    on `except BaseException`'s flat 2 even though the first entry had genuinely applied and
+    verified.  A run that CHANGED something (`changed_count > 0`) MUST NOT report 2 ("nothing was
+    changed") -- the same PD#1 reasoning `finish()`'s own SPEC 9.2 precedence rule already applies
+    to a run-record write failure.  Three independently-written `2`s is exactly the shape that lets
+    one arm get fixed and the other two silently drift, which is why this is now the ONE place all
+    three failure arms read the rule from.
+    """
+    return 3 if changed_count(tally(state["outcomes"])) else 2
+
+
 def exit_code_for(counts):
     """SPEC section 8, as a PURE function of the tally.
 
@@ -1474,30 +1493,27 @@ def main(argv):
     try:
         return finish(run_once(options, state), options=options, argv=argv, state=state)
     except StartupError as e:
-        report_line(f"ERROR: {e}")
-        # Task 9 review-deferred defect: an InvariantError (a StartupError subclass) escaping
+        # This covers the InvariantError deferred defect too (an InvariantError escaping
         # apply_all mid-run -- an entry reaching pass 3 with a verdict pass 1 should have caught,
-        # or a delete-id/body shape section 6 should already have rejected -- must not report exit
-        # 2 ("nothing was changed") when an EARLIER entry in the SAME run already applied.  SPEC
-        # 9.1's table currently pins InvariantError's own row flatly to 2; this is a stated,
-        # deliberate deviation from that row's literal text for exactly the changed>0 case, using
-        # the SAME changed_count() rule ApplyError/VerifyError already earn 2-vs-3 through via
-        # exit_code_for (SPEC 8.1) -- see the task report for the SPEC amendment this implies.
-        changed = changed_count(tally(state["outcomes"]))
-        return finish(3 if changed else 2, options=options, argv=argv, state=state)
+        # or a delete-id/body shape section 6 should already have rejected).  SPEC 9.1's table
+        # currently pins InvariantError's own row flatly to 2; failure_code() is a stated,
+        # deliberate deviation from that row's literal text for the changed>0 case -- see the task
+        # report for the SPEC amendment this implies.
+        report_line(f"ERROR: {e}")
+        return finish(failure_code(state), options=options, argv=argv, state=state)
     except KeyboardInterrupt:
         report_line("ERROR: interrupted")
         return finish(130, options=options, argv=argv, state=state)
     except OSError as e:
         report_line(f"ERROR: {e}")
-        return finish(2, options=options, argv=argv, state=state)
+        return finish(failure_code(state), options=options, argv=argv, state=state)
     except SystemExit:
         raise
     except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the
         # docstring: without it CPython's exit 1 on an uncaught traceback would be
         # indistinguishable from this program's own exit 1.
         report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
-        return finish(2, options=options, argv=argv, state=state)
+        return finish(failure_code(state), options=options, argv=argv, state=state)
 
 
 if __name__ == "__main__":

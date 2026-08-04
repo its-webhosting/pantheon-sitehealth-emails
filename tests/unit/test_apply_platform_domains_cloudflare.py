@@ -175,8 +175,17 @@ def test_require_usable_streams_refuses_a_closed_stdout(apc, monkeypatch):
 
 def test_the_exception_spine_keeps_startup_errors_at_exit_two(apc):
     """PlanFileError, InvariantError, OutputWriteError and CloudflareReadError are all
-    StartupError subclasses so main()'s ONE handler gives them all exit 2 -- they add names,
-    not code paths (PD#2).  ApplyError is deliberately NOT one: it usually means exit 3."""
+    StartupError subclasses so main()'s ONE `except StartupError` handler catches them all --
+    they add names, not code paths (PD#2).
+
+    Minor 7 (review round 1): this docstring used to claim the handler "gives them all exit 2",
+    which stopped being true once `failure_code(state)` made that handler changed-aware
+    (Critical 1): InvariantError and OutputWriteError can both earn exit 3 when an earlier entry
+    in the same run already applied (`test_a_mid_run_invariant_error_after_an_applied_entry_exits_
+    three_not_two` and the record-write-failure precedence tests cover that directly).  What THIS
+    test actually pins is narrower and still true: they share ONE handler, not that the handler's
+    output is a constant.  ApplyError is deliberately NOT a StartupError subclass: it usually
+    means exit 3."""
     for name in ("PlanFileError", "InvariantError", "OutputWriteError", "CloudflareReadError"):
         assert issubclass(getattr(apc, name), apc.StartupError), name
     assert not issubclass(apc.ApplyError, apc.StartupError)
@@ -1599,6 +1608,12 @@ def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
     assert "b.umich.edu  FAILED -- b.umich.edu:" not in out  # minor 6: no duplicated fqdn
     assert "ERROR: b.umich.edu:" in err
     assert "81058" in err
+    # Important 4 (review round 1): the STDOUT lines above make this arm LOOK covered, but the
+    # run record's own copy of the failure reason -- SPEC R9.2's "the thing an operator can attach
+    # to a change ticket" -- was unpinned: dropping `"error": reason` from the failed/unverified/
+    # unknown arms, or emptying `item["detail"]` in outcome_document, left 145 passing.
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert "81058" in record["entries"]["b.umich.edu"]["error"]
 
 
 def test_a_failure_on_the_first_entry_exits_two_because_nothing_committed(
@@ -1863,6 +1878,11 @@ def test_the_run_record_is_written_when_validation_fails(apc, tmp_path, monkeypa
     assert record["run"]["exit_code"] == 2
     assert record["entries"]["a.umich.edu"]["outcome"] == "not-attempted"
     assert "records-missing" in record["entries"]["a.umich.edu"]["verdict"]
+    # Important 4 (review round 1): the `detail` half was unpinned -- emptying `item["detail"]`
+    # in outcome_document left 145 passing.  The expected text is derived from verdict_for itself
+    # (the same function that produced it), not a hand-copied literal that could drift from it.
+    expected_detail = apc.verdict_for(plan_entry(), [])[1]
+    assert record["entries"]["a.umich.edu"]["detail"] == expected_detail
 
 
 def test_the_run_record_captures_created_and_deleted_ids(apc, tmp_path, monkeypatch):
@@ -1874,6 +1894,54 @@ def test_the_run_record_captures_created_and_deleted_ids(apc, tmp_path, monkeypa
     assert entry["outcome"] == "applied"
     assert entry["deleted_ids"] == ["rec-1"]
     assert sorted(entry["created_ids"]) == ["rec-a", "rec-b"]
+
+
+def test_the_run_record_is_byte_exact_on_a_subset_for_real_run(apc, tmp_path, monkeypatch):
+    """Important 3 (review round 1): eight of the ten `run` fields, including `entries_in_file`/
+    `selected` TRANSPOSED, were unpinned by any existing test -- every record-writing test used
+    `entries_in_file == selected` (1/1 or 3/3), so a swap of the two, an emptied `argv`/`counts`/
+    `source`/`source_generated_at`, a dropped `at`, or a changed `tool` string all left 145
+    passing.  ONE whole-document equality assertion on a `--only` SUBSET run (`entries_in_file=3,
+    selected=1`) closes every one of those mutations at once: a swap, a drop or a change to any
+    field is visible in an exact dict comparison the moment two numbers -- or any other value --
+    differ.  SPEC 12.3: the clock is frozen (`run_main`'s `now_utc` patch), so the record is
+    byte-deterministic and an exact comparison is honest, not brittle."""
+    doc = three_entry_doc()
+    path = write_doc(tmp_path, doc)
+    rows = {"b.umich.edu": [
+        [row("CNAME", "b.umich.edu", "live-umich-x.pantheonsite.io", "rec-b-cname")],
+        [row("A", "b.umich.edu", "23.185.0.4", "rec-b-a"),
+         row("AAAA", "b.umich.edu", "2620:12a:8000::4", "rec-b-aaaa")],
+    ]}
+    client = FakeCloudflareClient(rows_by_name=rows)
+    argv = ["--for-real", "--only", "b.umich.edu", path]
+    code = run_main(apc, argv, tmp_path, client, monkeypatch)
+    assert code == 0
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record == {
+        "run": {
+            "at": "2026-08-03T14:22:11Z",
+            "tool": "apply-platform-domains-cloudflare",
+            "direction": "plan",
+            "source": path,
+            "source_generated_at": "2026-08-01T00:22:23Z",
+            "for_real": True,
+            "argv": argv,
+            "exit_code": 0,
+            "entries_in_file": 3,
+            "selected": 1,
+            "counts": {"applied": 1, "already-applied": 0, "planned": 0, "failed": 0,
+                       "unverified": 0, "unknown": 0, "not-attempted": 0},
+        },
+        "entries": {
+            "b.umich.edu": {
+                "outcome": "applied",
+                "at": "2026-08-03T14:22:11Z",
+                "deleted_ids": ["rec-b-cname"],
+                "created_ids": ["rec-b-a", "rec-b-aaaa"],
+            },
+        },
+    }
 
 
 def test_a_record_write_failure_never_claims_nothing_changed(apc, tmp_path, monkeypatch, capsys):
@@ -1901,6 +1969,50 @@ def test_a_record_write_failure_on_a_dry_run_is_exit_two(apc, tmp_path, monkeypa
 
     monkeypatch.setattr(apc, "write_run_record", boom)
     assert run_main(apc, [path], tmp_path, client, monkeypatch) == 2
+
+
+def test_a_real_unwritable_record_directory_is_named_not_swallowed(
+        apc, tmp_path, monkeypatch, capsys):
+    """Important 2 (review round 1): BOTH tests above monkeypatch write_run_record ITSELF,
+    replacing its whole body -- so write_run_record's OWN try/except (OSError/TypeError/ValueError
+    -> OutputWriteError) had zero cover, and reducing it to a bare write_json_atomic() call left
+    145 passing.  Measured: with that wrapping gone, a REAL unwritable directory raises a bare
+    PermissionError that escapes write_run_record, escapes finish() (whose own try/except only
+    catches OutputWriteError, never a plain OSError), and -- because finish() is called a SECOND
+    time from inside main()'s own `except OSError` clause on this path -- escapes THAT clause too
+    (a fresh exception raised inside an except clause is never redispatched to a sibling clause of
+    the same try), reaching main()'s caller as an uncaught traceback: exit 1, the code that means
+    "completed with already-applied skips," the worst possible lie for a run that just rewrote
+    production DNS.  This drives main() end to end against a REAL chmod'd directory rather than a
+    monkeypatched write_run_record, so it is the wrapping logic itself under test."""
+    record_dir = tmp_path / "unwritable"
+    record_dir.mkdir()
+    path = write_doc(record_dir, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    record_dir.chmod(0o500)
+    try:
+        code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    finally:
+        record_dir.chmod(0o700)   # tmp_path's own fixture cleanup needs write access back
+    err = capsys.readouterr().err
+    assert "cannot write the run record" in err
+    assert "PermissionError" in err
+    assert code == 2   # dry run: changed nothing, SPEC 9.2's other precedence branch
+
+
+def test_write_run_record_wraps_a_serialization_failure(apc, monkeypatch):
+    """Important 2 (review round 1), the TypeError branch: patches `write_json_atomic` -- NOT
+    `write_run_record` itself, which the two tests above already fully replace -- so
+    write_run_record's OWN wrapping is what is under test.  A genuinely unserializable value in
+    the document is a second, indirect way to trigger this same branch; patching the seam
+    write_run_record calls is simpler and just as honest, since write_run_record does not care WHY
+    write_json_atomic raised, only that it did."""
+    def boom(path, data):
+        raise TypeError("Object of type object is not JSON serializable")
+
+    monkeypatch.setattr(apc, "write_json_atomic", boom)
+    with pytest.raises(apc.OutputWriteError, match="TypeError"):
+        apc.write_run_record("run.json", {"run": {}})
 
 
 def test_an_interrupt_during_a_batch_call_records_unknown_and_exits_130(
@@ -1933,7 +2045,12 @@ def test_an_interrupt_during_a_batch_call_records_unknown_and_exits_130(
 def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch):
     """SPEC 9.3: a second Ctrl-C must not truncate the ONE record of what a destructive run
     did.  Asserted by observing the SIG_IGN call, since the real behavior cannot be provoked
-    in-process."""
+    in-process.
+
+    Minor 6 (review round 1): this test asserted NEITHER the exit code nor that the record was
+    actually written -- it proved SIG_IGN was requested, but not that the interrupted run still
+    completed its SPEC R8.1/R9.1 obligations around that guard.  Both added below.
+    """
     calls = []
     monkeypatch.setattr(apc.signal, "signal", lambda sig, handler: calls.append((sig, handler)))
     path = write_doc(tmp_path, plan_doc())
@@ -1942,8 +2059,57 @@ def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch):
         def _list(self, **kwargs):
             raise KeyboardInterrupt
 
-    run_main(apc, [path], tmp_path, Interrupting(), monkeypatch)
+    code = run_main(apc, [path], tmp_path, Interrupting(), monkeypatch)
     assert (apc.signal.SIGINT, apc.signal.SIG_IGN) in calls
+    assert code == 130
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 130
+
+
+def test_the_sigint_guard_runs_before_the_flushs_own_writes(apc, tmp_path, monkeypatch):
+    """Minor 5 (review round 1): the guard's POSITION inside finish() was unpinned -- moving
+    `signal.signal(SIGINT, SIG_IGN)` to AFTER write_run_record left 145 passing, so no test could
+    tell a guard that actually protects the flush from a useless one sitting after it.  SPEC 9.3:
+    "During THAT FINAL FLUSH, SIGINT MUST be set to SIG_IGN" -- meaning before ANY of the flush's
+    own writes, not merely somewhere inside finish().
+
+    A VALIDATION-FAILURE run is used deliberately: it is the one path where pass 2
+    (report_entries) never runs, so the ONLY write_report/write_run_record calls in this run are
+    finish()'s own flush -- isolating the ordering assertion to exactly what SPEC 9.3 is about,
+    rather than picking up an earlier, unrelated write_report call from pass 2's report.
+
+    (Review round 1, Minor 5 also noted the brief's sketch wraps this call in
+    `contextlib.suppress(ValueError)`, which this implementation deliberately omits -- see the
+    fix report's deviation note: both sibling scripts (`find-platform-domains-dns`'s
+    `report_stop()`, `psh/lifecycle.py`'s `abort_run()`) call it bare, and nothing in this
+    single-threaded script can raise "signal only works in main thread".)
+    """
+    order = []
+    monkeypatch.setattr(apc.signal, "signal", lambda *args: order.append("signal"))
+
+    real_write_report = apc.write_report
+
+    def recording_write_report(text):
+        order.append("write_report")
+        return real_write_report(text)
+
+    monkeypatch.setattr(apc, "write_report", recording_write_report)
+
+    real_write_run_record = apc.write_run_record
+
+    def recording_write_run_record(path, document):
+        order.append("write_run_record")
+        return real_write_run_record(path, document)
+
+    monkeypatch.setattr(apc, "write_run_record", recording_write_run_record)
+
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 2
+    assert order[0] == "signal"
+    assert "write_report" in order
+    assert "write_run_record" in order
 
 
 def test_a_mid_run_invariant_error_after_an_applied_entry_exits_three_not_two(
@@ -1977,6 +2143,42 @@ def test_a_mid_run_invariant_error_after_an_applied_entry_exits_three_not_two(
     assert record["entries"]["a.umich.edu"]["outcome"] == "applied"
     assert record["entries"]["b.umich.edu"]["outcome"] == "not-attempted"
     assert record["entries"]["c.umich.edu"]["outcome"] == "not-attempted"
+
+
+def test_a_plain_exception_mid_apply_after_an_applied_entry_exits_three_not_two(
+        apc, tmp_path, monkeypatch):
+    """Review round 1, Critical 1: `except OSError` and `except BaseException` each still had
+    their OWN independently-written flat `2`, even after the InvariantError test above fixed
+    `except StartupError` alone.  Measured by the reviewer: a bare `RuntimeError` out of
+    apply_entry on the second of three entries -- an unexpected SDK shape change, exactly what the
+    `except BaseException` last-line-of-defence exists for (SPEC 8.3) -- landed on that flat 2
+    even though entry `a` had genuinely applied and verified; the run's own summary line read "1 of
+    3 entries changed" while the exit code claimed nothing had.  Fixed by routing all three failure
+    arms through the ONE shared `failure_code(state)` helper.  `RuntimeError` (not
+    `apc.InvariantError`, which the test above already covers) is what actually exercises `except
+    BaseException` here: `apply_all` only catches KeyboardInterrupt/transport errors/ApplyError/
+    VerifyError, so anything else -- including a plain RuntimeError -- propagates all the way past
+    `run_once()` uncaught, past `except StartupError` (RuntimeError is not one), to the
+    catch-all."""
+    path = write_doc(tmp_path, three_entry_doc())
+    real_apply_entry = apc.apply_entry
+
+    def flaky(client, fqdn, entry, delete_ids):
+        if fqdn == "b.umich.edu":
+            raise RuntimeError("contrived SDK-shape defect")
+        return real_apply_entry(client, fqdn, entry, delete_ids)
+
+    monkeypatch.setattr(apc, "apply_entry", flaky)
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = FakeCloudflareClient(rows_by_name=rows)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 3
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 3
+    assert record["entries"]["a.umich.edu"]["outcome"] == "applied"
 
 
 @needs_dev_full
