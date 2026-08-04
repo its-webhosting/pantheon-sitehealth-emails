@@ -491,8 +491,17 @@ pair's shared taxonomy MUST record that this third script differs (§18).
         raise
     except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the docstring: ...
         report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
-        return 2
+        return failure_code(state)   # 3 if changed_count > 0 else 2 -- see §9.1
 ```
+
+**The `return` here is `failure_code(state)`, NOT a literal 2**, and the same applies to the
+`OSError` arm. *Intent:* §9.1's rule — no exit path may report 2 once `changed_count > 0` — names
+this arm explicitly, and an earlier version of this snippet showing a bare `return 2` is what led
+an implementer to read the two sections as contradictory and leave the catch-all reporting
+"nothing was changed" after a partial rewrite. An `AttributeError` or `KeyError` from an SDK shape
+change is precisely what this arm exists to catch, and it can land after entries have applied. One
+helper, used by all three failure arms, is the only shape that keeps them from drifting apart
+again.
 
 CPython exits **1** on any uncaught traceback, and 1 here means "completed with already-applied
 skips". Without this guard a crashed run and a healthy run are indistinguishable. The catch-all
