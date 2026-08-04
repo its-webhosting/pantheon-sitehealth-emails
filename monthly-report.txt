@@ -1,4 +1,4 @@
-TODAY="20260601"
+TODAY="20260801"
 
 # site counts:
 jq -r '"site_name,framework,version,plan_name", (to_entries | map([.key, .value.framework, .value.version, .value.plan_name] | join(",")))[]' \
