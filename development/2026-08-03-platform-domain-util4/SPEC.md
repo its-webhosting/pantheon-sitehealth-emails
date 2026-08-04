@@ -471,6 +471,15 @@ action.** A batch call ends in exactly one of:
 | `failed` | the batch was **rejected** — a batch is one transaction, so nothing committed for this entry | fix the cause and re-run; this entry is untouched |
 | `unknown` | the call did not complete (dropped connection, timeout), so whether it committed is **not known** | inspect this FQDN by hand before re-running |
 
+**One known overstatement in `unverified`, measured and accepted.** The SDK raises only on HTTP
+status — verified against cloudflare 5.4.0, where neither `_base_client` nor `_response` inspects a
+`success` field — so a hypothetical `200` carrying `"success": false` would reach R6's verification,
+fail it, and be labelled `unverified` ("the batch returned, so it committed") for a call that
+committed nothing. The operator action that label implies (*inspect this FQDN by hand*) is the safe
+one and the exit code (3) is the conservative one, so this is a labelling overstatement rather than
+a hazard. Recorded rather than mitigated: distinguishing it would mean parsing a response envelope
+the SDK does not expose.
+
 *Intent for `unverified` specifically (added after Task 8 surfaced the contradiction):* R6.3 says a
 surviving verification mismatch exits 3 because Cloudflare was changed, while an earlier version of
 this section derived `changed` from `applied + unknown` only — so a lone mismatch produced
@@ -534,8 +543,8 @@ before any stream guard exists and outside every handler, so `--help >/dev/full`
 | `VerifyError` (subclass of `ApplyError`) | the batch **returned**, but the post-apply verification did not match after §R6.2's retry, **or** the verification record-list call itself failed | `main()` | `ERROR: …` naming the FQDN and what Cloudflare actually holds | outcome **`unverified`**; 3 per §8.1 |
 | `OutputWriteError` (subclass of `StartupError`) | the run record write | `main()` | `ERROR: cannot write <path>: <class>: <message>` | §9.2 |
 | `KeyboardInterrupt` | anywhere | `main()` | the summary, then the interrupt notice | 130 |
-| `OSError` | report/record writes | `main()` | `ERROR: …` | 2 |
-| anything else | inside `main()`'s try | `main()`'s `except BaseException` (§8.3) | `ERROR: unexpected <class>: <message>` | 2 |
+| `OSError` | report/record writes | `main()` | `ERROR: …` | **2, or 3 if `changed_count > 0`** |
+| anything else | inside `main()`'s try | `main()`'s `except BaseException` (§8.3) | `ERROR: unexpected <class>: <message>` | **2, or 3 if `changed_count > 0`** |
 
 **No exit path may report 2 once `changed_count(counts) > 0`.** Exit 2 means *"could not complete,
 and **nothing in Cloudflare was changed**"* (§8). Any exception escaping mid-run — an
