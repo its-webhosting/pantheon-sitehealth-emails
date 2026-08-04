@@ -15,6 +15,7 @@ development/2026-08-03-platform-domain-util4/SPEC.md section 19.
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
 import types
@@ -32,6 +33,26 @@ SCRIPT = Path(__file__).resolve().parent.parent.parent / "apply-platform-domains
 DEV_FULL = "/dev/full"
 needs_dev_full = pytest.mark.skipif(not os.path.exists(DEV_FULL),  # noqa: PTH110 -- a device
                                     reason="/dev/full is Linux-only")   # node, not a repo path
+
+
+@pytest.fixture(autouse=True)
+def _restore_sigint_handler():
+    """Task 9: finish() calls the REAL `signal.signal(SIGINT, SIG_IGN)` (SPEC 9.3) on every exit
+    path, and only the two tests that monkeypatch `apc.signal.signal` (the interrupt/second-Ctrl-C
+    tests) intercept it -- every OTHER test in this file that drives `main()` to completion (most
+    of them) calls the real one, and a process's signal handler is global and outlives the test
+    that set it.  This is the EXACT bug class `tests/unit/test_find_platform_domains_dns.py`'s
+    `_restore_sigint_handler` documents as "fix round 2, N1" for `report_stop()`'s identical
+    guard -- measured here too: without this fixture, SIGINT was still SIG_IGN at the end of the
+    WHOLE `--fast` session, caught only by that OTHER file's session-scoped
+    `_sigint_handler_is_never_left_ignored_at_session_end` fixture (which is session-scoped and so
+    applies across every test file, not just its own).  Autouse and function-scoped -- restoring
+    the handler that was in place BEFORE this test ran, regardless of what the test (or the code
+    under test) did to it, is what catches a leak between any two tests, not just at session end.
+    """
+    original = signal.getsignal(signal.SIGINT)
+    yield
+    signal.signal(signal.SIGINT, original)
 
 
 @pytest.fixture
@@ -1804,3 +1825,176 @@ def test_apply_all_marks_the_in_flight_entry_unknown_on_a_keyboard_interrupt(apc
          "posts": entries["a.umich.edu"]["body"]["posts"]},
     ]
 
+
+# ---------------------------------------------------------------------------------------------
+# Task 9: the run record and interruption (SPEC R8, R9, 9.2, 9.3, 9.4, 12).
+# ---------------------------------------------------------------------------------------------
+
+
+def test_outcome_path_is_named_run_not_applied(apc):
+    """A DRY RUN writes one too, so "-applied-" would be a lie.  The timestamp makes a run
+    incapable of clobbering a previous one."""
+    # outcome_path is a pure string function -- no file at this path is ever opened, the literal
+    # is only here to prove the directory is preserved (matches SPEC 12.1's own example).
+    path = apc.outcome_path("/tmp/platform-domains-cloudflare-plan.json",  # noqa: S108
+                            "2026-08-03T14:22:11Z")
+    assert path.endswith("platform-domains-cloudflare-plan-run-20260803T142211Z.json")
+    assert "-applied-" not in path
+
+
+def test_the_run_record_is_written_on_a_clean_dry_run(apc, tmp_path, monkeypatch):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, [path], tmp_path, client, monkeypatch)
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["for_real"] is False
+    assert record["run"]["direction"] == "plan"
+    assert record["entries"]["a.umich.edu"]["outcome"] == "planned"
+
+
+def test_the_run_record_is_written_when_validation_fails(apc, tmp_path, monkeypatch):
+    """SPEC R9.1: EVERY exit path, including the fatal ones -- this is the record an operator
+    attaches to a change ticket."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert code == 2
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 2
+    assert record["entries"]["a.umich.edu"]["outcome"] == "not-attempted"
+    assert "records-missing" in record["entries"]["a.umich.edu"]["verdict"]
+
+
+def test_the_run_record_captures_created_and_deleted_ids(apc, tmp_path, monkeypatch):
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), address_rows()]})
+    run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    entry = record["entries"]["a.umich.edu"]
+    assert entry["outcome"] == "applied"
+    assert entry["deleted_ids"] == ["rec-1"]
+    assert sorted(entry["created_ids"]) == ["rec-a", "rec-b"]
+
+
+def test_a_record_write_failure_never_claims_nothing_changed(apc, tmp_path, monkeypatch, capsys):
+    """SPEC 9.2: exiting 2 after a for-real run that rewrote records would assert "nothing was
+    changed" about production DNS.  The earned code stands; the error is still named."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), address_rows()]})
+
+    def boom(record_path, document):
+        raise apc.OutputWriteError(f"cannot write {record_path}: disk full")
+
+    monkeypatch.setattr(apc, "write_run_record", boom)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 0
+    assert "cannot write" in capsys.readouterr().err
+
+
+def test_a_record_write_failure_on_a_dry_run_is_exit_two(apc, tmp_path, monkeypatch):
+    """The other branch: a dry run whose only deliverable was the record has genuinely failed."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+
+    def boom(record_path, document):
+        raise apc.OutputWriteError(f"cannot write {record_path}: disk full")
+
+    monkeypatch.setattr(apc, "write_run_record", boom)
+    assert run_main(apc, [path], tmp_path, client, monkeypatch) == 2
+
+
+def test_an_interrupt_during_a_batch_call_records_unknown_and_exits_130(
+        apc, tmp_path, monkeypatch, capsys):
+    """SPEC 9.3: the in-flight entry is `unknown` -- never `failed`, never `not-attempted`."""
+    path = write_doc(tmp_path, three_entry_doc())
+    monkeypatch.setattr(apc.signal, "signal", lambda *args: None)  # see SPEC 9.3's test caveat
+
+    class InterruptOnSecond(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            if len(self.batch_calls) == 1:
+                raise KeyboardInterrupt
+            return super()._batch(**kwargs)
+
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = InterruptOnSecond(rows_by_name=rows)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 130
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    outcomes = {k: v["outcome"] for k, v in record["entries"].items()}
+    assert outcomes["a.umich.edu"] == "applied"
+    assert outcomes["b.umich.edu"] == "unknown"
+    assert outcomes["c.umich.edu"] == "not-attempted"
+    assert "unknown 1" in capsys.readouterr().out
+
+
+def test_the_flush_ignores_a_second_ctrl_c(apc, tmp_path, monkeypatch):
+    """SPEC 9.3: a second Ctrl-C must not truncate the ONE record of what a destructive run
+    did.  Asserted by observing the SIG_IGN call, since the real behavior cannot be provoked
+    in-process."""
+    calls = []
+    monkeypatch.setattr(apc.signal, "signal", lambda sig, handler: calls.append((sig, handler)))
+    path = write_doc(tmp_path, plan_doc())
+
+    class Interrupting(FakeCloudflareClient):
+        def _list(self, **kwargs):
+            raise KeyboardInterrupt
+
+    run_main(apc, [path], tmp_path, Interrupting(), monkeypatch)
+    assert (apc.signal.SIGINT, apc.signal.SIG_IGN) in calls
+
+
+def test_a_mid_run_invariant_error_after_an_applied_entry_exits_three_not_two(
+        apc, tmp_path, monkeypatch):
+    """Task 9 review-deferred defect (task brief item 2): SPEC 9.1's table pins InvariantError's
+    exit flatly to 2, which contradicts SPEC 8.1 once an EARLIER entry in the same run already
+    applied -- exactly the same "changed > 0 -> 3" rule ApplyError/VerifyError already earn
+    through exit_code_for.  Reproduced by making apply_entry raise InvariantError for the second
+    of three entries, after the first has genuinely applied -- the resolution routes a
+    StartupError/InvariantError escaping mid-run through the SAME changed-aware code finish()'s
+    record-write precedence rule already uses, rather than reporting the flat 2 that would assert
+    "nothing was changed" about an entry this very run just applied."""
+    path = write_doc(tmp_path, three_entry_doc())
+    real_apply_entry = apc.apply_entry
+
+    def flaky(client, fqdn, entry, delete_ids):
+        if fqdn == "b.umich.edu":
+            raise apc.InvariantError("contrived mid-run invariant violation")
+        return real_apply_entry(client, fqdn, entry, delete_ids)
+
+    monkeypatch.setattr(apc, "apply_entry", flaky)
+    rows = three_entry_rows()
+    for name in rows:
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = FakeCloudflareClient(rows_by_name=rows)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    assert code == 3
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["exit_code"] == 3
+    assert record["entries"]["a.umich.edu"]["outcome"] == "applied"
+    assert record["entries"]["b.umich.edu"]["outcome"] == "not-attempted"
+    assert record["entries"]["c.umich.edu"]["outcome"] == "not-attempted"
+
+
+@needs_dev_full
+def test_a_doomed_stdout_during_the_flush_still_exits_a_named_code_not_crashing(tmp_path):
+    """A latent gap Task 9's own restructure introduces, not one of the brief's seven tests: the
+    summary-block print now happens inside finish(), and finish() is called from FOUR places,
+    THREE of them already inside one of main()'s own `except` clauses.  A fresh exception raised
+    INSIDE an except clause is never redispatched to a sibling except of the SAME try statement,
+    so a doomed stdout hit for the FIRST time inside such a finish() call -- e.g. a run that fails
+    before a single byte of output exists, like a missing FILE argument -- would otherwise escape
+    main() entirely as an unhandled StartupError instead of the named exit 2 every other doomed-
+    stdout path in this script produces.  Reproduced with a nonexistent FILE (so main() never
+    reaches the FakeClient or a single stdout write before finish()'s own summary print is the
+    first one attempted)."""
+    path = str(tmp_path / "does-not-exist.json")
+    with Path(DEV_FULL).open("w") as doomed_out:
+        completed = run_apc_in_a_subprocess(tmp_path, [path], stdout=doomed_out,
+                                            stderr=subprocess.PIPE)
+    assert completed.returncode == 2
+    assert b"does-not-exist.json" in completed.stderr
+    assert b"cannot write the report to standard output" in completed.stderr

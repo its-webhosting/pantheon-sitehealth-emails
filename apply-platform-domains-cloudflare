@@ -30,7 +30,7 @@ import json
 import os
 import re
 import shlex
-import signal  # noqa: F401 -- unused until Task 9's SIGINT-during-flush guard
+import signal
 import sys
 import tempfile
 import time
@@ -1060,6 +1060,12 @@ def apply_all(client, entries, validations, outcomes, details):
     line: SPEC 11.2's `-v` POST-body row is pass 2's (`report_entries`, which already ran for
     every one of these entries before pass 3 starts), and a second, bare `POST <path>` line here
     was a plain duplicate under `-v --for-real` (Task 8 review, minor 9).
+
+    Every `details[fqdn]` assignment below also carries `"at": now_utc()` (Task 9, SPEC 12.2/12.3)
+    -- the moment THIS entry's outcome was decided, not the run's overall `run.at` finish() stamps
+    once at the end.  `already-applied` (the `continue` above) gets none: that verdict is decided
+    in pass 1, not by this function, and SPEC 12.2's own example shows no `at` for `not-attempted`
+    either -- only for entries THIS function actually recorded an outcome for.
     """
     for fqdn, entry in sorted(entries.items()):
         validation = validations[fqdn]
@@ -1077,7 +1083,8 @@ def apply_all(client, entries, validations, outcomes, details):
             # whichever stage inside apply_entry was interrupted (the batch call itself, the
             # verification read, or the retry sleep), we cannot tell whether Cloudflare committed.
             outcomes[fqdn] = "unknown"
-            details[fqdn] = {"error": "interrupted", "deleted_ids": validation.delete_ids}
+            details[fqdn] = {"error": "interrupted", "deleted_ids": validation.delete_ids,
+                             "at": now_utc()}
             raise
         except (cloudflare.APIConnectionError, TimeoutError, OSError) as e:
             # Listed BEFORE ApplyError/VerifyError: an unknown-fate transport failure must never
@@ -1085,7 +1092,8 @@ def apply_all(client, entries, validations, outcomes, details):
             # `unverified`.
             reason = f"the call did not complete ({type(e).__name__}: {e})"
             outcomes[fqdn] = "unknown"
-            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids}
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids,
+                             "at": now_utc()}
             write_report(f"{fqdn}  UNKNOWN -- {reason}")
             report_line(
                 f"ERROR: {fqdn}: {reason}, so whether Cloudflare applied it is UNKNOWN.  Check "
@@ -1102,19 +1110,22 @@ def apply_all(client, entries, validations, outcomes, details):
             # per-entry column.
             reason = str(e).removeprefix(f"{fqdn}: ")
             outcomes[fqdn] = "unverified"
-            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids}
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids,
+                             "at": now_utc()}
             write_report(f"{fqdn}  UNVERIFIED -- {reason}")
             report_line(f"ERROR: {e}")
             return
         except ApplyError as e:
             reason = str(e).removeprefix(f"{fqdn}: ")  # see the VerifyError arm above
             outcomes[fqdn] = "failed"
-            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids}
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids,
+                             "at": now_utc()}
             write_report(f"{fqdn}  FAILED -- {reason}")
             report_line(f"ERROR: {e}")
             return
         outcomes[fqdn] = "applied"
-        details[fqdn] = {"deleted_ids": validation.delete_ids, "created_ids": created}
+        details[fqdn] = {"deleted_ids": validation.delete_ids, "created_ids": created,
+                         "at": now_utc()}
         write_report(f"{fqdn}  applied")
 
 
@@ -1170,6 +1181,83 @@ def report_entries(entries, validations, *, verbose) -> None:
                 "\n", "\n    "))
 
 
+def outcome_path(input_path, at):
+    """<input-stem>-run-<YYYYMMDDThhmmssZ>.json, beside the input file (SPEC 12.1).
+
+    Named `-run-`, not `-applied-`, because a DRY RUN writes one too -- with for_real false and
+    every ready entry recorded as `planned`, which makes it the validation report an operator can
+    attach to a change ticket before the change ever happens.  The timestamp comes from the
+    now_utc() seam (SPEC 12.1/12.3) and makes a run incapable of clobbering a previous one.
+
+    The repository's existing .gitignore line /platform-domains-cloudflare*.json already covers
+    records written beside the conventional baseline, so no new ignore entry is needed (SPEC 19).
+    """
+    stamp = at.replace("-", "").replace(":", "")
+    source = Path(input_path)
+    return str(source.with_name(f"{source.stem}-run-{stamp}.json"))
+
+
+def outcome_document(*, at, direction, source, source_generated_at, for_real, argv, exit_code,  # noqa: PLR0913 -- every argument is a distinct SPEC 12.2 run-record field; bundling them into a second data structure just to shrink this list would not reduce what finish() passes, the same reasoning summary_lines' own noqa above gives
+                     entries_in_file, selected, counts, outcomes, details, validations):
+    """The SPEC 12.2 run-record document.
+
+    Iterates `sorted(outcomes)` -- the CALLER-OWNED dict main() seeds with `not-attempted` for
+    every SELECTED entry the moment selection succeeds (SPEC R9.1, task 9 requirement 1) -- so
+    `entries` always has one object per selected entry, whatever the run's outcome, never only the
+    entries pass 3 happened to reach.
+
+    A verdict/detail pair is added only for the invalid verdicts (SPEC 7.3's four INVALID rows):
+    `ready` and `already-applied` are the two VALID verdicts, and repeating either of them here
+    would just restate the `outcome` key one line down for every healthy entry in the file --
+    `validations` still holds one Validation per SELECTED entry regardless (a dict `main()`
+    populates right after validate_entries returns), so `.get(fqdn)` is `None` only when
+    validate_entries itself never ran for this entry (a --only-narrowed entry, or a read failure
+    that stopped validate_entries before reaching this one).
+
+    `details.get(fqdn, {})` supplies everything apply_all/apply_entry know about a pass-3-touched
+    entry -- `deleted_ids`/`created_ids` on success, `error` (and `deleted_ids`) on
+    failed/unverified/unknown/interrupted, each carrying its OWN `at` (apply_all stamps one at the
+    moment it records the outcome, SPEC 12.3) -- `.update()` rather than a fresh dict so a future
+    detail key needs no change here.
+    """
+    entries = {}
+    for fqdn in sorted(outcomes):
+        item = {"outcome": outcomes[fqdn]}
+        validation = validations.get(fqdn)
+        if validation is not None and validation.verdict not in ("ready", "already-applied"):
+            item["verdict"] = validation.verdict
+            item["detail"] = validation.detail
+        item.update(details.get(fqdn, {}))
+        entries[fqdn] = item
+    return {
+        "run": {"at": at, "tool": "apply-platform-domains-cloudflare", "direction": direction,
+                "source": source, "source_generated_at": source_generated_at,
+                "for_real": for_real, "argv": list(argv), "exit_code": exit_code,
+                "entries_in_file": entries_in_file, "selected": selected, "counts": counts},
+        "entries": entries,
+    }
+
+
+def write_run_record(path, document) -> None:
+    """Write the run record atomically (SPEC R9.1), through the SAME write_json_atomic() the
+    sibling scripts use -- temp file + os.replace(), so an interrupted write never leaves a
+    half-written record where a previous run's still stands.
+
+    Named OutputWriteError rather than reusing OSError because the failure is not always an
+    OS-level one: dump_json()'s json.dump() call raises TypeError/ValueError on an unserializable
+    value, and calling THAT an OSError would be exactly the "handle errors" mis-naming PD#2
+    forbids.  A StartupError subclass (SPEC 9.1) so it flows through main()'s existing exception
+    spine -- this adds a NAME, not a new code path -- but its exit code is decided by finish()'s
+    OWN SPEC 9.2 precedence rule, not by the generic StartupError handler: unlike every other
+    StartupError, a run RECORD write failure can follow a run that already changed something.
+    """
+    try:
+        write_json_atomic(path, document)
+    except (OSError, TypeError, ValueError) as e:
+        raise OutputWriteError(
+            f"cannot write the run record {path}: {type(e).__name__}: {e}") from e
+
+
 def build_arg_parser():
     """The CLI (SPEC R2).
 
@@ -1216,17 +1304,21 @@ def build_arg_parser():
     return parser
 
 
-def abort_on_invalid_entries(validations, entries, *, direction, source, source_generated_at,  # noqa: PLR0913 -- every argument is a distinct SPEC 11.3 summary-block field main() already has in hand; bundling them into a second data structure just to shrink this list would not reduce what the caller passes
-                             for_real, entries_in_file) -> bool:
-    """SPEC R3.2/R8.1: name every invalid entry, print the summary block, and report the abort --
-    returns True when main() must stop at exit 2 having changed nothing.  Split out of main() as
-    a mechanical extraction (task 7 review's ruff C901 gate), not a behavior change: the messages
-    and their order are unchanged.
+def abort_on_invalid_entries(validations) -> bool:
+    """SPEC R3.2/11.2: name every invalid entry and report the abort -- returns True when main()
+    must stop at exit 2 having changed nothing.
 
-    Nothing happened to ANY selected entry when this fires, valid or invalid -- pass 2/3 was
-    never reached -- so `not-attempted` is the only one of the six outcomes that fits (task 7
-    review, important 3; measured before this existed, the validation-failure path wrote ZERO
-    bytes to stdout, violating R8.1's "on every exit path").
+    NARROWED by Task 9 to just the ATTENTION lines and the abort ERROR line: through Task 7/8 this
+    function also printed its OWN copy of the summary block, which is now finish()'s job, printed
+    on EVERY exit path from exactly ONE place (SPEC R8.1/R9.1) -- if this function kept printing
+    its own copy too, a validation failure would print the summary TWICE.  SPEC 11.2's own message
+    table orders these ATTENTION/ERROR lines BEFORE the summary block, which is exactly the split
+    that falls out of this: abort_on_invalid_entries owns everything the table lists before the
+    summary row, finish() owns the summary row and everything after it.
+
+    `len(validations)` stands in for "entries selected" (task 7's `len(entries)`, since removed
+    from this function's signature): validate_entries() returns exactly one Validation per entry
+    it was CALLED with, so the two were always the same number.
     """
     invalid = {fqdn: v for fqdn, v in validations.items()
                if v.verdict not in ("ready", "already-applied")}
@@ -1236,17 +1328,122 @@ def abort_on_invalid_entries(validations, entries, *, direction, source, source_
               file=sys.stderr, flush=True)
     if not invalid:
         return False
-    abort_counts = tally(dict.fromkeys(entries, "not-attempted"))
-    for line in summary_lines(
-            direction=direction, source=source, source_generated_at=source_generated_at,
-            for_real=for_real, entries_in_file=entries_in_file, selected=len(entries),
-            counts=abort_counts, record_path="(none yet)"):
-        write_report(line)
     report_line(
-        f"ERROR: {len(invalid)} of {len(entries)} selected entries did not match "
+        f"ERROR: {len(invalid)} of {len(validations)} selected entries did not match "
         "Cloudflare's current state; NOTHING was changed.  Re-generate the baseline "
         "with find-platform-domains-cloudflare and try again.")
     return True
+
+
+def finish(code, *, options, argv, state):
+    """Print the summary block and write the run record -- SPEC R8.1/R9.1, on EVERY exit path.
+    Returns the exit code main() should actually use, which is `code` unchanged unless the run
+    record write itself fails (SPEC 9.2's precedence rule, below).
+
+    Module-level, not a closure inside main(): nested function DEFINITIONS count toward the
+    ENCLOSING function's own ruff C901/PLR0915 totals (measured directly -- nesting this and
+    run_once() inside main() pushed main() from 13 to 14 branches and 53 statements, both over
+    the gate), so `options`/`argv`/`state` are passed explicitly instead of closed over.
+
+    SIGINT -> SIG_IGN FIRST, mirroring psh/lifecycle.py's `abort_run()` and the DNS sibling's
+    `report_stop()` (CLAUDE.md's Database section: "a second Ctrl-C landing mid-flush must not
+    truncate the only record of what a destructive run did").  Called bare, matching both of those
+    precedents -- neither wraps it in a `ValueError` guard, and this script has no thread that
+    would raise "signal only works in main thread" either.
+
+    The summary print is wrapped in its OWN `try`/`except StartupError`.  This matters because
+    finish() is called from several places in main(), MOST of them already inside one of its
+    `except` clauses -- and a fresh exception raised INSIDE an except clause is never redispatched
+    to a sibling except of the SAME try statement.  Without this local catch, a doomed stdout hit
+    for the FIRST time here (a run that fails before a single byte of report exists at all -- e.g.
+    a missing FILE argument) would escape main() entirely as an unhandled StartupError, instead of
+    the named, bounded exit every OTHER doomed-stdout path in this script produces -- the fourth
+    instance of the "a doomed stream overrides the exit code" bug class this script family keeps
+    finding (CLAUDE.md records the first three).  write_report() has already detached the doomed
+    stream and named the failure before raising, so there is nothing left to retry;
+    report_line() carries the name onward to stderr (the same "nothing left to report; the exit
+    code is the only channel" reasoning report_line's own docstring states), and the run record
+    write below is deliberately still attempted -- a doomed STDOUT says nothing about whether the
+    JSON file can be written.
+    """
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    at = now_utc()
+    counts = tally(state["outcomes"])
+    record_path = outcome_path(options.file, at)
+    try:
+        for line in summary_lines(
+                direction=state["direction"], source=options.file,
+                source_generated_at=state["generated_at"], for_real=state["for_real"],
+                entries_in_file=state["entries_in_file"], selected=state["selected"],
+                counts=counts, record_path=record_path):
+            write_report(line)
+    except StartupError as e:
+        report_line(f"ERROR: {e}")
+    try:
+        write_run_record(record_path, outcome_document(
+            at=at, direction=state["direction"], source=options.file,
+            source_generated_at=state["generated_at"], for_real=state["for_real"],
+            argv=argv, exit_code=code, entries_in_file=state["entries_in_file"],
+            selected=state["selected"], counts=counts, outcomes=state["outcomes"],
+            details=state["details"], validations=state["validations"]))
+    except OutputWriteError as e:
+        # SPEC 9.2's precedence rule.  A run that CHANGED something (changed_count > 0) keeps its
+        # EARNED code: exiting 2 here would assert "nothing was changed" about production DNS this
+        # very run just rewrote -- the worse of the two lies PD#1 has to choose between.  A run
+        # that changed NOTHING (a dry run, or an already-applied-only run) had the record as its
+        # ONLY deliverable, so failing to write it IS the failure -- 2.
+        report_line(f"ERROR: {e}")
+        return code if changed_count(counts) else 2
+    return code
+
+
+def run_once(options, state):
+    """The core three-pass flow (SPEC section 4): require_usable_streams() through the final
+    finish() call.  Module-level for the same C901/PLR0915 reason finish() is (see its
+    docstring) -- this is the SAME sequence Tasks 1-8 built, unchanged except for reading/writing
+    `state` instead of main()'s own locals.  main()'s try calls this once and routes whatever it
+    raises to the right `except` clause.
+
+    `state["outcomes"]` is seeded `not-attempted` for every SELECTED entry the moment selection
+    succeeds -- not built at the end from whatever the happy path finished with -- so a validation
+    failure or an interrupt still produces a COMPLETE per-entry run record (task 9 requirement 1).
+    """
+    require_usable_streams()
+
+    doc = read_apply_file(options.file)
+    direction = check_file_contract(doc, options.file)
+    state["direction"] = direction
+    state["generated_at"] = doc["generated"].get("at", "unknown")
+    state["entries_in_file"] = len(doc["entries"])
+
+    entries = select_entries(doc["entries"], options.only)
+    state["selected"] = len(entries)
+    state["outcomes"] = dict.fromkeys(entries, "not-attempted")   # see the docstring above
+    if len(entries) != len(doc["entries"]):
+        print(f"ATTENTION: applying {len(entries)} of {len(doc['entries'])} entries in "
+              f"this file", file=sys.stderr, flush=True)
+    client = cloudflare_client(options.config)
+    validations = validate_entries(client, entries, verbose=options.verbose)
+    state["validations"] = validations
+
+    if abort_on_invalid_entries(validations):
+        return "abort"   # main() maps this to finish(2); see its own docstring
+
+    report_entries(entries, validations, verbose=options.verbose)
+    if options.for_real:
+        report_line("FOR REAL -- changes WILL be made to Cloudflare")  # SPEC 11.2: printed
+        # before the first batch call.
+        # Caller-owned (Task 8 review, minor 11): apply_all mutates state["outcomes"]/
+        # state["details"] IN PLACE, so a KeyboardInterrupt raised out of it still leaves `state`
+        # holding the in-flight entry's `unknown` outcome and every entry reached before it --
+        # main()'s `except KeyboardInterrupt` clause reads the SAME dicts, not a copy that
+        # unwound with the exception.
+        apply_all(client, entries, validations, state["outcomes"], state["details"])
+    else:
+        state["outcomes"] = {fqdn: ("already-applied" if v.verdict == "already-applied"
+                                    else "planned")
+                             for fqdn, v in validations.items()}
+    return exit_code_for(tally(state["outcomes"]))
 
 
 def main(argv):
@@ -1260,70 +1457,46 @@ def main(argv):
     the last line of defence; `except SystemExit: raise` sits above it so a deliberate exit keeps
     its own code.  Neither swallows: the class is always named on stderr (PD#2).
 
-    Later tasks fill in the body between require_usable_streams() and the return.
+    `state` is the run's accumulator (SPEC R8.1/R9.1), passed to `run_once()` and `finish()`
+    (module-level siblings, not nested closures -- see their own docstrings for why) so both read
+    and write the SAME dict this function holds.  `finish()` is the ONE place that prints the
+    summary block and writes the run record -- called from every exit below: the happy/abort path
+    (via `run_once()`'s "abort" sentinel) and every `except` clause except `SystemExit`, which
+    re-raises past it entirely by design (SPEC 8.3).
     """
     options = build_arg_parser().parse_args(argv)
+    state = {"direction": "unknown", "generated_at": "unknown", "entries_in_file": 0,
+             "selected": 0, "outcomes": {}, "details": {}, "validations": {},
+             "for_real": options.for_real}
     try:
-        require_usable_streams()
-
-        doc = read_apply_file(options.file)
-        direction = check_file_contract(doc, options.file)
-        entries = select_entries(doc["entries"], options.only)
-        if len(entries) != len(doc["entries"]):
-            print(f"ATTENTION: applying {len(entries)} of {len(doc['entries'])} entries in "
-                  f"this file", file=sys.stderr, flush=True)
-        client = cloudflare_client(options.config)
-        validations = validate_entries(client, entries, verbose=options.verbose)
-
-        if abort_on_invalid_entries(
-                validations, entries, direction=direction, source=options.file,
-                source_generated_at=doc["generated"].get("at", "unknown"),
-                for_real=options.for_real, entries_in_file=len(doc["entries"])):
-            return 2
-
-        report_entries(entries, validations, verbose=options.verbose)
-        if options.for_real:
-            report_line("FOR REAL -- changes WILL be made to Cloudflare")  # SPEC 11.2: printed
-            # before the first batch call.
-            # Caller-owned (Task 8 review, minor 11): apply_all mutates these IN PLACE, so a
-            # KeyboardInterrupt raised out of it still leaves them holding the in-flight entry's
-            # `unknown` outcome and every entry reached before it -- a `return`-by-value could not
-            # survive an exception unwinding past it.
-            outcomes = dict.fromkeys(entries, "not-attempted")
-            _details = {}
-            apply_all(client, entries, validations, outcomes, _details)
-            # `_details` (per-entry error/created-id detail) is not yet consumed -- Task 9 writes
-            # it into the run record.  Underscore-prefixed so it stays visibly unused rather than
-            # silently unread (ruff's dummy-variable convention), not because it is unneeded.
-        else:
-            outcomes = {fqdn: ("already-applied" if v.verdict == "already-applied"
-                               else "planned")
-                        for fqdn, v in validations.items()}
-            _details = {}
-        counts = tally(outcomes)
-        for line in summary_lines(
-                direction=direction, source=options.file,
-                source_generated_at=doc["generated"].get("at", "unknown"),
-                for_real=options.for_real, entries_in_file=len(doc["entries"]),
-                selected=len(entries), counts=counts, record_path="(none yet)"):
-            write_report(line)
-        return exit_code_for(counts)
+        result = run_once(options, state)
+        code = 2 if result == "abort" else result
+        return finish(code, options=options, argv=argv, state=state)
     except StartupError as e:
         report_line(f"ERROR: {e}")
-        return 2
+        # Task 9 review-deferred defect: an InvariantError (a StartupError subclass) escaping
+        # apply_all mid-run -- an entry reaching pass 3 with a verdict pass 1 should have caught,
+        # or a delete-id/body shape section 6 should already have rejected -- must not report exit
+        # 2 ("nothing was changed") when an EARLIER entry in the SAME run already applied.  SPEC
+        # 9.1's table currently pins InvariantError's own row flatly to 2; this is a stated,
+        # deliberate deviation from that row's literal text for exactly the changed>0 case, using
+        # the SAME changed_count() rule ApplyError/VerifyError already earn 2-vs-3 through via
+        # exit_code_for (SPEC 8.1) -- see the task report for the SPEC amendment this implies.
+        changed = changed_count(tally(state["outcomes"]))
+        return finish(3 if changed else 2, options=options, argv=argv, state=state)
     except KeyboardInterrupt:
-        report_line("ERROR: interrupted")   # replaced in Task 9
-        return 130
+        report_line("ERROR: interrupted")
+        return finish(130, options=options, argv=argv, state=state)
     except OSError as e:
         report_line(f"ERROR: {e}")
-        return 2
+        return finish(2, options=options, argv=argv, state=state)
     except SystemExit:
         raise
     except BaseException as e:  # noqa: BLE001 -- deliberate last line of defence, see the
         # docstring: without it CPython's exit 1 on an uncaught traceback would be
         # indistinguishable from this program's own exit 1.
         report_line(f"ERROR: unexpected {type(e).__name__}: {e}")
-        return 2
+        return finish(2, options=options, argv=argv, state=state)
 
 
 if __name__ == "__main__":
