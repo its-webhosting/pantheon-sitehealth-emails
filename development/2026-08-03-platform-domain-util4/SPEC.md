@@ -278,6 +278,13 @@ count under the word "sites" would be a wrong number in an operator's incident n
 
 R9.1 Every run MUST write a run record (§12) beside the input file, on every exit path.
 
+R9.1a **One documented exception, exhaustive, shared with R8.1:** argparse's own `--help` and
+usage-error exits happen inside `parse_args`, **before** `main()`'s `try` and before `options.file`
+exists — so neither the summary block nor the run record is produced on those two paths, and
+structurally cannot be. This is the same boundary §8.3 already records for the exit-120 case, and
+it is stated here so a reader does not take "every exit path" as a promise the program cannot
+keep.
+
 R9.2 A dry run writes one too, with `"for_real": false`. *Intent:* it is the validation report,
 and it is the thing an operator can attach to a change ticket before the change.
 
