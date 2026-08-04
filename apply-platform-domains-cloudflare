@@ -1493,12 +1493,10 @@ def main(argv):
     try:
         return finish(run_once(options, state), options=options, argv=argv, state=state)
     except StartupError as e:
-        # This covers the InvariantError deferred defect too (an InvariantError escaping
-        # apply_all mid-run -- an entry reaching pass 3 with a verdict pass 1 should have caught,
-        # or a delete-id/body shape section 6 should already have rejected).  SPEC 9.1's table
-        # currently pins InvariantError's own row flatly to 2; failure_code() is a stated,
-        # deliberate deviation from that row's literal text for the changed>0 case -- see the task
-        # report for the SPEC amendment this implies.
+        # Covers InvariantError escaping apply_all mid-run (an entry reaching pass 3 with a
+        # verdict pass 1 should have caught, or a delete-id/body shape section 6 should already
+        # have rejected): SPEC 9.1's InvariantError row is "2, or 3 if changed_count > 0" -- see
+        # failure_code()'s own docstring.
         report_line(f"ERROR: {e}")
         return finish(failure_code(state), options=options, argv=argv, state=state)
     except KeyboardInterrupt:
