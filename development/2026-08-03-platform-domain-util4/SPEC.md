@@ -142,7 +142,7 @@ R2.5 `-v/--verbose` adds the API method, path and exact request body per entry (
 R2.6 **Without `--for-real`, the run MUST NOT perform any batch call.** This is the primary
 blast-radius control, and §14 group 5 asserts it against the fake client rather than inferring it.
 
-### R3 — Two passes, in this order, with no interleaving
+### R3 — Three passes, in this order, with no interleaving
 
 R3.1 **Pass 1 (validate)** MUST complete for every selected entry before pass 3 begins. It
 performs only DNS record **list** calls.
@@ -948,9 +948,71 @@ carried as an assumption and falsified here. If a stale id is silently ignored, 
 rewritten and R6's post-apply verification becomes the sole guard — which it already is in
 practice.
 
-### Results
+### Results — items 1–6, run 2026-08-04 after Task 10
 
-*(To be pasted here, verbatim, before submission.)*
+**Item 1 — full offline suite.**
+
+```
+107 snapshots passed.
+========= 1625 passed, 3 skipped, 2 deselected, 15 warnings in 34.64s ==========
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+exit=0
+```
+
+**Item 2 — this utility's own file.** `150 passed in 4.34s`, ruff and pyright clean.
+
+**Item 3 — both siblings untouched.** `git diff --stat` over the whole branch for
+`find-platform-domains-dns`, `find-platform-domains-cloudflare` and both their test files:
+**empty output**.
+
+**Item 4 — an excluded file is refused by name.** Note that the summary block and the run record
+are produced on this fatal path too (R8.1/R9.1):
+
+```
+ERROR: platform-domains-cloudflare-excluded.json is an EXCLUDED file (generated.direction is
+'excluded'), not a plan or a revert.  An excluded file records why FQDNs got no rewrite
+instructions; it carries no request body and there is nothing to apply.
+apply-platform-domains-cloudflare: direction=unknown
+  source: platform-domains-cloudflare-excluded.json (generated unknown)
+  mode:   DRY RUN -- no changes were made
+  entries in file: 0   selected: 0   (entries are FQDNs, not Pantheon sites)
+  applied 0   already applied 0   planned 0   failed 0   unverified 0   unknown 0   not attempted 0
+  record: platform-domains-cloudflare-excluded-run-20260804T020342Z.json
+exit=2
+```
+
+**Item 5 — `--help`.** Documents `FILE`, `--only`, `--for-real` ("WITHOUT THIS FLAG NOTHING IS
+CHANGED") and all five exit codes.
+
+**Item 6 — a live dry run against the real 217-entry baseline plan.** Read-only; **zero batch
+calls**, by construction and by R2.6's test. Exit **0**:
+
+```
+apply-platform-domains-cloudflare: direction=plan
+  source: platform-domains-cloudflare-plan.json (generated 2026-08-01T00:22:23Z)
+  mode:   DRY RUN -- no changes were made
+  entries in file: 217   selected: 217   (entries are FQDNs, not Pantheon sites)
+  applied 0   already applied 0   planned 217   failed 0   unverified 0   unknown 0   not attempted 0
+  record: platform-domains-cloudflare-plan-run-20260804T020610Z.json
+```
+
+**stderr was empty — all 217 entries validated `ready` against live Cloudflare state**, three days
+after the plan was generated. This is the strongest end-to-end signal available without STOP 2:
+217 real FQDNs across 187 zones, each read back through `records_at_name` and compared by
+`record_key`, with no `record-ambiguous`, `partially-applied`, `unexpected-records` or
+`records-missing` verdict anywhere.
+
+The run record it wrote carries all eleven `run` fields, `for_real: false`, `exit_code: 0`,
+`entries_in_file: 217`, `selected: 217`, a zero-filled seven-key `counts` with `planned: 217`, and
+one entry per FQDN. `git check-ignore -v` confirms §12.1's claim on the real filename:
+
+```
+.gitignore:11:/platform-domains-cloudflare*.json  platform-domains-cloudflare-plan-run-20260804T020610Z.json
+```
+
+**Items 7–13 remain unrun** — they are destructive and gated behind STOP 2 (§21), which requires
+the exact phrase `RUN LIVE` **and** a named throwaway hostname.
 
 ---
 
@@ -1008,7 +1070,7 @@ and the range constants. This script does no DNS work (§20).
 
 | File | Change |
 |---|---|
-| `CLAUDE.md` | A new `### apply-platform-domains-cloudflare (temporary utility)` subsection: the two passes, the verdict table, the exit taxonomy **including that this script adds 3 and why**, the run record, `--for-real` as the blast-radius gate, and the deletion pointer. Also: the "**two** places to check on a Cloudflare SDK upgrade" sentence becomes **three** (§5); and the `find-platform-domains-cloudflare` subsection's "a separate, not-yet-written *applier* script" sentence now names this one. |
+| `CLAUDE.md` | A new `### apply-platform-domains-cloudflare (temporary utility)` subsection: the three passes, the verdict table, the exit taxonomy **including that this script adds 3 and why**, the run record, `--for-real` as the blast-radius gate, and the deletion pointer. Also: the "**two** places to check on a Cloudflare SDK upgrade" sentence becomes **three** (§5); and the `find-platform-domains-cloudflare` subsection's "a separate, not-yet-written *applier* script" sentence now names this one. |
 | the script's module docstring | the same, in brief, plus the copied-code inventory rationale |
 | `development/2026-07-31-platform-domain-util3/SPEC.md` | a pointer at §5.4 to this spec, recording that §5.4's per-entry tolerance was superseded by R4 |
 | `development/2026-07-30-platform-domain-util2/SPEC.md` §11 | the deletion checklist gains this script's share (§19) |
