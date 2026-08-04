@@ -675,11 +675,11 @@ left to the file's mtime, which survives neither a copy nor `git add`.
 
 **The `mode:` line MUST be derived from the tally, never from `--for-real` alone.** A dry run reads
 `DRY RUN -- no changes were made`; a for-real run reads
-`FOR REAL -- N of M entries changed`, where N is `applied + unknown` (§8.1's `changed`) and M is the
-number selected. *Intent:* `FOR REAL -- changes were made` is a claim about production DNS, and a
-for-real run that reached no entry — because every one was `already-applied`, or because it aborted
-in validation — would assert a rewrite that never happened. Deriving it from the tally makes the
-line true on every path, including the transitional state where pass 3 is not yet wired.
+`FOR REAL -- N of M entries changed`, where N is `applied + unverified + unknown` (§8.1's
+`changed`) and M is the number selected. *Intent:* `FOR REAL -- changes were made` is a claim about
+production DNS, and a for-real run that reached no entry — because every one was `already-applied`,
+or because it aborted in validation — would assert a rewrite that never happened. Deriving it from
+the tally makes the line true on every path.
 
 ### 11.4 The per-entry change line
 

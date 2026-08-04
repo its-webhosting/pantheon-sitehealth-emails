@@ -166,17 +166,38 @@ class CloudflareReadError(StartupError):
 
     Pass 1 is read-only, so this always means nothing was changed -- hence exit 2 and a
     StartupError subclass.  A list failure during POST-APPLY VERIFICATION is NOT this: by then
-    Cloudflare has been written to, so it is an ApplyError and the run exits 3.
+    Cloudflare has been written to, so it is a VerifyError and the run exits 3.
     """
 
 
 class ApplyError(Exception):
-    """A batch call failed, a post-apply verification did not match after one retry, or a
-    verification list call failed (SPEC 9.1).
+    """A batch call was REJECTED -- Cloudflare committed nothing for this entry (SPEC 9.1, 8.1).
 
     Deliberately NOT a StartupError subclass: those all mean exit 2 ("nothing was changed"), and
-    this one usually means exit 3.  main() computes the code from the outcome tally
-    (exit_code_for), never from the exception class.
+    this one can mean exit 2 or exit 3 depending on whether an EARLIER entry in the same run
+    already applied -- main() computes the code from the outcome tally (exit_code_for), never
+    from the exception class alone.
+
+    Raised ONLY for a rejected batch call (a real Cloudflare 4xx/5xx, not a dropped connection).
+    A batch call that RETURNED but did not verify -- where Cloudflare committed SOMETHING and only
+    our confirmation of it is in doubt -- is the distinct `VerifyError` subclass below, never this
+    base class directly: SPEC 8.1's four-state table (`applied`/`unverified`/`failed`/`unknown`)
+    needs a signal `apply_all` can actually branch on, not just a shared string message, or
+    "rejected, nothing committed" and "committed but unconfirmed" collapse into the same `failed`
+    outcome -- exactly the contradiction that made R6.3's own exit-3 claim false before the
+    `unverified` outcome existed (Task 8 review, Item A).
+    """
+
+
+class VerifyError(ApplyError):
+    """The batch call RETURNED (so Cloudflare committed something), but the post-apply
+    verification could not confirm what (SPEC R6.3, 8.1, 9.1).
+
+    Raised for the two SPEC R6.3 triggers: a verification-read call itself failing outright, or a
+    mismatch surviving the single retry.  A subclass of `ApplyError`, not a sibling, so
+    `pytest.raises(ApplyError, ...)` and any future generic `except ApplyError` still catch it --
+    but `apply_all` MUST catch THIS class before the plain `ApplyError` clause, or a rejected batch
+    and a committed-but-unconfirmed one collapse into the same `failed` outcome again.
     """
 
 
@@ -771,7 +792,8 @@ def api_error_text(e):
             + "; ".join(parts) + suffix)
 
 
-OUTCOMES = ("applied", "already-applied", "planned", "failed", "unknown", "not-attempted")
+OUTCOMES = ("applied", "already-applied", "planned", "failed", "unverified", "unknown",
+           "not-attempted")
 
 
 def tally(outcomes):
@@ -790,6 +812,20 @@ def tally(outcomes):
     return counts
 
 
+def changed_count(counts):
+    """SPEC 8.1's `changed`: entries whose outcome is `applied`, `unverified` OR `unknown` --
+    every state in which Cloudflare MAY or DOES hold a change (the four-state table's first three
+    rows; `failed` is the one state in which nothing committed for that entry, since a batch is
+    one transaction).
+
+    Extracted so `exit_code_for` and `summary_lines` cannot independently drift on this one,
+    most-consequential formula (Task 8 review, Important 3): before this, both had their OWN
+    correct copy of the same three-term sum -- each independently mutation-tested, which caught a
+    change to either copy but not the two silently diverging from each other.
+    """
+    return counts["applied"] + counts["unverified"] + counts["unknown"]
+
+
 def exit_code_for(counts):
     """SPEC section 8, as a PURE function of the tally.
 
@@ -798,13 +834,18 @@ def exit_code_for(counts):
     a validation failure returns 2 and an interrupt returns 130 directly from main(), before any
     outcome exists.
 
-    `changed` counts applied PLUS unknown.  An entry whose batch call raised a timeout did not
-    tell us whether Cloudflare committed it, and reporting "nothing was changed" about a
-    production rewrite we cannot account for is exactly the silent failure PD#1 forbids.
+    The run "did not cleanly succeed" whenever ANY entry is `failed`, `unverified` or `unknown` --
+    all three are states pass 3 stops the run on (SPEC R3.4).  Once that is true, `changed_count`
+    (SPEC 8.1) decides 2 vs 3: an entry whose batch call was rejected outright commits nothing, but
+    an `unverified` or `unknown` entry means Cloudflare MAY or DOES hold a change we cannot fully
+    account for, and reporting "nothing was changed" about that is exactly the silent failure PD#1
+    forbids.  `unverified` must ALSO be in the trigger condition, not just in `changed_count`: an
+    all-`unverified` run (no `failed`, no `unknown`) would otherwise fall through to `return 0`,
+    the code that means "every selected entry applied... AND read back as expected" -- false for
+    exactly the entries this outcome exists to flag.
     """
-    if counts["failed"] or counts["unknown"]:
-        changed = counts["applied"] + counts["unknown"]
-        return 3 if changed else 2
+    if counts["failed"] or counts["unverified"] or counts["unknown"]:
+        return 3 if changed_count(counts) else 2
     if counts["already-applied"]:
         return 1
     return 0
@@ -821,14 +862,14 @@ def summary_lines(*, direction, source, source_generated_at, for_real, entries_i
     The `mode:` line is derived from the TALLY, never from `for_real` alone (SPEC 11.3, amended
     by the task 7 review, important 2): "FOR REAL -- changes were made" is a claim about
     production DNS, and a for-real run that reached no entry -- every one already-applied, or an
-    abort in validation -- would assert a rewrite that never happened.  `changed` is SPEC 8.1's
-    own definition (applied + unknown), so this stays true on every path: a clean --for-real run
-    (Task 8's apply_all) reads "N of N entries changed", and a --for-real run that reached no
-    entry (every one already-applied, or an abort in validation) reads "0 of N entries changed".
+    abort in validation -- would assert a rewrite that never happened.  `changed_count` is SPEC
+    8.1's own definition (applied + unverified + unknown, the SAME shared helper `exit_code_for`
+    uses -- Task 8 review, important 3), so this stays true on every path: a clean --for-real run
+    reads "N of N entries changed", and a --for-real run that reached no entry (every one
+    already-applied, or an abort in validation) reads "0 of N entries changed".
     """
     if for_real:
-        changed = counts["applied"] + counts["unknown"]
-        mode = f"FOR REAL -- {changed} of {selected} entries changed"
+        mode = f"FOR REAL -- {changed_count(counts)} of {selected} entries changed"
     else:
         mode = "DRY RUN -- no changes were made"
     return [
@@ -881,10 +922,23 @@ def verify_records(entry, rows):
     Compared as `record_key()` SETS over the governed types only, the same rule pass 1's
     `verdict_for` uses for R == P -- so a TXT/MX/CAA record at the name (never touched by this
     script) cannot make a healthy apply look unverified.
+
+    Raises InvariantError (SPEC 9.1) on an empty/missing `body.posts` -- the FOURTH instance of
+    the nil-shadow class this file already guards against in `verdict_for`, `merge_body` and
+    `describe_change` (Task 8 review, minor 7; "fix the class, not the instance").  Without this
+    guard, `verify_records(entry-with-empty-posts, [])` returned True: two EMPTY sets compare
+    equal, reporting a successful verification for a call that verified nothing, and a missing
+    `body` raised a bare, unnamed KeyError.  Unreachable through `apply_entry` today (`merge_body`
+    already guards the same shape first), but this is a section-13-listed public helper in its own
+    right.
     """
+    posts = entry.get("body", {}).get("posts")
+    if not posts:
+        raise InvariantError(
+            "verify_records: entry has an empty or missing body.posts -- section 6 check 7 "
+            "should have made this fatal before pass 1 ever ran")
     have = {record_key(r.type, r.name, r.content) for r in governed_records(rows)}
-    want = {record_key(item["type"], item["name"], item["content"])
-            for item in entry["body"]["posts"]}
+    want = {record_key(item["type"], item["name"], item["content"]) for item in posts}
     return have == want
 
 
@@ -910,6 +964,14 @@ def apply_entry(client, fqdn, entry, delete_ids):
     `exit_code_for` treat a rewrite of unknown fate as "nothing was changed" -- the exact silent
     failure PD#1 forbids.  apply_all is the layer that turns the bare re-raise into the `unknown`
     outcome; this function only distinguishes the two, it does not decide the outcome.
+
+    The batch-call clause and the two verification clauses below raise DIFFERENT exception
+    classes for the same reason (SPEC R6.3, 8.1's four-state table, added after Task 8's review
+    surfaced the contradiction in the original three-outcome design): a REJECTED batch call
+    (`ApplyError`) commits nothing, so this entry is untouched; a batch call that RETURNED but did
+    not verify (`VerifyError`, a subclass) means Cloudflare committed SOMETHING -- only our
+    confirmation of it is in doubt.  Collapsing the two into one exception class would leave
+    `apply_all` unable to tell "nothing happened" from "something happened, go look" apart.
     """
     body = merge_body(entry, delete_ids)
     try:
@@ -918,7 +980,7 @@ def apply_entry(client, fqdn, entry, delete_ids):
     except cloudflare.APIConnectionError:
         raise   # unknown fate -- apply_all records `unknown`, never wraps this into ApplyError
     except cloudflare.CloudflareError as e:
-        raise ApplyError(f"{fqdn}: batch call failed: {api_error_text(e)}") from e
+        raise ApplyError(f"{fqdn}: batch call rejected: {api_error_text(e)}") from e
 
     for attempt in (1, 2):
         try:
@@ -926,24 +988,25 @@ def apply_entry(client, fqdn, entry, delete_ids):
                                                 name={"exact": fqdn}))
         except cloudflare.CloudflareError as e:
             # The batch call above already succeeded -- Cloudflare committed SOMETHING -- so this
-            # is deliberately an ApplyError (a verification-read failure, SPEC 9.1's third ApplyError
-            # trigger), never re-raised bare like the batch clause above: only the batch call itself
-            # can leave Cloudflare's own COMMIT in doubt, and this one already happened.
-            raise ApplyError(
+            # is deliberately a VerifyError (SPEC R6.3's second trigger: the verification READ
+            # itself failed), never re-raised bare like the batch clause above: only the batch
+            # call itself can leave Cloudflare's own COMMIT in doubt, and this one already
+            # happened.
+            raise VerifyError(
                 f"{fqdn}: the batch call succeeded but the verification read failed, so the "
                 f"result is unconfirmed: {api_error_text(e)}") from e
         if verify_records(entry, rows):
             return [r.id for r in governed_records(rows)]
         if attempt == 1:
             sleep(VERIFY_RETRY_SLEEP)
-    raise ApplyError(
+    held = describe_keys(sorted({record_key(r.type, r.name, r.content)
+                                 for r in governed_records(rows)})) or "no CNAME/A/AAAA record"
+    raise VerifyError(
         f"{fqdn}: the batch call succeeded but Cloudflare does not hold the expected records "
-        f"afterwards, twice {VERIFY_RETRY_SLEEP}s apart; it now holds "
-        f"{describe_keys(sorted({record_key(r.type, r.name, r.content)
-                                 for r in governed_records(rows)}))}")
+        f"afterwards, twice {VERIFY_RETRY_SLEEP}s apart; it now holds {held}")
 
 
-def apply_all(client, entries, validations, *, verbose):
+def apply_all(client, entries, validations, outcomes, details):
     """Pass 3 (SPEC R3.4): in key order, one entry at a time, stopping at the first failure.
 
     Nothing already applied is reverted and nothing further is attempted -- PROMPT.md is explicit
@@ -951,19 +1014,50 @@ def apply_all(client, entries, validations, *, verbose):
     attempt to make the remaining changes specified in the file").  Every unattempted entry keeps
     its `not-attempted` seed value from before this loop starts.
 
-    An entry whose call raised an unknown-outcome error (a dropped connection or a timeout, SPEC
-    9.1/8.1) is recorded as `unknown`, never `failed`: we do not know which it was, and
-    `exit_code_for` treats `unknown` as changed for exactly that reason -- printing "nothing was
-    changed" about a call whose fate is unconfirmed would be the silent failure PD#1 forbids.
-    `TimeoutError`/`OSError` are caught alongside `cloudflare.APIConnectionError` for the same
-    reason: a transport-level failure the SDK's own retry loop did not manage to wrap can reach
-    here as a raw stdlib exception rather than the SDK's own class (PD#3's upstream-error shadow).
+    `outcomes`/`details` are CALLER-OWNED mutable dicts (mutated in place, not built fresh here),
+    a contract change from Task 8's original shape (Task 8 review, minor 11): returning them BY
+    VALUE meant a `KeyboardInterrupt` raised out of `apply_entry` discarded every outcome
+    accumulated so far, because the exception unwinds straight past the `return` -- and SPEC 9.3
+    requires the in-flight entry `unknown` and the rest `not-attempted` to survive that, which is
+    only possible if the caller already holds the SAME dict objects this function mutates.  The
+    caller still constructs them as `dict.fromkeys(entries, "not-attempted")` / `{}`, exactly what
+    this function built internally before; only who OWNS the object changed.  The `except
+    KeyboardInterrupt` arm below is the other half: it marks the in-flight entry before re-raising,
+    so a Ctrl-C mid-batch-call or mid-verification-retry is never silently lost.
+
+    Dropped the `verbose` keyword this function took at Task 8's first pass: SPEC 11.2's message
+    table has no pass-3-only `-v` line -- the `POST <path>` + exact body row belongs entirely to
+    pass 2 (`report_entries`, which already ran, under the same `-v`, for every entry reaching
+    this function) -- so a second copy printed here was a plain duplicate under `-v --for-real`
+    (Task 8 review, minor 9), and the parameter had no other use once it was removed.
+
+    Three outcomes -- `unverified`, `failed`, `unknown` -- each stop the run immediately and are
+    mutually exclusive per entry (SPEC 8.1's four-state table, added after Task 8's review
+    surfaced a contradiction in the original three-outcome design):
+      - `unverified` (`VerifyError`): the batch call RETURNED (Cloudflare committed something) but
+        the post-apply read never confirmed it -- inspect this FQDN by hand.
+      - `failed` (`ApplyError`, and NOT its `VerifyError` subclass -- caught below it): the batch
+        call was REJECTED, so nothing committed for this entry.
+      - `unknown` (`cloudflare.APIConnectionError`/`TimeoutError`/`OSError`): the call did not
+        complete at all, so whether it committed is not known.  `TimeoutError`/`OSError` are
+        caught alongside `APIConnectionError` for PD#3's upstream-error shadow: a transport-level
+        failure the SDK's own retry loop did not manage to wrap can reach here as a raw stdlib
+        exception rather than the SDK's own class.
+    Recording any of the three as `failed` (or vice versa) would make `exit_code_for` report the
+    wrong thing happened to production DNS -- the exact silent failure PD#1 forbids.
+
+    Per entry's result line, the failure reason is written to BOTH streams (SPEC 11.2, ruling
+    `f6639ad`): stdout as part of the `<fqdn>  <OUTCOME> -- <reason>` result line (so `> apply.log`
+    captures a full account of what broke, not just that something did), and stderr as the
+    `ERROR:` line (so an operator watching the terminal is not left to scroll a long report to
+    find out).  This is the one deliberate duplication in SPEC 11.2's message table.
 
     Every stdout line goes through `write_report`, never a bare `print` (SPEC 11.1) -- the same
-    discipline `report_entries` already applies.
+    discipline `report_entries` already applies.  Pass 3 does NOT print its own `POST <path>`
+    line: SPEC 11.2's `-v` POST-body row is pass 2's (`report_entries`, which already ran for
+    every one of these entries before pass 3 starts), and a second, bare `POST <path>` line here
+    was a plain duplicate under `-v --for-real` (Task 8 review, minor 9).
     """
-    outcomes = dict.fromkeys(entries, "not-attempted")
-    details = {}
     for fqdn, entry in sorted(entries.items()):
         validation = validations[fqdn]
         if validation.verdict == "already-applied":
@@ -973,28 +1067,40 @@ def apply_all(client, entries, validations, *, verbose):
             raise InvariantError(
                 f"{fqdn} reached the apply pass with verdict {validation.verdict!r}; pass 1 "
                 "should have aborted the run")
-        if verbose:
-            write_report(f"    POST {entry['path']}")
         try:
             created = apply_entry(client, fqdn, entry, validation.delete_ids)
-        except (cloudflare.APIConnectionError, TimeoutError, OSError) as e:
-            # Listed BEFORE ApplyError: an unknown-fate transport failure (a dropped connection
-            # from the SDK, or -- belt and suspenders, PD#3's upstream-error shadow -- a raw
-            # stdlib TimeoutError/OSError the SDK's own retry loop did not manage to wrap) must
-            # never be caught by the broader ApplyError clause below and recorded as `failed`.
+        except KeyboardInterrupt:
+            # SPEC 9.3: the in-flight entry's fate is UNKNOWN, never `failed`/`not-attempted` --
+            # whichever stage inside apply_entry was interrupted (the batch call itself, the
+            # verification read, or the retry sleep), we cannot tell whether Cloudflare committed.
             outcomes[fqdn] = "unknown"
-            details[fqdn] = {"error": f"{type(e).__name__}: {e}",
-                             "deleted_ids": validation.delete_ids}
-            write_report(f"{fqdn}  UNKNOWN -- the call did not complete")
+            details[fqdn] = {"error": "interrupted", "deleted_ids": validation.delete_ids}
+            raise
+        except (cloudflare.APIConnectionError, TimeoutError, OSError) as e:
+            # Listed BEFORE ApplyError/VerifyError: an unknown-fate transport failure must never
+            # be caught by either of the broader clauses below and recorded as `failed`/
+            # `unverified`.
+            reason = f"the call did not complete ({type(e).__name__}: {e})"
+            outcomes[fqdn] = "unknown"
+            details[fqdn] = {"error": reason, "deleted_ids": validation.delete_ids}
+            write_report(f"{fqdn}  UNKNOWN -- {reason}")
             report_line(
-                f"ERROR: {fqdn}: the batch call did not complete ({type(e).__name__}), so "
-                "whether Cloudflare applied it is UNKNOWN.  Check this FQDN by hand before "
-                "re-running.")
+                f"ERROR: {fqdn}: {reason}, so whether Cloudflare applied it is UNKNOWN.  Check "
+                "this FQDN by hand before re-running.")
+            return outcomes, details
+        except VerifyError as e:
+            # Listed BEFORE the plain ApplyError clause: VerifyError IS an ApplyError (SPEC 8.1),
+            # and the broader clause below would otherwise catch it first and record `failed`,
+            # collapsing "committed but unconfirmed" into "nothing committed".
+            outcomes[fqdn] = "unverified"
+            details[fqdn] = {"error": str(e), "deleted_ids": validation.delete_ids}
+            write_report(f"{fqdn}  UNVERIFIED -- {e}")
+            report_line(f"ERROR: {e}")
             return outcomes, details
         except ApplyError as e:
             outcomes[fqdn] = "failed"
             details[fqdn] = {"error": str(e), "deleted_ids": validation.delete_ids}
-            write_report(f"{fqdn}  FAILED")
+            write_report(f"{fqdn}  FAILED -- {e}")
             report_line(f"ERROR: {e}")
             return outcomes, details
         outcomes[fqdn] = "applied"
@@ -1170,7 +1276,13 @@ def main(argv):
         if options.for_real:
             report_line("FOR REAL -- changes WILL be made to Cloudflare")  # SPEC 11.2: printed
             # before the first batch call.
-            outcomes, _details = apply_all(client, entries, validations, verbose=options.verbose)
+            # Caller-owned (Task 8 review, minor 11): apply_all mutates these IN PLACE, so a
+            # KeyboardInterrupt raised out of it still leaves them holding the in-flight entry's
+            # `unknown` outcome and every entry reached before it -- a `return`-by-value could not
+            # survive an exception unwinding past it.
+            outcomes = dict.fromkeys(entries, "not-attempted")
+            _details = {}
+            apply_all(client, entries, validations, outcomes, _details)
             # `_details` (per-entry error/created-id detail) is not yet consumed -- Task 9 writes
             # it into the run record.  Underscore-prefixed so it stays visibly unused rather than
             # silently unread (ruff's dummy-variable convention), not because it is unneeded.

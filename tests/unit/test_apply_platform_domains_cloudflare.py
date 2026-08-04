@@ -987,8 +987,8 @@ def test_the_network_guard_itself_can_fire(apc, tmp_path, refuse_real_network):
 
 def test_tally_zero_fills_every_outcome(apc):
     counts = apc.tally({"a": "applied"})
-    assert counts == {"applied": 1, "already-applied": 0, "planned": 0,
-                      "failed": 0, "unknown": 0, "not-attempted": 0}
+    assert counts == {"applied": 1, "already-applied": 0, "planned": 0, "failed": 0,
+                      "unverified": 0, "unknown": 0, "not-attempted": 0}
 
 
 def test_exit_code_zero_when_everything_applied(apc):
@@ -1440,17 +1440,56 @@ def test_apply_entry_retries_verification_once_before_failing(apc, monkeypatch):
     assert sorted(created) == ["rec-a", "rec-b"]
 
 
-def test_apply_entry_fails_when_verification_never_matches(apc, monkeypatch):
+def test_apply_entry_raises_verify_error_when_verification_never_matches(apc, monkeypatch):
+    """SPEC R6.3: a surviving mismatch is `VerifyError` (`unverified`), never plain `ApplyError`
+    (`failed`) -- the batch call already returned, so Cloudflare committed SOMETHING.
+
+    Minor 5 (Task 8 review): R6.2 pins the re-list at ONE retry, so exactly TWO `list()` calls
+    total -- the initial read plus the one retry.  `for attempt in (1, 2)` -> `(1, 2, 3)` left the
+    suite green before this asserted the call COUNT (the sleep-count alone does not distinguish
+    the two: this code sleeps only after the FIRST failed attempt regardless of how many follow),
+    and a second retry would make the raised message's "twice VERIFY_RETRY_SLEEPs apart" false.
+    """
+    slept = []
+    monkeypatch.setattr(apc, "sleep", slept.append)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
+    with pytest.raises(apc.VerifyError, match=r"a\.umich\.edu"):
+        apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+    assert slept == [apc.VERIFY_RETRY_SLEEP]
+    assert len(client.list_calls) == 2  # SPEC R6.2: re-list ONCE, not twice
+
+
+def test_apply_entry_names_what_cloudflare_actually_holds_when_nothing_governed_is_there(
+        apc, monkeypatch):
+    """Minor 8 (Task 8 review): the surviving-mismatch message truncated to "...it now holds "
+    on the COMMONEST shape (nothing governed at the name) -- `verdict_for` already guards this
+    with `describe_keys(...) or 'no CNAME/A/AAAA record'`; `apply_entry` did not."""
     monkeypatch.setattr(apc, "sleep", lambda seconds: None)
     client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [[]]})
-    with pytest.raises(apc.ApplyError, match=r"a\.umich\.edu"):
+    with pytest.raises(apc.VerifyError, match="it now holds no CNAME/A/AAAA record"):
         apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
 
 
-def test_apply_entry_raises_apply_error_on_a_batch_failure(apc):
+def test_apply_entry_raises_verify_error_when_the_verification_read_itself_fails(apc):
+    """SPEC R6.3's second trigger: the batch call already succeeded, so a failing verification
+    READ is `VerifyError` (`unverified`) too, never plain `ApplyError` (`failed`)."""
+    error = api_status_error(cloudflare.InternalServerError, 500,
+                             {"errors": [{"code": 1000, "message": "boom"}]})
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [address_rows()]},
+                                  list_error=error)
+    with pytest.raises(apc.VerifyError, match="verification read failed"):
+        apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+
+
+def test_apply_entry_raises_apply_error_not_verify_error_on_a_batch_rejection(apc):
+    """A REJECTED batch call means nothing committed for this entry (SPEC 8.1's `failed` row) --
+    the exact TYPE (not merely `isinstance(..., ApplyError)`, which `VerifyError` would also
+    satisfy) is what `apply_all`'s except-clause ordering actually depends on to keep `failed` and
+    `unverified` apart."""
     client = FakeCloudflareClient(batch_error=cloudflare_error(400, 81058, "already exists"))
-    with pytest.raises(apc.ApplyError, match="81058"):
+    with pytest.raises(apc.ApplyError, match="81058") as excinfo:
         apc.apply_entry(client, "a.umich.edu", plan_entry(), ["rec-1"])
+    assert type(excinfo.value) is apc.ApplyError
 
 
 def three_entry_doc():
@@ -1462,18 +1501,35 @@ def three_entry_doc():
 
 
 def three_entry_rows(applied=()):
-    """Pass-1 rows for three FQDNs; those in `applied` are already swapped."""
+    """Pass-1 rows for three FQDNs; those in `applied` are already swapped.
+
+    Each entry's CNAME (or, once applied, A/AAAA) row carries an id DERIVED FROM ITS OWN FQDN
+    ("rec-a-cname" for a.umich.edu, "rec-b-a"/"rec-b-aaaa" for an applied b.umich.edu, ...)
+    rather than the row() defaults ("rec-1"/"rec-a"/"rec-b") every FQDN shared before.  Critical 1
+    (Task 8 review): with every entry resolving the SAME delete id, `apply_all` could hand
+    `apply_entry` a wrong -- even a hardcoded literal -- id and the whole suite stayed green,
+    because nothing distinguished "the id THIS entry resolved" from "the id ANY entry resolved".
+    """
     rows = {}
     for name in ("a.umich.edu", "b.umich.edu", "c.umich.edu"):
-        base = address_rows() if name in applied else cname_rows()
-        rows[name] = [[row(r.type, name, r.content, r.id) for r in base]]
+        letter = name[0]
+        if name in applied:
+            base = [row("A", name, "23.185.0.4", f"rec-{letter}-a"),
+                   row("AAAA", name, "2620:12a:8000::4", f"rec-{letter}-aaaa")]
+        else:
+            base = [row("CNAME", name, "live-umich-x.pantheonsite.io", f"rec-{letter}-cname")]
+        rows[name] = [base]
     return rows
 
 
 def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
         apc, tmp_path, monkeypatch, capsys):
     """SPEC R3.4 and 8.1: stop immediately, revert nothing, attempt nothing further -- and exit 3
-    because the FIRST entry did commit."""
+    because the FIRST entry did commit.
+
+    Minor 10 (Task 8 review): `"applied 1" in out` also matches `already applied 1` -- harmless
+    today only because this fixture's already-applied count happens to be 0.  Asserting the WHOLE
+    counts line is what makes the check actually pin the shape rather than get lucky."""
     path = write_doc(tmp_path, three_entry_doc())
 
     class FailOnSecond(FakeCloudflareClient):
@@ -1492,9 +1548,9 @@ def test_a_failure_on_the_second_entry_leaves_the_third_not_attempted(
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
     out = capsys.readouterr().out
     assert code == 3
-    assert "applied 1" in out
-    assert "failed 1" in out
-    assert "not attempted 1" in out
+    assert ("applied 1   already applied 0   planned 0   failed 1   unverified 0   unknown 0   "
+            "not attempted 1") in out
+    assert len(client.batch_calls) == 2  # stop-at-first-failure: entry c never reached
 
 
 def test_a_failure_on_the_first_entry_exits_two_because_nothing_committed(
@@ -1506,10 +1562,42 @@ def test_a_failure_on_the_first_entry_exits_two_because_nothing_committed(
     assert code == 2
 
 
+@pytest.mark.parametrize("error_factory", [
+    lambda: cloudflare.APIConnectionError(request=None),
+    lambda: cloudflare.APITimeoutError(request=None),
+    TimeoutError,
+    OSError,
+])
+def test_every_unknown_fate_transport_error_makes_the_outcome_unknown_and_exits_three(
+        apc, tmp_path, monkeypatch, capsys, error_factory):
+    """SPEC 8.1: the call did not tell us whether Cloudflare committed it, so "nothing was
+    changed" is a claim this run cannot make.
+
+    Minor 6 (Task 8 review): only `cloudflare.APIConnectionError` had a test -- narrowing
+    `apply_all`'s `except (cloudflare.APIConnectionError, TimeoutError, OSError)` tuple to drop
+    either of the other two left the whole suite green.  `TimeoutError` IS an `OSError` subclass
+    in the stdlib, so this also proves listing both is verified to be redundant rather than
+    silently load-bearing -- either alone would still catch a raw `TimeoutError`."""
+    path = write_doc(tmp_path, plan_doc())
+
+    class Dropped(FakeCloudflareClient):
+        def _batch(self, **kwargs):
+            self.batch_calls.append(kwargs)
+            raise error_factory()
+
+    client = Dropped(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 3
+    assert "unknown 1" in out
+    assert "a.umich.edu  UNKNOWN --" in out
+
+
 def test_a_connection_error_makes_the_outcome_unknown_and_exits_three(
         apc, tmp_path, monkeypatch, capsys):
     """SPEC 8.1: the call did not tell us whether Cloudflare committed it, so "nothing was
-    changed" is a claim this run cannot make."""
+    changed" is a claim this run cannot make.  Also asserts the reason reaches BOTH streams
+    (SPEC 11.2, ruling f6639ad)."""
     path = write_doc(tmp_path, plan_doc())
 
     class Dropped(FakeCloudflareClient):
@@ -1519,13 +1607,58 @@ def test_a_connection_error_makes_the_outcome_unknown_and_exits_three(
 
     client = Dropped(rows_by_name={"a.umich.edu": [cname_rows()]})
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
     assert code == 3
-    assert "unknown 1" in capsys.readouterr().out
+    assert "unknown 1" in captured.out
+    assert "a.umich.edu  UNKNOWN -- the call did not complete (APIConnectionError" in captured.out
+    assert "ERROR: a.umich.edu:" in captured.err
+    assert "UNKNOWN" in captured.err
+
+
+def test_a_verify_mismatch_makes_the_outcome_unverified_and_exits_three(
+        apc, tmp_path, monkeypatch, capsys):
+    """Item A (Task 8 review): SPEC R6.3/8.1, amended after Task 8's review surfaced the
+    contradiction -- a surviving verification mismatch means Cloudflare's batch call RETURNED
+    (it committed), so the outcome is `unverified`, never `failed`, and `changed_count` must
+    count it or `exit_code_for` reports exit 2 ("nothing was changed") about a write it cannot
+    fully account for.  Also pins the result line's UNVERIFIED shape and the both-streams reason
+    (SPEC 11.2, ruling f6639ad)."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), []]})
+    monkeypatch.setattr(apc, "sleep", lambda seconds: None)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert code == 3
+    assert "unverified 1" in captured.out
+    assert "a.umich.edu  UNVERIFIED -- a.umich.edu:" in captured.out
+    assert "ERROR: a.umich.edu:" in captured.err
+
+
+def test_exit_code_three_when_the_only_outcome_is_unverified(apc):
+    """Item A (Task 8 review): the pure-function pin for R6.3's exit-3 rule, independent of any
+    end-to-end run."""
+    assert apc.exit_code_for(apc.tally({"a": "unverified", "b": "not-attempted"})) == 3
+
+
+def test_changed_count_sums_applied_unverified_and_unknown(apc):
+    """Important 3 (Task 8 review): `changed_count` is the ONE shared formula `exit_code_for` and
+    `summary_lines` both call, so this pins its definition directly rather than only through the
+    two call sites' own tests."""
+    counts = apc.tally({"a": "applied", "b": "unverified", "c": "unknown",
+                        "d": "failed", "e": "already-applied"})
+    assert apc.changed_count(counts) == 3
 
 
 def test_a_clean_for_real_run_applies_every_entry_and_exits_zero(
         apc, tmp_path, monkeypatch):
-    path = write_doc(tmp_path, three_entry_doc())
+    """Critical 1 (Task 8 review): asserting only `len(client.batch_calls) == 3` (as this test did
+    before the fix) proves `apply_entry` was called three times, never that it was called with the
+    id PASS 1 actually resolved for THAT entry -- mutating `apply_all`'s call site to
+    `apply_entry(client, fqdn, entry, ["WRONG-ID"])` left the whole suite green.  `three_entry_rows`
+    now gives each FQDN a distinct delete id, so asserting the full `batch_calls` list (matched per
+    entry against the file's own `zone_id`/`deletes`/`posts`) actually catches a cross-wired id."""
+    doc = three_entry_doc()
+    path = write_doc(tmp_path, doc)
     rows = three_entry_rows()
     for name in rows:
         rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
@@ -1533,5 +1666,87 @@ def test_a_clean_for_real_run_applies_every_entry_and_exits_zero(
     client = FakeCloudflareClient(rows_by_name=rows)
     code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
     assert code == 0
-    assert len(client.batch_calls) == 3
+    assert client.batch_calls == [
+        {"zone_id": "zone-a", "deletes": [{"id": "rec-a-cname"}],
+         "posts": doc["entries"]["a.umich.edu"]["body"]["posts"]},
+        {"zone_id": "zone-a", "deletes": [{"id": "rec-b-cname"}],
+         "posts": doc["entries"]["b.umich.edu"]["body"]["posts"]},
+        {"zone_id": "zone-a", "deletes": [{"id": "rec-c-cname"}],
+         "posts": doc["entries"]["c.umich.edu"]["body"]["posts"]},
+    ]
+
+
+def test_a_mixed_already_applied_and_ready_run_applies_only_the_ready_entries(
+        apc, tmp_path, monkeypatch, capsys):
+    """Critical 2 (Task 8 review): mutating `apply_all`'s already-applied `continue` into `return
+    outcomes, details` left 122/122 green -- both the correct and the mutated behavior exit 1 on
+    every EXISTING already-applied fixture, because each used a single, homogeneous entry (the one
+    shape that survives that mutation: both a real skip-and-continue and a wrongful early-return
+    produce "nothing else happened, exit 1").  This file mixes ONE already-applied entry FIRST in
+    sort order with two ready ones, so the regression changes both the batch calls actually made
+    and the counts line, not just the exit code."""
+    path = write_doc(tmp_path, three_entry_doc())
+    rows = three_entry_rows(applied=("a.umich.edu",))
+    for name in ("b.umich.edu", "c.umich.edu"):
+        rows[name] = [rows[name][0], [row(r.type, name, r.content, r.id)
+                                      for r in address_rows()]]
+    client = FakeCloudflareClient(rows_by_name=rows)
+    code = run_main(apc, ["--for-real", path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 1
+    assert ("applied 2   already applied 1   planned 0   failed 0   unverified 0   unknown 0   "
+            "not attempted 0") in out
+    assert [call["posts"][0]["name"] for call in client.batch_calls] == [
+        "b.umich.edu", "c.umich.edu"]
+
+
+def test_for_real_verbose_prints_the_post_body_exactly_once(apc, tmp_path, monkeypatch, capsys):
+    """Minor 9 (Task 8 review): `apply_all` printed a second, bare `POST <path>` line under -v --
+    `report_entries` (pass 2) already prints the full POST line with the exact merged body per
+    SPEC 11.2's `-v` row, and pass 3 has no line of its own in that table."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows(), address_rows()]})
+    run_main(apc, ["-v", "--for-real", path], tmp_path, client, monkeypatch)
+    out = capsys.readouterr().out
+    assert out.count("POST /zones/zone-a/dns_records/batch") == 1
+
+
+def test_verify_records_raises_invariant_error_on_the_impossible_empty_shape(apc):
+    """Minor 7 (Task 8 review): the FOURTH instance of the nil-shadow class this file guards
+    against elsewhere (`verdict_for`, `merge_body`, `describe_change`) -- `verify_records(entry
+    with posts=[], rows=[])` returned True (two EMPTY sets compare equal, a false "verified"), and
+    a missing `body` raised a bare, unnamed `KeyError`.  Unreachable through `apply_entry` today
+    (`merge_body` already guards the same shape first), but this is a section-13-listed public
+    helper in its own right -- "fix the class, not the instance."""
+    entry = plan_entry()
+    entry["body"]["posts"] = []
+    with pytest.raises(apc.InvariantError):
+        apc.verify_records(entry, [])
+
+    missing_body = plan_entry()
+    del missing_body["body"]
+    with pytest.raises(apc.InvariantError):
+        apc.verify_records(missing_body, [])
+
+
+def test_apply_all_marks_the_in_flight_entry_unknown_on_a_keyboard_interrupt(apc, monkeypatch):
+    """Minor 11 (Task 8 review): `apply_all` returned `outcomes`/`details` BY VALUE, so a
+    `KeyboardInterrupt` raised out of `apply_entry` discarded every outcome accumulated so far --
+    SPEC 9.3 requires the in-flight entry `unknown` and the rest `not-attempted`, which Task 9's
+    summary+run-record write cannot honor unless the caller can still see this state AFTER the
+    exception propagates.  Fixed by making the caller own `outcomes`/`details` (mutated in place,
+    never returned as the only copy) and catching `KeyboardInterrupt` around the in-flight call to
+    mark it before re-raising."""
+    def boom(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(apc, "apply_entry", boom)
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    entries = {"a.umich.edu": plan_entry()}
+    validations = apc.validate_entries(client, entries, verbose=False)
+    outcomes = dict.fromkeys(entries, "not-attempted")
+    details = {}
+    with pytest.raises(KeyboardInterrupt):
+        apc.apply_all(client, entries, validations, outcomes, details)
+    assert outcomes["a.umich.edu"] == "unknown"
+    assert details["a.umich.edu"]["error"] == "interrupted"
 
