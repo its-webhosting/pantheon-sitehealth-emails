@@ -1082,15 +1082,20 @@ both null it only when `field not in creds`. Measured: an **explicit** `api_emai
 `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY` reaches a real built request — routes 1 and 2 of the
 four-route pin, reopened, on the one copy that performs writes.
 
-**It is latent in all three, not live in any:** every caller guards
+**It was latent in all three, not live in any:** every caller guards
 (`cloudflare_client` here, `build_client()` in the plugin) and exits before it can pass `None`. But
 `build_client`'s own docstring claims it "uses EXACTLY the credentials the config supplied", and
-under the `not in` form that claim is false for an explicit `None` — so the divergence makes the
+under the `not in` form that claim is false for an explicit `None` — so the change makes the
 docstring true rather than merely intended, and is what lets §14's new
 `build_client(api_email=None, api_key=None)` test pin the idiom itself rather than the caller's
-guard. **The other two copies still carry the `not in` form**; the plugin's is the one worth
-revisiting, because unlike these two utilities it is not scheduled for deletion and it runs
-unattended against production monthly.
+guard.
+
+**Status of the other two copies, as of 2026-08-04:**
+
+| Copy | Form | Why |
+|---|---|---|
+| `plugin/cloudflare/client.py` (`pinned_client`) | **fixed** — `creds.get(field) is None` | The main program's pin. Not scheduled for deletion, and it runs unattended against production monthly, so it got the same fix and its own real-SDK test (`test_pinned_client_nulls_an_explicit_none_credential`) |
+| `find-platform-domains-cloudflare` (`build_client`) | still `field not in creds` | **Deliberately left.** That utility is read-only — it never writes to Cloudflare — and is deleted with this one after the CDN migration. Fixing it would mean touching a script three reviews have verified byte-identical to its original, for a hole its own caller already guards, on a path that cannot write. Recorded here so the divergence is a decision rather than an oversight (PD#9) |
 
 **Not copied, deliberately:** `read_all`, `read_page_once`, `expected_record_count`, `ListTally`
 and the completeness cross-check (~120 lines). They exist to survive paginating a whole zone;
