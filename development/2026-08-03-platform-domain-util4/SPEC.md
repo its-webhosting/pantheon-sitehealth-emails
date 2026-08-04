@@ -772,8 +772,8 @@ records written next to the conventional baseline, so no new ignore entry is req
     "exit_code": 3,
     "entries_in_file": 217,
     "selected": 217,
-    "counts": {"applied": 12, "already-applied": 0, "planned": 0,
-               "failed": 1, "unknown": 0, "not-attempted": 204}
+    "counts": {"applied": 12, "already-applied": 0, "planned": 0, "failed": 1,
+               "unverified": 0, "unknown": 0, "not-attempted": 204}
   },
   "entries": {
     "a.umich.edu": {"outcome": "applied", "at": "2026-08-03T14:22:13Z",
@@ -846,9 +846,9 @@ can still fire: it hooks the SDK's transport, so a transport change would otherw
 | `verify_records(entry, rows)` | `True` when R == P (R6.1) |
 | `outcome_document(...)` | the §12.2 document |
 | `outcome_path(input_path, at)` | the §12.1 path |
-| `summary_lines(tally, ...)` | the §11.3 block |
+| `summary_lines(*, direction, source, source_generated_at, for_real, entries_in_file, selected, counts, record_path)` | the §11.3 block. All **keyword-only** |
 | `changed_count(counts)` | §8.1's `changed` — `applied + unverified + unknown`. **One definition**, called by both `exit_code_for` and `summary_lines`, which each computed it separately until the Task 8 review |
-| `exit_code_for(tally, failed)` | §8's code, from the tally alone |
+| `exit_code_for(counts)` | §8's code, from the tally alone. **One argument** — there is no `failed` parameter; the failure terms are in `counts` |
 
 `apply_entry(client, fqdn, entry, delete_ids)` and `records_at_name(client, zone_id, fqdn)` are
 the only I/O functions; they are listed here so the extraction list is complete, and are covered
@@ -1044,7 +1044,7 @@ the exact phrase `RUN LIVE` **and** a named throwaway hostname.
   `$CLOUDFLARE_CUSTOM_HEADERS`, and `$CLOUDFLARE_BASE_URL` redirecting a configured credential to
   an arbitrary host. Group 13 asserts it against a **real built request**, not against the
   attribute assignments that implement it.
-- **This is the first of the three copies that performs writes**, which raises the stakes of the
+- **This is the ONLY one of the three copies that performs writes**, which raises the stakes of the
   `$CLOUDFLARE_BASE_URL` route from "credential disclosure" to "credential disclosure plus a
   rewrite aimed at an attacker-chosen host." The pin is therefore load-bearing here in a way it is
   not in the read-only siblings, and §14 group 13 is not optional.
@@ -1132,7 +1132,7 @@ script adds:
 6. **No `.gitignore` change is required** — `/platform-domains-cloudflare*.json` already covers the
    run records written beside the conventional baseline (§12.1)
 
-**Deletion stays `git rm` of two files plus four textual edits.** No new source module, no package,
+**Deletion stays `git rm` of THREE files** (the script, its `.py` symlink, its test file) **plus three textual edits** (`pyproject.toml`, `.claude/hooks/ruff-check.sh`, `CLAUDE.md`). No new source module, no package,
 nothing imported from `psh/`.
 
 ---
@@ -1177,7 +1177,7 @@ spec and the diff, reviews before merge, per `prompts/adversarial-review.md`.
 
 Evidence: the ten per-task reports and reviews in `.superpowers/sdd/PLAN/`, the whole-branch review
 and its fix wave (`final-fix-report.md`), the ledger (`progress.md`), and the code at `HEAD`
-(`a039384..250e517`, 37 commits, no branch created per `CLAUDE.md`).
+(`a039384..250e517`, 36 commits, no branch created per `CLAUDE.md`).
 
 **The dominant finding across all ten tasks: the production code was almost always right, and the
 tests proving it were repeatedly wrong.** Every Critical and Important finding on this branch —
@@ -1232,9 +1232,35 @@ second appeared in seven of the ten tasks.
 
 6. **Is the script free of any DNS resolution (§20)?**
 
-   Yes. `git grep -n "dns\.\|resolve("` returns three matches, all prose: two docstring references
-   to the sibling `find-platform-domains-dns` and one `# Path.resolve() follows symlinks` comment.
-   No resolver import, no lookup. The script's only network peer is the Cloudflare API.
+   Yes — but **the evidence originally pasted here was not what the quoted command produces**, and
+   that is worth recording rather than quietly correcting: this answer claimed "three matches, all
+   prose" where the command returns **eight**, three of them live code. The conclusion was right and
+   the audit trail was wrong, in the one section whose entire job is to be auditable. §22's own
+   preamble names "the tests proving it were repeatedly wrong" as this branch's dominant failure
+   class; this is that class landing in the audit itself (PD#14 — *"applies at design time too — to
+   a new counter, artifact, or notice — not only in tests"*). Found by the post-merge review.
+
+   The real output, re-run at HEAD:
+
+   ```
+   $ git grep -c "dns\.\|resolve(" -- apply-platform-domains-cloudflare
+   8
+   ```
+
+   All eight are one of two things, and neither is name resolution:
+
+   - **Five are prose** — docstring references to the sibling `find-platform-domains-dns`, the
+     `# Path.resolve() follows symlinks` comment on `write_json_atomic`, and two docstrings
+     describing the SDK's pagination and its typed batch entry point.
+   - **Three are live code**, and all three are the **Cloudflare SDK's own `dns.records.*`
+     namespace** — `records_at_name`'s `client.dns.records.list(...)`, and `apply_entry`'s
+     `client.dns.records.batch(...)` and its verification `list(...)`. That is Cloudflare's
+     resource path for DNS *records*, not a resolver.
+
+   No `dns.resolver` import, no `dnspython` dependency, no lookup of any kind. The script's only
+   network peer is the Cloudflare API — which is what §20 requires and what makes the sibling's
+   whole resolver layer (`resolve`, `resolve_retrying`, `resolve_target`, `sorted_addresses`,
+   `classify`) correctly absent from §17's copy inventory.
 
 7. **Line count, and did "copy, don't modularize" start costing more than it saves?**
 
@@ -1242,7 +1268,7 @@ second appeared in seven of the ten tasks.
    file is **2449** lines / 164 tests. For scale, the sibling it copies from is **1620** lines. So
    the third copy did not make the rule more expensive than it already was — the shared surface is
    eight small helpers (§17), each verified byte-identical in behavior by the final reviewer, and
-   deletion stays `git rm` of two files plus four textual edits. **Recorded, not acted on, per the
+   deletion stays `git rm` of three files plus three textual edits. **Recorded, not acted on, per the
    question's own instruction.** The one real cost is that an SDK upgrade now has three pin sites to
    re-verify instead of two; `CLAUDE.md` says so explicitly.
 

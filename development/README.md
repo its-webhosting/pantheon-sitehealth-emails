@@ -27,6 +27,14 @@ Conventions:
   that matches the relevant `README.md` TODO wording when the work maps to one.
 - **Prompt ordering:** number prompt files `01-`, `02-`, … in the order they were used.
 - **Fixed names:** `SPEC.md`, `transcript.md`, `statistics.md`, `analytics.md`.
+- **`PROMPT.md` and `PLAN.md` are equally conventional**, and the numbered `NN-*.prompt.md` form
+  above is not the only one in use. The four most recent feature folders
+  (`2026-07-28-platform-domain-util` through `2026-08-03-platform-domain-util4`) each carry a
+  single unnumbered `PROMPT.md` — the whole brief, given once — and three of the four carry a
+  `PLAN.md` beside `SPEC.md`, because `superpowers:brainstorming` writes the spec and
+  `superpowers:writing-plans` writes the task-by-task plan as two separate artifacts. Use the
+  numbered form when a feature genuinely took several distinct prompts; use `PROMPT.md` when it
+  took one. Four consecutive folders make this a convention, not a deviation.
 - **Multiple sessions for one feature:** suffix the per-session files —
   `transcript-01.md` / `statistics-01.md`, `transcript-02.md`, … A single-session
   feature leaves them unsuffixed.

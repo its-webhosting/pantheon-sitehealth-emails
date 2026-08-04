@@ -23,6 +23,28 @@ record.
 **SPEC**). Where this plan and the SPEC disagree, the SPEC wins and the disagreement is a defect
 in this plan — report it rather than resolving it silently.
 
+> ## ⚠️ SUPERSEDED IN THREE PLACES — read the SPEC, not this plan, on these
+>
+> This document is **frozen at its pre-implementation state** (one commit, `a039384`); the SPEC was
+> amended nineteen times during implementation. The precedence rule above did its job — a Task 8
+> implementer escalated the first item below rather than coding it — but the plan's own text still
+> says the superseded thing, so it is named here explicitly:
+>
+> 1. **There are SEVEN outcomes, not six.** This plan's `OUTCOMES` omits **`unverified`**
+>    (the batch returned, so Cloudflare committed, but the result could not be confirmed).
+>    See SPEC §8.1's four-state table.
+> 2. **`changed` is `applied + unverified + unknown`.** This plan's
+>    `changed = counts["applied"] + counts["unknown"]` is the formula SPEC §8.1 records as having
+>    produced **exit 2 — "nothing in Cloudflare was changed" — for a batch that returned 200 and
+>    therefore committed.** Use `changed_count(counts)`, the one shared definition.
+> 3. **No failure arm returns a literal `2`.** This plan shows `return 2` in each of `main()`'s
+>    handlers; SPEC §8.3 and §9.1 require `failure_code(state)`, which yields **3** when
+>    `changed_count > 0`. An earlier revision of §8.3's own snippet showed the bare `2` and is what
+>    led an implementer to read the two sections as contradictory.
+>
+> Everything else in this plan held up. The task decomposition, the seams, and the mandatory
+> mutation tests are the record of how the work was actually sequenced.
+
 ---
 
 ## Global Constraints

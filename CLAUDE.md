@@ -152,10 +152,10 @@ an unwritable destination is caught at second zero, not after the ~2-minute swee
 
 Only the inventory exists in stdout mode — resolution, classification and exclusion still run in
 both modes, so the inventory is byte-identical between them and only its destination differs.
-**This utility NEVER calls the Cloudflare API to write anything**: `apply-platform-domains-
-cloudflare` (below) is the applier that reads a plan or revert file and performs the actual batch
-calls (SPEC §5.4 is its normative contract, superseded in one respect by the applier's own SPEC
-R4 — see that subsection).
+**This utility NEVER calls the Cloudflare API to write anything.**
+`apply-platform-domains-cloudflare` (below) is the applier that reads a plan or revert file and
+performs the actual batch calls (SPEC §5.4 is its normative contract, superseded in one respect by
+the applier's own SPEC R4 — see that subsection).
 
 **Two traps when comparing the inventory to `fqdns.json`:** that file keys by the **raw**
 `record.name` (normalize both sides, or you invent phantom entries), and its `origins` means
@@ -377,8 +377,11 @@ inside `parse_args`, before `options.file` even exists, so neither the summary n
 is produced on those two paths — structurally, not as an oversight.
 
 **This is the third appearance, in this script family, of the exit-120 stream-guard class.** Both
-siblings' subsections above record it once each (`find-platform-domains-dns`'s `report_line`;
-`find-platform-domains-cloudflare`'s `write_json_stdout`): CPython's shutdown flush covers **both**
+siblings' subsections above record it once each — the `find-platform-domains-dns` one describes the
+class without naming a function ("each stream got a 'detach only a stream a real write/flush has
+proven doomed' guard"; the function is `report_line`, at `find-platform-domains-dns:1090`), and the
+`find-platform-domains-cloudflare` one names `write_json_stdout` and `report_line`. CPython's
+shutdown flush covers **both**
 standard streams and turns a failure of *either* into exit 120, silently overriding whatever
 `main()` returned, unless the doomed stream is detached **before** interpreter shutdown — never
 unconditionally, which would discard a buffered line and, under pytest's fd-level capture, repoint
