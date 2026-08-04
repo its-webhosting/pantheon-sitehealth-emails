@@ -74,6 +74,11 @@ ERROR_MESSAGE_LIMIT = 200                 # SPEC 9.1 rule 3: per-message cap
 MAX_ADMITTED_ERRORS = 5                   # SPEC 9.1 rule 3: per-ARRAY cap (review round 1, finding 3
 # -- the per-message cap alone left the total length unbounded in the number of errors)
 MAX_CODE_LENGTH = 32                      # SPEC 9.1 rule 3: errors[].code was unbounded (finding 3)
+STALE_PLAN_HOURS = 24                     # SPEC 6a: the age past which a plan is reported stale.
+# Not invented: 24h is this repository's existing staleness convention -- the Cloudflare plugin
+# refreshes fqdns.json when it is "stale (>24h)" -- and CLAUDE.md already tells the operator to
+# regenerate the baseline IMMEDIATELY before any rewrite, so a file older than a day is one the
+# documented workflow did not intend to be applied.
 
 # Copied verbatim from find-platform-domains-cloudflare.  A marker is "<{ ... }" -- the trailing
 # ">" that appears in the sample config is decorative and NOT part of the syntax.
@@ -351,6 +356,107 @@ def read_apply_file(path):
     if not isinstance(doc, dict):
         raise PlanFileError(f"{path} is not a JSON object (got {type(doc).__name__})")
     return doc
+
+
+class Provenance(NamedTuple):
+    """What the input file's `generated` header says about the sweep that produced it (SPEC 6a).
+
+    `zones_swept`/`zones_total` are None when the header does not record them as integers -- the
+    run record then carries null, which is the honest value for "this file did not say".
+    """
+
+    zones_swept: int | None
+    zones_total: int | None
+    warnings: list
+
+
+def whole_int(value):
+    """`value` when it is a real integer, else None.
+
+    `bool` is an `int` SUBCLASS in Python and is deliberately not one here: `zones_swept = true`
+    in a hand-edited file must read as "unverifiable", never as one zone.
+    """
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def parse_stamp(text):
+    """One `now_utc()`-shaped stamp as an aware datetime, or None when it cannot be read.
+
+    Deliberately strict about the format: this is the stamp THIS script's own seam writes and the
+    sibling's `provenance()` emits, so anything else in that field means the header is not what it
+    claims to be -- which the caller reports rather than guessing at.
+    """
+    try:
+        return datetime.datetime.strptime(str(text), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.UTC)
+    except ValueError:
+        return None
+
+
+def read_provenance(generated, now):
+    """The `generated` header's sweep facts, plus every ATTENTION line they warrant (SPEC 6a).
+
+    Adversarial review 2026-08-04, findings 5 and 10.  The header is written to be checked -- the
+    sibling's own `provenance()` docstring says the fields are recorded "so an applier can verify
+    the assumptions the file was built under" -- and this script, the LAST program to see the file
+    before production DNS changes, read only `direction` and `at`.
+
+    Two facts, two warnings, and they do not swallow each other:
+
+      - COVERAGE (finding 5).  `zones_swept != zones_total` means the file came from a narrowed
+        sweep: its entries are correct, but it is not a baseline, and a narrowed sweep cannot see
+        a cross-zone duplicate, so an entry can look unambiguous when it is not.  A missing or
+        non-integer pair is reported as UNVERIFIABLE rather than silently passing: silence would
+        be ambiguous between "complete" and "no idea", which is PD#1's shape exactly.
+      - AGE (finding 10).  Free -- the stamp is already in the file, no API call and no DNS
+        lookup, so this does NOT reopen SPEC 20's declined re-resolution.  It matters because
+        validation compares R against D (the CNAME), so a plan whose P addresses have gone stale
+        validates perfectly `ready` and then writes the wrong addresses.  A stamp in the FUTURE is
+        its own warning: treating clock skew as freshness would disable the signal for exactly the
+        file most likely to be wrong.
+
+    WARN, DO NOT REFUSE, for both.  This script refuses what is wrong about THIS INVOCATION -- an
+    `--only` name that matches nothing, an `-excluded.json` -- because those are typos an operator
+    fixes by retyping.  A partial or elderly file is a valid artifact whose correct use is the
+    operator's judgment (CLAUDE.md documents `-o /tmp/one-zone engin.umich.edu` as a workflow);
+    refusing it would need an override flag, which is more surface on a script scheduled for
+    deletion and one more thing to pass by reflex.  What this script owes the operator is that
+    they cannot make that judgment UNKNOWINGLY.
+    """
+    header = generated if isinstance(generated, dict) else {}
+    swept = whole_int(header.get("zones_swept"))
+    total = whole_int(header.get("zones_total"))
+    warnings = []
+    if swept is None or total is None:
+        warnings.append(
+            "ATTENTION: this file's `generated` header does not record zones_swept/zones_total "
+            "as two integers, so the coverage of the sweep it came from CANNOT BE VERIFIED; "
+            "treat it as partial")
+    elif swept != total:
+        warnings.append(
+            f"ATTENTION: this file was generated from a PARTIAL sweep ({swept} of {total} zones) "
+            "and MUST NOT be treated as a complete baseline -- a narrowed sweep also cannot see a "
+            "cross-zone duplicate, so an entry can look unambiguous when it is not")
+    at = parse_stamp(header.get("at"))
+    at_now = parse_stamp(now)
+    if at is None or at_now is None:
+        warnings.append(
+            f"ATTENTION: this file's `generated.at` ({str(header.get('at'))[:40]!r}) is not a "
+            "timestamp this script can read, so its age -- the only staleness signal the file "
+            "carries -- CANNOT BE CHECKED")
+        return Provenance(swept, total, warnings)
+    hours = (at_now - at).total_seconds() / 3600
+    if hours < 0:
+        warnings.append(
+            f"ATTENTION: this file's `generated.at` ({header['at']}) is in the FUTURE; the clock "
+            "that wrote it and the clock reading it disagree, so its age is not a staleness "
+            "signal")
+    elif hours >= STALE_PLAN_HOURS:
+        warnings.append(
+            f"ATTENTION: this file was generated {hours:.0f} hours ago ({header['at']}); "
+            "regenerate the baseline with find-platform-domains-cloudflare immediately before a "
+            "rewrite -- the addresses it pins were resolved at sweep time")
+    return Provenance(swept, total, warnings)
 
 
 def check_record_list(items, where, fqdn):
@@ -1592,7 +1698,8 @@ def outcome_path(input_path, at):
 
 
 def outcome_document(*, at, direction, source, source_generated_at, for_real, argv, exit_code,  # noqa: PLR0913 -- every argument is a distinct SPEC 12.2 run-record field; bundling them into a second data structure just to shrink this list would not reduce what finish() passes, the same reasoning summary_lines' own noqa above gives
-                     entries_in_file, selected, counts, outcomes, details, validations):
+                     entries_in_file, selected, counts, outcomes, details, validations,
+                     source_zones_swept, source_zones_total):
     """The SPEC 12.2 run-record document.
 
     Iterates `sorted(outcomes)` -- the CALLER-OWNED dict main() seeds with `not-attempted` for
@@ -1626,6 +1733,8 @@ def outcome_document(*, at, direction, source, source_generated_at, for_real, ar
     return {
         "run": {"at": at, "tool": "apply-platform-domains-cloudflare", "direction": direction,
                 "source": source, "source_generated_at": source_generated_at,
+                "source_zones_swept": source_zones_swept,
+                "source_zones_total": source_zones_total,
                 "for_real": for_real, "argv": list(argv), "exit_code": exit_code,
                 "entries_in_file": entries_in_file, "selected": selected, "counts": counts},
         "entries": entries,
@@ -1782,7 +1891,9 @@ def finish(code, *, options, argv, state):
             source_generated_at=state["generated_at"], for_real=state["for_real"],
             argv=argv, exit_code=code, entries_in_file=state["entries_in_file"],
             selected=state["selected"], counts=counts, outcomes=state["outcomes"],
-            details=state["details"], validations=state["validations"]))
+            details=state["details"], validations=state["validations"],
+            source_zones_swept=state["zones_swept"],
+            source_zones_total=state["zones_total"]))
     except OutputWriteError as e:
         # SPEC 9.2's precedence rule.  A run that CHANGED something (changed_count > 0) keeps its
         # EARNED code: exiting 2 here would assert "nothing was changed" about production DNS this
@@ -1822,6 +1933,16 @@ def run_once(options, state):
     state["direction"] = direction
     state["generated_at"] = doc["generated"].get("at", "unknown")
     state["entries_in_file"] = len(doc["entries"])
+
+    # SPEC 6a (adversarial review 2026-08-04, findings 5 and 10): the header's own coverage and
+    # age facts, reported BEFORE the client is built or a single record is read, and carried into
+    # the run record either way.  Through report_line, not a bare print, for the same reason the
+    # subset ATTENTION below is: a doomed stderr must not abort the run here.
+    provenance = read_provenance(doc["generated"], now_utc())
+    state["zones_swept"] = provenance.zones_swept
+    state["zones_total"] = provenance.zones_total
+    for warning in provenance.warnings:
+        report_line(warning)
 
     entries = select_entries(doc["entries"], options.only)
     state["selected"] = len(entries)
@@ -1880,6 +2001,7 @@ def main(argv):
     options = build_arg_parser().parse_args(argv)
     state = {"direction": "unknown", "generated_at": "unknown", "entries_in_file": 0,
              "selected": 0, "outcomes": {}, "details": {}, "validations": {},
+             "zones_swept": None, "zones_total": None,
              "for_real": options.for_real}
     try:
         return finish(run_once(options, state), options=options, argv=argv, state=state)

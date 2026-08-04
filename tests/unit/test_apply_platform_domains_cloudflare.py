@@ -369,8 +369,23 @@ def plan_entry(zone_id="zone-a", fqdn="a.umich.edu",
     }
 
 
-def plan_doc(entries=None, direction="plan"):
-    return {"generated": {"direction": direction, "at": "2026-08-01T00:22:23Z"},
+def plan_doc(entries=None, direction="plan", generated=None):
+    """A document in the shape `find-platform-domains-cloudflare` really writes.
+
+    `zones_swept`/`zones_total` are part of that shape (its `provenance()` emits both, as two
+    integers, so "a machine reads this") and were missing from this fixture until the 2026-08-04
+    adversarial review's finding 5 -- a file with no coverage header is not the file the sibling
+    produces, so a fixture without them cannot exercise the complete-sweep path at all.
+
+    `at` stays 2026-08-01T00:22:23Z against `run_main`'s frozen 2026-08-03T14:22:11Z clock, which
+    is 62 hours: DELIBERATELY older than STALE_PLAN_HOURS, so every main()-driving test in this
+    file carries the staleness ATTENTION finding 10 added, and a mutation removing it has ~60
+    tests' worth of stderr to survive.
+    """
+    header = {"direction": direction, "at": "2026-08-01T00:22:23Z",
+              "zones_swept": 187, "zones_total": 187}
+    header.update(generated or {})
+    return {"generated": header,
             "entries": entries if entries is not None else {"a.umich.edu": plan_entry()}}
 
 
@@ -674,6 +689,102 @@ def test_check_file_contract_checks_every_entry_not_just_the_first(apc, mutate, 
     with pytest.raises(apc.PlanFileError, match=match):
         apc.check_file_contract(
             plan_doc(entries={"a.umich.edu": good, "b.umich.edu": bad}), "p.json")
+
+
+NOW = "2026-08-03T14:22:11Z"   # the same frozen clock run_main installs
+
+
+def provenance_header(drop=(), **overrides):
+    header = {"direction": "plan", "at": "2026-08-03T12:22:11Z",
+              "zones_swept": 187, "zones_total": 187}
+    header.update(overrides)
+    for key in drop:
+        del header[key]
+    return header
+
+
+def test_read_provenance_is_quiet_on_a_complete_recent_sweep(apc):
+    """Adversarial review 2026-08-04, findings 5 and 10.  The quiet case is asserted first and
+    separately: a function that warned unconditionally would satisfy every other test here."""
+    result = apc.read_provenance(provenance_header(), NOW)
+    assert result.warnings == []
+    assert (result.zones_swept, result.zones_total) == (187, 187)
+
+
+def test_read_provenance_warns_that_a_partial_sweep_is_not_a_baseline(apc):
+    """Finding 5.  The sibling writes zones_swept/zones_total "so an applier can verify the
+    assumptions the file was built under" -- and the applier, the last program to see the file
+    before production DNS changes, read only `generated.at`.  A subset sweep also cannot see a
+    cross-zone duplicate, so an entry can look unambiguous when it is not."""
+    result = apc.read_provenance(provenance_header(zones_swept=1), NOW)
+    assert (result.zones_swept, result.zones_total) == (1, 187)
+    assert len(result.warnings) == 1
+    assert "PARTIAL sweep (1 of 187 zones)" in result.warnings[0]
+    assert "MUST NOT" in result.warnings[0]
+
+
+@pytest.mark.parametrize("header", [
+    provenance_header(zones_swept=None, zones_total=None),
+    provenance_header(drop=("zones_total",)),
+    provenance_header(drop=("zones_swept", "zones_total")),
+    provenance_header(zones_swept=True, zones_total=187),   # bool is an int subclass, not a count
+    provenance_header(zones_swept="187", zones_total="187"),
+])
+def test_read_provenance_warns_when_the_coverage_cannot_be_verified(apc, header):
+    """PD#3's nil/upstream shadows for a header this script does not write.  Silence would be
+    ambiguous between "a complete sweep" and "no idea", which is PD#1's shape exactly.  `True` is
+    included because `isinstance(True, int)` is True in Python -- a `zones_swept = true` typo must
+    not read as one zone."""
+    result = apc.read_provenance(header, NOW)
+    assert result.warnings == [w for w in result.warnings if "CANNOT BE VERIFIED" in w]
+    assert len(result.warnings) == 1
+    assert result.zones_swept is None or result.zones_total is None
+
+
+def test_read_provenance_warns_that_a_stale_plan_must_be_regenerated(apc):
+    """Finding 10.  SPEC 20 declines RE-RESOLUTION and this does not reopen that: the age is
+    already in the file and costs nothing to read.  Validation compares R against D (the CNAME),
+    so a plan whose P addresses have gone stale validates perfectly `ready` and then writes the
+    wrong addresses -- and the recorded project knowledge is that Pantheon rotates them."""
+    result = apc.read_provenance(provenance_header(at="2026-07-31T14:22:11Z"), NOW)
+    assert len(result.warnings) == 1
+    assert "generated 72 hours ago (2026-07-31T14:22:11Z)" in result.warnings[0]
+    assert "regenerate the baseline" in result.warnings[0]
+
+
+def test_read_provenance_is_quiet_just_under_the_staleness_threshold(apc):
+    """The boundary, from the quiet side -- without this, a threshold of zero would pass every
+    other test in this group."""
+    fresh = apc.read_provenance(provenance_header(at="2026-08-02T14:22:12Z"), NOW)
+    assert fresh.warnings == []
+    stale = apc.read_provenance(provenance_header(at="2026-08-02T14:22:11Z"), NOW)
+    assert len(stale.warnings) == 1
+    assert "24 hours ago" in stale.warnings[0]
+
+
+@pytest.mark.parametrize("at", [None, "", "yesterday", 20260801, "2026-08-01"])
+def test_read_provenance_warns_when_the_timestamp_cannot_be_read(apc, at):
+    result = apc.read_provenance(provenance_header(at=at), NOW)
+    assert len(result.warnings) == 1
+    assert "CANNOT BE CHECKED" in result.warnings[0]
+
+
+def test_read_provenance_warns_when_the_timestamp_is_in_the_future(apc):
+    """Clock skew between the machine that swept and the machine applying.  Treating it as fresh
+    would silently disable the staleness signal for exactly the file most likely to be wrong."""
+    result = apc.read_provenance(provenance_header(at="2026-08-04T00:00:00Z"), NOW)
+    assert len(result.warnings) == 1
+    assert "FUTURE" in result.warnings[0]
+
+
+def test_read_provenance_reports_both_problems_at_once(apc):
+    """Neither warning may swallow the other: an operator holding a partial sweep from last week
+    needs to be told both things, and a first-problem-wins function would name only one."""
+    result = apc.read_provenance(
+        provenance_header(zones_swept=1, at="2026-07-27T14:22:11Z"), NOW)
+    assert len(result.warnings) == 2
+    assert any("PARTIAL sweep" in w for w in result.warnings)
+    assert any("hours ago" in w for w in result.warnings)
 
 
 def test_select_entries_returns_everything_without_only(apc):
@@ -1990,6 +2101,57 @@ def test_a_file_whose_posts_disagree_is_refused_before_any_cloudflare_call(
     assert "disagree" in capsys.readouterr().err
 
 
+def test_a_partial_sweep_file_is_reported_on_stderr_and_in_the_run_record(
+        apc, tmp_path, monkeypatch, capsys):
+    """Adversarial review 2026-08-04, finding 5, end to end.  A plan built with
+    `find-platform-domains-cloudflare -o /tmp/one-zone engin.umich.edu` and applied a week later
+    used to run with no signal at all: the generating run's own ATTENTION scrolled away, and the
+    machine-readable evidence survived in the file the applier then dropped.
+
+    It WARNS, it does not refuse -- the single-zone workflow is one CLAUDE.md documents -- so the
+    run still completes (exit 0 here), and the numbers land in the run record, which SPEC R9.2
+    calls "the thing an operator can attach to a change ticket"."""
+    path = write_doc(tmp_path, plan_doc(generated={"zones_swept": 1, "zones_total": 187}))
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    code = run_main(apc, [path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "ATTENTION: this file was generated from a PARTIAL sweep (1 of 187 zones)" in captured.err
+    assert "ATTENTION" not in captured.out
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["source_zones_swept"] == 1
+    assert record["run"]["source_zones_total"] == 187
+
+
+def test_a_complete_sweep_still_records_its_coverage(apc, tmp_path, monkeypatch, capsys):
+    """The other half of finding 5: the numbers are recorded on EVERY run, not only the alarming
+    one -- a run record that carried them only when they differed could not be audited for the
+    case it is meant to prove.  A one-fixture version of the test above cannot tell an
+    always-1-of-187 bug from a correct read, which is SPEC 22's named fixture failure class."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, [path], tmp_path, client, monkeypatch)
+    assert "PARTIAL sweep" not in capsys.readouterr().err
+    record = json.loads(Path(apc.outcome_path(path, "2026-08-03T14:22:11Z")).read_text())
+    assert record["run"]["source_zones_swept"] == 187
+    assert record["run"]["source_zones_total"] == 187
+
+
+def test_a_stale_plan_is_reported_on_stderr_before_any_cloudflare_call(
+        apc, tmp_path, monkeypatch, capsys):
+    """Finding 10, end to end.  plan_doc()'s own header is 62 hours older than run_main's frozen
+    clock, so this is the ordinary shape, not a contrived one.  Printed to stderr, which SPEC 11.1
+    reserves for "problems reach a watching operator", rather than buried in the summary block
+    that prints AFTER a 217-line report on a run the operator has already committed to."""
+    path = write_doc(tmp_path, plan_doc())
+    client = FakeCloudflareClient(rows_by_name={"a.umich.edu": [cname_rows()]})
+    run_main(apc, [path], tmp_path, client, monkeypatch)
+    captured = capsys.readouterr()
+    assert "ATTENTION: this file was generated 62 hours ago (2026-08-01T00:22:23Z)" in captured.err
+    assert "regenerate the baseline" in captured.err
+    assert "ATTENTION" not in captured.out
+
+
 def test_a_subset_run_warns_how_much_of_the_file_it_covers(
         apc, tmp_path, monkeypatch, capsys):
     doc = plan_doc(entries={"a.umich.edu": plan_entry(),
@@ -3223,6 +3385,8 @@ def test_the_run_record_is_byte_exact_on_a_subset_for_real_run(apc, tmp_path, mo
             "direction": "plan",
             "source": path,
             "source_generated_at": "2026-08-01T00:22:23Z",
+            "source_zones_swept": 187,
+            "source_zones_total": 187,
             "for_real": True,
             "argv": argv,
             "exit_code": 0,

@@ -428,6 +428,52 @@ partially applying it is the outcome §3's property 1 exists to prevent.
 
 ---
 
+## 6a. Provenance checks — warn loudly, never refuse
+
+Read from the `generated` header immediately after §6's checks pass, **before the Cloudflare client
+is built or a single record is read**. Both facts are also carried into the run record
+(`run.source_zones_swept` / `run.source_zones_total`, §12.2). Added by the 2026-08-04 adversarial
+review (findings 5 and 10). The helper is `read_provenance(generated, now)` → `Provenance(
+zones_swept, zones_total, warnings)`; every warning goes to stderr through `report_line`.
+
+| Condition | Line |
+|---|---|
+| `zones_swept != zones_total`, both integers | `ATTENTION: this file was generated from a PARTIAL sweep (N of M zones) and MUST NOT be treated as a complete baseline — a narrowed sweep also cannot see a cross-zone duplicate, so an entry can look unambiguous when it is not` |
+| either absent, or not an integer (`bool` is **not** an integer here) | `ATTENTION: … does not record zones_swept/zones_total as two integers, so the coverage … CANNOT BE VERIFIED; treat it as partial` |
+| `generated.at` older than `STALE_PLAN_HOURS` (24) | `ATTENTION: this file was generated N hours ago (<stamp>); regenerate the baseline with find-platform-domains-cloudflare immediately before a rewrite — the addresses it pins were resolved at sweep time` |
+| `generated.at` in the future | `ATTENTION: … is in the FUTURE; the clock that wrote it and the clock reading it disagree, so its age is not a staleness signal` |
+| `generated.at` absent or unreadable | `ATTENTION: … is not a timestamp this script can read, so its age … CANNOT BE CHECKED` |
+
+The coverage warning and the age warning are independent: an elderly partial file emits **both**.
+
+*Intent for reading the header at all (finding 5):* the sibling's `provenance()` docstring says the
+fields are recorded *"so an applier can verify the assumptions the file was built under"*, and this
+script — the last program to see the file before production DNS changes — verified `direction` and
+nothing else. The generating run's own subset warning is on **its** stderr, which scrolls away; the
+machine-readable evidence survives in the file.
+
+*Intent for the age warning (finding 10):* it is **free** — the stamp is already in the file, so
+this does not reopen §20's declined re-resolution — and §11.3's claim that printing `generated.at`
+in the summary is a sufficient staleness signal is weaker than it reads. Validation compares R
+against **D** (the CNAME), so a plan whose **P** addresses have gone stale validates perfectly
+`ready` and then writes the wrong addresses; the project's recorded knowledge is that Pantheon
+rotates those address sets. The summary's stamp is undecorated and prints *after* the whole report,
+on a run the operator has already committed to. `STALE_PLAN_HOURS = 24` is not invented: it is this
+repository's existing staleness convention (`fqdns.json` is refreshed when *"stale (>24h)"*), and
+CLAUDE.md already tells the operator to regenerate the baseline *immediately* before any rewrite.
+
+*Intent for WARN and not REFUSE (both):* this script refuses what is wrong about **this
+invocation** — an `--only` name matching nothing, an `-excluded.json` — because those are typos an
+operator fixes by retyping, and a typo that silently narrows a destructive run is the under-
+reporting failure R7.3 exists to prevent. A partial or elderly file is a **valid artifact** whose
+correct use is the operator's judgment; CLAUDE.md documents `-o /tmp/one-zone engin.umich.edu` as a
+workflow, so refusing it would need an override flag — more surface on a script scheduled for
+deletion, and one more thing to pass by reflex. What this script owes the operator is that the
+judgment cannot be made **unknowingly**, which is what an unconditional stderr line plus a run-record
+field provide.
+
+---
+
 ## 7. The verdict — the single canonical gate table
 
 ### 7.1 What is compared
@@ -804,6 +850,7 @@ really fails (`/dev/full`), never `subprocess.DEVNULL`, which accepts every writ
 | every invalid verdict: `ATTENTION: <fqdn> <code>: <detail>` | **always, never `-v`-gated** | stderr |
 | the validation-failure abort: `ERROR: N of M selected entries did not match Cloudflare's current state; NOTHING was changed. …` | always (that path only) | stderr |
 | `--only` subset coverage: `ATTENTION: applying N of M entries in this file` | always | stderr |
+| the file's own sweep coverage and age (§6a, five shapes) | always, never `-v`-gated, before any Cloudflare call | stderr |
 | the summary block (§11.3) | always, every exit path | stdout |
 | the run record's path | always | stdout |
 
@@ -831,9 +878,13 @@ apply-platform-domains-cloudflare: direction=plan
 ```
 
 The `source` line prints the input file's own `generated.at`. *Intent:* the plan pins addresses
-resolved at sweep time, and this spec deliberately does not re-resolve them (§20). The age of the
-file is therefore the operator's only staleness signal, so it is printed on every run rather than
-left to the file's mtime, which survives neither a copy nor `git add`.
+resolved at sweep time, and this spec deliberately does not re-resolve them (§20). It is printed on
+every run rather than left to the file's mtime, which survives neither a copy nor `git add`.
+
+It is **no longer the only staleness signal** — §6a's stderr `ATTENTION` is, and this line is the
+audit-trail copy at full precision. The two are deliberately not merged: the summary is a tally
+printed after the report, and rendering the age here as well would put one fact in two places that
+can drift. The run record carries the raw stamp, so the age stays derivable.
 
 **The `mode:` line MUST be derived from the tally, never from `--for-real` alone.** A dry run reads
 `DRY RUN -- no changes were made`; a for-real run reads
@@ -881,6 +932,8 @@ records written next to the conventional baseline, so no new ignore entry is req
     "direction": "plan",
     "source": "platform-domains-cloudflare-plan.json",
     "source_generated_at": "2026-08-01T00:22:23Z",
+    "source_zones_swept": 187,
+    "source_zones_total": 187,
     "for_real": true,
     "argv": ["--for-real", "platform-domains-cloudflare-plan.json"],
     "exit_code": 3,
@@ -959,6 +1012,9 @@ can still fire: it hooks the SDK's transport, so a transport change would otherw
 | `mismatch_verdict(have, want_delete, want_post)` | §7.3 rows 4–6, as `(verdict, detail)` |
 | `proxy_status_mismatches(posts, rows)` | §7.1a's list of human-readable proxy-status disagreements; `[]` when every matching live record agrees |
 | `check_post_flags(posts, where)` | §6 check 9; raises `PlanFileError` |
+| `read_provenance(generated, now)` | §6a's `Provenance(zones_swept, zones_total, warnings)`. Pure — `now` is the `now_utc()` string, passed in, never read from the clock here |
+| `whole_int(value)` | the value when it is a real `int` (a `bool` is not), else `None` |
+| `parse_stamp(text)` | one `now_utc()`-shaped stamp as an aware datetime, or `None` |
 | `merge_body(entry, delete_ids)` | the postable batch body (R5.1) |
 | `describe_change(fqdn, entry)` | the §11.4 line |
 | `verify_records(entry, rows)` | `True` when R == P **and** every proxy status matches (R6.1/§7.1a) |
@@ -1266,7 +1322,7 @@ Each with the reasoning preserved, so a later session does not re-litigate it.
 
 | Item | Why not |
 |---|---|
-| **Re-resolving each plan entry's target to detect a stale plan** | Offered as an expansion and **declined** in the design conversation: the file is the authority. Mitigated by printing the input file's `generated.at` on every run (§11.3) and by the operator discipline CLAUDE.md already states — regenerate the baseline immediately before a rewrite. This also keeps the script free of any DNS dependency (§16). |
+| **Re-resolving each plan entry's target to detect a stale plan** | Offered as an expansion and **declined** in the design conversation: the file is the authority. This keeps the script free of any DNS dependency (§16). **Re-litigated and declined again on 2026-08-04** (adversarial review, finding 10), which argued — correctly — that the mitigation this row used to claim was weaker than it read: printing `generated.at` in the summary (§11.3) puts one undecorated stamp *after* the whole report, and validation compares R against **D**, so a plan whose **P** addresses have gone stale validates `ready` and then writes the wrong addresses. The reviewer did **not** ask for re-resolution, and the DNS-dependency reasoning above is unchanged. What was added instead is §6a's **age warning**: an unconditional stderr `ATTENTION` before any Cloudflare call, over a 24-hour threshold, at zero dependency cost. Recorded here so the next reviewer finds the argument already weighed. |
 | Auto-reverting entries already applied when one fails | `PROMPT.md` forbids it: *"it should not attempt to revert any changes it has already made."* |
 | Applying more than one file per invocation | One file, one direction, one decision (Global Constraint 5). |
 | Interactive y/N confirmation | `--for-real` is the blast-radius gate, matching the main program's primary safety mechanism. An interactive prompt would also break any scripted use. |

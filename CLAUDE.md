@@ -344,6 +344,21 @@ a `PlanFileError` before the first API call; `InvariantError` is defined as "not
 `describe_change` keeps the guard, where the class is now correct: with check 9 upstream, reaching
 it means the gate has a bug.
 
+**The file's own `generated` header is checked, and warned about — never refused.** Immediately
+after the file contract passes and **before the Cloudflare client is built**, `read_provenance()`
+reads `zones_swept`/`zones_total` and `at` and writes an unconditional stderr `ATTENTION` when the
+sweep was **partial** (`N of M zones` — the sibling writes those two integers exactly so an applier
+can check them, and a narrowed sweep cannot see a cross-zone duplicate, so an entry can look
+unambiguous when it is not), when the pair is **absent or non-integer** (unverifiable, treat as
+partial), when the file is **older than 24 hours** (`STALE_PLAN_HOURS`, matching this repo's
+`fqdns.json` staleness convention — validation compares R against the CNAME, so a plan whose
+*addresses* went stale still validates `ready` and then writes the wrong ones), when the stamp is in
+the **future** (clock skew), or when it **cannot be read**. Both numbers land in the run record as
+`run.source_zones_swept`/`source_zones_total`, on every run, not only the alarming one. It warns
+rather than refuses because a narrow sweep is a documented workflow (`-o /tmp/one-zone
+engin.umich.edu`) — refusal would need an override flag, which is one more thing to pass by reflex;
+what the script owes the operator is that the judgment cannot be made unknowingly.
+
 **The exit taxonomy adds a code the siblings don't have.** Both siblings use `0 / 1 / 2 / 130`;
 this script adds **3**: `0` completed clean (or a dry run that validated clean), `1` completed
 with ≥1 `already-applied` skip, `2` could not complete and **nothing in Cloudflare was changed**,
