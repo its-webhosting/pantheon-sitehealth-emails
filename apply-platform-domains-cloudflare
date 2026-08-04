@@ -1427,7 +1427,10 @@ def run_once(options, state):
     state["validations"] = validations
 
     if abort_on_invalid_entries(validations):
-        return "abort"   # main() maps this to finish(2); see its own docstring
+        return 2   # SPEC 8: could not complete, nothing was changed -- exit_code_for would
+        # produce this same code for the "everything failed" shape too; no separate sentinel is
+        # needed to tell the two apart, since main() treats them identically either way (finish()
+        # with code 2).
 
     report_entries(entries, validations, verbose=options.verbose)
     if options.for_real:
@@ -1461,17 +1464,15 @@ def main(argv):
     (module-level siblings, not nested closures -- see their own docstrings for why) so both read
     and write the SAME dict this function holds.  `finish()` is the ONE place that prints the
     summary block and writes the run record -- called from every exit below: the happy/abort path
-    (via `run_once()`'s "abort" sentinel) and every `except` clause except `SystemExit`, which
-    re-raises past it entirely by design (SPEC 8.3).
+    (`run_once()`'s own return value, either way) and every `except` clause except `SystemExit`,
+    which re-raises past it entirely by design (SPEC 8.3).
     """
     options = build_arg_parser().parse_args(argv)
     state = {"direction": "unknown", "generated_at": "unknown", "entries_in_file": 0,
              "selected": 0, "outcomes": {}, "details": {}, "validations": {},
              "for_real": options.for_real}
     try:
-        result = run_once(options, state)
-        code = 2 if result == "abort" else result
-        return finish(code, options=options, argv=argv, state=state)
+        return finish(run_once(options, state), options=options, argv=argv, state=state)
     except StartupError as e:
         report_line(f"ERROR: {e}")
         # Task 9 review-deferred defect: an InvariantError (a StartupError subclass) escaping
