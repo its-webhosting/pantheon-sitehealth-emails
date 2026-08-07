@@ -257,25 +257,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* **Modularization campaign — complete.** The 15-increment (I0–I14) refactor of the monolithic
-  main script into a `psh/` core package plus self-registering `check/`/`plugin/` packages is
-  finished. The frozen architecture and decision record live in
-  [`development/2026-07-17-modularization-campaign/CAMPAIGN.md`](development/2026-07-17-modularization-campaign/CAMPAIGN.md),
-  the append-only cross-increment history in its `LEDGER.md`, the nine closing-audit answers in
-  [`CLOSING-AUDIT.md`](development/2026-07-17-modularization-campaign/CLOSING-AUDIT.md), and the
-  goal-versus-outcome writeup in
-  [`RETROSPECTIVE.md`](development/2026-07-17-modularization-campaign/RETROSPECTIVE.md). The
-  follow-ups the campaign recorded at close are the **(post-campaign)** items below.
-
-* **Extract further from `main()` toward CAMPAIGN.md §3.3's 250–400-line target**
-  **(post-campaign)** — `main()` closed the campaign at **622 raw / 445 logic lines**, above the
-  target. This is a *recorded deviation*, not an oversight: everything remaining matches §3.3's
-  exhaustive stay-list (loop control, the `continue`-crossing seams, phase ordering), so it was
-  answered at close as CLOSING-AUDIT Q1 rather than forced under the line by extracting during the
-  increment specced as closing (golden risk). Candidate extractions for a later, dedicated change:
-  the config/arg bootstrap sequence, the per-site skip/banner preamble, and the phase-firing +
-  contract-stuffing spine.
-
 * **Fix or drop the `uvx pyright@1.1.411` fallback** **(post-campaign)** — `./run-tests` prefers
   the venv's pinned pyright and falls back to `uvx pyright@1.1.411`, but that fallback runs in an
   isolated environment with **none of the project's dependencies**, so it reports **34 false
@@ -335,6 +316,8 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   improving console text freely), so it changes no artifact — ledgered to "I14's sweep" at campaign
   I12 but left for post-campaign because I14d is documentation-only (its one sanctioned production
   edit was `Notice.severity` validation). Reword to name the set it actually skips.
+
+* run all periodic prompts
 
 * update dependencies
 * * git worktrees! (add to prompts to always use worktrees using Claude's `EnterWorktree` tool), https://code.claude.com/docs/en/worktrees
