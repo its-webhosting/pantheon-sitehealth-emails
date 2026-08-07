@@ -85,7 +85,7 @@ untestable at any tier *by construction*:
 | Region | Why it is unreachable today |
 |---|---|
 | The `--resume-from` filter + resume banner | `--resume-from` requires `--all`, which is a forbidden flag. **Permanently unreachable at the subprocess tier, by design.** |
-| The five per-site skip gates | Reached only through a full site loop. |
+| The five per-site skip gates | **Reached but never asserted on.** `tests/e2e/test_unknown_framework_e2e.py` and the four goldens each run a single named site through `run_program`, so the loop *is* entered and the portal / not-in-list / Sandbox gates *are* evaluated — no test asserts on their outcome, and no test reaches the not-taken branch of any of them. |
 | The `--update-cloudflare-fqdns` guard (`psh/cli.py:425`) | Not interlock-blocked, merely never exercised: **no file under `tests/` contains its exit message** (verified — see §10 item 4). |
 | The `isinstance(domains, dict)` guard (667) | No test at any tier. |
 | The unknown-plan `sys.exit("Bailing out.")` (586) | Needs a hand-authored terminus fixture plus a subprocess run that must abort. |
@@ -176,9 +176,9 @@ choice:
 2. **§5.6 is last because it is the only one that can change startup behavior for every other
    task's tests.** `validate_options()` moves four `sys.exit` guards; a defect there fails every
    subsequent task's `./run-tests` in a way that looks like that task's fault.
-3. **§5.3 must land as one commit** even though it is two functions (§5.3 R3.9).
+3. **§5.3 must land as one commit** even though it is three functions (§5.3 R3.9).
 4. The middle four are ordered by ascending amendment surface: §5.2 (no amendment) → §5.3
-   (narrow one) → §5.4 (one) → §5.5 (a split plus one).
+   (one, narrowing B31) → §5.4 (one, B14) → §5.5 (**three** — B17, the B18 split, and B20).
 
 An implementer who finds their task's predecessor not yet landed MUST report `BLOCKED`, not
 re-order.
@@ -200,8 +200,15 @@ signal, never refreshed to green."*
 
 **R-G2 — the stage spine never moves.** Every `stuff_*_contract(...)` and `sc.invoke_hooks(...)`
 line stays inline in `main()`, so `main()` still reads as *fetch → stuff → fire phase*. Only
-stage **bodies** move. Exhaustive list of the spine lines that stay: 627-628, 632-633, 691-692,
-763-766, 894-908 (`stuff_plans_contract` + `site_pre_render`).
+stage **bodies** move.
+
+**Line-range convention, used identically everywhere in this spec:** a spine range names the
+`stuff_*`/`invoke_hooks` statements **together with the explanatory comment immediately above
+them**, because the comment travels with the call. Exhaustive list of the spine ranges that stay:
+**627-628** (`stuff_envs_contract` + `site_pre`), **630-633** (`stuff_traffic_contract` +
+`site_post_traffic`), **688-692** (`stuff_dns_contract` + `site_post_dns`), **761-766**
+(`stuff_gather_contract` + `site_post_gather`), **894-908** (`stuff_plans_contract` +
+`site_pre_render`). §5.2 and §5.3 use these same numbers.
 
 **R-G3 — loop control stays in `main()` (D-i6-1).** A helper NEVER executes `continue` or `break`
 on `main()`'s behalf and NEVER contains the site loop. Helpers signal a skip by returning a
@@ -234,7 +241,12 @@ smell**, NEVER *clear the previous one*. Every helper that can produce a smell r
 separate field and `main()` writes `if <helper>.wp_smell != "": wp_smell = <helper>.wp_smell`.
 A helper MUST NOT be handed the current smell value to merge internally.
 
-**R-G6 — the no-move list (exhaustive).** These stay in `main()` in their current position:
+**R-G6 — the no-move list (exhaustive).** These stay in `main()`. **Two sub-rules, because they
+are different claims:** the rows in the first table stay *in their current position* (their line
+numbers are pinned relative to what surrounds them); the rows in the second table stay *in
+`main()`* but their line positions necessarily shift as ranges above and around them are replaced.
+
+**R-G6a — position-pinned (exhaustive):**
 
 | What | Lines | Why |
 |---|---|---|
@@ -244,7 +256,22 @@ A helper MUST NOT be handed the current smell value to merge internally.
 | The `--only-warn` gate | 869-872 | §3.3 stay-list (B42). |
 | `try:` / `except BaseException` / `finish_run` | 532, 969-984, 986-991 | §3.3 stay-list (B59-B60 call sites); Invariant 4's single flush path. |
 | `sc.SiteContext(site)` | 579 | §5.5 R5.6 — its *position* is a documented invariant of the loop. |
-| The per-site loop header and all five skip `continue`s | 533-534, 546, 554, 568, 574, 603, 615, 619, 623, 646, 872, 891 | D-i6-1 / R-G3. |
+| The pre-loop bindings `site_name = None` / `site_emailed = False` | 530-531 | §4.2 / R-G4 — the handler's guarantee that both names are bound before `try:`. |
+| The per-iteration reset `site_emailed = False` | 534 | §4.1 / R-G4 — the trap. |
+
+**R-G6b — stays in `main()`, but its line position changes (exhaustive):**
+
+| What | Lines today | What happens |
+|---|---|---|
+| The loop header `for site_name in site_names:` | 533 | Unchanged text; shifts upward as ranges above it are replaced. |
+| The portal / not-in-list skip `continue`s | 546, 554 | Unchanged text and position **relative to their guards**; absolute line numbers shift. |
+| The plan/Sandbox skip | 568, 574 | **Replaced** by §5.5's single `if plan_name is None: continue`. The `continue` stays in `main()` (R-G3); the two guards it replaces do not. |
+| The `envs` / traffic / `--import-older-metrics` / `--update` `continue`s | 603, 615, 619, 623 | Unchanged text; absolute line numbers shift. |
+| The `domain:list` skip | 646 | **Replaced** by §5.3's `if fetched is None: continue`. Same note as the plan/Sandbox row. |
+| The `--only-warn` and `resolve_recipients` `continue`s | 872, 891 | Unchanged text; absolute line numbers shift. |
+
+The point of R-G6b is R-G3, not the line numbers: **every `continue` is executed by `main()`**,
+before and after. A helper never executes one.
 
 **R-G7 — Invariant 8: column-pinned literals move verbatim.** `CAMPAIGN.md` §9.8: *"Column-0
 `f\"\"\"` notice literals move **verbatim** — never re-indented; `git diff -w` is not acceptable
@@ -276,11 +303,36 @@ that could see it.
 gate this and `./run-tests` blocks on them. `main()`'s existing `except BaseException` keeps its
 `# noqa: BLE001` and its reason comment verbatim.
 
-**R-G12 — `noqa` comments travel with the code they suppress.** `main()`'s `# noqa: C901,
-PLR0912, PLR0915` on the `def main()` line (370) stays; the implementer MUST NOT remove it even if
-the extraction drops the branch count below the threshold, because ruff's `RUF100` (unused-noqa)
-is not selected in a way that would flag it and removing it is a judgment call outside this
-increment. If ruff *does* flag it, that is a finding to report, not to silently act on.
+**R-G12 — `main()`'s complexity `noqa` stays, and here is the measured reason.** `main()`'s
+`# noqa: C901, PLR0912, PLR0915` on the `def main()` line (370) stays.
+
+> **Correction (this replaces a false claim in the first draft of this spec).** The first draft
+> justified this with *"ruff's `RUF100` (unused-noqa) is not selected in a way that would flag
+> it."* **That is false and was recalled rather than measured** — exactly the failure §10 exists to
+> catch, committed inside §10's own document. `pyproject.toml` `[tool.ruff.lint]` is
+> `select = ["ALL"]` and the `ignore` list contains **no** `RUF` entry at all, so `RUF100` **is**
+> selected. Demonstrated red on a probe file (PD#14 — an instrument shown capable of going red):
+>
+> ```
+> $ uvx ruff@0.15.22 check --force-exclude _ruf100_probe.py
+> RUF100 [*] Unused `noqa` directive (unused: `C901`, `PLR0912`, `PLR0915`)
+>  --> _ruf100_probe.py:1:19
+> Found 1 error.
+> ```
+
+**The measured reason the suppression stays required.** With no `max-statements` /
+`max-branches` / `max-complexity` overrides in `pyproject.toml`, ruff's defaults apply:
+`PLR0915` = 50 statements, `PLR0912` = 12 branches, `C901` = 10 complexity. Measured by AST over
+`psh/cli.py` at `c01e77b`:
+
+| | statements | branch/loop/try/with nodes |
+|---|---|---|
+| `main()` today | **255** | **58** |
+| `main()` with all six ranges deleted (a *lower* bound — the §5 replacement blocks add back) | **143** | **25** |
+
+143 ≫ 50 and 25 ≫ 12, so **all three suppressions remain load-bearing after the extraction and
+`RUF100` cannot fire.** The implementer MUST NOT remove the `noqa`. If ruff nonetheless flags it,
+that measurement was wrong and it is a finding to **report**, not to silently act on.
 
 ---
 
@@ -526,21 +578,34 @@ the **`site_url` derivation part of B31**, and **B32 (residue)** (the WP-network
 after I9 moved `wordpress_network_url` to `psh/gather.py`). Lines 688-692 (**B31**'s
 `stuff_dns_contract` + `invoke_hooks("site_post_dns")`) stay — stage spine (R-G2).
 
-**R3.9 — one commit, two functions.** The two ranges MUST land in **one commit**, because the
+**R3.9 — one commit, THREE functions.** The two ranges MUST land in **one commit**, because the
 first deletes the three aliases (`main_fqdn`/`custom_domains`/`primary_domain`, 664-666) that the
-second consumes. They MUST remain **two functions**, because the stage spine at 688-692 sits
-between them and stays in `main()`.
+second consumes. `fetch_site_domains` and `resolve_site_url` MUST remain **two separate
+functions**, because the stage spine at 688-692 sits between them and stays in `main()`. The
+**third** is the pure notice builder `no_domains_notice` required by R3.6d.
 
 **Destination rationale.** `psh/cli.py`, **not** `psh/dns_classify.py`. That module's docstring
 bars it (**verified at `psh/dns_classify.py:1-9`**): *"Pure data producer for the site_post_dns
 contract … Presentation (notices) lives in check/dns/, not here."* `fetch_site_domains` both makes
-a `terminus` call and emits a `Notice`. `NOTICE_NO_DOMAINS` is registered at **`psh/cli.py:141`**
-(**verified**) and `no_primary_domain_notice` — the same shape of helper — already lives at
-`psh/cli.py:295-334` (**verified**).
+a `terminus` call and emits a `Notice`, and `no_domains_notice` (R3.6d) is presentation outright.
+`NOTICE_NO_DOMAINS` is registered at **`psh/cli.py:141`** (**verified**) and
+`no_primary_domain_notice` — the exact shape `no_domains_notice` copies — already lives at
+`psh/cli.py:295-334` (**verified**). All three land in `psh/cli.py`.
 
 **Signatures and return types.**
 
 ```python
+def no_domains_notice(site, domains, custom_domains) -> Notice | None:
+    """The `no-domains` alert, or None when it does not apply (B29's notice half).
+
+    PURE -- no I/O, no sc.console, no SiteContext.  Deliberately mirrors
+    no_primary_domain_notice (psh/cli.py:295): same file, same shape, same
+    `-> Notice | None` contract, so both notice builders in this module are
+    unit-testable at the same seam.  Carries the golden-pinned column-16
+    literal (R3.6) and the load-bearing isinstance guard (R3.6b).
+    """
+
+
 class SiteDomains(NamedTuple):
     domains: object               # raw domain:list payload; never None (a fatal fetch returns None instead)
     facts: dns_classify.DnsFacts  # all-empty when `domains` is not a dict
@@ -567,10 +632,12 @@ def resolve_site_url(site, live_site, site_context, facts) -> SiteUrlFacts:
 line 691 anyway, and `facts.main_fqdn` / `facts.custom_domains` / `facts.primary_domain` read fine
 at the three surviving sites inside the second helper.
 
-**R3.3** `site_url = ""` at line 650 is **deleted** (it becomes dead once `resolve_site_url`
-returns the value). `resolve_site_url` initializes it internally. Net across both helpers: **five**
-locals eliminated from `main()` (`site_url`'s early binding, the three aliases, and `cf_on`/`cf_ctx`
-which move wholly inside — counting the pair as one).
+**R3.3** The `site_url = ""` **pre-binding** at line 650 is deleted; `resolve_site_url` initializes
+it internally and `main()` rebinds `site_url` from the return value. **`site_url` itself is NOT
+eliminated** — it is read at 763, 875 and 922, well past both helpers. What is eliminated from
+`main()`, exhaustively: the three aliases (`main_fqdn`, `custom_domains`, `primary_domain`,
+664-666) and the two Cloudflare-gate locals (`cf_on`, `cf_ctx`, 653-654) — **five locals**, plus
+one dead pre-binding.
 
 **R3.4** The Cloudflare gate resolution at 653-654 (`cf_on = cloudflare_enabled()`,
 `cf_ctx = sc.plugin_context["plugin.cloudflare"] if cf_on else {}`) moves **inside**
@@ -607,27 +674,82 @@ psh/cli.py  col  content
    684       16      """,
 ```
 
-In a module-level helper the frame shifts: `Notice(` lands at column 16, its keyword arguments at
-column **20**, and the interior lines **MUST still be 16** — one column *less* than the keyword.
-That looks wrong and is required. The precedent is `no_primary_domain_notice` at
-`psh/cli.py:313-332`, where `html=`/`text=` sit at column **12** inside a frame whose `return
-Notice(` is at 8, and every interior line sits at **20** (**verified**).
+**The rule is ABSOLUTE, and the frame is irrelevant.** Every interior line — and both closing
+`"""` — sits at **column 16, counted from the start of the line**, whatever enclosing function,
+`if`, or indent level the `Notice(...)` call ends up in. State it that way and it cannot be got
+wrong; state it as a *relationship* to the keyword column and it changes with every reframing.
+For the record, the three frames involved differ:
+
+| Where | `Notice(` at | keyword (`html=`) at | interior lines at |
+|---|---|---|---|
+| `main()` today (674-684) | 24 | 28 | **16** (12 *less* than the keyword) |
+| `no_primary_domain_notice` precedent (313-332) | 8 | 12 | 20 (8 *more* than the keyword) |
+| `no_domains_notice` after R3.6d | 8 | 12 | **16** (4 *more* than the keyword) |
+
+All three are correct for their literal. Only the third row is a constraint on this increment:
+**16, absolutely.**
 
 **R3.6a** The implementer MUST add a sentinel comment at the new `def` naming Invariant 8 and the
 three goldens, so the next formatter run cannot silently re-indent the block and re-email every
 site owner a differently-indented alert.
 
 **R3.6b** The two `if`s at 667-668 stay **nested**, with the `# noqa: SIM102` and its full reason
-comment verbatim. The outer `isinstance(domains, dict)` guard is **load-bearing, not defensive**:
-`facts.custom_domains` is `[]` for *any* non-dict payload, so removing the guard emits a false
-"paid plan with no custom domains" **alert** to the owner. That branch has **no test at any tier**
-and MUST get one here (a non-dict `domains` payload → no notice added).
+comment verbatim — now inside `no_domains_notice` (R3.6d). The outer `isinstance(domains, dict)`
+guard is **load-bearing, not defensive**: `facts.custom_domains` is `[]` for *any* non-dict
+payload, so removing the guard emits a false "paid plan with no custom domains" **alert** to the
+owner. That branch has **no test at any tier** and MUST get one here (a non-dict `domains`
+payload → `no_domains_notice` returns `None`).
 
-**R3.6c — evidence beyond the goldens (PD#14).** See §8 R8.3: the new unit test MUST assert
-`all(line.startswith(" " * 16) for line in notice.html.splitlines()[1:] if line.strip())` and the
-task MUST compare the pre/post `ast.get_source_segment` of the `Notice(...)` call. **`git diff -w`
-is not acceptable evidence** — `CLAUDE.md` § Conventions & gotchas: a line that only gained leading
-whitespace is exactly what `-w` is designed to ignore.
+**R3.6d — the notice half is extracted as a PURE builder, and this is a deviation from the plan.**
+The plan put the `Notice(...)` construction inline in `fetch_site_domains`. **That makes the
+Invariant-8 assertion R3.6c requires impossible to write**, for two independent reasons, both
+**verified**:
+
+1. **Nothing at that seam returns a `Notice`.** `fetch_site_domains` calls
+   `site_context.add_notice(Notice(...))`, and `SiteContext.add_notice`
+   (`script_context.py:118-133`) immediately projects through `notice_to_dict`, storing the
+   six-key render dict `{type, icon, csv, short, message, text}`. `notice.html` becomes
+   `site_context["notices"][0]["message"]`. There is no `notice` object to bind, so the assertion
+   as first drafted references a name that cannot exist.
+2. **The tier is wrong.** `fetch_site_domains` makes a `terminus("domain:list")` call, so it can
+   never be unit-pure; the first draft nonetheless assigned the column assertion to the `unit`
+   tier. The `no_primary_domain_notice` precedent has a unit test precisely *because* it is a pure
+   builder.
+
+**Therefore:** extract `no_domains_notice(site, domains, custom_domains) -> Notice | None` as a
+module-level pure builder in `psh/cli.py`, immediately beside `no_primary_domain_notice`. The
+column-pinned literal, the nested `if`s, and the `# noqa: SIM102` all live in it.
+`fetch_site_domains` reduces to:
+
+```python
+            notice = no_domains_notice(site, domains, facts.custom_domains)
+            if notice is not None:
+                site_context.add_notice(notice)
+```
+
+which is the **identical** call shape `main()` already uses for `no_primary_domain_notice` at
+`psh/cli.py:701-705`. This is sanctioned scope, not creep:
+`prompts/implementation-standards.md` § Test discipline — *"If a core `main()` change has no honest
+seam, extracting a pure module-level helper is **part of the change**"* — and it matches the I1
+preserved-bug-extraction pattern (`LEDGER.md:125-127`). Recorded as a deviation in §10 item 6.
+
+**R3.6c — evidence beyond the goldens (PD#14).** Against the `no_domains_notice` seam, where a real
+`Notice` **is** returned, the new unit test MUST assert
+
+```python
+notice = no_domains_notice(SITE, DOMAINS, [])
+assert notice is not None
+assert all(
+    line.startswith(" " * 16)
+    for line in notice.html.splitlines()[1:]
+    if line.strip()
+)
+```
+
+and the same for `notice.text`. The task MUST additionally compare the pre/post
+`ast.get_source_segment` of the `Notice(...)` call. **`git diff -w` is not acceptable evidence** —
+`CLAUDE.md` § Conventions & gotchas: a line that only gained leading whitespace is exactly what
+`-w` is designed to ignore.
 
 **What `main()` keeps:**
 
@@ -677,11 +799,23 @@ so what is left is the roster plus `smtp_enabled`).
 **R5.4.1 — hoist 501-509.** The Cloudflare/SMTP `sc.debug` banners and the `smtp_enabled`
 assignment move to **immediately after line 493** (`sc.debug(f"Generating report for …")`). This
 is a zero-data-dependency statement move: neither line reads `sites`, `site_count`, or
-`site_name_to_id`. Its **only** observable effect is console ordering on one failure path — if
-`org:site:list` fails, the two banners now print *before* the `Could not list organization sites`
-exit instead of not at all. Both are `sc.debug`, so both are invisible without `-v`.
-`CAMPAIGN.md` §8 sanctions this explicitly: *"stdout / console / error messages | MAY improve
-freely"*.
+`site_name_to_id`.
+
+**Its console effect is broader than one failure path**, and the spec says so precisely because
+this sentence will be restated in six task reports. `run_terminus` emits its own output before the
+call returns — `psh/gateway.py:46` is `sc.debug("Running Terminus command:\n", commandline)` and
+`:48` opens `sc.console.status(f"[bold green]Running: …")` (**verified**). So the hoist moves the
+two banners ahead of the `org:site:list` command's own debug line **and its spinner** on **every**
+`-v` run, not only when the call fails. Two consequences, both benign:
+
+- **Every `-v` run:** the Cloudflare/SMTP banners now precede the `org:site:list` debug line and
+  spinner instead of following them.
+- **The failure path:** if `org:site:list` raises `TerminusError`, the banners now print before the
+  `Could not list organization sites` exit instead of not at all.
+
+Everything moved is `sc.debug`, so all of it is invisible without `-v`, and none of it is
+golden-covered. `CAMPAIGN.md` §8 sanctions the class explicitly: *"stdout / console / error
+messages | MAY improve freely"*.
 
 **R5.4.2 — relocate `current_site_number = 1` (line 500)** down to the pre-loop prologue, beside
 `site_name = None` / `site_emailed = False` at 530-531 and **before** `try:`. It MUST NOT go
@@ -846,9 +980,29 @@ needs a hand-authored terminus fixture plus a subprocess run that must abort.
 Empty: `plan_names == []` → every plan is unknown → `sys.exit`. Upstream error: an Elite site whose
 `plan:info` is fatal → `None` → skip.
 
-**R5.5.8 — CAMPAIGN.md amendment: a SPLIT plus one.** **B18** and **B20** are both on §3.3's
-stay-list. B18 splits (Sandbox skip moves; `SiteContext` creation stays); B20 moves entirely. See
-§7 R7.3.
+**R5.5.8 — CAMPAIGN.md amendment: THREE block IDs, not two.** §3.3's stay-list reads *"the
+site-loop skeleton (skips, banner, sorted order, resume filter — **B14–B18**, B20, B25, B42)"*.
+`B14–B18` is a **five-ID range**, and `BLOCKMAP.md` confirms B15/B16/B17/B18 all exist
+(*"| B17 | 2323–2349 | Elite plan SKU → name via `terminus("plan:info")`, `plan_sku_to_name` |"*).
+Extraction 5 moves **B17 (residue)**, **the Sandbox half of B18**, and **B20** — all three on the
+stay-list, all three needing an amendment.
+
+> **This corrects the first draft of this spec, which named only B18 and B20.** The omission was
+> not a judgment that B17's residue is exempt — it was an oversight, and it is the one that would
+> have left `CAMPAIGN.md` **wrong by definition** after Task 5 landed: §3.3 would still assert that
+> B17 stays in `main()` when nothing of B17 remained there. The decision rule this spec already
+> applies elsewhere is dispositive: B14 and B20 are neither "skips, banner, sorted order, nor
+> resume filter" either, and both were given amendments on **ID-list membership alone**. B17 gets
+> the same treatment.
+
+**B17's history, which the amendment must record.** `CAMPAIGN.md` §3.1 assigns *"SKU resolution
+(B17)"* to `psh/plans.py`, while §3.3 lists B17 among the IDs staying in `main()` — a **pre-existing
+internal tension in `CAMPAIGN.md`**, not something this increment creates. I7 resolved it in
+practice without amending §3.3: `LEDGER.md:684-685` records *"`resolve_plan_name` (B17 body incl.
+the Elite check as its early return; `main()` keeps `continue` + tail inits)"*. So the **body** left
+at I7 and the **call site plus the `site["plan_name"]` write-back** stayed. This increment moves
+that residue, after which **no B17 content remains in `main()` at all** and the §3.1/§3.3 tension is
+closed rather than carried. See §7 R7.3a.
 
 ---
 
@@ -932,14 +1086,16 @@ stay-list walk names the guards explicitly. See §7 R7.1.
 `prompts/implementation-standards.md` § *TDD override*: *"**the spec declares the seams** … A task
 whose spec names no seam is `NEEDS_CONTEXT`, not a licence to pick one."* This section is that
 declaration. Each row is written so a fresh implementer can copy it into a test without further
-judgment. **Every seam named here already exists in this codebase**; this increment creates no new
-mock seam.
+judgment. **Every *mock* seam named here already exists in this codebase**; this increment creates
+no new monkeypatch seam. (It does create one new *pure-function* seam, `no_domains_notice` — R3.6d
+— which is a test target, not a mock point.)
 
 | Task | Seam under test | Tier | How to reach it |
 |---|---|---|---|
 | **1** | `psh.traffic.build_traffic_window` — called directly | `unit` | Pure data in: a `list[TrafficRow]`, two `datetime.date`s, two `str`s. **No I/O, no monkeypatching.** `sc.options`/`sc.console` come from the autouse `reset_sc` fixture. Add `tests/unit/test_traffic_window.py`. Hypothesis is available (see `tests/unit/test_traffic_aggregation.py` for the house idiom). |
 | **2** | `psh.gather.gather_framework` — called with an `sc.SiteContext` | `integration` | Patch **BOTH** `psh.gateway.run_terminus` (the `gateway` conftest fixture) **AND** `psh.gather.run_terminus` — `psh/gather.py` binds `run_terminus` in its own namespace for `gather_drupal`'s composer dry-run, and a test that patches only the former makes **real** Terminus subprocess calls. See `tests/integration/test_gather_drupal.py`'s docstring. Add `tests/integration/test_gather_framework.py`. |
-| **3** | `psh.cli.fetch_site_domains` and `psh.cli.resolve_site_url` — called with an `sc.SiteContext` | `integration` (+ one `unit` file for the notice literal) | Two existing seams: `psh.gateway.run_terminus` (the `gateway` fixture) for `domain:list` and the WP-network `wp_eval`, and **`psh.dns_classify.resolve`** for every A/AAAA lookup (`tests/helpers/dnsfake.py`'s `make_resolver`/`patch_resolve`). `cloudflare_enabled` is monkeypatched on `sc`, never assigned directly (see the `reset_sc` note in `CLAUDE.md`). Add `tests/integration/test_site_domains.py`; put the Invariant-8 column assertion in `tests/unit/test_no_domains_notice.py`. |
+| **3a** | `psh.cli.no_domains_notice` — called directly (R3.6d) | `unit` | **Pure.** `no_domains_notice(site_dict, domains_payload, custom_domains_list)` → `Notice \| None`. No I/O, no monkeypatching, no `SiteContext`. This is where the Invariant-8 column assertion (R3.6c) and the non-dict-`domains` guard test (R3.6b) live, because it is the only seam that returns a real `Notice`. Add `tests/unit/test_no_domains_notice.py`, modelled on the `no_primary_domain_notice` unit test. |
+| **3b** | `psh.cli.fetch_site_domains` and `psh.cli.resolve_site_url` — called with an `sc.SiteContext` | `integration` | Three existing seams: `psh.gateway.run_terminus` (the `gateway` fixture) for `domain:list` and the WP-network `wp_eval`; **`psh.dns_classify.resolve`** for every A/AAAA lookup (`tests/helpers/dnsfake.py`'s `make_resolver`/`patch_resolve`); and **`psh.cli.cloudflare_enabled`** for the Cloudflare gate — see S5, this is NOT `sc.cloudflare_enabled`. Add `tests/integration/test_site_domains.py`. |
 | **4** | `psh.cli.resolve_site_roster` — called directly | `integration` | `psh.gateway.run_terminus` (the `gateway` fixture) reaches `terminus_data("org:site:list", …)` through `psh.gateway`'s own `terminus`. `sc.options.resume_from` is set via `reset_sc.options = psh.parse_args([...])`. Use `recording_console(monkeypatch, sc, width=80)` for the resume banner — production's non-tty width, per `CLAUDE.md`'s rich gotcha. Add `tests/integration/test_site_roster.py`. |
 | **5** | `psh.plans.resolve_site_plan` — called directly | `integration` | `psh.gateway.run_terminus` (the `gateway` fixture) for the Elite-SKU `plan:info` call inside `resolve_plan_name`; a non-Elite `site` makes **no** subprocess call at all. `sc.config["Pantheon"]["plan_sku_to_name"]` from `reset_sc`. Add `tests/integration/test_resolve_site_plan.py`. |
 | **6** | `psh.cli.validate_options` — called directly | `unit` | `sc.options = psh.parse_args([...])` plus a minimal `sc.config` dict, then `pytest.raises(SystemExit)` on the message. This is the exact idiom of `tests/unit/test_argparse_contract.py`. **No subprocess, no `run_program`.** Add to `tests/unit/test_argparse_contract.py` or a sibling `tests/unit/test_validate_options.py`. |
@@ -948,6 +1104,23 @@ mock seam.
 
 - **S1.** The two-binding trap is real and silent: `from X import f` binds the *importer's* name.
   Row 2's double patch is not optional.
+- **S5 — `cloudflare_enabled` MUST be patched at `psh.cli.cloudflare_enabled`, NEVER at
+  `sc.cloudflare_enabled`.** This is S1 applied to row 3b, and the first draft of this spec got it
+  wrong. `psh/cli.py:38-45` does `from psh.configuration import (cloudflare_enabled, …)`, so the
+  bare call at line 653 resolves in **`psh.cli`'s own namespace**; `monkeypatch.setattr(sc,
+  "cloudflare_enabled", …)` never reaches it. **Both failure modes are bad and neither is loud:**
+  patching `sc` and expecting *disabled* yields a silent green (the real `cloudflare_enabled()`
+  also returns falsy under a test config with no `[Cloudflare]` section, so the test passes while
+  testing nothing); patching `sc` and expecting *enabled* yields a confusing `KeyError` on
+  `sc.plugin_context["plugin.cloudflare"]` rather than a message naming the seam.
+  **Precedent for the correct form:** `tests/integration/test_plugin_cloudflare.py:136`. The
+  existing `monkeypatch.setattr(reset_sc, "cloudflare_enabled", …)` calls
+  (`tests/integration/test_check_dns.py:41,53,67,83`; `test_check_pantheon_cdn_change.py:28`) are
+  **not** counter-examples — they are `check/` tests whose consumer genuinely calls
+  `sc.cloudflare_enabled()`, which is the façade route. Copying them here is the trap.
+  An equally acceptable alternative, if the implementer prefers no monkeypatch at all: drive the
+  gate through data by setting `sc.config["Cloudflare"]["enabled"]` and populating
+  `sc.plugin_context["plugin.cloudflare"]` with the four keys line 653-661 reads.
 - **S2.** No test in this increment may call `main()`. It has no in-process caller today (§1.2) and
   this increment does not add one.
 - **S3.** No test may pass `--all`, `-a`, or `--for-real` to `run_program()`, or run a live
@@ -974,6 +1147,19 @@ accumulators already left at I13; `smtp_enabled` is hoisted, not extracted — �
 the `SiteContext` creation stays (with §5.5 R5.6's reasoning recorded, because it is the
 non-obvious half). **B20 moves** entirely.
 
+**R7.3a — `CAMPAIGN.md` §3.3, B17.** Amend so **B17 leaves the stay-list entirely**: the SKU
+resolution *call site* and the `site["plan_name"]` write-back move into
+`psh.plans.resolve_site_plan`, and the loop skeleton around them stays. §3.3's `B14–B18` range must
+be rewritten so it no longer asserts that B17 stays — after Task 5, **no B17 content remains in
+`main()`**, and leaving the range as written would make §3.3 false by definition.
+
+The amendment MUST also record that this **closes a pre-existing §3.1/§3.3 tension rather than
+creating one**: §3.1 has always assigned *"SKU resolution (B17)"* to `psh/plans.py` while §3.3
+listed B17 among the IDs staying in `main()`. I7 moved the body and left the call site without
+amending §3.3 (`LEDGER.md:684-685`: *"`resolve_plan_name` (B17 body incl. the Elite check as its
+early return; `main()` keeps `continue` + tail inits)"*). This increment moves the residue, so the
+two sections agree for the first time. See §5.5 R5.5.8.
+
 **R7.4 — `CAMPAIGN.md` §3.3, B31 narrowed.** Amend so B31 means its `stuff_dns_contract` +
 `invoke_hooks("site_post_dns")` **seam**; the `site_url` derivation that shares its baseline range
 moves.
@@ -997,9 +1183,22 @@ errors, both **verified** in this task:
 Record **D-i14d-1 as discharged**, with the re-measured raw/logic count from §9.
 
 **R7.6a — `README.md`: the D-i14d-1 TODO is ALREADY STRUCK.** Commit `5b92ee1` (2026-08-07 06:54)
-removed it. Task 7 MUST verify this (`grep -n 'D-i14d-1' README.md` returns nothing) and MUST NOT
-re-add or re-strike it. Recording the discharge lives in `CLOSING-AUDIT.md` (R7.6) and `LEDGER.md`
-(R7.5) instead.
+removed it. Task 7 MUST NOT re-add or re-strike it; the discharge is recorded in `CLOSING-AUDIT.md`
+(R7.6) and `LEDGER.md` (R7.5) instead.
+
+**The verification MUST grep the TODO's own text, not its decision ID (PD#14).**
+
+```
+$ grep -n 'Extract further from' README.md      # expect: no match  (the TODO is gone)
+$ git show 5b92ee1^:README.md | grep -c 'Extract further from'   # expect: 1  (it was there)
+```
+
+> The first draft of this spec prescribed `grep -n 'D-i14d-1' README.md` as the proof. **That
+> instrument cannot go red**: the string `D-i14d-1` never appeared in `README.md` at all —
+> `git show 5b92ee1^:README.md | grep -n 'D-i14d-1'` returns **no match** on the pre-strike file
+> too. The ID lives only in `CLOSING-AUDIT.md`, `RETROSPECTIVE.md`, `LEDGER.md` and the I14d SPEC.
+> A check that returns the same answer before and after the event it is checking for is not a
+> check. The two-command form above is red-capable in both directions.
 
 **R7.7 — `README.md`: give the orphaned pathlib deferral a home.** Add a TODO recording that four
 `noqa` comments in `main()` (`psh/cli.py:373, 437, 438, 470`) defer a pathlib migration to
@@ -1010,7 +1209,9 @@ mentions it. PD#9: *"Everything deferred is written down. Vague intentions are l
 1. The new helper roster per module — `psh/traffic.py` gains `build_traffic_window`/`TrafficWindow`;
    `psh/gather.py` gains `gather_framework`/`FrameworkGather`; `psh/plans.py` gains
    `resolve_site_plan`; `psh/cli.py` gains `validate_options`, `resolve_site_roster`/`SiteRoster`,
-   `fetch_site_domains`/`SiteDomains`, `resolve_site_url`/`SiteUrlFacts`.
+   `fetch_site_domains`/`SiteDomains`, `resolve_site_url`/`SiteUrlFacts`, and the pure builder
+   `no_domains_notice` (recorded **beside** `no_primary_domain_notice`, since `CLAUDE.md` already
+   names that one and the pair is now the module's notice-builder convention).
 2. **Why `SiteContext` construction did *not* move** (§5.5 R5.6).
 3. The **new rule**: no extracted helper may be the sole assigner of `site_name` or `site_emailed`
    (R-G4), with the concrete failure scenario.
@@ -1033,6 +1234,23 @@ MUST make that determination explicitly rather than by default.
    Refactoring is **not** part of the red→green loop; it belongs to review. **Watch the test fail
    for the right reason** — a test that passes the moment it is written is testing existing
    behavior (PD#14).
+
+   **What "the right reason" is for these six tasks, stated once so six fresh implementers do not
+   each decide it alone.** These are **behavior-preserving extractions**: the behavior under test
+   already works inside `main()`, so there is no wrong-answer red available. The **only** legitimate
+   first red is the helper not existing yet:
+
+   ```
+   AttributeError: module 'psh.traffic' has no attribute 'build_traffic_window'
+   ```
+   (or `ImportError` / `NameError` for the same cause, depending on the import form).
+
+   That is sufficient and is what the implementer MUST paste. What it does **not** license: writing
+   the test *after* the helper and asserting it was red "in principle". Two reds are therefore
+   required in sequence for each task — first the `AttributeError` above, then, once the helper
+   exists as a stub, a **substantive** failure (a wrong return value, a missing field) before the
+   body is filled in. A task whose report shows only the `AttributeError` has not demonstrated that
+   its assertions can go red on anything but a typo in the module name.
 2. **`./run-tests`** (full) — **the four e2e goldens MUST be byte-identical.** A golden going red
    is a defect in the increment, never a refresh (Invariant 1). `--update-goldens` MUST NOT run.
 3. **ruff + pyright** are gates *inside* `./run-tests` and abort before pytest. A missing pyright
@@ -1047,15 +1265,21 @@ and `./run-tests --update-goldens` (Invariant 1).
 
 ### 8.3 Extraction 3 only — Invariant 8 evidence beyond the goldens
 
-Both are required, and **`git diff -w` is not acceptable for either**:
+Both are required, and **`git diff -w` is not acceptable for either**. The assertion is written
+against the **`psh.cli.no_domains_notice`** seam (§6 row 3a), which is the only seam that returns a
+real `Notice` — see R3.6d for why the first draft's version of this block could not be written at
+all:
 
 ```python
-# in the new unit test
-assert all(
-    line.startswith(" " * 16)
-    for line in notice.html.splitlines()[1:]
-    if line.strip()
-)
+# tests/unit/test_no_domains_notice.py
+notice = psh.no_domains_notice(SITE, DOMAINS_PAYLOAD, [])
+assert notice is not None
+for body in (notice.html, notice.text):
+    assert all(
+        line.startswith(" " * 16)
+        for line in body.splitlines()[1:]
+        if line.strip()
+    )
 ```
 
 and a pre/post comparison of `ast.get_source_segment(source, notice_call_node)` for the
@@ -1071,6 +1295,36 @@ and a pre/post comparison of `ast.get_source_segment(source, notice_call_node)` 
 ---
 
 ## 9. Measurement baseline (PD#14 — measured, not recalled)
+
+### 9.0 The suite is green NOW — the baseline every task compares against
+
+The whole increment's gate (§8) presumes the four goldens are green before Task 1 starts. That is a
+claim, so it is measured and pasted here, per the Spine's *"Acceptance criteria = exact commands +
+expected output, **run and pasted**, never summarized."* **Run at commit `c01e77b`, immediately
+before this spec was committed:**
+
+```
+$ ./run-tests
+...
+--------------------------- snapshot report summary ----------------------------
+107 snapshots passed.
+================ 1743 passed, 3 skipped, 15 warnings in 40.89s =================
+Linting (ruff, campaign ratchet) ...
+Type-checking (pyright, campaign ratchet) ...
+$ echo $?
+0
+```
+
+Exit 0, so **both gates passed** — `run-tests` calls `run_gates()` and returns its non-zero code
+before pytest is ever invoked (`./run-tests:143-149`), so a red ruff or pyright could not have
+produced this. (The two gate banners appear *after* the pytest summary only because the run was
+piped through `tail` with `2>&1`, interleaving two streams; the gates genuinely run first.)
+
+**Task 1's implementer: if your first `./run-tests` does not start from `1743 passed, 3 skipped`
+and `107 snapshots passed`, something is red that this increment did not cause.** Say so rather
+than absorbing it.
+
+### 9.1 `main()`'s size
 
 Measured against `psh/cli.py` at commit `c01e77b`, using `CLOSING-AUDIT.md` Q1's snippet:
 
@@ -1114,9 +1368,13 @@ implementer MUST NOT compress a replacement block, or skip a comment, to hit a n
 Every claim below was re-verified against the authority named. Where the plan is wrong, **this
 spec is written to the truth** and the implementer follows this spec.
 
-1. **`README.md:260-267` no longer holds D-i14d-1.** The TODO was struck in commit `5b92ee1`
-   earlier the same day. Lines 260-267 of `README.md` now hold the `uvx pyright@1.1.411` TODO.
-   Consequence: §7 R7.6a.
+1. **`README.md:260-267` no longer holds the D-i14d-1 TODO.** It was struck in commit `5b92ee1`
+   earlier the same day; lines 260-267 now hold the `uvx pyright@1.1.411` TODO. **Precision the
+   first draft of this spec got wrong:** the *string* `D-i14d-1` was never in `README.md` at all —
+   what was there is the TODO's prose, *"Extract further from `main()` toward CAMPAIGN.md §3.3's
+   250–400-line target"*. The decision ID lives only in `CLOSING-AUDIT.md`, `RETROSPECTIVE.md`,
+   `LEDGER.md` and the I14d SPEC. Consequence: §7 R7.6a, whose verification greps the prose (which
+   can go red) rather than the ID (which cannot).
 2. **"seven per-line `# noqa: B023` suppressions" is six.** Measured at `psh/cli.py:817-835`:
    `site`, `visits_by_month`, `plan_on_day`, `site_plan_start`, `first_plan_day`, `last_plan_day`.
    `plan_info` (824) carries none. Consequence: §5.1 R1.4 says six. The rule is unchanged.
@@ -1128,16 +1386,50 @@ spec is written to the truth** and the implementer follows this spec.
    *string* also appears in `tests/integration/test_plugin_cloudflare_fqdns.py:231,268,329` and in
    the parser definition at `psh/cli.py:264-276`. The *guard's exit message* appears in **no** file
    under `tests/`. Consequence: §5.6 R6.5 states it precisely.
-5. **Everything else in the plan verified true**, specifically: the six line ranges all still match
+5. **The plan's stay-list membership is right for five of six extractions and INCOMPLETE for
+   extraction 5.** The plan named B18 and B20; §3.3's `B14–B18` is a five-ID range and
+   **B17** — which the plan itself puts in extraction 5's range as "B17 (residue)" — is inside it.
+   Consequence: §5.5 R5.5.8 and the new §7 R7.3a. This is the one correction that would have left
+   `CAMPAIGN.md` **false by definition** after Task 5.
+6. **DEVIATION from the plan, deliberate and sanctioned: extraction 3 gains a third function.**
+   The plan constructs the `no-domains` `Notice` inline inside `fetch_site_domains`. That makes the
+   plan's *own* Invariant-8 assertion unwritable — `SiteContext.add_notice` projects the `Notice`
+   away immediately, and `fetch_site_domains` makes a `terminus` call so it cannot carry a unit
+   test. §5.3 R3.6d therefore extracts the pure builder `no_domains_notice(site, domains,
+   custom_domains) -> Notice | None` beside `no_primary_domain_notice`. Sanctioned by
+   `prompts/implementation-standards.md` § Test discipline (*"extracting a pure module-level helper
+   is **part of the change**"*) and matching the I1 pattern at `LEDGER.md:125-127`. Recorded here
+   rather than applied silently, per `prompts/implementation-standards.md` § Deviation discipline.
+7. **Everything else in the plan verified true**, specifically: the six line ranges all still match
    `psh/cli.py` exactly; the `NOTICE_NO_DOMAINS` literal is in exactly 3 of the 4 goldens;
    `psh/traffic.py` already imports from `psh.plans` (line 27), so extraction 1 adds no cycle;
    `NOTICE_NO_DOMAINS` is registered at `psh/cli.py:141`; `no_primary_domain_notice`'s literal sits
    at column 20 inside a frame at 8/12 while the `no-domains` literal sits at 16 inside a frame at
-   28, exactly as the plan describes; `main()` has no in-process caller in the suite;
+   24/28, materially as the plan describes; `main()` has no in-process caller in the suite;
    `psh/lifecycle.py`'s docstring pins its module-level imports to stdlib + `sqlalchemy.exc` +
    `rich`; `psh/dns_classify.py`'s docstring bars presentation; `psh/gather.py:11-13` is the
-   smell-merge authority; `main()` is 622 raw / 445 logic; the block-ID → §3.3 stay-list membership
-   is as the plan states for all six extractions.
+   smell-merge authority; `main()` is 622 raw / 445 logic.
+
+### 10a. Corrections to the FIRST DRAFT of this spec (review round 1)
+
+Recorded separately from the plan's errors, because a spec that claims *"every number was
+measured"* and then ships four recalled ones has committed the defect it exists to prevent. All
+were found by adversarial review of the committed baseline and are fixed above.
+
+| # | First draft said | Truth | Fixed in |
+|---|---|---|---|
+| a | B18 + B20 need amendments | **B17** too — `B14–B18` is a five-ID range | §5.5 R5.5.8, §7 R7.3a |
+| b | Patch `sc.cloudflare_enabled` | `psh/cli.py` imports the name, so patch **`psh.cli.cloudflare_enabled`** — this spec's own S1 trap | §6 row 3b, S5 |
+| c | Assert on `notice.html` at the `fetch_site_domains` seam, `unit` tier | Nothing there returns a `Notice`, and it makes a `terminus` call | §5.3 R3.6d, §6 row 3a, §8.3 |
+| d | `RUF100` "is not selected in a way that would flag it" | `select = ["ALL"]`, no `RUF` ignore; **demonstrated red on a probe**. The real reason is 143 statements vs a max of 50 | R-G12 |
+| e | Hoisting 501-509 affects "one failure path" | Also reorders against `run_terminus`'s own debug line and spinner on **every** `-v` run | §5.4 R5.4.1 |
+| f | Verify with `grep 'D-i14d-1' README.md` | That returns nothing **before** the strike too — an instrument that cannot go red | §7 R7.6a |
+| g | R-G6 "stay in their current position" incl. lines §5.3/§5.5 replace | Split into position-pinned (R-G6a) vs. stays-but-moves (R-G6b) | R-G6 |
+| h | No baseline `./run-tests` output | Pasted: `1743 passed, 3 skipped`, 107 snapshots, exit 0 | §9.0 |
+| i | Spine ranges given three ways (627-628/632-633/691-692/763-766 vs 761-766 vs 688-692) | One convention: call + the comment above it | R-G2 |
+| j | "five locals eliminated" incl. `site_url` | `site_url` survives; only its `= ""` pre-binding goes | §5.3 R3.3 |
+| k | "the right reason" left to the implementer | Stated once: `AttributeError`, then a substantive red | §8.1 item 1 |
+| l | Skip gates "reached only through a full site loop" | Reached by every single-site e2e run; **never asserted on** | §1.2 |
 
 ---
 
