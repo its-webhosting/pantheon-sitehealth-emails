@@ -20,6 +20,7 @@ import sys
 import time  # noqa: F401 -- retained as the psh.time.sleep monkeypatch seam (CLAUDE.md § Two mock seams): the real time.sleep(5) lives in psh/gateway.py, but 13 tests patch the shared module object via psh.time (the conftest psh fixture is this module, psh.cli)
 import tomllib
 from email.utils import make_msgid
+from typing import NamedTuple
 
 import sqlalchemy as db  # noqa: F401 -- retained as the psh.db.* test seam (tests/conftest.py TempDB uses psh.db.create_engine / psh.db.orm.sessionmaker, which resolve to THIS alias on the psh.cli module, not the psh/db.py package): B10's last in-file use (db.create_engine/db.orm.sessionmaker) moved to psh.db.open_database at I13
 from rich.markup import escape
@@ -290,6 +291,53 @@ def parse_args(argv=None):
     return build_arg_parser().parse_args(argv)
 
 
+# INVARIANT 8 -- DO NOT RE-INDENT THE html=/text= LITERALS BELOW.  Every interior line, and
+# both closing triple quotes, MUST stay at column 16 counted from the start of the line --
+# NOT at an indent relative to the `html=`/`text=` keyword, and NOT whatever a formatter
+# thinks this frame deserves.  Those leading spaces are string content: they are rendered
+# into three of the four e2e goldens (tests/e2e/__snapshots__/test_golden.ambr,
+# test_golden_drupal.ambr, test_golden_nonumich.ambr) and into the email every site owner
+# on a paid plan with no custom domains receives.  `git diff -w` cannot see a violation;
+# tests/unit/test_no_domains_notice.py::test_the_literal_interior_stays_at_column_16 can.
+# (CAMPAIGN.md section 9.8; development/2026-08-07-main-extraction/SPEC.md R3.6/R3.6a.)
+def no_domains_notice(site, domains, custom_domains) -> Notice | None:
+    """Return the no-domains alert Notice, or None when it does not apply (BLOCKMAP B29's
+    notice half; extracted from main() at development/2026-08-07-main-extraction/SPEC.md
+    section 5.3, R3.6d).
+
+    PURE: no I/O, no sc.console, no SiteContext.  Deliberately mirrors its sibling
+    no_primary_domain_notice below -- same module, same shape, same `-> Notice | None`
+    contract -- so both of this module's notice builders are unit-testable at the same
+    seam.  fetch_site_domains calls it and does the site_context.add_notice(), exactly as
+    main() already does for no_primary_domain_notice.
+
+    `domains` is the RAW terminus("domain:list") payload and `custom_domains` the
+    already-classified DnsFacts field.  Both guards are needed and neither is defensive:
+    classify_domains returns an all-empty DnsFacts for any non-dict payload, so the
+    isinstance guard is the only thing standing between a malformed domain:list and a
+    false ALERT telling the owner to downgrade a site whose domains were never read.
+    """
+    if isinstance(domains, dict):  # noqa: SIM102 -- NOT merged with the nested if: the body is a moved-verbatim Notice whose html/text f-strings carry golden-pinned column-16 leading whitespace (three e2e goldens); collapsing the ifs would dedent that literal and change the rendered email (Invariant 8)
+        if len(custom_domains) == 0:
+            return Notice(
+                severity=Severity.ALERT,
+                code=NOTICE_NO_DOMAINS,
+                short="no domains connected",
+                html=f"""
+                <p>{site["name"]} is on a paid plan but does not have any custom domains connected.  Either connect
+                a domain through which people will access the site or downgrade the site's plan to Sandbox to save
+                money.</p>
+                """,
+                text=f"""
+                {site["name"]} is on a paid plan but does not have
+                any custom domains connected. Either connect a domain through
+                which people will access the ste or downgrade the site's plan
+                to Sandbox to save money.
+                """,
+            )
+    return None
+
+
 def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite) -> Notice | None:
     """Return the no-primary-domain info Notice, or None when it does not apply
     (BLOCKMAP B30; extracted at campaign I10 -- SPEC D-i10-3; rode to psh/cli.py with
@@ -330,6 +378,110 @@ def no_primary_domain_notice(site, custom_domains, primary_domain, is_multisite)
                     """,
         )
     return None
+
+
+class SiteDomains(NamedTuple):
+    domains: object               # the RAW domain:list payload; never None (a fatal/undecodable fetch returns the skip sentinel instead)
+    facts: dns_classify.DnsFacts  # all-empty when `domains` is not a dict
+
+
+def fetch_site_domains(live_site, site, site_name, site_context) -> SiteDomains | None:
+    """B29: fetch the site's domains and classify them, verbatim from main().
+
+    Returns None -- the SKIP SENTINEL -- on a fatal or undecodable domain:list; the caller
+    does the `continue` (loop control stays in main(), D-i6-1 / SPEC R-G3).  The skip is
+    never silent: it prints the ERROR line naming the site first (PD#1).
+
+    The set of Cloudflare-proxied FQDNs (fqdns.json) is fetched-or-loaded once, before the
+    site loop, by the cloudflare plugin's update_and_load_proxied_fqdns setup hook; this
+    reads it from plugin_context.  The bag is only consulted under `if cf_on`, which is the
+    only state in which it exists.
+
+    Emits the no-domains alert through the pure no_domains_notice builder, in the identical
+    `if notice is not None` shape main() already uses for no_primary_domain_notice.  Extracted
+    at development/2026-08-07-main-extraction/SPEC.md section 5.3.
+    """
+    # Query Pantheon for the site's domains
+    domains, errors, fatal = terminus("domain:list", live_site)
+    if fatal or domains is None:
+        sc.console.print(
+            f":exclamation: [bold red] ERROR: could not fetch domains for {site_name}: {escape(errors)}"
+        )
+        return None
+    if sc.options.verbose:
+        sc.debug(f"=== Domains for {site['name']}:")
+        pprint(domains)
+    # Resolve the Cloudflare gate and its plugin_context bag once (the bag's net/proxied
+    # keys exist only when [Cloudflare] is enabled).
+    cf_on = cloudflare_enabled()
+    cf_ctx = sc.plugin_context["plugin.cloudflare"] if cf_on else {}
+    facts = dns_classify.classify_domains(
+        domains,
+        cf_on,
+        cf_ctx["cloudflare_ipv4_nets"] if cf_on else [],
+        cf_ctx["cloudflare_ipv6_nets"] if cf_on else [],
+        cf_ctx["proxied_fqdns"] if cf_on else {},
+        cf_ctx.get("fqdn_zone_conflicts", {}) if cf_on else {},
+        fqdn_re,
+    )
+    notice = no_domains_notice(site, domains, facts.custom_domains)
+    if notice is not None:
+        site_context.add_notice(notice)
+    return SiteDomains(domains=domains, facts=facts)
+
+
+class SiteUrlFacts(NamedTuple):
+    site_url: str      # "" when there is no main_fqdn and no WP-network URL
+    wp_smell: str      # "" = no NEW smell -- a delta, merged by main()
+    drush_smell: str   # "" = no NEW smell -- a delta, merged by main()
+
+
+def resolve_site_url(site, live_site, site_context, facts) -> SiteUrlFacts:
+    """B30 (residue) + B31's site_url derivation + B32 (residue): the post-site_post_dns half
+    of the domains stage, verbatim from main().  Never returns None -- this region has no
+    skip path.
+
+    Runs AFTER sc.invoke_hooks("site_post_dns"), which is why it can read
+    drupal_multisite_smell / drupal_multisite at all: check.drupal.multisite PRODUCES them in
+    that phase.  Both are hook-produced, not registry-owned, so both are read with .get() --
+    they are absent whenever the probe did not run (every WordPress site, [Check.drupal]
+    disabled, or a failed gate), and an index read would be a KeyError on the common path.
+
+    The two smells are DELTAS (SPEC R-G5 / psh/gather.py's module docstring): "" means no NEW
+    smell, NEVER "clear the previous one", and this function is deliberately never handed the
+    caller's current values -- main() keeps the last-wins merge.  Extracted at
+    development/2026-08-07-main-extraction/SPEC.md section 5.3.
+    """
+    site_url = ""
+    wp_smell = ""
+    drush_smell = ""
+    # The Drupal multisite probe (was B30, inline here) moved to
+    # check/drupal/multisite.py, a site_post_dns hook -- its produced keys are
+    # DAG-declared, not contract-guaranteed (CLAUDE.md, CAMPAIGN.md section 4
+    # amendment 2), so read with .get() (campaign I10, SPEC D-i10-3).
+    probe_smell = site_context.get("drupal_multisite_smell", "")
+    if probe_smell != "":
+        drush_smell = probe_smell
+    notice = no_primary_domain_notice(
+        site, facts.custom_domains, facts.primary_domain,
+        site_context.get("drupal_multisite", False),
+    )
+    if notice is not None:
+        site_context.add_notice(notice)
+
+    if facts.main_fqdn != "":
+        site_url = f"https://{facts.main_fqdn}/"
+
+    if site["framework"] == "wordpress_network":
+        network_url, network_smell = wordpress_network_url(site, live_site, site_context)
+        if network_smell != "":
+            wp_smell = network_smell
+        if network_url is not None:
+            site_url = network_url
+
+    sc.debug(f"Main domain for {site['name']}: {facts.main_fqdn}")
+    sc.debug(f"Site URL for {site['name']}:    {site_url}")
+    return SiteUrlFacts(site_url=site_url, wp_smell=wp_smell, drush_smell=drush_smell)
 
 
 def sort_notices_and_subject(site_context, report):
@@ -630,58 +782,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             stuff_traffic_contract(site_context, results, start_date, end_date)
             sc.invoke_hooks("site_post_traffic", site_context)
 
-            # The set of Cloudflare-proxied FQDNs (fqdns.json) is fetched-or-loaded once, before this
-            # loop, by the cloudflare plugin's update_and_load_proxied_fqdns setup hook; read it from
-            # plugin_context here.  Only consulted below under `if cloudflare_enabled` (which is where
-            # the plugin_context bag exists).
-
-            # Query Pantheon for the site's domains
-            domains, errors, fatal = terminus("domain:list", live_site)
-            if fatal or domains is None:
-                sc.console.print(
-                    f":exclamation: [bold red] ERROR: could not fetch domains for {site_name}: {escape(errors)}"
-                )
-                continue
-            if sc.options.verbose:
-                sc.debug(f"=== Domains for {site['name']}:")
-                pprint(domains)
-            site_url = ""
-            # Resolve the Cloudflare gate and its plugin_context bag once (the bag's net/proxied
-            # keys exist only when [Cloudflare] is enabled).
-            cf_on = cloudflare_enabled()
-            cf_ctx = sc.plugin_context["plugin.cloudflare"] if cf_on else {}
-            facts = dns_classify.classify_domains(
-                domains,
-                cf_on,
-                cf_ctx["cloudflare_ipv4_nets"] if cf_on else [],
-                cf_ctx["cloudflare_ipv6_nets"] if cf_on else [],
-                cf_ctx["proxied_fqdns"] if cf_on else {},
-                cf_ctx.get("fqdn_zone_conflicts", {}) if cf_on else {},
-                fqdn_re,
-            )
-            main_fqdn = facts.main_fqdn
-            custom_domains = facts.custom_domains
-            primary_domain = facts.primary_domain
-            if isinstance(domains, dict):  # noqa: SIM102 -- NOT merged with the nested if: the body is a moved-verbatim Notice whose html/text f-strings carry golden-pinned column-16 leading whitespace (three e2e goldens); collapsing the ifs would dedent that literal and change the rendered email (Invariant 8)
-                if len(custom_domains) == 0:
-                    site_context.add_notice(
-                        Notice(
-                            severity=Severity.ALERT,
-                            code=NOTICE_NO_DOMAINS,
-                            short="no domains connected",
-                            html=f"""
-                <p>{site["name"]} is on a paid plan but does not have any custom domains connected.  Either connect
-                a domain through which people will access the site or downgrade the site's plan to Sandbox to save
-                money.</p>
-                """,
-                            text=f"""
-                {site["name"]} is on a paid plan but does not have
-                any custom domains connected. Either connect a domain through
-                which people will access the ste or downgrade the site's plan
-                to Sandbox to save money.
-                """,
-                        )
-                    )
+            fetched = fetch_site_domains(live_site, site, site_name, site_context)
+            if fetched is None:
+                continue  # fatal/undecodable domain:list -- skip this site (D-i6-1)
+            domains, facts = fetched
 
             # Per-phase data contract (see CLAUDE.md): publish the DnsFacts via the pure helper
             # (unit-tested against value-swaps in test_dns_classify.py), then fire the phase. The
@@ -689,31 +793,15 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             dns_classify.stuff_dns_contract(site_context, domains, facts)
             sc.invoke_hooks("site_post_dns", site_context)
 
-            # The Drupal multisite probe (was B30, inline here) moved to
-            # check/drupal/multisite.py, a site_post_dns hook -- its produced keys are
-            # DAG-declared, not contract-guaranteed (CLAUDE.md, CAMPAIGN.md section 4
-            # amendment 2), so read with .get() (campaign I10, SPEC D-i10-3).
-            probe_smell = site_context.get("drupal_multisite_smell", "")
-            if probe_smell != "":
-                drush_smell = probe_smell
-            notice = no_primary_domain_notice(
-                site, custom_domains, primary_domain, site_context.get("drupal_multisite", False)
-            )
-            if notice is not None:
-                site_context.add_notice(notice)
-
-            if main_fqdn != "":
-                site_url = f"https://{main_fqdn}/"
-
-            if site["framework"] == "wordpress_network":
-                network_url, network_smell = wordpress_network_url(site, live_site, site_context)
-                if network_smell != "":
-                    wp_smell = network_smell
-                if network_url is not None:
-                    site_url = network_url
-
-            sc.debug(f"Main domain for {site['name']}: {main_fqdn}")
-            sc.debug(f"Site URL for {site['name']}:    {site_url}")
+            url_facts = resolve_site_url(site, live_site, site_context, facts)
+            site_url = url_facts.site_url
+            # Smell merges stay in main() (D-i9-2/D-i10-2): a returned "" means "no NEW smell",
+            # never "clear the previous one".  Source order matches the inline code these two
+            # replace -- the multisite-probe drush_smell first, then the WP-network wp_smell.
+            if url_facts.drush_smell != "":
+                drush_smell = url_facts.drush_smell
+            if url_facts.wp_smell != "":
+                wp_smell = url_facts.wp_smell
 
             # Check the site's plugins/modules
             gather = gather_framework(site, live_site, site_context)
