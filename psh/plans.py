@@ -285,6 +285,44 @@ def resolve_plan_name(site: dict) -> str | None:
     return sc.config["Pantheon"]["plan_sku_to_name"][plan_sku]
 
 
+def resolve_site_plan(site: dict, plan_names: list[str]) -> str | None:
+    """B17 (residue) / the Sandbox half of B18 / B20: resolve this site's billing plan
+    name, verbatim from main() (development/2026-08-07-main-extraction/SPEC.md
+    section 5.5).
+
+    Returns the skip sentinel None for TWO distinct reasons -- a transient/undecodable
+    plan:info failure (resolve_plan_name's own None) or the Sandbox plan -- collapsed
+    into one sentinel because each path prints its own operator message before
+    returning (SPEC R5.5.2); main() performs the continue for both (D-i6-1).
+
+    sys.exit("Bailing out.") on a plan absent from plan_names is a POSTCONDITION of
+    this function, not a caller concern (SPEC R5.5.3): returning a name plan_costs
+    cannot price is a broken contract, the same reasoning resolve_plan_name already
+    applies to an unknown SKU.
+
+    Writes site["plan_name"] in place (SPEC R5.5.5) -- the Elite-SKU resolution that
+    build_traffic_table_rows and recommend_plan read off the site dict later. No hook
+    has fired for this site yet at this point in the loop, so no hook can observe the
+    pre-write value."""
+    plan_name = resolve_plan_name(site)
+    if plan_name is None:
+        return None
+    site["plan_name"] = plan_name
+
+    if site["plan_name"] == "Sandbox":
+        sc.console.print(f"{site['name']} is on the Sandbox plan, skipping it.")
+        return None
+
+    if site["plan_name"] not in plan_names:
+        sc.console.print(
+            f":exclamation: [bold red] ATTENTION: {site['name']} "
+            f"is on an unknown plan: {site['plan_name']}"
+        )
+        sys.exit("Bailing out.")
+
+    return site["plan_name"]
+
+
 @dataclasses.dataclass(frozen=True)
 class PlanRecommendation:
     """Everything main() and the site_pre_render contract need from the cost model."""

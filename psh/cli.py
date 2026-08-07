@@ -118,7 +118,7 @@ from psh.plans import (
     overage_blocks,  # noqa: F401
     plan_costs,  # noqa: F401
     recommend_plan,
-    resolve_plan_name,
+    resolve_site_plan,
     stuff_plans_contract,
 )
 from psh.render import escape_url, render_report
@@ -753,27 +753,15 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             )
             current_site_number += 1
 
-            plan_name = resolve_plan_name(site)
+            plan_name = resolve_site_plan(site, plan_names)
             if plan_name is None:
                 continue
-            site["plan_name"] = plan_name
-            site_current_plan = site["plan_name"]
-
-            if site["plan_name"] == "Sandbox":
-                sc.console.print(f"{site['name']} is on the Sandbox plan, skipping it.")
-                continue
+            site_current_plan = plan_name
 
             # This site will be processed: build its context as far up as possible (past the
             # portal / not-requested / Sandbox skips above).  notices/sections/attachments
             # accumulate into it through the pipeline below.
             site_context = sc.SiteContext(site)
-
-            if site["plan_name"] not in plan_names:
-                sc.console.print(
-                    f":exclamation: [bold red] ATTENTION: {site['name']} "
-                    f"is on an unknown plan: {site['plan_name']}"
-                )
-                sys.exit("Bailing out.")
 
             # From https://docs.pantheon.io/guides/account-mgmt/traffic/overages
             # FAQ 1 as of April 25, 2024:
