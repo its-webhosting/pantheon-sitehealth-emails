@@ -26,6 +26,12 @@ build_smell_notices is the B48 smell-notice *builder* (SPEC D-i10-1 amendment 1)
 lives here beside its sibling gathers, but its *emission* stays in main() (behind the
 --only-warn gate) because no hook position can guarantee it runs after the
 wp_smell/drush_smell in-place mutators (D-i9-3/D-i10-4).
+
+gather_framework (B33, B34 (residue), B35 (residue), B36) is the caller-side dispatch
+that threads gather_wordpress/gather_drupal into main()'s locals, extracted from main()
+at development/2026-08-07-main-extraction/SPEC.md section 5.2 -- it returns the smell
+fields as deltas too (never merged with a caller value it is never given) and touches
+no RunState (CAMPAIGN.md section 3.4's parallel-ready criterion, D8).
 """
 import html
 import json
@@ -77,6 +83,18 @@ class DrupalGather(NamedTuple):
     drush_smell: str      # last-wins stderr across core-status/pm:list; "" if none
     composer_smell: str   # composer dry-run stderr; "" if none
     results_entry: dict   # {"framework", "version", "plan_name"} for site_results
+
+
+class FrameworkGather(NamedTuple):
+    wordpress_version: str | None  # None = not WordPress; "" when the version fetch failed
+    plugins: object                # None = not WP, or the gather failed
+    drupal_version: str | None     # None = not Drupal; "unknown" when core-status failed
+    modules: object                # None = not Drupal, or the gather failed
+    add_on_updates: list           # [] = none pending, unknown framework, or gather failed
+    wp_smell: str                  # "" = no NEW smell -- a delta, merged by main()
+    drush_smell: str               # "" = no NEW smell -- a delta, merged by main()
+    composer_smell: str            # "" = no NEW smell -- a delta, merged by main()
+    results_entry: dict            # main() writes it into run_state.site_results
 
 
 def check_wordpress_plugin(  # noqa: PLR0913 -- moved verbatim, signature unchanged (Task 4 brief): one input per notice ingredient, pinned by the papc/sessions/cloudflare_cms call sites
@@ -580,6 +598,65 @@ def gather_drupal(site: dict, live_site: str, site_context) -> DrupalGather:  # 
         drupal_version=drupal_version,
         modules=mods,
         add_on_updates=add_on_updates,
+        drush_smell=drush_smell,
+        composer_smell=composer_smell,
+        results_entry=results_entry,
+    )
+
+
+def gather_framework(site: dict, live_site: str, site_context) -> FrameworkGather:
+    """B33 / B34 (residue) / B35 (residue) / B36: dispatch to gather_wordpress or
+    gather_drupal by site["framework"], or fall back to the unknown-framework
+    results_entry (with its own ATTENTION console print), verbatim from main().
+
+    Touches NO RunState (CAMPAIGN.md section 3.4's parallel-ready criterion, D8) --
+    main() performs the run_state.site_results write from the returned results_entry.
+    The three smell fields are DELTAS (CLAUDE.md / this module's docstring): "" means
+    no NEW smell, never "clear the previous one" -- main() keeps the merge (SPEC
+    development/2026-08-07-main-extraction/SPEC.md section 5.2, R2.2/R2.5)."""
+    wordpress_version = None
+    plugins = None
+    drupal_version = None
+    modules = None
+    add_on_updates = []
+    wp_smell = ""
+    drush_smell = ""
+    composer_smell = ""
+
+    if site["framework"].startswith("wordpress"):
+        gather = gather_wordpress(site, live_site, site_context)
+        wordpress_version = gather.wordpress_version
+        plugins = gather.plugins
+        add_on_updates = gather.add_on_updates
+        wp_smell = gather.wp_smell
+        results_entry = gather.results_entry
+
+    elif site["framework"].startswith("drupal"):
+        gather = gather_drupal(site, live_site, site_context)
+        drupal_version = gather.drupal_version
+        modules = gather.modules
+        add_on_updates = gather.add_on_updates
+        drush_smell = gather.drush_smell
+        composer_smell = gather.composer_smell
+        results_entry = gather.results_entry
+
+    else:
+        sc.console.print(
+            f":exclamation: [bold red] ATTENTION: unknown framework for {site['name']}: {site['framework']}"
+        )
+        results_entry = {
+            "framework": site["framework"],
+            "version": "unknown",
+            "plan_name": site["plan_name"],
+        }
+
+    return FrameworkGather(
+        wordpress_version=wordpress_version,
+        plugins=plugins,
+        drupal_version=drupal_version,
+        modules=modules,
+        add_on_updates=add_on_updates,
+        wp_smell=wp_smell,
         drush_smell=drush_smell,
         composer_smell=composer_smell,
         results_entry=results_entry,

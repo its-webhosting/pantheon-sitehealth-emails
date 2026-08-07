@@ -79,8 +79,7 @@ from psh.gather import (
     build_smell_notices,
     check_drupal_module,
     check_wordpress_plugin,
-    gather_drupal,
-    gather_wordpress,
+    gather_framework,
     wordpress_network_url,
 )
 from psh.lifecycle import (
@@ -717,45 +716,21 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             sc.debug(f"Site URL for {site['name']}:    {site_url}")
 
             # Check the site's plugins/modules
-
-            # Initialized before the framework branch so the site_post_gather data-contract
-            # stuffing below the chain is unconditional (None = not that framework, or the
-            # gather failed):
-            plugins = None
-            mods = None
-            wordpress_version = None
-            drupal_version = None
-
-            add_on_updates = []
-            if site["framework"].startswith("wordpress"):
-                gather = gather_wordpress(site, live_site, site_context)
-                wordpress_version = gather.wordpress_version
-                plugins = gather.plugins
-                add_on_updates = gather.add_on_updates
-                if gather.wp_smell != "":
-                    wp_smell = gather.wp_smell
-                run_state.site_results[site["name"]] = gather.results_entry
-
-            elif site["framework"].startswith("drupal"):
-                gather = gather_drupal(site, live_site, site_context)
-                drupal_version = gather.drupal_version
-                mods = gather.modules
-                add_on_updates = gather.add_on_updates
-                if gather.drush_smell != "":
-                    drush_smell = gather.drush_smell
-                if gather.composer_smell != "":
-                    composer_smell = gather.composer_smell
-                run_state.site_results[site["name"]] = gather.results_entry
-
-            else:
-                sc.console.print(
-                    f":exclamation: [bold red] ATTENTION: unknown framework for {site['name']}: {site['framework']}"
-                )
-                run_state.site_results[site["name"]] = {
-                    "framework": site["framework"],
-                    "version": "unknown",
-                    "plan_name": site["plan_name"],
-                }
+            gather = gather_framework(site, live_site, site_context)
+            wordpress_version = gather.wordpress_version
+            plugins = gather.plugins
+            drupal_version = gather.drupal_version
+            mods = gather.modules
+            add_on_updates = gather.add_on_updates
+            # Smell merges stay in main() (D-i9-2/D-i10-2): a returned "" means "no NEW smell",
+            # never "clear the previous one".
+            if gather.wp_smell != "":
+                wp_smell = gather.wp_smell
+            if gather.drush_smell != "":
+                drush_smell = gather.drush_smell
+            if gather.composer_smell != "":
+                composer_smell = gather.composer_smell
+            run_state.site_results[site["name"]] = gather.results_entry
 
             # Per-phase data contract (see CLAUDE.md): WP/Drush gather results are guaranteed
             # present from site_post_gather onward.
