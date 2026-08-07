@@ -257,20 +257,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* **Fix the blanked `site_url` on a fatal WordPress-network URL fetch** — for a
-  `wordpress_network` site whose `network_home_url` eval is **fatal**, `wordpress_network_url`
-  (`psh/gather.py:246-249`) returns `("", "")` rather than `(None, "")`: `run_terminus` yields
-  `""` on the fatal path and `"".strip()` is a `str`, so the `isinstance(network_home_url, str)`
-  branch wins. `psh/cli.py::resolve_site_url` then does `if network_url is not None: site_url =
-  network_url`, which **overwrites a perfectly good `https://{main_fqdn}/` with `""`** — that
-  site's report renders with an empty `site_url` even though the primary domain resolved fine.
-  A `version-check` alert notice *is* emitted, so the failure is not silent, but the blanking is
-  collateral and unintended. **Pre-existing** (verified at base commit `9f44959`), found and
-  pinned — not fixed — by the 2026-08-07 main-extraction increment, which was
-  behavior-preserving; today's behavior is pinned by
-  `tests/integration/test_site_domains.py::test_a_fatal_network_url_fetch_blanks_the_site_url_and_notices_the_failure`.
-  The fix changes a rendered email, so it needs its own reviewed golden diff.
-
 * **Migrate `main()`'s four `open`/`os.path` calls to `pathlib`, or retire the deferral**
   **(post-campaign)** — `psh/cli.py` carries four suppressions reading `# noqa: PTH123 --
   verbatim config read; pathlib migration is I14b+` (also `PTH110`/`PTH103`; grep

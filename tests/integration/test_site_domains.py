@@ -279,26 +279,48 @@ def test_a_wordpress_network_probe_smell_comes_back_as_a_wp_delta(
     assert result.drush_smell == ""
 
 
-def test_a_fatal_network_url_fetch_blanks_the_site_url_and_notices_the_failure(
+def test_a_fatal_network_url_fetch_keeps_the_main_fqdn_url_and_notices_the_failure(
     gateway, reset_sc, monkeypatch
 ):
-    """PD#3 upstream-error shadow, pinning the behavior AS MOVED -- which is not the obvious one.
+    """The README TO DO fix (2026-08-07): a fatal network_home_url eval no longer blanks a
+    perfectly good site_url.
 
-    wordpress_network_url returns (None, smell) only when the eval produced a non-str; on a
-    FATAL eval run_terminus still yields "" and `"".strip()` is a str, so it returns ("", "")
-    -- and `if network_url is not None` then overwrites the main_fqdn URL with "".  A
-    wordpress_network site whose network_home_url eval dies therefore loses its site_url
-    entirely, despite having a perfectly good main FQDN.  That is pre-existing behavior
-    (psh/cli.py before this extraction, psh/gather.py:247-249), preserved verbatim here and
-    pinned so a later change to it is a deliberate one rather than a silent one."""
+    Until this change wordpress_network_url returned (None, smell) only when the eval produced
+    a NON-STR; on a FATAL eval run_terminus still yields "" and `"".strip()` is a str, so it
+    returned ("", "") and `if network_url is not None` overwrote the main_fqdn URL with "" --
+    that site's report rendered with an empty Main URL despite its primary domain resolving
+    fine.  A fatal fetch now reports no URL at all, so the main_fqdn derivation stands and the
+    version-check alert is the only visible effect."""
     monkeypatch.setattr(
         gateway, "run_terminus", lambda command, input_data=None: ("", "boom", True))
     ctx = _ctx(reset_sc, SITE_NETWORK)
     result = psh.cli.resolve_site_url(
         SITE_NETWORK, LIVE, ctx, _facts(main_fqdn="www.example.com"))
-    assert result.site_url == ""
+    assert result.site_url == "https://www.example.com/"
     assert result.wp_smell == ""   # a FATAL fetch produces a notice, not a smell
     assert any(n["csv"].startswith("its-wws-test1,wp-error,version-check,") for n in ctx["notices"])
+
+
+def test_an_empty_network_url_keeps_the_main_fqdn_url(gateway, reset_sc, monkeypatch):
+    """A successful eval returning nothing counts as "no URL" (user decision, 2026-08-07),
+    so it too leaves the main_fqdn derivation standing instead of blanking it."""
+    monkeypatch.setattr(
+        gateway, "run_terminus", lambda command, input_data=None: ("\n", "", False))
+    result = psh.cli.resolve_site_url(
+        SITE_NETWORK, LIVE, _ctx(reset_sc, SITE_NETWORK), _facts(main_fqdn="www.example.com"))
+    assert result.site_url == "https://www.example.com/"
+
+
+def test_a_fatal_network_url_fetch_with_no_main_fqdn_leaves_the_site_url_empty(
+    gateway, reset_sc, monkeypatch
+):
+    """The counterpart of the above: with nothing to fall back to, site_url stays "" -- the
+    fix restores the main_fqdn derivation, it does not invent a URL."""
+    monkeypatch.setattr(
+        gateway, "run_terminus", lambda command, input_data=None: ("", "boom", True))
+    result = psh.cli.resolve_site_url(
+        SITE_NETWORK, LIVE, _ctx(reset_sc, SITE_NETWORK), _facts())
+    assert result.site_url == ""
 
 
 def test_a_non_network_site_makes_no_subprocess_call(gateway, reset_sc, monkeypatch):

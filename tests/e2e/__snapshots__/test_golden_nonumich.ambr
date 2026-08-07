@@ -362,7 +362,7 @@
   <h1>Pantheon plan recommendation</h1>
     <table style="border: 0; width: max-content; font-weight: bold;">
       <tr><td>Pantheon website name:</td><td></td><td>its-wws-test1</td></tr>
-      <tr><td>Main URL:</td><td></td><td></td></tr>
+      <tr><td>Main URL:</td><td></td><td>(unknown URL)</td></tr>
       <tr><td colspan=3>&nbsp;</td></tr>
   
       <tr><td>Current plan:</td><td></td><td>Performance Small</td></tr>
@@ -628,7 +628,7 @@
   === PANTHEON PLAN RECOMMENDATION
   
   Pantheon website name:     its-wws-test1
-  Main URL:                  
+  Main URL:                  (unknown URL)
   
   Current plan:              Performance Small
   Recommended plan:          (needs 4 months more data)
@@ -665,7 +665,6 @@
   HTML version of this email.  The data is presented in list form, below.
   
   its-wws-test1 Pantheon Traffic
-  
   
   
   MARCH 2026

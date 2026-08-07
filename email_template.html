@@ -316,7 +316,7 @@ h3 { font-size: 15pt; }
 <h1>Pantheon plan recommendation</h1>
   <table style="border: 0; width: max-content; font-weight: bold;">
     <tr><td>Pantheon website name:</td><td></td><td>{{site_name}}</td></tr>
-    <tr><td>Main URL:</td><td></td><td>{{site_url}}</td></tr>
+    <tr><td>Main URL:</td><td></td><td>{%if site_url%}{{site_url}}{%else%}(unknown URL){%endif%}</td></tr>
     <tr><td colspan=3>&nbsp;</td></tr>
 {% if months_until_recommendations == 0 %}
     <tr><td>Current plan:</td><td style="font-size: larger; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';">{% if current_plan == recommended_plan %}&#x2705;{% elif current_plan_index > recommended_plan_index %}&#x2198;{% else %}&#x2197;{% endif %}</td><td>{{current_plan}}</td></tr>

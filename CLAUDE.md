@@ -599,7 +599,13 @@ their shadowing order — see **Resuming an interrupted `--all` run**), `resolve
   `plan_costs` **contract key** `{"same": …, "median": …, "best": …}`).
 - **`psh/gather.py`** — the framework gather cores. WordPress: `check_wordpress_plugin` (the
   recommended-WordPress-plugin notice builder the papc/sessions/cloudflare_cms hooks call via
-  `sc.check_wordpress_plugin`), `wordpress_network_url`, and `gather_wordpress` (version /
+  `sc.check_wordpress_plugin`), `wordpress_network_url` (**returns `None` for the URL when the
+  eval was fatal, non-str, OR successful-but-empty** — never the `""` the gateway hands back on
+  the fatal path, because `psh.cli.resolve_site_url` overrides `site_url` on `is not None`, so
+  returning `""` blanked a perfectly good `https://{main_fqdn}/`; fixed 2026-08-07, pinned by
+  `test_a_fatal_network_url_fetch_keeps_the_main_fqdn_url_and_notices_the_failure` and
+  `test_an_empty_network_url_keeps_the_main_fqdn_url` in
+  `tests/integration/test_site_domains.py`), and `gather_wordpress` (version /
   plugin-list / theme-list fetches, add-on-update collection plugins-then-themes in list order,
   the must-use diagnostic print) returning a **`WordPressGather`** NamedTuple that
   `gather_framework` (below) — **not** `main()` — threads into its branch locals; the
@@ -1052,7 +1058,15 @@ is now one line away from being violated.
   `docs/resuming-interrupted-runs.md`.
 - **Rendering**: the Jinja render + PHP inline is `psh.render.render_report`. Templates
   `email_template.html` and `email_template.txt` are rendered per site into
-  `build/<site>.{html,txt}`. The HTML is then run through `inline-styles.php` (PHP Emogrifier via
+  `build/<site>.{html,txt}`. **An empty `site_url` renders as the literal `(unknown URL)` in the
+  "Main URL:" field of both templates** (2026-08-07) — the contract key itself stays `""`, so the
+  `{%if site_url%}` guards elsewhere (the intro line, the traffic caption, the chart title) still
+  omit their URL rather than emitting a non-URL string into an `href`; three of the four e2e
+  goldens carry that literal, since their `domain:list` fixture leaves `main_fqdn` empty. The
+  `.txt` traffic caption is one of those guards as of the same change — it printed a bare
+  `{{site_url}}` and so left a stray blank line for a URL-less site; its `{%endif%}` sits on its
+  own line on purpose, contributing the newline the URL line used to. The HTML is then run
+  through `inline-styles.php` (PHP Emogrifier via
   `vendor/`) to inline CSS for email clients → `build/<site>-inline.html`, and a regex pass then
   appends `!important` to every inlined CSS declaration → `build/<site>-inline2.html`, **which is
   the HTML actually attached** (not `-inline.html`) — `render_report` returns that `-inline2`
@@ -1403,8 +1417,10 @@ Non-obvious things the harness relies on:
 - **psh/gather + check/wordpress + U-M WP-check tests.** All integration tier:
   `tests/integration/test_gather_wordpress.py` (`psh.gather` via the `gateway` fixture +
   `sc.SiteContext` — happy path, fatal version/plugin/theme fetches, last-wins smell, the
-  network-URL variants; its header note records why the defensive `"unknown"`/`None` branches are
-  unreachable through the gateway seam), `tests/integration/test_check_wordpress_init.py` (config
+  network-URL variants; its header note records why `gather_wordpress`'s `"unknown"` fallback and
+  the *isinstance* half of `wordpress_network_url`'s `None` return stay unreachable through the
+  gateway seam — the `fatal` half of that `None` is reachable and load-bearing, see that
+  function's docstring), `tests/integration/test_check_wordpress_init.py` (config
   gating + the four hooks' declarations in order; default-true proof),
   `tests/integration/test_check_wordpress.py` (the four hook seams, incl. the ocp
   no-matching-plugin no-call pin, the `wp_smell`-rebind pins, and the precedence pin — theme

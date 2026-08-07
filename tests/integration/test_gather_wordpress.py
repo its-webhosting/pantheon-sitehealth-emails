@@ -9,12 +9,14 @@ Loop control stays in main(): these functions return their results (a WordPressG
 a (url, smell) pair) and main() threads them into its locals per SPEC D-i9-2, preserving
 the last-wins smell semantics (a later empty smell never clears an earlier one).
 
-NOTE two deliberate divergences from SPEC section 7's predicted expectations, verbatim
-behavior preserved (PD#14 -- the prediction is corrected in the task report, not the code):
-through the run_terminus seam wp_eval ALWAYS returns a str (GatewayResult.output is decoded
-stdout), so the "unknown" fallback and wordpress_network_url's non-str None return are
-unreachable defensive branches -- a fatal fetch with empty stdout yields "" (still
-notice-carrying, entry still written), not "unknown"/None.
+NOTE through the run_terminus seam wp_eval ALWAYS returns a str (GatewayResult.output is
+decoded stdout), so gather_wordpress's "unknown" version fallback and the isinstance half of
+wordpress_network_url's None return are unreachable defensive branches -- a fatal version
+fetch with empty stdout yields "" (still notice-carrying, entry still written), not
+"unknown".  wordpress_network_url's None return is NOT in that class any more: since the
+README TO DO fix (2026-08-07) it also fires on `fatal`, which is exactly the reachable case
+(test_network_url_fatal_adds_notice_and_no_smell), so that a dead network-URL fetch stops
+blanking a site_url the main FQDN already supplied.
 """
 import json
 
@@ -178,10 +180,25 @@ def test_network_url_fatal_adds_notice_and_no_smell(gateway, reset_sc, monkeypat
     assert [n["csv"] for n in ctx["notices"]] == [
         f"{SITE['name']},wp-error,version-check,\"boom\""
     ]
-    # Fatal stdout is still a str ("" here) through the gateway, so the verbatim
-    # isinstance guard returns it stripped -- main()'s `is not None` thread then sets
-    # site_url = "", exactly today's inline behavior (see module note).
-    assert (url, smell) == ("", "")
+    # A fatal fetch reports NO url, so resolve_site_url's `is not None` thread leaves the
+    # main-FQDN site_url standing.  Fatal stdout is still a str ("" here) through the
+    # gateway, so this is the `fatal` half of the guard, not the isinstance half.
+    assert (url, smell) == (None, "")
+
+
+@pytest.mark.parametrize("stdout", ["", "\n", "   \n"])
+def test_network_url_empty_but_successful_eval_reports_no_url(
+    gateway, reset_sc, monkeypatch, stdout
+):
+    """An eval that SUCCEEDS but yields nothing (or only whitespace) is "no URL", not the
+    empty-string URL "" -- returning "" would let resolve_site_url's `is not None` override
+    blank a site_url the main FQDN already supplied, the same defect as the fatal path.
+    No notice: nothing failed, so there is nothing to alert on (the report shows the
+    Main URL as "(unknown URL)" if no main FQDN supplies one either)."""
+    _install_fake(monkeypatch, gateway, version=(stdout, "", False))
+    ctx = _ctx(reset_sc)
+    assert wordpress_network_url(SITE, LIVE, ctx) == (None, "")
+    assert ctx["notices"] == []
 
 
 def test_network_url_stderr_becomes_smell(gateway, reset_sc, monkeypatch):

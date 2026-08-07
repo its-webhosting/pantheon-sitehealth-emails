@@ -49,7 +49,7 @@ and obtain support through either Pantheon or ITS
 === PANTHEON PLAN RECOMMENDATION
 
 Pantheon website name:     {{site_name}}
-Main URL:                  {{site_url}}
+Main URL:                  {%if site_url%}{{site_url}}{%else%}(unknown URL){%endif%}
 {% if months_until_recommendations == 0 %}
 Current plan:              {% if current_plan == recommended_plan %}✅{% elif current_plan_index > recommended_plan_index %}↘{% else %}↗{% endif %} {{current_plan}}
 Recommended plan:          {% if current_plan == recommended_plan %}✅{% else %}🎯{% endif %} {{recommended_plan}}
@@ -99,8 +99,8 @@ A chart showing Pantheon website traffic over time is available in the
 HTML version of this email.  The data is presented in list form, below.
 
 {{site_name}} Pantheon Traffic
-{{site_url}}
-
+{%if site_url%}{{site_url}}
+{%endif%}
 {% for row in traffic_table_rows %}
 {{traffic_table_rows[row]['month'] | upper}}{% for column in traffic_table_columns[1:] %}
   {{"{:>20}".format(column['label'])}}: {{"{:>25}".format(traffic_table_rows[row][column['name']]|striptags)}}{% endfor %}

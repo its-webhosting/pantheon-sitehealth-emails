@@ -221,9 +221,16 @@ def check_drupal_module(  # noqa: PLR0913 -- moved verbatim, signature unchanged
 def wordpress_network_url(site: dict, live_site: str, site_context) -> tuple[str | None, str]:
     """B32: fetch the WordPress-network home URL (wordpress_network sites only).
 
-    Returns (stripped URL | None, smell): None when the eval produced no string, the
-    smell being the probe's non-fatal stderr ("" when clean or fatal -- a fatal fetch
-    adds the wp_error notice to site_context instead, exactly the inline behavior).
+    Returns (stripped URL | None, smell): None when the eval was FATAL, produced no
+    string, or produced an empty/whitespace-only one, the smell being the probe's
+    non-fatal stderr ("" when clean or fatal -- a fatal fetch adds the wp_error notice
+    to site_context instead).
+
+    Every one of those is "no URL", NEVER the empty-string URL "": psh.cli.resolve_site_url
+    overrides site_url on `is not None`, so returning "" overwrites a perfectly good
+    https://{main_fqdn}/ with "" (README TO DO, fixed 2026-08-07).  The fatal case reaches
+    it because run_terminus yields "" there and `"".strip()` is a str; the successful-but-
+    empty case reaches it whenever network_home_url() itself comes back blank.
     """
     wp_smell = ""
     sc.console.print(
@@ -244,9 +251,9 @@ def wordpress_network_url(site: dict, live_site: str, site_context) -> tuple[str
     elif errors != "":
         wp_smell = errors
     sc.debug(f"{site['name']} WordPress network URL: {network_home_url}")
-    if isinstance(network_home_url, str):
-        return network_home_url.strip(), wp_smell
-    return None, wp_smell
+    if fatal or not isinstance(network_home_url, str):
+        return None, wp_smell
+    return network_home_url.strip() or None, wp_smell
 
 
 def gather_wordpress(site: dict, live_site: str, site_context) -> WordPressGather:  # noqa: C901, PLR0912 -- moved verbatim (CAMPAIGN.md section 3.1: moves get no algorithmic redesign)
