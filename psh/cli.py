@@ -425,12 +425,19 @@ class SiteDomains(NamedTuple):
     facts: dns_classify.DnsFacts  # all-empty when `domains` is not a dict
 
 
-def fetch_site_domains(live_site, site, site_name, site_context) -> SiteDomains | None:
+def fetch_site_domains(site: dict, live_site: str, site_context) -> SiteDomains | None:
     """B29: fetch the site's domains and classify them, verbatim from main().
 
     Returns None -- the SKIP SENTINEL -- on a fatal or undecodable domain:list; the caller
     does the `continue` (loop control stays in main(), D-i6-1 / SPEC R-G3).  The skip is
     never silent: it prints the ERROR line naming the site first (PD#1).
+
+    Parameter order and annotations match gather_framework(site, live_site, site_context)
+    and resolve_site_url on purpose: the three read as one stage in main() and a swapped
+    (site, live_site) pair is otherwise invisible to pyright.  There is no separate
+    site_name parameter -- main() binds `site = sites[site_name_to_id[site_name]]` from a
+    map keyed by `site["name"]`, so the two are the same string, and one identity per site
+    cannot be passed mismatched by a test.
 
     The set of Cloudflare-proxied FQDNs (fqdns.json) is fetched-or-loaded once, before the
     site loop, by the cloudflare plugin's update_and_load_proxied_fqdns setup hook; this
@@ -445,7 +452,7 @@ def fetch_site_domains(live_site, site, site_name, site_context) -> SiteDomains 
     domains, errors, fatal = terminus("domain:list", live_site)
     if fatal or domains is None:
         sc.console.print(
-            f":exclamation: [bold red] ERROR: could not fetch domains for {site_name}: {escape(errors)}"
+            f":exclamation: [bold red] ERROR: could not fetch domains for {site['name']}: {escape(errors)}"
         )
         return None
     if sc.options.verbose:
@@ -476,7 +483,7 @@ class SiteUrlFacts(NamedTuple):
     drush_smell: str   # "" = no NEW smell -- a delta, merged by main()
 
 
-def resolve_site_url(site, live_site, site_context, facts) -> SiteUrlFacts:
+def resolve_site_url(site: dict, live_site: str, site_context, facts) -> SiteUrlFacts:
     """B30 (residue) + B31's site_url derivation + B32 (residue): the post-site_post_dns half
     of the domains stage, verbatim from main().  Never returns None -- this region has no
     skip path.
@@ -825,7 +832,8 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             stuff_traffic_contract(site_context, results, start_date, end_date)
             sc.invoke_hooks("site_post_traffic", site_context)
 
-            fetched = fetch_site_domains(live_site, site, site_name, site_context)
+            # Not a pure fetch: also emits the `no-domains` alert into site_context.
+            fetched = fetch_site_domains(site, live_site, site_context)
             if fetched is None:
                 continue  # fatal/undecodable domain:list -- skip this site (D-i6-1)
             domains, facts = fetched
@@ -836,6 +844,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             dns_classify.stuff_dns_contract(site_context, domains, facts)
             sc.invoke_hooks("site_post_dns", site_context)
 
+            # Not a pure derivation: also emits the `no-primary-domain` notice into
+            # site_context.  MUST stay below the site_post_dns phase -- it reads the
+            # drupal_multisite / drupal_multisite_smell keys check.drupal.multisite produces
+            # there (pinned by tests/integration/test_regressions.py).
             url_facts = resolve_site_url(site, live_site, site_context, facts)
             site_url = url_facts.site_url
             # Smell merges stay in main() (D-i9-2/D-i10-2): a returned "" means "no NEW smell",
@@ -876,7 +888,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
                 results, start_date, end_date, site_current_plan, site_name
             )
             # Unpacked into the pre-existing local names on purpose: the db_retry lambda below
-            # carries six per-line `# noqa: B023` suppressions keyed to these exact names.
+            # carries six per-line B023 suppressions keyed to these exact names.  Named as
+            # bare "B023" on purpose: ruff scans EVERY comment for a suppression directive,
+            # so writing the full form here (even as prose, even in backticks) makes it warn
+            # "Invalid ... directive" on every gate run and every edit-time hook run.
             visits_by_month = window.visits_by_month
             plan_on_day = window.plan_on_day
             plan_over_time = window.plan_over_time

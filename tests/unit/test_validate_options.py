@@ -7,7 +7,7 @@ sc.options via `reset_sc.options = psh.parse_args([...])` and sc.config via
 exact idiom tests/unit/test_argparse_contract.py already uses for sc.smtp_username().
 
 Three of the four guards were previously reachable only through a full subprocess boot
-via run_program (tests/integration/test_argparse_contract.py's "main()-level validation"
+via run_program (tests/unit/test_argparse_contract.py's "main()-level validation"
 section, which stays -- it still exercises the same code through main(), now delegating
 to this function). The fourth -- --update-cloudflare-fqdns without [Cloudflare].enabled --
 had NO coverage at any tier before this file: no exit message for it appears anywhere

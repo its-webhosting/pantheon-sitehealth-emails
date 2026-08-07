@@ -11,6 +11,7 @@ which crashed on the pre-fix code.
 """
 import importlib.util
 import inspect
+import re
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
@@ -94,3 +95,73 @@ def test_site_notices_are_recorded_before_the_email_is_sent(psh):
     # raising ValueError on that miss reads like a harness bug, not a signal that the send moved.
     send = source.index("smtp_login()")
     assert append < send, "the notices append must precede the SMTP send"
+
+
+# ── The composition glue main() kept after the 2026-08-07 main-extraction increment ──────
+#
+# The six extracted helpers each carry their own tests.  What no test reached was the WIRING
+# main() kept between them, and two of the increment's own global invariants (SPEC
+# development/2026-08-07-main-extraction/SPEC.md R-G5 and resolve_site_url's docstring) live
+# only there.  Both were measured green under violation on the shipped branch: collapsing the
+# smell merges to unconditional assignment, and hoisting resolve_site_url above the
+# site_post_dns phase, each left all 1818 tests passing.
+#
+# Same idiom and same justification as test_site_notices_are_recorded_before_the_email_is_sent
+# above: main() has no in-process caller (the subprocess interlock bans --all/--for-real, and
+# no golden site is a Drupal multisite or a wordpress_network), so the ORDER and the SHAPE of
+# the glue are what get pinned.  These are source assertions on purpose; PD#14 -- they were
+# each shown red by re-running the two injections before being committed.
+
+
+def test_resolve_site_url_runs_after_the_site_post_dns_phase(psh):
+    # resolve_site_url reads site_context["drupal_multisite_smell"] and ["drupal_multisite"],
+    # which check/drupal/multisite.py PRODUCES in the site_post_dns phase.  Called before the
+    # phase fires, both .get() reads return their defaults: the multisite probe's drush_smell
+    # is lost (nobody learns the site emits PHP notices) AND no_primary_domain_notice's
+    # multisite suppression stops working, so a multisite with several custom domains and no
+    # primary is told to set one -- exactly what check/drupal/multisite.py exists to prevent.
+    #
+    # Before the extraction this was structural: 25 lines physically below the phase firing.
+    # It is now a single call, so the constraint is a one-line move away from being violated.
+    source = inspect.getsource(psh.main)
+    phase = 'sc.invoke_hooks("site_post_dns"'
+    call = "resolve_site_url("
+    assert source.count(phase) == 1, "expected exactly one site_post_dns phase firing in main()"
+    assert source.count(call) == 1, "expected exactly one resolve_site_url() call in main()"
+    assert source.index(phase) < source.index(call), (
+        "resolve_site_url() must run AFTER sc.invoke_hooks('site_post_dns') -- it reads the "
+        "hook-produced drupal_multisite_smell / drupal_multisite keys that phase publishes"
+    )
+
+
+@pytest.mark.parametrize(
+    ("owner", "smell"),
+    [
+        ("url_facts", "wp_smell"),
+        ("url_facts", "drush_smell"),
+        ("gather", "wp_smell"),
+        ("gather", "drush_smell"),
+        ("gather", "composer_smell"),
+    ],
+)
+def test_each_smell_merge_stays_guarded(psh, owner, smell):
+    # SPEC R-G5 / psh/gather.py's module docstring: a returned smell is a DELTA -- "" means
+    # "no NEW smell", NEVER "clear the previous one".  Collapsing any of these five to an
+    # unconditional `x = <owner>.x` clears a smell an earlier stage recorded.  Concretely: a
+    # Drupal multisite whose drush php probe emits a PHP deprecation on stderr (drush_smell
+    # set by resolve_site_url) and whose pm:list/composer calls are clean (gather.drush_smell
+    # == "") loses the smell, stuff_gather_contract publishes drush_smell="",
+    # build_smell_notices emits nothing, and nobody learns the site emits PHP notices.
+    # Invisible to all four goldens (PD#1 -- a failure that can happen silently).
+    source = inspect.getsource(psh.main)
+    guard = f'if {owner}.{smell} != "":'
+    assignment = f"{smell} = {owner}.{smell}"
+    assert source.count(guard) == 1, f"expected exactly one `{guard}` merge guard in main()"
+    assert source.count(assignment) == 1, (
+        f"expected exactly one `{assignment}`; a second one outside the guard would defeat "
+        f"the delta rule even with the guard still present"
+    )
+    assert re.search(re.escape(guard) + r"\n\s+" + re.escape(assignment), source), (
+        f"`{assignment}` must sit directly inside `{guard}` -- an unconditional assignment "
+        f"turns the delta into a clear-the-previous-smell overwrite (SPEC R-G5)"
+    )

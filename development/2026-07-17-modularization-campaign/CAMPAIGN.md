@@ -175,9 +175,11 @@ leaves. Target: 250–400 lines.
 **Amendments A1–A5 + status (2026-08-07, post-campaign).** The campaign closed at I14d
 with `main()` at 622 raw / 445 logic, above the target — a recorded deviation
 (`CLOSING-AUDIT.md` Q1) whose remainder became post-campaign TODO **D-i14d-1**. That TODO
-was discharged on 2026-08-07 by the eight-commit **main-extraction increment**
-(`development/2026-08-07-main-extraction/SPEC.md`; commits `5f58192`, `284a8f9`,
-`b106f80`, `9f44959`, `51cf48a`, `d5063dd`, `c47807b`, `ecae81a`), which moved six stage
+was discharged on 2026-08-07 by the **main-extraction increment**
+(`development/2026-08-07-main-extraction/SPEC.md`) — **eight code+spec commits** (`5f58192`,
+`284a8f9`, `b106f80`, `9f44959`, `51cf48a`, `d5063dd`, `c47807b`, `ecae81a`) **plus the
+documentation commits that amend these campaign records** (`0d749ce`, `f069f70`, and the
+final-review fix wave that followed them) — which moved six stage
 *bodies* out of `main()` while the four e2e goldens stayed byte-identical. **The
 architecture above is unchanged** — no module boundary, phase, contract key, or invariant
 moved; what changed is which block *residues* are still inside `main()`. The rows below

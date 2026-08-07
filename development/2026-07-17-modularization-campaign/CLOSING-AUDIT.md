@@ -66,9 +66,11 @@ make are listed in CAMPAIGN.md §3.3 A1–A5 and in LEDGER "Amendments — §3.3
 (2026-08-07, post-campaign)".)
 
 **1. D-i14d-1 is DISCHARGED, and the "NO on the line count" answer is superseded.** The
-2026-08-07 main-extraction increment (`development/2026-08-07-main-extraction/SPEC.md`;
-commits `5f58192`, `284a8f9`, `b106f80`, `9f44959`, `51cf48a`, `d5063dd`, `c47807b`,
-`ecae81a`) moved six stage bodies out of `main()`, goldens byte-identical. Re-measured with
+2026-08-07 main-extraction increment (`development/2026-08-07-main-extraction/SPEC.md`) —
+**eight code+spec commits** (`5f58192`, `284a8f9`, `b106f80`, `9f44959`, `51cf48a`,
+`d5063dd`, `c47807b`, `ecae81a`) **plus the documentation commits that amend these campaign
+records** (`0d749ce`, `f069f70`, and the final-review fix wave that followed them) — moved
+six stage bodies out of `main()`, goldens byte-identical. Re-measured with
 this section's own snippet, on the post-increment tree:
 
 ```

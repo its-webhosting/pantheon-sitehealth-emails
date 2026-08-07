@@ -584,8 +584,10 @@ their shadowing order — see **Resuming an interrupted `--all` run**), `resolve
   performs the `"-"` → `None` normalization **mutating the config sub-dict in place**, so
   `main()`'s `plan_info`/`plan_names` aliases and the chart/annual-billing regions keep reading
   the same object — a copy would fork two views of one config); `resolve_plan_name(site)` (the
-  Elite-SKU lookup — `None` on a transient Terminus failure so `main()` can `continue`,
-  `sys.exit` preserved on a missing/unknown SKU); `resolve_site_plan(site, plan_names) -> str |
+  Elite-SKU lookup — `None` on a transient Terminus failure, which its **only** caller
+  `resolve_site_plan` passes straight through as its own skip sentinel for `main()` to
+  `continue` on; `sys.exit` preserved on a missing/unknown SKU); `resolve_site_plan(site,
+  plan_names) -> str |
   None` (the caller-side wrapper around it: the SKU resolution, the `site["plan_name"]`
   **in-place** write-back, the Sandbox skip and the unknown-plan `sys.exit("Bailing out.")`
   postcondition. `None` is the **skip sentinel** for *two* conditions — a transient `plan:info`
@@ -599,14 +601,17 @@ their shadowing order — see **Resuming an interrupted `--all` run**), `resolve
   recommended-WordPress-plugin notice builder the papc/sessions/cloudflare_cms hooks call via
   `sc.check_wordpress_plugin`), `wordpress_network_url`, and `gather_wordpress` (version /
   plugin-list / theme-list fetches, add-on-update collection plugins-then-themes in list order,
-  the must-use diagnostic print) returning a **`WordPressGather`** NamedTuple that `main()`
-  threads into its locals with last-wins overwrite semantics (a later empty smell never clears
-  an earlier one). Drupal: `check_drupal_module` (the recommended-module notice builder the
+  the must-use diagnostic print) returning a **`WordPressGather`** NamedTuple that
+  `gather_framework` (below) — **not** `main()` — threads into its branch locals; the
+  last-wins-but-never-clearing semantics (a later empty smell never clears an earlier one)
+  are `main()`'s, applied to the `FrameworkGather` smell *deltas* `gather_framework` returns.
+  Drupal: `check_drupal_module` (the recommended-module notice builder the
   Drupal siblings call via `sc.check_drupal_module`), `gather_drupal` (banner + core-status
   fetch + version derivation + `site_results` entry, pm:list, and the D7 pm:updatestatus **or**
   D8+ composer dry-run + composer audit add-on collection — the D7-vs-D8+ branch stays inside
   because it selects between two *gather* strategies, not between checks) returning a
-  **`DrupalGather`** NamedTuple threaded last-wins like the WP branch, and `build_smell_notices`
+  **`DrupalGather`** NamedTuple threaded by `gather_framework` like the WP branch, and
+  `build_smell_notices`
   (the smell-notice *builder*; **its emission stays in `main()`** because it summarizes
   end-of-phase smell state no hook position can guarantee and must stay behind the `--only-warn`
   gate). The `wp_error`/`drush_error` notices for *failed gathers* stay with the fetches (they
@@ -872,6 +877,23 @@ concrete failures, neither visible to any of the four goldens:
 `site_id` stays in `main()` for the same class of reason: it is read ~230 lines after it is
 bound. This rule is prose, not an instrument — it is a queued question whether an AST assertion
 over `main()`'s source can make it red-capable.
+
+**The composition glue `main()` kept between the stage helpers has its own instruments, in
+`tests/integration/test_regressions.py`.** Each helper's internals are well covered; the *wiring*
+was not, and two invariants live only there. Measured on the branch that introduced them, both
+violations left the whole suite green: collapsing a smell merge to an unconditional
+`wp_smell = gather.wp_smell`, and hoisting the `resolve_site_url(...)` call above
+`sc.invoke_hooks("site_post_dns", …)`. Both are now pinned by `inspect.getsource(psh.main)`
+assertions — the same idiom and the same justification as
+`test_site_notices_are_recorded_before_the_email_is_sent` in that file: `main()` has no
+in-process caller (the subprocess interlock bans `--all`/`--for-real`) and no golden site is a
+Drupal multisite or a `wordpress_network`, so the **order** and the **shape** are what can be
+pinned. `test_resolve_site_url_runs_after_the_site_post_dns_phase` covers the ordering (the
+helper reads the `drupal_multisite`/`drupal_multisite_smell` keys `check.drupal.multisite`
+produces in that phase; run early, the multisite smell is lost *and* the `no-primary-domain`
+suppression stops working); `test_each_smell_merge_stays_guarded` covers all five merges. Before
+the extraction the ordering was structural — 25 lines physically below the phase firing — and it
+is now one line away from being violated.
 
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
   `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
@@ -1289,8 +1311,11 @@ Non-obvious things the harness relies on:
 - **Pure-helper seam.** Pure functions extracted from `main()` as module-level defs so they're
   importable as `psh.<fn>` (the `psh` fixture is the `psh.cli` module, which re-imports them) and
   unit/property tested: `overage_blocks`, `contract_year_end`, `plan_costs` (the cost model —
-  DB-free via an injected `op_lookup(month)`), and `build_plan_over_time` (returns `[]` for zero
-  traffic; `main()` guards the empty case and skips the plan sections) live in `psh/plans.py`.
+  DB-free via an injected `op_lookup(month)`), and `build_plan_over_time` (returns `[]` for an
+  empty `plan_on_day`; its only production caller is `psh.traffic.build_traffic_window` — **not**
+  `main()`, since `b106f80` — and the guard is that helper's synthetic zero-traffic seed, which
+  makes `plan_on_day` never empty and so `plan_over_time[0]` never an `IndexError`, pinned by
+  `tests/unit/test_traffic_window.py`) live in `psh/plans.py`.
   Also extracted: `load_news_items`, and `sites_from_resume_point`/`merge_prior_results` (the
   `--resume-from` logic, which cannot be reached through the `--all`-banned subprocess interlock
   and so is only testable in-process). `estimate_month_visits` and `build_traffic_table_rows` live

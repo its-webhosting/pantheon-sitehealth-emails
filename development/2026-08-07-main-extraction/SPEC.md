@@ -1433,15 +1433,19 @@ were found by adversarial review of the committed baseline and are fixed above.
 
 ### 10a (continued). Corrections to the COMMITTED spec, found during implementation
 
-Two defects in the *committed* text above were found by Tasks 3-6 and are corrected here
-rather than by rewriting the sections that carry them, so the record of what the
-implementers were handed stays intact. Both are in §5.3/§8.3 — the extraction the spec
-itself calls *"the single highest-risk paragraph in the increment."*
+Three defects in the *committed* text above were found by Tasks 3-6 and by the final
+whole-branch review, and are corrected here rather than by rewriting the sections that
+carry them, so the record of what the implementers were handed stays intact. Rows **m**
+and **n** are in §5.3/§8.3 — the extraction the spec itself calls *"the single
+highest-risk paragraph in the increment."* Row **o** is in §5.1, the extraction the spec
+called *"the cheapest correct start"*, and is the one that shipped a ruff warning into
+every gate run.
 
 | # | The committed spec said | Truth (measured on the shipped code) | Where |
 |---|---|---|---|
 | m | §5.3's frame table, row 3: after R3.6d, `no_domains_notice` has `Notice(` at column **8** and `html=` at **12**, so the interior lines sit "4 *more* than the keyword". | **Unreachable as written.** Those columns require a single `if` in the function body — but R3.6b *requires* the two `if`s stay nested with the `# noqa: SIM102`. The shipped frame is `def` body 4 → `if isinstance` 4 → `if len(...)` 8 → `return Notice(` **12** → `html=` **16** → interior **16**, i.e. the interior is at the **same** column as the keyword, not 4 more. Only the third column of that row was ever normative and it is correct: **interior at 16, absolutely** (`psh/cli.py:360-377`, `tests/unit/test_no_domains_notice.py::test_the_literal_interior_stays_at_column_16`). |
 | n | §8.3's prescribed Invariant-8 assertion, `assert all(line.startswith(" " * 16) for line in body.splitlines()[1:] if line.strip())`. | **The prescribed instrument is weak and would have shipped green against the defect it exists to catch:** `startswith(" " * 16)` is satisfied by **17** spaces, so every over-indent — the exact failure a reformatter produces — passes it (PD#14: *"A green check is a claim, not evidence, until it has been shown capable of going red on the condition it guards."*). Task 3 shipped the stronger form instead: `indent == 16` per interior line, plus `lines[0] == ""` and `lines[-1] == " " * 16` (the closing quote's own line is golden-carried whitespace too). **This was a silent-but-correct deviation** — the task strengthened a spec-prescribed assertion without flagging it; recorded here so the deviation is not silent, per `prompts/implementation-standards.md` § Deviation discipline. |
+| o | §5.1's "What `main()` keeps" block prescribes the comment *"carries six per-line `` `# noqa: B023` `` suppressions keyed to these exact names"*, and §5.1 R1.4 uses the same string in prose. | **The prescribed comment makes ruff warn on every gate run.** ruff scans *every* comment for a `# noqa:` sequence, so the prose reference is parsed as a malformed directive: `warning: Invalid `# noqa` directive on psh/cli.py:879: expected code to consist of uppercase letters followed by digits only`. Task 1 (`b106f80`) shipped it verbatim as prescribed, and it was then **mis-triaged as pre-existing** in `LEDGER.md`'s discovered-task 5 — measured false at `c01e77b` (0 warnings) vs. `b106f80` (1). The shipped comment now reads `carries six per-line B023 suppressions …` (no `# noqa:` prefix, no backticks). Corrected here rather than by rewriting §5.1, so the record of what Task 1's implementer was handed stays intact. PD#14: *"A test, golden, fixture, shim, counter, log line, or metric is code, and can be silently wrong."* |
 
 ---
 

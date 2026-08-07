@@ -2446,12 +2446,32 @@ each new instrument red-capable by fault injection.
   4. `tests/integration/test_site_domains.py::test_an_undecodable_payload_returns_the_skip_sentinel`
      asserts the skip sentinel but **not** the operator console message its sibling asserts
      (PD#1 — the message is the visible half of the failure). Small, additive; deferred.
-  5. **A pre-existing ruff warning fires on every gate run**: *"Invalid `# noqa` directive
-     on `psh/cli.py:879`: expected code to consist of uppercase letters followed by digits
+  5. **A ruff warning fires on every gate run**: *"Invalid `# noqa` directive on
+     `psh/cli.py:879`: expected code to consist of uppercase letters followed by digits
      only"* — the prose `# noqa: B023` *reference* inside an explanatory comment, which ruff
-     parses as a directive. It was at `:748` before this increment and is not this
-     increment's; it is noise on every `./run-tests` and every edit-time hook run, and the
-     fix is one word of comment rewording.
+     parses as a directive. It is noise on every `./run-tests` and every edit-time hook run,
+     and the fix is one word of comment rewording. **CORRECTED, and FIXED in the
+     final-review fix wave: this warning was NOT pre-existing — Task 1 (`b106f80`)
+     introduced it**, in the very comment SPEC §5.1's "What `main()` keeps" block
+     prescribed. Measured:
+
+     ```
+     $ git show c01e77b:psh/cli.py > /tmp/c.py && uvx ruff@0.15.22 check --isolated \
+         --select F401 /tmp/c.py 2>&1 | grep -c -i invalid
+     0                     # base: no such warning
+     $ git show b106f80:psh/cli.py > /tmp/c.py && uvx ruff@0.15.22 check --isolated \
+         --select F401 /tmp/c.py 2>&1 | grep -c -i invalid
+     1                     # Task 1's commit: introduced here
+     ```
+
+     The "it was at `:748` before this increment" claim above was the mis-triage's own
+     tell: base `psh/cli.py:748` is `composer_smell = gather.composer_smell`, a line
+     *inside* the increment's own edit region and not a comment at all. Left in place
+     rather than deleted (this ledger is append-only) because the correction is the
+     record: **a discovered-task triage is an instrument, and it was silently wrong**
+     (PD#14). The comment now reads `carries six per-line B023 suppressions …` — no
+     `# noqa:` prefix, no backticks — and `uvx ruff@0.15.22 check --force-exclude psh/
+     check/ plugin/ tests/` emits `All checks passed!` with no warning line.
 
 - **Open questions for a future increment:** SPEC §11's four closing-audit questions are
   the queue — (1) does every new helper have a test that reaches it independently of
@@ -2460,6 +2480,44 @@ each new instrument red-capable by fault injection.
   locals-groups now objects, does D-i12-2's *"a ~25-parameter function"* objection to
   extracting `template_dict` still hold; (4) is `main()`'s 454/318 remainder all stay-list
   content. (4) is answered in CLOSING-AUDIT.md Q1's correction; (1)-(3) are open.
+
+- **Final-review fix wave (2026-08-07, one commit after `f069f70`).** The whole-branch
+  review returned two Important and six Minor findings, all fixed in one wave. **No
+  behavior changed and the four e2e goldens stayed byte-identical** (`--update-goldens`
+  and `--record` were never run). What landed:
+
+  1. **The ruff warning above (discovered task 5) was mis-triaged and is now fixed** — see
+     the correction inline there.
+  2. **The composition glue `main()` kept between the six helpers got its first
+     instruments.** Each helper's own invariants were well pinned; the *wiring* was not,
+     and two of the increment's own global invariants (SPEC R-G5, and `resolve_site_url`'s
+     "runs AFTER `sc.invoke_hooks("site_post_dns")`" docstring) lived only there. **Both
+     were measured provable-green under violation**: collapsing the post-gather smell
+     merges to unconditional assignment left `1821 passed` (every pre-existing test), and
+     hoisting `resolve_site_url` above the phase likewise. Two new
+     `tests/integration/test_regressions.py` assertions over `inspect.getsource(psh.main)`
+     — the same idiom and justification as
+     `test_site_notices_are_recorded_before_the_email_is_sent` — now go red on each. The
+     ordering constraint is **new in kind**: before `51cf48a` it was structural (25 lines
+     physically below the phase firing) and is now a one-line move away from violation.
+     This partly answers SPEC §11 question (2): an AST/source assertion over `main()` *is*
+     red-capable for an ordering invariant. R-G4 itself remains prose.
+  3. **Six minor corrections**, all record-accuracy: `fetch_site_domains` normalized to
+     `(site, live_site, site_context)` with `site: dict, live_site: str` annotations
+     matching `gather_framework`/`resolve_site_url` (it was the only one taking
+     `live_site` first, and the only one pyright could not catch a swap in) and its
+     redundant `site_name` parameter dropped (`site["name"] == site_name` provably, since
+     `main()` binds `site = sites[site_name_to_id[site_name]]` from a map keyed by
+     `site["name"]`); a call-site comment at each of `fetch_site_domains` /
+     `resolve_site_url` naming the notice it emits, since neither name says so; an
+     unresolvable path in `tests/unit/test_validate_options.py`'s docstring; the
+     "eight-commit" description of this ten-commit increment in CAMPAIGN.md §3.3 and
+     CLOSING-AUDIT.md; and **three** CLAUDE.md sentences still routing a moved call
+     through `main()` (`resolve_plan_name`'s caller is `resolve_site_plan`;
+     `WordPressGather`/`DrupalGather` are threaded by `gather_framework`;
+     `build_plan_over_time`'s caller is `build_traffic_window`). The review found one of
+     those three and asserted it was the last; re-sweeping found the other two — the drift
+     class is stickier than a single sweep suggests.
 
 ## Amendments — §3.3 stay-list (2026-08-07, post-campaign; applied to CAMPAIGN.md by the entry above)
 

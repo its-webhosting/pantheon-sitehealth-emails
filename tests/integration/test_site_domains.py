@@ -75,7 +75,7 @@ def test_a_dict_payload_returns_the_raw_domains_and_the_classified_facts(
     patch_resolve(monkeypatch, ZONE)
     _terminus_returning(monkeypatch, gateway, json.dumps(WITH_CUSTOM))
     ctx = _ctx(reset_sc)
-    fetched = psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], ctx)
+    fetched = psh.cli.fetch_site_domains(SITE, LIVE, ctx)
     assert fetched is not None
     domains, facts = fetched
     assert domains == WITH_CUSTOM          # the RAW payload, not the facts
@@ -92,7 +92,7 @@ def test_a_fatal_domain_list_returns_the_skip_sentinel_and_names_the_site(
     console = recording_console(monkeypatch, reset_sc, width=80)
     _terminus_returning(monkeypatch, gateway, "", stderr="boom", fatal=True)
     ctx = _ctx(reset_sc)
-    assert psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], ctx) is None
+    assert psh.cli.fetch_site_domains(SITE, LIVE, ctx) is None
     # PD#1: the skip must be visible to the operator, not silent.  main() does the continue.
     assert "could not fetch domains for its-wws-test1" in console.export_text()
 
@@ -102,14 +102,14 @@ def test_an_undecodable_payload_returns_the_skip_sentinel(gateway, reset_sc, mon
     # `domains is None` half of the guard is the only thing that catches this.
     _terminus_returning(monkeypatch, gateway, "not json at all")
     ctx = _ctx(reset_sc)
-    assert psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], ctx) is None
+    assert psh.cli.fetch_site_domains(SITE, LIVE, ctx) is None
 
 
 # ── fetch_site_domains: the no-domains alert (R3.7 shadow paths) ─────────────────────
 def test_a_paid_site_with_no_custom_domains_gets_the_alert(gateway, reset_sc, monkeypatch):
     _terminus_returning(monkeypatch, gateway, json.dumps(PLATFORM_ONLY))
     ctx = _ctx(reset_sc)
-    fetched = psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], ctx)
+    fetched = psh.cli.fetch_site_domains(SITE, LIVE, ctx)
     assert fetched is not None
     assert fetched.facts.custom_domains == []
     assert [n["csv"] for n in ctx["notices"]] == ["its-wws-test1,no-domains"]
@@ -119,7 +119,7 @@ def test_an_empty_dict_payload_gets_the_alert(gateway, reset_sc, monkeypatch):
     # PD#3 empty-input shadow: {} is a dict, so the guard passes and the alert fires.
     _terminus_returning(monkeypatch, gateway, json.dumps({}))
     ctx = _ctx(reset_sc)
-    fetched = psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], ctx)
+    fetched = psh.cli.fetch_site_domains(SITE, LIVE, ctx)
     assert fetched is not None
     assert fetched.domains == {}
     assert [n["csv"] for n in ctx["notices"]] == ["its-wws-test1,no-domains"]
@@ -131,7 +131,7 @@ def test_a_non_dict_payload_is_returned_but_raises_no_alert(gateway, reset_sc, m
     # that stops a false "downgrade your plan" ALERT reaching the owner.
     _terminus_returning(monkeypatch, gateway, json.dumps(["www.example.com"]))
     ctx = _ctx(reset_sc)
-    fetched = psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], ctx)
+    fetched = psh.cli.fetch_site_domains(SITE, LIVE, ctx)
     assert fetched is not None
     assert fetched.domains == ["www.example.com"]
     assert fetched.facts.custom_domains == []   # all-empty DnsFacts for a non-dict payload
@@ -162,7 +162,7 @@ def test_the_cloudflare_gate_is_read_through_psh_cli_s_own_binding(
     }
     patch_resolve(monkeypatch, ZONE)
     _terminus_returning(monkeypatch, gateway, json.dumps(WITH_CUSTOM))
-    fetched = psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], _ctx(reset_sc))
+    fetched = psh.cli.fetch_site_domains(SITE, LIVE, _ctx(reset_sc))
     assert calls == ["cf"]
     assert fetched is not None
     # 203.0.113.10 is inside the net above and the FQDN is proxied -> behind Cloudflare.
@@ -178,7 +178,7 @@ def test_the_plugin_context_bag_is_never_read_when_the_gate_is_off(
     monkeypatch.setattr(psh.cli, "cloudflare_enabled", lambda: False)
     patch_resolve(monkeypatch, ZONE)
     _terminus_returning(monkeypatch, gateway, json.dumps(WITH_CUSTOM))
-    fetched = psh.cli.fetch_site_domains(LIVE, SITE, SITE["name"], _ctx(reset_sc))
+    fetched = psh.cli.fetch_site_domains(SITE, LIVE, _ctx(reset_sc))
     assert fetched is not None
     assert fetched.facts.fqdns_behind_cloudflare == []
 
