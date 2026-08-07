@@ -2353,3 +2353,186 @@ and `-- '*.ambr'` both empty).
   repoint tests off the `psh.<name>` re-export surface; the `mutates` hook declaration). The
   campaign is **complete**: CAMPAIGN.md carries its `**Completed:**` status line, the closing
   audit and retrospective are written, and the ledger is fully resolved.
+
+## 2026-08-07 — post-campaign: six stage bodies out of `main()` (commits `5f58192`…`ecae81a` + this docs commit)
+
+**Not `I<N>`-numbered: the campaign is closed.** CAMPAIGN.md has carried its
+`**Completed:** 2026-07-24 at I14d` line since I14d, and this increment neither reopens it
+nor adds an increment to it. It is recorded here because it discharges a campaign artifact
+(post-campaign TODO **D-i14d-1**, CLOSING-AUDIT.md Q1) and because it amends CAMPAIGN.md
+§3.3, which by that document's preamble *requires* a ledger entry. Spec:
+`development/2026-08-07-main-extraction/SPEC.md` (which cites CAMPAIGN.md by section and
+re-derives nothing, per §12's protocol). Run through
+`superpowers:subagent-driven-development` under `prompts/implementation-standards.md`: one
+implementer per task, each adversarially reviewed by a separate fresh-context agent that
+re-ran the suite, byte-diffed the moved code against its pre-extraction source, and proved
+each new instrument red-capable by fault injection.
+
+- **Moved** (six extractions, one commit each, all behavior-preserving; block IDs per
+  `BLOCKMAP.md`):
+
+  | Commit | Extraction | Blocks | From → to |
+  |---|---|---|---|
+  | `b106f80` | `build_traffic_window` + `TrafficWindow` | B43, B44 (residue) | `main()` → `psh/traffic.py` |
+  | `9f44959` | `gather_framework` + `FrameworkGather` | B33, B34 (residue), B35 (residue), B36 | `main()` → `psh/gather.py` |
+  | `51cf48a` | `no_domains_notice`, `fetch_site_domains` + `SiteDomains`, `resolve_site_url` + `SiteUrlFacts` | B29, B30 (residue), B32 (residue), B31's `site_url` derivation | `main()` → `psh/cli.py` |
+  | `d5063dd` | `resolve_site_roster` + `SiteRoster` | B14 (roster half) | `main()` → `psh/cli.py` |
+  | `c47807b` | `resolve_site_plan` | B17 (residue), B18's Sandbox skip, B20 | `main()` → `psh/plans.py` |
+  | `ecae81a` | `validate_options` | B5 (guard bodies) | `main()` → `psh/cli.py` |
+
+  `5f58192` + `284a8f9` are the SPEC and its review-fix round. **`main()`: 622 raw / 445
+  logic → 454 raw / 318 logic** (`psh/cli.py:618-1071`), re-measured with CLOSING-AUDIT.md
+  Q1's AST snippet on the post-increment tree — **inside §3.3's 250–400 target on the logic
+  measure**, which is what discharges D-i14d-1.
+
+- **Deviations from CAMPAIGN.md:** **five §3.3 stay-list amendments**, all applied to
+  CAMPAIGN.md in this same commit and ledgered in the entry immediately below (A1 B5, A2
+  B14, A3 B17, A4 B18-split + B20, A5 B31-narrowed). Nothing else: no module boundary,
+  phase, hook, contract key, invariant, or §8 behavior surface changed. Two spec-level
+  deviations, both recorded in the increment SPEC rather than applied silently: extraction 3
+  gained a **third** function (`no_domains_notice`, SPEC §10 item 6 — the pure builder that
+  makes the Invariant-8 assertion writable at all), and Task 3 **strengthened** SPEC §8.3's
+  prescribed assertion (SPEC §10a row n).
+
+- **Contract/config/`sc` additions:** **none.** No new contract key, no config key, no new
+  `sc` façade name. The four e2e goldens and all 107 `.ambr` snapshots stayed
+  **byte-identical** through all six commits — the increment's central gate, never once
+  refreshed (`--update-goldens` was never run; Invariant 1).
+
+- **Tests: 1743 → 1818 passed** (3 skipped, 107 snapshots), **+75 across 7 new files** —
+  `tests/unit/test_traffic_window.py` (5), `tests/unit/test_no_domains_notice.py` (11),
+  `tests/unit/test_validate_options.py` (14), `tests/integration/test_gather_framework.py`
+  (12), `tests/integration/test_site_domains.py` (19),
+  `tests/integration/test_site_roster.py` (7),
+  `tests/integration/test_resolve_site_plan.py` (7). 5+11+14+12+19+7+7 = 75; no unexplained
+  delta. Several regions got their **first** test at any tier: the `no_domains_notice`
+  non-dict-payload guard, `site_count`-before-the-resume-filter, the
+  `--update-cloudflare-fqdns` guard, the zero-traffic `plan_on_day` synthetic seed, and
+  `gather_framework`'s unknown-framework branch. `gather_framework` also carries the first
+  **mechanical** check of CAMPAIGN.md §3.4's parallel-ready criterion (it runs with no
+  `sc.run_state` bound at all), which was a review criterion and nothing else for the whole
+  campaign.
+
+- **New rule, R-G4 (recorded in CLAUDE.md):** no extracted helper may be the sole assigner
+  of `site_name` or `site_emailed`. Both are read by the `except BaseException` handler
+  ~450 lines away; a helper owning the per-iteration `site_emailed = False` reset would let
+  `abort_run(..., emailed=True)` advance the resume point **past** a site that never got its
+  email, and drop that site's `site_results` cleanup — invisible to all four goldens
+  (PD#1). The two bindings three characters apart (`psh/cli.py`'s pre-loop binding vs. the
+  per-iteration reset) are the concrete trap.
+
+- **Discovered tasks (dispositions):**
+  1. **A pre-existing defect, pinned but NOT fixed → README TODO** (added this commit): for
+     a `wordpress_network` site whose `network_home_url` eval is **fatal**,
+     `wordpress_network_url` (`psh/gather.py:246-249`) returns `("", "")` rather than
+     `(None, "")` — `run_terminus` yields `""` and `"".strip()` is a `str` — so
+     `resolve_site_url`'s `if network_url is not None:` overwrites a good
+     `https://{main_fqdn}/` with `""` and the report renders with an empty `site_url`.
+     Verified pre-existing at base commit `9f44959`; today's behavior is pinned by
+     `tests/integration/test_site_domains.py::test_a_fatal_network_url_fetch_blanks_the_site_url_and_notices_the_failure`.
+     Not fixed here: this increment is behavior-preserving, and the fix changes a rendered
+     email.
+  2. **The orphaned pathlib deferral → README TODO** (added this commit): four `noqa`
+     comments in `main()` (`psh/cli.py:621, 660, 661, 693`) say *"pathlib migration is
+     I14b+"*, but I14b's ledger entry never touched PTH and neither README.md nor CLAUDE.md
+     mentioned it. PD#9 — a deferral nobody can find is a vague intention.
+  3. **A decorative `monkeypatch`** in
+     `tests/integration/test_site_domains.py::test_the_plugin_context_bag_is_never_read_when_the_gate_is_off`:
+     the test stays green with the patch removed, because the real `cloudflare_enabled()` is
+     already falsy under the test config. **Not a coverage hole** — its sibling is a
+     verified S5 instrument — but it reads as double-covering the seam. Triage in a later
+     test pass.
+  4. `tests/integration/test_site_domains.py::test_an_undecodable_payload_returns_the_skip_sentinel`
+     asserts the skip sentinel but **not** the operator console message its sibling asserts
+     (PD#1 — the message is the visible half of the failure). Small, additive; deferred.
+  5. **A pre-existing ruff warning fires on every gate run**: *"Invalid `# noqa` directive
+     on `psh/cli.py:879`: expected code to consist of uppercase letters followed by digits
+     only"* — the prose `# noqa: B023` *reference* inside an explanatory comment, which ruff
+     parses as a directive. It was at `:748` before this increment and is not this
+     increment's; it is noise on every `./run-tests` and every edit-time hook run, and the
+     fix is one word of comment rewording.
+
+- **Open questions for a future increment:** SPEC §11's four closing-audit questions are
+  the queue — (1) does every new helper have a test that reaches it independently of
+  `main()`; (2) is R-G4 mechanically checkable (an AST assertion over `main()`'s source is
+  the candidate; PD#14 asks whether it can go red) or does it stay prose; (3) with the six
+  locals-groups now objects, does D-i12-2's *"a ~25-parameter function"* objection to
+  extracting `template_dict` still hold; (4) is `main()`'s 454/318 remainder all stay-list
+  content. (4) is answered in CLOSING-AUDIT.md Q1's correction; (1)-(3) are open.
+
+## Amendments — §3.3 stay-list (2026-08-07, post-campaign; applied to CAMPAIGN.md by the entry above)
+
+Five amendments, one per stay-list claim the main-extraction increment made false. Each is
+written into CAMPAIGN.md §3.3 as **what is true now**; the "changed after close, and why"
+narrative is here, which is the split the amendment mechanism exists to keep — §3.3
+describes the shipped architecture in the present tense, the ledger holds the history.
+**No architecture changed**: every one of these moves a block *residue* out of `main()`
+into a module §3.1 already owns.
+
+1. **A1 — B5.** Before: *"Config/arg bootstrap ordering (B1–B8 — the two-pass substitution
+   order is the program)"*, with B5's four argument guards inline. After: the guard
+   **bodies** live in `psh.cli.validate_options()` and `main()` keeps the **call sequence**.
+   Why the claim survives: §3.3's stated reason for keeping B1–B8 is the substitution
+   *order*, which is a property of where the call sits, not of the guard bodies;
+   `validate_options()` is invoked from the exact position the guards occupied (after
+   `validate_hooks()`, before the verbose banner, after `process_config()` pass 1 — the
+   fourth guard reads `sc.config`). The 399-402 sequencing comment stayed at the call site
+   for the same reason. §3.1's `psh/cli.py` row already read *"arg validation (B5)"*, so the
+   destination needed no amendment — only §3.3's inline-ness did.
+2. **A2 — B14.** Before: B14 named in the `B14–B18` stay-range as part of *"the site-loop
+   skeleton (skips, banner, sorted order, resume filter)"*. After: roster **resolution**
+   (the `org:site:list` fetch, the name→id map, the sort, the `sites_from_resume_point`
+   filter, and both `sys.exit` paths) lives in `psh.cli.resolve_site_roster()`; the loop
+   skeleton it feeds stays. Why: "sorted order, resume filter" named the *result* the
+   skeleton consumes, not the fetch-and-sort that computes it. B14's run accumulators had
+   already left at I13 (`RunState`); `smtp_enabled` was **hoisted, not extracted** (SPEC
+   §5.4 R5.4.1 — a zero-data-dependency statement move that reorders two `sc.debug` banners
+   ahead of `org:site:list`'s own debug line and spinner on every `-v` run; §8 sanctions
+   console-text changes freely). `site_count` stays `len(sites)` **before** the resume
+   filter — it is the denominator of both the per-site banner and `finish_run`'s "Email sent
+   for N of M sites", and it now has a test that goes red if it is "tidied" to
+   `len(site_names)`.
+3. **A3 — B17.** Before: B17 inside the `B14–B18` stay-range. After: **B17 is off the
+   stay-list entirely** — the `resolve_plan_name` call site and the `site["plan_name"]`
+   write-back moved into `psh.plans.resolve_site_plan()`, so no B17 content remains in
+   `main()`. **This closes a pre-existing internal tension in CAMPAIGN.md rather than
+   creating one**, and that is the whole reason it is worth ledgering: §3.1 has assigned
+   *"SKU resolution (B17)"* to `psh/plans.py` since the campaign was written, while §3.3
+   listed B17 among the IDs staying in `main()`. I7 moved the body and left the call site
+   **without amending §3.3** (this ledger's I7 entry: *"`resolve_plan_name` (B17 body incl.
+   the Elite check as its early return; `main()` keeps `continue` + tail inits)"*). The two
+   sections have disagreed since I7; they agree now. Had this amendment been skipped, §3.3
+   would have been false *by definition* after `c47807b` — asserting that a block stays in a
+   function no part of it is in.
+4. **A4 — B18 (split) + B20.** Before: both inside the stay-range (`BLOCKMAP.md` pairs
+   *"Sandbox skip; `SiteContext` creation"* under B18; B20 is the unknown-plan
+   `sys.exit`). After: the **Sandbox skip** and **B20** moved into `resolve_site_plan()`;
+   the **`SiteContext` creation** stays. Why the split falls exactly there: the skip is
+   plan-domain — it reads the plan name the same helper just resolved — whereas the
+   constructor's **position** is a documented invariant *of the loop* (CLAUDE.md: *"as far
+   up the per-site loop as possible (after the portal/not-requested/Sandbox skips)"*).
+   Burying the constructor in a helper hides that invariant from the only code that can
+   honor it, and the next skip added would have no local signal about which side of the line
+   it belongs on. Folding B20 in also moves the unknown-plan guard **above** the
+   constructor; that is behavior-identical, verified at implementation time (not assumed):
+   `SiteContext.__init__` is exactly `super().__init__(site=site, notices=[], sections=[],
+   attachments=[])` at `script_context.py:115-116` — no console output, no `sc` write, no
+   `run_state` write — and on the bail path the object is discarded unread.
+5. **A5 — B31 (narrowed).** Before: B31 named under *"phase firing and contract stuffing"*.
+   After: B31 on the stay-list means its `stuff_dns_contract` + `invoke_hooks("site_post_dns")`
+   **seam**, which stayed inline; the `site_url` derivation that shares B31's baseline line
+   range moved into `psh.cli.resolve_site_url()`. Why: `BLOCKMAP.md` lists three things under
+   one ID (*"`stuff_dns_contract`; `invoke_hooks("site_post_dns")`; `site_url`"*), and only
+   the first two are "phase firing and contract stuffing" — the reason §3.3 keeps B31 at all.
+   R-G2 (the stage spine never moves, so `main()` still reads as *fetch → stuff → fire
+   phase*) is preserved: `resolve_site_url` is called **after** the phase fires, which is why
+   it can read `drupal_multisite_smell` at all.
+
+**Also corrected, in CLOSING-AUDIT.md Q1 — a correction of that document's prose, NOT a
+§3.3 amendment.** Q1's stay-list walk discharged the *"Phase firing + contract stuffing
+(B27, B28, B31, B37, B52)"* row partly with *"the gather threading + `stuff_gather_contract`
++ `invoke_hooks("site_post_gather")"`* — but the §3.3 row names only **B37**; the gather
+threading is B33/B34 (residue)/B35 (residue)/B36 and was never stay-list content. The same
+walk lumped `classify_domains` (**B29**, not on the list) together with `stuff_dns_contract`
+(**B31**, on it). Both were wrong when written; §3.3 was right. Q1's "NO on the line count"
+answer is also superseded there, with the re-measured 454/318 and the D-i14d-1 discharge.

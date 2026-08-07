@@ -57,6 +57,66 @@ stay-list content, not un-extracted logic.
 **Post-campaign TODO (D-i14d-1):** `README.md` "Extract further from `main()` toward
 CAMPAIGN.md §3.3's 250–400-line target **(post-campaign)**".
 
+### Corrections and discharge (2026-08-07, post-campaign)
+
+Three things above are no longer true. The first is a **discharge**; the other two are
+**corrections of this document's own prose** — they were wrong when written and are not
+changes to CAMPAIGN.md §3.3, which was right. (The §3.3 amendments the same increment did
+make are listed in CAMPAIGN.md §3.3 A1–A5 and in LEDGER "Amendments — §3.3 stay-list
+(2026-08-07, post-campaign)".)
+
+**1. D-i14d-1 is DISCHARGED, and the "NO on the line count" answer is superseded.** The
+2026-08-07 main-extraction increment (`development/2026-08-07-main-extraction/SPEC.md`;
+commits `5f58192`, `284a8f9`, `b106f80`, `9f44959`, `51cf48a`, `d5063dd`, `c47807b`,
+`ecae81a`) moved six stage bodies out of `main()`, goldens byte-identical. Re-measured with
+this section's own snippet, on the post-increment tree:
+
+```
+$ python - <<'PY'
+import ast, pathlib
+t = ast.parse(pathlib.Path("psh/cli.py").read_text())
+m = next(n for n in t.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+raw = m.end_lineno - m.lineno + 1
+body = pathlib.Path("psh/cli.py").read_text().splitlines()[m.lineno-1:m.end_lineno]
+logic = sum(1 for line in body if line.strip() and not line.strip().startswith("#"))
+print(f"main() at psh/cli.py:{m.lineno}-{m.end_lineno}  raw={raw} logic={logic}")
+PY
+main() at psh/cli.py:618-1071  raw=454 logic=318
+```
+
+622 raw / 445 logic → **454 raw / 318 logic**. **318 is inside the 250–400 target on the
+logic measure**; 454 is still 54 above it on the raw measure, and the difference is this
+function's comment density — the same thing this answer named as the overage's cause at
+close. The README TODO was struck in commit `5b92ee1` (2026-08-07 06:54, before the
+increment's own commits), so the discharge is recorded here and in the ledger rather than in
+`README.md`. Verification that the TODO is gone greps its **prose**, not its decision ID —
+`grep -n 'D-i14d-1' README.md` returns nothing **before** the strike too, and a check that
+answers the same before and after the event it checks for is not a check (PD#14):
+
+```
+$ grep -n 'Extract further from' README.md            # no match  (the TODO is gone)
+$ git show 5b92ee1^:README.md | grep -c 'Extract further from'
+1                                                     # it was there
+```
+
+**2. The stay-list walk's "Phase firing + contract stuffing" row over-claimed twice.** Its
+§3.3 row names **B27, B28, B31, B37, B52**, and the walk discharged it partly with *"the
+gather threading + `stuff_gather_contract` + `invoke_hooks("site_post_gather")"`*. The
+**gather threading was never stay-list content**: it is B33 / B34 (residue) / B35 (residue)
+/ B36, none of which §3.3 lists. Only `stuff_gather_contract` + `invoke_hooks` — i.e. B37 —
+belongs in that cell. The threading has since moved to `psh.gather.gather_framework`
+(commit `9f44959`) and needed no §3.3 amendment for exactly this reason.
+
+**3. The same row lumped `classify_domains` in with `stuff_dns_contract`.**
+`classify_domains` is **B29**, which is *not* on the stay-list; `stuff_dns_contract` +
+`invoke_hooks("site_post_dns")` is **B31**, which is. B29 has since moved into
+`psh.cli.fetch_site_domains` (commit `51cf48a`) with no §3.3 amendment; B31 got one (A5),
+narrowing it to the seam. Writing the two under one bullet is what made a moved block look
+like a stay-list violation and an amended one look untouched.
+
+**Everything else in the walk stands**, including the answer's substantive claim: the
+remainder of `main()` is stay-list content, not un-extracted logic.
+
 ---
 
 ## Q2 — Has every DAG fatal condition been demonstrated red at least once?

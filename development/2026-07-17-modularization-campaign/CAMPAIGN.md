@@ -159,14 +159,51 @@ condition-2 fatal against the core registry (D-i9-3), and alphabetical registrat
 ### 3.3 What stays in `main()` (exhaustive, with why)
 
 Config/arg bootstrap ordering (B1–B8 — the two-pass substitution *order* is the
-program); overage constants + date window (B9, B13 part); the site-loop skeleton (skips,
-banner, sorted order, resume filter — B14–B18, B20, B25, B42); phase firing and contract
-stuffing (B27, B28, B31, B37, B52); the B48 smell-notice *emission* call (the builder
+program; of B5, the **call sequence** stays and the guard bodies do not — A1); overage
+constants + date window (B9, B13 part); the site-loop skeleton (skips, banner, sorted
+order, resume filter — of B14 the **loop skeleton** only (A2), B15, B16, of B18 the
+**`SiteContext` creation** only (A4), B25, B42); phase firing and contract
+stuffing (B27, B28, B31 as its `stuff_dns_contract`/`invoke_hooks` **seam** (A5), B37,
+B52); the B48 smell-notice *emission* call (the builder
 moved to `psh/gather.py` at I10, but the emission summarizes end-of-phase smell state no
 hook position can guarantee under the D-i9-3 rebind design, and it must stay behind the
 `--only-warn` gate — LEDGER I10 amendment 1); notice sort + subject (B50 minus billing);
 the `try`/`except BaseException` lifecycle dispatch (B59–B60 call sites). Everything else
 leaves. Target: 250–400 lines.
+
+**Amendments A1–A5 + status (2026-08-07, post-campaign).** The campaign closed at I14d
+with `main()` at 622 raw / 445 logic, above the target — a recorded deviation
+(`CLOSING-AUDIT.md` Q1) whose remainder became post-campaign TODO **D-i14d-1**. That TODO
+was discharged on 2026-08-07 by the eight-commit **main-extraction increment**
+(`development/2026-08-07-main-extraction/SPEC.md`; commits `5f58192`, `284a8f9`,
+`b106f80`, `9f44959`, `51cf48a`, `d5063dd`, `c47807b`, `ecae81a`), which moved six stage
+*bodies* out of `main()` while the four e2e goldens stayed byte-identical. **The
+architecture above is unchanged** — no module boundary, phase, contract key, or invariant
+moved; what changed is which block *residues* are still inside `main()`. The rows below
+state what is true **now**; the narrative of what changed and why is LEDGER
+"Amendments — §3.3 stay-list (2026-08-07, post-campaign)", per this document's
+edit-the-document-**and**-ledger rule.
+
+| # | Block | Stays in `main()` | Left `main()` | Why the line falls there |
+|---|---|---|---|---|
+| A1 | **B5** | the bootstrap **call sequence** — `validate_options()` is invoked from the exact position the guards occupied | the four guard **bodies** → `psh.cli.validate_options()` | §3.3's claim is that the two-pass substitution *order* **is** the program. The order is a property of the call sequence, not of the guard bodies; the call site did not move, so the claim is untouched. |
+| A2 | **B14** | the loop skeleton the roster feeds (`for site_name in site_names`, the banner denominator `site_count`, the `smtp_enabled` read) | roster resolution — `org:site:list` fetch, name→id map, sort, `sites_from_resume_point` filter → `psh.cli.resolve_site_roster()` | "sorted order, resume filter" named the *result* the skeleton consumes, not the fetch-and-sort that computes it. The accumulators B14 also held left at I13 (`RunState`). |
+| A3 | **B17** | **nothing — B17 leaves the stay-list entirely** | the `resolve_plan_name` call site and the `site["plan_name"]` write-back → `psh.plans.resolve_site_plan()` | **This closes a pre-existing §3.1/§3.3 tension rather than creating one.** §3.1 has always assigned *"SKU resolution (B17)"* to `psh/plans.py`, while §3.3's `B14–B18` range listed B17 among the IDs staying. I7 moved the body and left the call site without amending §3.3 (`LEDGER.md`: *"`resolve_plan_name` (B17 body incl. the Elite check as its early return; `main()` keeps `continue` + tail inits)"*). With the residue moved, no B17 content remains in `main()` and the two sections agree for the first time. |
+| A4 | **B18** (split) + **B20** | B18's **`SiteContext` creation** | B18's **Sandbox skip** and **B20**'s unknown-plan guard → `psh.plans.resolve_site_plan()` | B18 is two things with different owners. The skip is plan-domain (it reads the plan name the same helper just resolved); the constructor's *position* is a documented invariant of the loop (`CLAUDE.md`: *"as far up the per-site loop as possible (after the portal/not-requested/Sandbox skips)"*) — burying it in a helper hides that from the only code that can honor it. Folding B20 in moves the unknown-plan guard **above** the constructor; that is behavior-identical because `SiteContext.__init__` is a bare `super().__init__(site=…, notices=[], sections=[], attachments=[])` with no console output, no `sc` write and no `run_state` write (`script_context.py:115-116`), and on the bail path the object is discarded unread. |
+| A5 | **B31** (narrowed) | the `stuff_dns_contract` + `invoke_hooks("site_post_dns")` **seam** | the `site_url` derivation that shares B31's baseline line range → `psh.cli.resolve_site_url()` | §3.3 keeps B31 as *phase firing and contract stuffing*; the `site_url` derivation is neither. `BLOCKMAP.md` lists all three under one ID (*"`stuff_dns_contract`; `invoke_hooks("site_post_dns")`; `site_url`"*), so the ID needed narrowing to the seam it was kept for. R-G2 (the stage spine never moves) is preserved. |
+
+**Status of the 250–400-line target.** Measured on the post-increment tree with
+`CLOSING-AUDIT.md` Q1's AST snippet: `main()` at `psh/cli.py:618-1071`, **454 raw / 318
+logic** — **inside the target on the logic measure**, above it by 54 on the raw measure.
+The difference is `main()`'s comment density, which is the same cause Q1 named for the
+overage at close: §7's per-increment obligation is comments that explain *why*, and every
+replacement call site carries one. Q1's "NO on the line count" answer is superseded and
+corrected in place there.
+
+**No amendment was needed for the other blocks the same increment moved** — exhaustively
+B29, B30 (residue), B32 (residue), B33, B34 (residue), B35 (residue), B36, B43 and B44
+(residue): none of them is on this stay-list. (`B34r`/`B35r` are **not** block IDs — no
+campaign document defines them; write "B34 (residue)".)
 
 ### 3.4 Parallel-ready constraint (D8)
 

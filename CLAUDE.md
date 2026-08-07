@@ -524,7 +524,17 @@ PHP 8.4 — use PHP 8.3 or earlier, or the toolchain is dead.**
 The orchestrator — `main()`, the argparse pair (`build_arg_parser`/`parse_args`), and the
 per-site pipeline — lives in **`psh/cli.py`**. The rest of the program body is carved into
 sibling `psh/` modules, one layer each; `psh/cli.py` imports the names it calls (and re-imports
-the pure helpers below), so it is the single module the test `psh` fixture exposes. Each module:
+the pure helpers below), so it is the single module the test `psh` fixture exposes.
+
+`psh/cli.py` also owns its own stage helpers, extracted from `main()` so each stage is
+reachable by a test without running the loop: `validate_options()` (the four argument guards, in
+their shadowing order — see **Resuming an interrupted `--all` run**), `resolve_site_roster()` →
+`SiteRoster` (the `org:site:list` fetch, name→id map, sort and resume filter; its `site_count` is
+`len(sites)` **before** the filter — the denominator of the per-site banner and of `finish_run`'s
+"Email sent for N of M sites", never `len(site_names)`), `fetch_site_domains()` → `SiteDomains`
+(`None` = skip this site) and `resolve_site_url()` → `SiteUrlFacts` (which straddle the
+`site_post_dns` seam and so must stay two functions), and the pure notice builders
+`no_domains_notice` / `no_primary_domain_notice`. Each module:
 
 - **`psh/gateway.py`** — the gateway: every Terminus/WP-CLI/Drush subprocess flows through it
   (the eleven wrappers; the future Pantheon-API transport seam — see the **Terminus/WP/Drush
@@ -558,9 +568,16 @@ the pure helpers below), so it is the single module the test `psh` fixture expos
   `sc.run_state.db_reconnects_by_site`/`…failures…` — one shared, `reset_sc`-isolated namespace
   rather than two separately rebindable module bindings of the same name.
 - **`psh/traffic.py`** — the traffic-metrics layer: `traffic_table_columns`,
-  `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows`, and four per-site flow
+  `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows`, four per-site flow
   functions (`update_site_traffic`, `import_older_site_metrics`, `load_site_traffic`,
-  `aggregate_visits_by_month`).
+  `aggregate_visits_by_month`), and `build_traffic_window(...) -> TrafficWindow` — the whole
+  report-window assembly (aggregation, `build_plan_over_time`, the month-midpoint `dates`, the
+  `estimate_month_visits` call, and the plan-day bounds) as one NamedTuple. `main()` unpacks all
+  nine fields back into its **pre-existing local names** on purpose: the `db_retry` lambda below
+  the call carries six per-line `# noqa: B023` suppressions keyed to those exact names. The
+  zero-traffic case returns a **synthetic seed** (`plan_on_day == {end_date: current_plan}`,
+  `first_plan_day == last_plan_day == end_date`) rather than an empty map — `plan_on_day` is
+  never empty, which is what keeps `psh/charts.py`'s midpoint lookup off an `IndexError`.
 - **`psh/plans.py`** — the plans layer: `cost_table_columns`, `overage_blocks`,
   `contract_year_end`, `plan_costs`, `build_plan_over_time`, `build_plan_recommendation_notice`;
   the typed `PlanCatalog`/`PlanInfo` view over `[Pantheon].plan_info` (`PlanCatalog.from_config`
@@ -568,7 +585,13 @@ the pure helpers below), so it is the single module the test `psh` fixture expos
   `main()`'s `plan_info`/`plan_names` aliases and the chart/annual-billing regions keep reading
   the same object — a copy would fork two views of one config); `resolve_plan_name(site)` (the
   Elite-SKU lookup — `None` on a transient Terminus failure so `main()` can `continue`,
-  `sys.exit` preserved on a missing/unknown SKU); `recommend_plan(...)` (returns a frozen
+  `sys.exit` preserved on a missing/unknown SKU); `resolve_site_plan(site, plan_names) -> str |
+  None` (the caller-side wrapper around it: the SKU resolution, the `site["plan_name"]`
+  **in-place** write-back, the Sandbox skip and the unknown-plan `sys.exit("Bailing out.")`
+  postcondition. `None` is the **skip sentinel** for *two* conditions — a transient `plan:info`
+  failure and the Sandbox plan — which is only acceptable because each prints its own operator
+  message before returning; `main()` does the `continue`, never the helper); `recommend_plan(...)`
+  (returns a frozen
   `PlanRecommendation` and adds the upgrade notice to `site_context` itself); and
   `stuff_plans_contract()` (which nests `cost_same`/`costs_median`/`costs_best` into the single
   `plan_costs` **contract key** `{"same": …, "median": …, "best": …}`).
@@ -591,7 +614,15 @@ the pure helpers below), so it is the single module the test `psh` fixture expos
   in `check/wordpress/`, `check/drupal/`, and `check/umich/`. `gather_drupal`'s composer dry-run
   calls `run_terminus(...)` directly (composer output is human-readable text, not JSON), so this
   module binds `run_terminus` in its **own** namespace — see the two-binding seam note under
-  Testing.
+  Testing. **`gather_framework(site, live_site, site_context) -> FrameworkGather`** is the branch
+  selector above both gathers (WordPress / Drupal / the unknown-framework fallback with its
+  `ATTENTION` print), returning versions, plugins/modules, `add_on_updates` (the **same list
+  object**, never a copy — the contract publishes it by identity), the `site_results` entry, and
+  the three **smell deltas**. The deltas are why `main()` keeps the merge: a returned `""` means
+  *no NEW smell*, never *clear the previous one*, so the helper is deliberately never handed the
+  caller's current values. It touches **no** `RunState` — pinned by a test that calls it with no
+  `sc.run_state` bound at all, the one mechanical check of CAMPAIGN.md §3.4's parallel-ready
+  constraint.
 - **`psh/charts.py`** — the per-site traffic-chart build: one public function,
   `build_chart(...) -> bytes` (PNG), with the cap-shape geometry as its prologue (recomputed per
   call) plus the chart data prep and matplotlib build. `main()` threads 13 shaped locals into it
@@ -820,10 +851,43 @@ side goes red:
 `psh/mail.py` would move those counter updates after `quit()` returns, reopening the
 Ctrl-C-during-`quit()` duplicate-email window. `main()` keeps calling `smtp_login()` itself.
 
+**No extracted helper may be the sole assigner of `site_name` or `site_emailed`.** Python has no
+block scope and the `except BaseException` handler reads both, ~450 lines below where they are
+bound, as `abort_run(db_session, db_engine, site_name, reason, e, emailed=site_emailed, …)`. Two
+concrete failures, neither visible to any of the four goldens:
+
+- **`site_emailed`.** There are *two* assignments three characters apart: the **pre-loop
+  binding** (the handler's guarantee that the name exists before `try:` opens) and the
+  **per-iteration reset** at the top of the loop body. A "per-site preamble" helper is the
+  natural-looking boundary that swallows the reset — and then `main()`'s local, set `True` for
+  site *N*, is never cleared for site *N+1*. Site *N+1* aborts at `domain:list`,
+  `abort_run(..., emailed=True)` advances the resume point **past** it, and that owner silently
+  never receives their monthly report (the `site_results.pop()` drop is skipped too, so the
+  artifacts claim the site completed). PD#1 — a failure that can happen silently is a critical
+  defect.
+- **`site_name`.** If a helper became its sole assigner, `abort_run` raises `NameError` **inside
+  the handler** — after SIGINT is set to `SIG_IGN` and before `finish_run()` — destroying every
+  artifact the handler exists to save, and telling the operator nothing about the real failure.
+
+`site_id` stays in `main()` for the same class of reason: it is read ~350 lines after it is
+bound. This rule is prose, not an instrument — it is a queued question whether an AST assertion
+over `main()`'s source can make it red-capable.
+
 - **Notices vs. news**: `site_context` is a **`sc.SiteContext`** (a `dict` subclass, so
   `site_context['notices'|'sections'|'attachments'|'site']` access is unchanged) constructed once
   per processed site, as far up the per-site loop as possible (after the portal/not-requested/
-  Sandbox skips). Add to it via its methods — `site_context.add_notice(notice)` /
+  Sandbox skips). **That position is an invariant of the loop, which is why the constructor call
+  stayed in `main()` when the skips around it moved into `psh.plans.resolve_site_plan`** (the
+  Sandbox skip and the unknown-plan guard both went; the `sc.SiteContext(site)` line did not).
+  Burying the constructor inside a helper would hide the invariant from the only code that can
+  honor it — the next skip added would have no local signal about which side of the line it
+  belongs on. Folding the unknown-plan guard into that helper does move it *above* the
+  constructor, which is behavior-identical only because `SiteContext.__init__` is a bare
+  `super().__init__(site=…, notices=[], sections=[], attachments=[])`: no console output, no `sc`
+  write, no `run_state` write, and on the bail path the object is discarded unread. Adding a side
+  effect to `__init__` would silently break that.
+
+  Add to it via its methods — `site_context.add_notice(notice)` /
   `.add_notices(list)` (builders: `wp_error`/`drush_error`/`check_wordpress_plugin`/
   `check_drupal_module`) / `.add_section(...)` / `.add_attachment(...)` — this is the
   **canonical** path; the old module-level `sc.add_notice`/`add_notices` free functions were
@@ -954,10 +1018,12 @@ Ctrl-C-during-`quit()` duplicate-email window. `main()` keeps calling `smtp_logi
   only by URL; every notice's csv key is `cloudflare-cache`. See `docs/cloudflare-cachecheck.md`
   and `development/2026-07-08-cloudflare-cache-configuration/`.
 - **Resuming an interrupted `--all` run**: `--resume-from SITE_NAME` filters the already-sorted
-  site-name list **before** the loop (via the pure helper `sites_from_resume_point`, which raises
-  `ResumeSiteNotFoundError` on an unknown name → fatal), so skipped-over sites do zero work. It
-  requires `--all` and is mutually exclusive with `--create-tables` (guards placed **before** the
-  create-tables/sites-or-all chain in `main()`, or that chain shadows the precise messages). On a
+  site-name list **before** the loop (inside `resolve_site_roster`, via the pure helper
+  `sites_from_resume_point`, which raises `ResumeSiteNotFoundError` on an unknown name → fatal),
+  so skipped-over sites do zero work. It
+  requires `--all` and is mutually exclusive with `--create-tables` (guards placed **first**
+  inside `validate_options()`, before the create-tables/sites-or-all chain, or that chain shadows
+  the precise messages — the four guards' order is the whole reason that helper exists). On a
   resumed run the two post-loop summary artifacts accumulate instead of truncating: `-notices.csv`
   opens in `"a"` mode and `-results.json` goes through `merge_prior_results()` (new wins on key
   collision; missing/malformed prior file → warn + this run's results only). See
@@ -1203,7 +1269,13 @@ Non-obvious things the harness relies on:
   namespace: a test faking the flush must patch **`psh.lifecycle.finish_run`**, NOT
   `psh.finish_run` (the fake's positional signature is the `run_state` shape). The `abort_run`
   SIGINT guard is unaffected: `psh/lifecycle.py` imports the shared `signal` module object, so
-  `monkeypatch.setattr(psh.signal, "signal", …)` still reaches it.
+  `monkeypatch.setattr(psh.signal, "signal", …)` still reaches it. **The same trap applies to
+  `cloudflare_enabled`**: `psh/cli.py` does `from psh.configuration import cloudflare_enabled`, so
+  a test gating `fetch_site_domains`' Cloudflare branch patches **`psh.cli.cloudflare_enabled`**,
+  NOT `sc.cloudflare_enabled` — the façade attribute is what `check/`/`plugin/` modules call, and
+  patching it leaves `psh/cli.py`'s own binding untouched (a patch that looks installed and
+  isn't). Driving the gate through data instead — set `sc.config["Cloudflare"]["enabled"]` and
+  populate `sc.plugin_context["plugin.cloudflare"]` — avoids the question entirely.
 - **The suite must stay green on a sqlite-only install.** `[mysql]` is an optional extra and the
   setup line above sanctions dropping it, so a test needing a real MySQL engine
   (`tests/integration/test_db_credentials.py`, which drives `db_retry()` against a URL that really
@@ -1230,6 +1302,26 @@ Non-obvious things the harness relies on:
   months to 0 and the last-row-wins `plan_on_day` map. The extractions are behavior-preserving
   (goldens byte-identical). **`classify_hostname_dns` is NOT one of these** — it lives in
   `psh/dns_classify.py`; import it from there.
+- **`main()` stage-helper tests.** The six stage bodies extracted from `main()` are covered by
+  seven files (the domains stage has two helpers plus a pure builder), each reaching a region
+  that previously had **no** seam above the e2e golden. Unit
+  tier: `tests/unit/test_traffic_window.py` (`psh.traffic.build_traffic_window` — the five
+  zero-traffic-seed postconditions plus a Hypothesis property that `plan_on_day` is never empty),
+  `tests/unit/test_no_domains_notice.py` (the pure `no_domains_notice` builder — the **Invariant
+  8** instrument asserting every interior line of the `html=`/`text=` literal sits at **exactly**
+  column 16, `indent == 16` and not `startswith(" " * 16)`, which passes on 17; plus the
+  load-bearing `isinstance(domains, dict)` guard, which had no test at any tier), and
+  `tests/unit/test_validate_options.py` (the four guards' shadowing order, table-driven — the
+  `--update-cloudflare-fqdns` guard had no test at any tier either). Integration tier:
+  `tests/integration/test_gather_framework.py` (the three framework branches, the smell deltas,
+  and the no-`sc.run_state` parallel-ready pin), `tests/integration/test_site_domains.py`
+  (`fetch_site_domains`/`resolve_site_url` — the skip sentinel, the Cloudflare gate at
+  `psh.cli.cloudflare_enabled`, the two smell deltas),
+  `tests/integration/test_site_roster.py` (incl. the pin that `site_count` is `len(sites)`
+  **before** the resume filter — the whole resume region is unreachable at the subprocess tier
+  permanently, since `--resume-from` requires the interlock-banned `--all`), and
+  `tests/integration/test_resolve_site_plan.py` (both skip sentinels and the unknown-plan
+  `sys.exit`). See `development/2026-08-07-main-extraction/SPEC.md`.
 - **DNS tests.** The `psh/dns_classify.py` engine and `check/dns/` package have their own suite:
   `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS, and
   `psh.dns_classify.MalformedNameError` — `resolve()` converts dnspython's syntax errors
