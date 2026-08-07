@@ -7,12 +7,19 @@ control stays in main(), these functions signal via return values, SPEC D-i6-1),
 B43 visits-by-month aggregation.  build_traffic_table_rows remains one of db_retry()'s
 five named idempotent units (CLAUDE.md section Database).
 
+build_traffic_window (B43 + the B44 residue) is the traffic-window / chart-data prep,
+extracted from main() at development/2026-08-07-main-extraction/SPEC.md section 5.1 --
+not pure in the strict sense (it prints two verbose pprints, a zero-traffic console
+message, and an sc.debug), but has no I/O and no monkeypatching seam of its own.
+
 overage_blocks is imported from psh.plans (bridge discharged at I7 per LEDGER I6).
 """
 import calendar
 import datetime
+from typing import NamedTuple
 
 from rich.markup import escape
+from rich.pretty import pprint
 
 import script_context as sc
 from psh.db import (
@@ -24,7 +31,7 @@ from psh.db import (
     update_traffic_rows,
 )
 from psh.gateway import TerminusError, terminus, terminus_data
-from psh.plans import overage_blocks
+from psh.plans import build_plan_over_time, overage_blocks
 
 traffic_table_columns = [
     {"name": "month", "label": "Month"},
@@ -330,6 +337,87 @@ def load_site_traffic(
         level=2,
     )
     return results
+
+
+class TrafficWindow(NamedTuple):
+    visits_by_month: dict[str, int]        # every "%Y-%m" in the window, 0-seeded
+    plan_on_day: dict[datetime.date, str]  # {end_date: current_plan} synthetic seed when the site has NO rows; never empty
+    plan_over_time: list[dict]             # contiguous {"start","end","plan"} spans; never []
+    dates: list[datetime.date]             # month midpoints indexing visits_by_month, in key order
+    estimate: int                          # -1 when the month is complete or too early to extrapolate
+    first_plan_day: datetime.date          # == end_date on the synthetic seed
+    last_plan_day: datetime.date           # == end_date on the synthetic seed
+    site_plan_start: datetime.date         # first-of-month of plan_over_time[0]["start"]
+    plot_right_date: datetime.date         # last day of end_date's month -- the chart's right edge
+
+
+def build_traffic_window(
+    rows: list[TrafficRow],
+    start_date: datetime.date,
+    end_date: datetime.date,
+    current_plan: str,
+    site_name: str,
+) -> TrafficWindow:
+    """The traffic-window / chart-data prep (B43 + the B44 residue): aggregate rows into
+    visits_by_month/plan_on_day, seed a synthetic plan-day for a brand-new site with no
+    traffic history (never let plan_on_day come back empty -- P10's IndexError guard),
+    collapse plan_on_day into contiguous plan_over_time spans, and extrapolate the current
+    (possibly partial) month's visits.
+
+    Moved verbatim out of main() (development/2026-08-07-main-extraction/SPEC.md §5.1) --
+    CAMPAIGN.md section 3.1: moves get no algorithmic redesign.  current_plan/site_name are
+    scalars, not derived from `site`, per SPEC R-G10 (a hook could mutate site_context["site"]
+    before this runs).
+    """
+    visits_by_month, plan_on_day = aggregate_visits_by_month(rows, start_date, end_date)
+    if sc.options.verbose:
+        pprint(visits_by_month)
+        if sc.options.verbose > 1:
+            pprint(plan_on_day)
+
+    # Create a list of time ranges when the site was on each plan
+    last_day = calendar.monthrange(end_date.year, end_date.month)[1]
+    plot_right_date = end_date.replace(day=last_day)
+    if not plan_on_day:
+        # A brand-new site with no traffic history yet.  Rather than dropping the whole
+        # report -- which would silently discard any alerts already gathered above
+        # (frozen, not-in-DNS, missing security/cache plugins, ...) and never email the
+        # owner -- seed a single synthetic plan-day at the report end date.  That gives
+        # the chart/plan code a non-empty plan_on_day (no IndexError, P10) and, because
+        # it counts as one in-window month, the report renders in the normal "not enough
+        # data yet" state (median_visitors stays 0) while still delivering the alerts.
+        sc.console.print(
+            f":mag: No traffic recorded yet for {site_name}; rendering the "
+            f'"not enough data" report with any alerts.'
+        )
+        plan_on_day = {end_date: current_plan}
+
+    # noinspection PyTypeChecker
+    days = sorted(plan_on_day.keys())
+    plan_over_time = build_plan_over_time(plan_on_day, plot_right_date)
+    sc.debug(plan_over_time)
+
+    # Convert the keys of the visits_by_month dictionary to datetime objects
+    dates = [datetime.date.fromisoformat(d + "-15") for d in visits_by_month]
+
+    # Estimate the visits for the last month if it isn't over yet:
+    estimate = estimate_month_visits(visits_by_month, dates, last_day, end_date.day)
+
+    first_plan_day = days[0]
+    last_plan_day = days[-1]
+    site_plan_start = plan_over_time[0]["start"].replace(day=1)
+
+    return TrafficWindow(
+        visits_by_month=visits_by_month,
+        plan_on_day=plan_on_day,
+        plan_over_time=plan_over_time,
+        dates=dates,
+        estimate=estimate,
+        first_plan_day=first_plan_day,
+        last_plan_day=last_plan_day,
+        site_plan_start=site_plan_start,
+        plot_right_date=plot_right_date,
+    )
 
 
 def aggregate_visits_by_month(

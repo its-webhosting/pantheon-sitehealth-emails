@@ -11,7 +11,6 @@ TODO: add WordPress MU plugin check (report on anything except plugin)
 """
 
 import argparse
-import calendar
 import datetime
 import os
 import re
@@ -112,7 +111,7 @@ from psh.plans import (
     PlanCatalog,
     PlanInfo,  # noqa: F401
     PlanRecommendation,  # noqa: F401
-    build_plan_over_time,
+    build_plan_over_time,  # noqa: F401 -- re-export surface (SPEC D-i14a-3): tests/unit/test_plan_over_time.py calls it as psh.build_plan_over_time, not psh.traffic.build_plan_over_time
     build_plan_recommendation_notice,  # noqa: F401
     contract_year_end,
     cost_table_columns,
@@ -124,9 +123,9 @@ from psh.plans import (
 )
 from psh.render import escape_url, render_report
 from psh.traffic import (
-    aggregate_visits_by_month,
     build_traffic_table_rows,
-    estimate_month_visits,
+    build_traffic_window,
+    estimate_month_visits,  # noqa: F401 -- re-export surface (SPEC D-i14a-3): tests/unit/test_plan_math.py calls it as psh.estimate_month_visits
     get_old_metrics,  # noqa: F401
     import_older_site_metrics,
     load_site_traffic,
@@ -767,45 +766,20 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
 
             # TODO: Warn if no Autopilot
 
-            visits_by_month, plan_on_day = aggregate_visits_by_month(
-                results, start_date, end_date
+            window = build_traffic_window(
+                results, start_date, end_date, site_current_plan, site_name
             )
-            if sc.options.verbose:
-                pprint(visits_by_month)
-                if sc.options.verbose > 1:
-                    pprint(plan_on_day)
-
-            # Create a list of time ranges when the site was on each plan
-            last_day = calendar.monthrange(end_date.year, end_date.month)[1]
-            plot_right_date = end_date.replace(day=last_day)
-            if not plan_on_day:
-                # A brand-new site with no traffic history yet.  Rather than dropping the whole
-                # report -- which would silently discard any alerts already gathered above
-                # (frozen, not-in-DNS, missing security/cache plugins, ...) and never email the
-                # owner -- seed a single synthetic plan-day at the report end date.  That gives
-                # the chart/plan code a non-empty plan_on_day (no IndexError, P10) and, because
-                # it counts as one in-window month, the report renders in the normal "not enough
-                # data yet" state (median_visitors stays 0) while still delivering the alerts.
-                sc.console.print(
-                    f":mag: No traffic recorded yet for {site_name}; rendering the "
-                    f'"not enough data" report with any alerts.'
-                )
-                plan_on_day = {end_date: site_current_plan}
-
-            # noinspection PyTypeChecker
-            days = sorted(plan_on_day.keys())
-            plan_over_time = build_plan_over_time(plan_on_day, plot_right_date)
-            sc.debug(plan_over_time)
-
-            # Convert the keys of the visits_by_month dictionary to datetime objects
-            dates = [datetime.date.fromisoformat(d + "-15") for d in visits_by_month]
-
-            # Estimate the visits for the last month if it isn't over yet:
-            estimate = estimate_month_visits(visits_by_month, dates, last_day, end_date.day)
-
-            first_plan_day = days[0]
-            last_plan_day = days[-1]
-            site_plan_start = plan_over_time[0]["start"].replace(day=1)
+            # Unpacked into the pre-existing local names on purpose: the db_retry lambda below
+            # carries six per-line `# noqa: B023` suppressions keyed to these exact names.
+            visits_by_month = window.visits_by_month
+            plan_on_day = window.plan_on_day
+            plan_over_time = window.plan_over_time
+            dates = window.dates
+            estimate = window.estimate
+            first_plan_day = window.first_plan_day
+            last_plan_day = window.last_plan_day
+            site_plan_start = window.site_plan_start
+            plot_right_date = window.plot_right_date
 
             sc.debug("[bold magenta]=== Creating the traffic table:")
 
