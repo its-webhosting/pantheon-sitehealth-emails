@@ -791,8 +791,8 @@ Check and integration-plugin packages:
 - `check/drupal/` — three generic Drupal checks (gated on `[Check.drupal].enabled`, **default
   true**): `multisite.py` (the multisite probe via `sc.drush_php_script`, a `site_post_dns` hook
   that consumes `custom_domains`/`primary_domain` and **produces** the hook-declared keys
-  `drupal_multisite`/`drupal_multisite_smell`, read by `main()` with `.get()` after the phase to
-  seed `drush_smell` and gate the core `no-primary-domain` notice), `papc.py` (delegating to
+  `drupal_multisite`/`drupal_multisite_smell`, read by `psh.cli.resolve_site_url` with `.get()`
+  after the phase to seed `drush_smell` and gate the core `no-primary-domain` notice), `papc.py` (delegating to
   `sc.check_drupal_module`) and `d7_eol.py` (the `drupal7-eol` notice + the tag1_d7es module
   check), the latter two at `site_post_gather`, registered multisite → papc → d7_eol; each
   early-returns unless the framework starts with `drupal`.
@@ -840,7 +840,7 @@ side goes red:
 |---|---|
 | `site_pre` | `envs` (dict — the `terminus env:list` JSON keyed by environment id, each value carrying `id, created, domain, connection_mode, locked, initialized, php_version, php_runtime_generation`. `main()`'s guards ensure `envs["live"]` exists with an `initialized` key before any site phase fires; **`php_version` is NOT guaranteed present** — read it with `.get`. Never `None`/empty when a phase fires: a failed `env:list` fetch skips the site. Core-produced — fetched by `main()` where it gates on it, stuffed by `stuff_envs_contract`. The phase fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
-| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `psh.dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str). They are DAG-declared in the hook's `produces`, present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `main()` reads them with `.get(...)` after the phase — never assume they exist) |
+| `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `psh.dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str). They are DAG-declared in the hook's `produces`, present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `psh.cli.resolve_site_url` — which `main()` calls **after** the phase, exactly so it can read them — reads them with `.get(...)` — never assume they exist) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (the smell emission) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry) |
 | `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a render dict, built by `site_context.notice_to_dict`) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext`; it receives the run's `RunState` — `finish_run`'s first statement is `invoke_hooks("run_finish", run_state)`, fired on completed and aborted runs, the seam for future run-level artifact hooks. `CONTRACT["run_finish"]` stays `()`: the `RunState` is the hook argument, not a contract key) |
@@ -852,7 +852,7 @@ side goes red:
 Ctrl-C-during-`quit()` duplicate-email window. `main()` keeps calling `smtp_login()` itself.
 
 **No extracted helper may be the sole assigner of `site_name` or `site_emailed`.** Python has no
-block scope and the `except BaseException` handler reads both, ~450 lines below where they are
+block scope and the `except BaseException` handler reads both ~325 lines below where they are
 bound, as `abort_run(db_session, db_engine, site_name, reason, e, emailed=site_emailed, …)`. Two
 concrete failures, neither visible to any of the four goldens:
 
@@ -869,7 +869,7 @@ concrete failures, neither visible to any of the four goldens:
   the handler** — after SIGINT is set to `SIG_IGN` and before `finish_run()` — destroying every
   artifact the handler exists to save, and telling the operator nothing about the real failure.
 
-`site_id` stays in `main()` for the same class of reason: it is read ~350 lines after it is
+`site_id` stays in `main()` for the same class of reason: it is read ~230 lines after it is
 bound. This rule is prose, not an instrument — it is a queued question whether an AST assertion
 over `main()`'s source can make it red-capable.
 
@@ -1177,15 +1177,12 @@ other institutions.
   (technically non-idiomatic) house style — follow the surrounding code.
 - There is an active TODO list in `README.md` describing planned work (daily traffic alerts,
   Cloudflare/security scoring, moving capture into the portal app, better error handling).
-- **`git diff -w` is not proof a re-indent was whitespace-only.** `main()`'s per-site loop builds
-  notice HTML/plaintext from multi-line `f"""..."""` literals whose continuation lines
-  deliberately start at column 0, not at the surrounding code's indent (grep `f"""` in the loop
-  body). A mechanical re-indent of a block containing one of these — e.g. wrapping the loop in a
-  `try:` — must NOT shift those interior lines: doing so adds leading whitespace to the rendered
-  email, a real behavior change, and `git diff -w` hides it completely, because a line that only
-  gained leading whitespace is exactly what `-w` is designed to ignore. The goldens are what would
-  actually catch it. Anyone re-indenting a block here should compare ASTs/token streams, or just
-  trust the goldens — not eyeball `git diff -w`.
+- **`git diff -w` is not proof a re-indent was whitespace-only** — the leading whitespace inside a
+  notice's `html=`/`text=` literal is string content that reaches the rendered email, and `-w` is
+  designed to ignore exactly the line that only gained some. `main()`'s loop no longer holds such a
+  literal; `psh/cli.py::no_domains_notice` does (interior at column **16**, not 0), and
+  `tests/unit/test_no_domains_notice.py::test_the_literal_interior_stays_at_column_16` is what goes
+  red — see the Invariant-8 sentinel comment above that `def`.
 
 ## Testing
 

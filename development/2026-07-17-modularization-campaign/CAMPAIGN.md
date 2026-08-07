@@ -160,8 +160,9 @@ condition-2 fatal against the core registry (D-i9-3), and alphabetical registrat
 
 Config/arg bootstrap ordering (B1–B8 — the two-pass substitution *order* is the
 program; of B5, the **call sequence** stays and the guard bodies do not — A1); overage
-constants + date window (B9, B13 part); the site-loop skeleton (skips, banner, sorted
-order, resume filter — of B14 the **loop skeleton** only (A2), B15, B16, of B18 the
+constants + date window (B9, B13 part); the site-loop skeleton (skips, banner, iteration
+over the already-sorted, already-filtered names — of B14 the **loop skeleton** only (A2),
+B15, B16, of B18 the
 **`SiteContext` creation** only (A4), B25, B42); phase firing and contract
 stuffing (B27, B28, B31 as its `stuff_dns_contract`/`invoke_hooks` **seam** (A5), B37,
 B52); the B48 smell-notice *emission* call (the builder
@@ -195,10 +196,11 @@ edit-the-document-**and**-ledger rule.
 **Status of the 250–400-line target.** Measured on the post-increment tree with
 `CLOSING-AUDIT.md` Q1's AST snippet: `main()` at `psh/cli.py:618-1071`, **454 raw / 318
 logic** — **inside the target on the logic measure**, above it by 54 on the raw measure.
-The difference is `main()`'s comment density, which is the same cause Q1 named for the
-overage at close: §7's per-increment obligation is comments that explain *why*, and every
-replacement call site carries one. Q1's "NO on the line count" answer is superseded and
-corrected in place there.
+Measured breakdown of the 454: **318 logic, 72 comment, 64 blank**. Comments are the
+larger share of the 136-line gap between the two measures but not the whole of it, and
+they are the cause Q1 named for the overage at close: §7's per-increment obligation is
+comments that explain *why*, and every replacement call site carries one. Q1's "NO on the
+line count" answer is superseded and corrected in place there.
 
 **No amendment was needed for the other blocks the same increment moved** — exhaustively
 B29, B30 (residue), B32 (residue), B33, B34 (residue), B35 (residue), B36, B43 and B44

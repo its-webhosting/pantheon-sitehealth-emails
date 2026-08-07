@@ -59,9 +59,9 @@ CAMPAIGN.md §3.3's 250–400-line target **(post-campaign)**".
 
 ### Corrections and discharge (2026-08-07, post-campaign)
 
-Three things above are no longer true. The first is a **discharge**; the other two are
-**corrections of this document's own prose** — they were wrong when written and are not
-changes to CAMPAIGN.md §3.3, which was right. (The §3.3 amendments the same increment did
+Three items. The first is a **discharge** — an answer that was true at I14d and has since
+been overtaken. The other two are **corrections of this document's own prose**: they were
+wrong when written, never true, and are not changes to CAMPAIGN.md §3.3, which was right. (The §3.3 amendments the same increment did
 make are listed in CAMPAIGN.md §3.3 A1–A5 and in LEDGER "Amendments — §3.3 stay-list
 (2026-08-07, post-campaign)".)
 
@@ -85,9 +85,10 @@ main() at psh/cli.py:618-1071  raw=454 logic=318
 ```
 
 622 raw / 445 logic → **454 raw / 318 logic**. **318 is inside the 250–400 target on the
-logic measure**; 454 is still 54 above it on the raw measure, and the difference is this
-function's comment density — the same thing this answer named as the overage's cause at
-close. The README TODO was struck in commit `5b92ee1` (2026-08-07 06:54, before the
+logic measure**; 454 is still 54 above it on the raw measure. The 454 breaks down as
+**318 logic, 72 comment, 64 blank** — comments are the larger share of the gap between
+the two measures, though not all of it, and they are the same thing this answer named as
+the overage's cause at close. The README TODO was struck in commit `5b92ee1` (2026-08-07 06:54, before the
 increment's own commits), so the discharge is recorded here and in the ledger rather than in
 `README.md`. Verification that the TODO is gone greps its **prose**, not its decision ID —
 `grep -n 'D-i14d-1' README.md` returns nothing **before** the strike too, and a check that
@@ -114,8 +115,14 @@ belongs in that cell. The threading has since moved to `psh.gather.gather_framew
 narrowing it to the seam. Writing the two under one bullet is what made a moved block look
 like a stay-list violation and an amended one look untouched.
 
-**Everything else in the walk stands**, including the answer's substantive claim: the
-remainder of `main()` is stay-list content, not un-extracted logic.
+**Everything else in the walk stands *as a record of the I14d tree*** — including the
+answer's substantive claim, that the remainder of `main()` is stay-list content and not
+un-extracted logic. Read in the present tense it would mislead: several of its cells name
+code the 2026-08-07 increment has since moved into helpers `main()` calls (the arg guards
+→ `validate_options`; the Sandbox and unknown-plan skips → `resolve_site_plan`;
+`sites_from_resume_point` → `resolve_site_roster`). This whole document is a dated
+snapshot — *"Run 2026-07-24 at I14d close"* — and is corrected, never rewritten;
+`CLAUDE.md` is where the architecture is described in the present tense.
 
 ---
 

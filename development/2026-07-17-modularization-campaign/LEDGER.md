@@ -2415,7 +2415,8 @@ each new instrument red-capable by fault injection.
 
 - **New rule, R-G4 (recorded in CLAUDE.md):** no extracted helper may be the sole assigner
   of `site_name` or `site_emailed`. Both are read by the `except BaseException` handler
-  ~450 lines away; a helper owning the per-iteration `site_emailed = False` reset would let
+  ~325 lines away (bound at `psh/cli.py:734-735`, reset at 739, read at 1061-1062); a
+  helper owning the per-iteration `site_emailed = False` reset would let
   `abort_run(..., emailed=True)` advance the resume point **past** a site that never got its
   email, and drop that site's `site_results` cleanup — invisible to all four goldens
   (PD#1). The two bindings three characters apart (`psh/cli.py`'s pre-loop binding vs. the
