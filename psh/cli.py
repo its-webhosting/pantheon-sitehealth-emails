@@ -484,6 +484,64 @@ def resolve_site_url(site, live_site, site_context, facts) -> SiteUrlFacts:
     return SiteUrlFacts(site_url=site_url, wp_smell=wp_smell, drush_smell=drush_smell)
 
 
+class SiteRoster(NamedTuple):
+    sites: dict                  # org:site:list payload keyed by site id
+    name_to_id: dict[str, str]
+    site_names: list[str]        # sorted, resume-filtered
+    site_count: int              # len(sites) BEFORE the filter -- the banner/finish_run denominator, NEVER len(site_names)
+
+
+def resolve_site_roster(org_id: str) -> SiteRoster:
+    """B14: fetch the org's site list and build the sorted, --resume-from-filtered roster,
+    verbatim from main().
+
+    sys.exit()s on a fatal org:site:list (TerminusError) or an unknown --resume-from site
+    name (ResumeSiteNotFoundError); both keep their exact messages (PD#2 -- both are already
+    named exception classes).
+
+    site_count is len(sites) BEFORE the --resume-from filter -- it is the denominator BOTH
+    the resume banner below and finish_run's "Email sent for N of M sites" read, and MUST NOT
+    become len(site_names) (SPEC development/2026-08-07-main-extraction/SPEC.md section 5.4,
+    R5.4.3).  Nothing at the subprocess tier would go red if it did: --resume-from requires
+    --all, and --all is in tests/conftest.py's FORBIDDEN_FLAGS, so this whole region is
+    permanently unreachable there by design (SPEC section 1.2) --
+    test_site_count_is_the_pre_filter_total_not_len_site_names is the instrument that closes
+    that gap.
+
+    Reads sc.options.resume_from at call time (the house rule); org_id is a parameter because
+    the ResumeSiteNotFoundError message interpolates it and passing it keeps the helper's
+    contract legible.  Extracted at development/2026-08-07-main-extraction/SPEC.md section 5.4.
+    """
+    try:
+        sites = terminus_data("org:site:list", org_id)
+    except TerminusError as e:
+        sys.exit(f"Could not list organization sites: {e}")
+    site_count = len(sites)
+    name_to_id = {site["name"]: site_id for (site_id, site) in sites.items()}
+    sc.debug(name_to_id)
+
+    # Sites are processed in sorted order, so --resume-from can drop the prefix of sites that
+    # an interrupted run already handled.  Filtering here (rather than `continue`ing inside the
+    # loop) means a skipped-over site does no work at all: no banner, no plan:info, no context.
+    site_names = sorted(name_to_id.keys())
+    if sc.options.resume_from is not None:
+        try:
+            site_names = sites_from_resume_point(site_names, sc.options.resume_from)
+        except ResumeSiteNotFoundError:
+            sys.exit(
+                f"--resume-from: site '{sc.options.resume_from}' was not found among the "
+                f"{len(site_names)} sites for org {org_id}."
+            )
+        sc.console.print(
+            f"[bold magenta]=== Resuming from [bold]{sc.options.resume_from}[/bold] "
+            f"({len(site_names)} of {site_count} sites remaining)"
+        )
+
+    return SiteRoster(
+        sites=sites, name_to_id=name_to_id, site_names=site_names, site_count=site_count
+    )
+
+
 def sort_notices_and_subject(site_context, report):
     """B50 sort/subject core + billing-key wiring (pure; rode to psh/cli.py with main() at I14a -- D-i13-1 discharged).
 
@@ -642,12 +700,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
     end_of_contract_year = contract_year_end(end_date)
     sc.debug(f"Generating report for {start_date} through {end_date}")
 
-    try:
-        sites = terminus_data("org:site:list", sc.config["Pantheon"]["org_id"])
-    except TerminusError as e:
-        sys.exit(f"Could not list organization sites: {e}")
-    site_count = len(sites)
-    current_site_number = 1
     sc.debug(
         "Cloudflare is "
         + ("[bold green]enabled" if cloudflare_enabled() else "[bold red]DISABLED")
@@ -657,28 +709,16 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
         "SMTP sending is "
         + ("[bold green]enabled" if smtp_enabled else "[bold red]DISABLED")
     )
-    site_name_to_id = {site["name"]: site_id for (site_id, site) in sites.items()}
-    sc.debug(site_name_to_id)
 
-    # Sites are processed in sorted order, so --resume-from can drop the prefix of sites that
-    # an interrupted run already handled.  Filtering here (rather than `continue`ing inside the
-    # loop) means a skipped-over site does no work at all: no banner, no plan:info, no context.
-    site_names = sorted(site_name_to_id.keys())
-    if sc.options.resume_from is not None:
-        try:
-            site_names = sites_from_resume_point(site_names, sc.options.resume_from)
-        except ResumeSiteNotFoundError:
-            sys.exit(
-                f"--resume-from: site '{sc.options.resume_from}' was not found among the "
-                f"{len(site_names)} sites for org {sc.config['Pantheon']['org_id']}."
-            )
-        sc.console.print(
-            f"[bold magenta]=== Resuming from [bold]{sc.options.resume_from}[/bold] "
-            f"({len(site_names)} of {site_count} sites remaining)"
-        )
+    roster = resolve_site_roster(sc.config["Pantheon"]["org_id"])
+    sites = roster.sites
+    site_name_to_id = roster.name_to_id
+    site_names = roster.site_names
+    site_count = roster.site_count  # len(sites) BEFORE the resume filter -- never len(site_names)
 
     site_name = None
     site_emailed = False
+    current_site_number = 1
     try:
         for site_name in site_names:
             site_emailed = False
