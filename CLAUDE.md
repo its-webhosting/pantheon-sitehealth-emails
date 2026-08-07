@@ -1220,13 +1220,41 @@ earlier gate's red (PD#1):
    stays fully gated. `[tool.ruff.lint.per-file-ignores]` carries the `tests/**` idiom block
    (rules that flag legitimate test idioms — `S101`, `S105`/`S106`, `INP001`, …) plus
    `development/finalize-session.py = ["T201"]` (a CLI tool: print IS its output).
-2. **pyright, standard mode** over `psh/` (`[tool.pyright]`); a missing pyright binary is a **hard
-   failure**, never a silent skip (PD#1/PD#14).
+2. **pyright, standard mode** over `psh/` (`[tool.pyright]`), invoked as `[sys.executable, "-m",
+   "pyright", "--pythonpath", sys.executable]` — **the venv's own pyright, resolving imports
+   against the venv, never a PATH or `uvx` one**. Unlike ruff, pyright's verdict depends on the
+   Python environment it resolves imports against: run against any other one it type-checks
+   `psh/` with **none** of the project's dependencies installed and reports dozens of false
+   `reportMissingImports` (34 from the dropped `uvx pyright@1.1.411` fallback, 46 from a
+   non-activated venv). That is why the fallback went (2026-08-07) *and* why the
+   `shutil.which("pyright")` branch went with it — a PATH pyright (the dev container has an
+   npm-global one) is the worse of the two, since it looks like the intended branch. **Both
+   halves of the anchor are load-bearing**: `-m pyright` fixes which pyright runs (so the
+   `[test]` extra's pin is the only thing deciding its version), and `--pythonpath` fixes which
+   environment it reads — without it pyright finds the environment from the `python` on PATH, so
+   `.venv/bin/python run-tests` without `source .venv/bin/activate` fails with 46 false findings
+   through the *right* binary. pyright missing from that interpreter is a **hard failure** naming
+   it, never a silent skip (PD#1/PD#14). **Its version is then verified before it runs**
+   (`pyright_version_problem`): `--version` is measured against the `pyright==` pin *parsed out of*
+   pyproject's `[test]` extra (derived, so the number has one home), and **every** way of failing
+   to establish it — mismatch, missing pin, unparseable or unrunnable `--version` — aborts the
+   gate. It reads the tool's own `--version` (0.3s) rather than `importlib.metadata`, which
+   reports the pyright-**python wrapper's** version that `PYRIGHT_PYTHON_FORCE_VERSION` can move
+   out from under the real checker. This closes the last drift route the mandatory-venv-binary
+   change left open: a **stale venv**. `[tool.pyright]` additionally sets `venvPath = "."` /
+   `venv = ".venv"`, which pins import resolution **for every pyright that is not `./run-tests`**
+   — above all the `pyright-lsp` plugin, which launches `pyright-langserver` by **bare name from
+   PATH**, so which environment the editor's diagnostics described used to be decided by process
+   PATH order. Measured: with those two set, even a pyright from outside the venv reports 0
+   errors with the venv off PATH.
 
 `[tool.ruff]` deliberately pins **no `target-version`**: ruff infers it from `requires-python`
-(`>=3.12`), and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program uses. Both
-tool invocations in `./run-tests` are **version-pinned** (`uvx ruff@0.15.22`, `uvx
-pyright@1.1.411`) so a `uvx` cache refresh cannot silently move the bar. `.claude/hooks/ruff-check.sh`
+(`>=3.12`), and pinning it *masks* the 3.12-only PEP 701 f-string syntax the program uses. Each
+gate is **version-pinned in exactly one place**: ruff by `uvx ruff@0.15.22` in `./run-tests` (so a
+`uvx` cache refresh cannot silently move the bar; a PATH `ruff` is still trusted un-versioned — a
+residual, accepted exposure recorded in `ruff_argv()`), pyright by `pyright==1.1.411` in
+pyproject's `[test]` extra, which is now the **only** thing deciding its version (residual
+exposure: a stale venv). `.claude/hooks/ruff-check.sh`
 runs **the same single merged ruff pass** at edit time (advisory, via `PostToolUse`, with
 `--force-exclude` and a repo-root `cd` so an edited excluded file honors the `extend-exclude`) but
 **not** pyright (edit-time latency; `./run-tests` carries the type gate). No invocation passes
@@ -1425,6 +1453,17 @@ Non-obvious things the harness relies on:
   `tests/integration/test_notice_roster.py` pins the 36-code roster and
   `tests/integration/test_notice_registration.py` enforces the registration rule by AST (see
   § Notices vs. news).
+- **The harness's own gates are tested** — `tests/unit/test_run_gates.py` loads the
+  extension-less `run-tests` with the same `SourceFileLoader` idiom the other extension-less
+  scripts use, and pins the two properties whose violation is **silent**: the type gate invokes
+  *this* venv's pyright with `--pythonpath` (a reintroduced PATH/`uvx` branch still runs and
+  still reports a verdict — a loud-but-useless 34–46 false `reportMissingImports`, which no
+  "gate missing" check would catch), and pyright **never runs unverified** (that test asserts on
+  the recorded `subprocess.call`s — exactly one, ruff's — because asserting the exit code alone
+  stays green if the version check is moved *below* the pyright run). All five mutations were
+  measured red, including the missing-pin one that was green until a test was added for it.
+  `run-tests` is invisible to both ruff (which discovers by extension) and pytest, so this file
+  is the only thing standing behind the instrument that decides "the suite is green".
 - **Shared test infrastructure (`tests/helpers/`).** `dnsfake.py` has the fake
   `psh.dns_classify.resolve` (`make_resolver`/`patch_resolve`, zone dict keyed `(name, rrtype)`)
   and `recording_console` (a `record=True` Console read back with `export_text()` — not `capsys`,

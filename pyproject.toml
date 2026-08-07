@@ -163,6 +163,18 @@ ignore = [
 include = ["psh", "find-platform-domains-dns.py", "find-platform-domains-cloudflare.py",
            "apply-platform-domains-cloudflare.py"]
 typeCheckingMode = "standard"
+# Resolve imports against THIS repo's venv, by config rather than by PATH luck.  pyright's
+# verdict depends on the Python environment it reads, and with neither of these set it takes
+# that environment from whatever `python` is first on PATH: measured, a pyright run with the
+# venv present but not ACTIVATED reports 46 false `reportMissingImports` over psh/.
+# ./run-tests passes `--pythonpath sys.executable`, which covers the gate -- these two cover
+# everything else, and the pyright-lsp plugin is why they are here: it launches
+# `pyright-langserver` by BARE NAME from PATH, so which environment the editor's diagnostics
+# describe was decided by process PATH order, not by anything in this repo.  Measured: with
+# these set, even a pyright from outside the venv reports 0 errors with the venv off PATH.
+# Assumes the README's documented `.venv` location; a venv elsewhere makes pyright say so.
+venvPath = "."
+venv = ".venv"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

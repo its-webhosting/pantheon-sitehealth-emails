@@ -257,13 +257,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* **Fix or drop the `uvx pyright@1.1.411` fallback** **(post-campaign)** — `./run-tests` prefers
-  the venv's pinned pyright and falls back to `uvx pyright@1.1.411`, but that fallback runs in an
-  isolated environment with **none of the project's dependencies**, so it reports **34 false
-  `reportMissingImports`**. It is loud, not silent, so it is not a gate defect — but it is useless
-  in practice. Either give the fallback the project's dependencies so it can resolve imports, or
-  drop it and require the venv binary outright.
-
 * **Fix the blanked `site_url` on a fatal WordPress-network URL fetch** — for a
   `wordpress_network` site whose `network_home_url` eval is **fatal**, `wordpress_network_url`
   (`psh/gather.py:246-249`) returns `("", "")` rather than `(None, "")`: `run_terminus` yields
@@ -317,7 +310,13 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   typed sc façade stubs for the runtime-exposed callables (`sc.escape_url`,
   `sc.check_wordpress_plugin`, `sc.terminus`, `sc.wp_eval`, …): those are assigned at runtime, so
   pyright cannot see their types today (the D-i8-7 lineage). Write the stubs, then extend
-  `[tool.pyright].include`.
+  `[tool.pyright].include`. **Measured 2026-08-07** (pyright 1.1.411, standard mode, venv
+  interpreter — supersedes the campaign-start figures, which included the since-deleted monolith
+  remnant): **44 errors over `check/` + `plugin/` + `script_context.py`** (54 files), of which
+  **36 are `reportAttributeAccessIssue`** — the sc-façade lineage above, i.e. the stubs are ~80% of
+  this job — plus 5 `reportArgumentType`, 2 `reportCallIssue`, 1 `reportInvalidTypeForm`.
+  `tests/` is a separate, larger job: **160 errors** over 138 files. Re-measure with
+  `python -m pyright --pythonpath .venv/bin/python --outputjson check plugin script_context.py`.
 
 * **Repoint tests off the `psh.<name>` re-export surface** **(post-campaign)** — the harness reaches
   every carved-out name through `psh.cli`'s re-export block (`psh.overage_blocks`, `psh.plan_costs`,

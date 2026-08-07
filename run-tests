@@ -11,12 +11,15 @@ Two audiences, one entry point (SPEC §5.8):
 
 Any other arguments (-k EXPR, -m MARK, paths, ...) are passed straight through to pytest.
 """
+import importlib.util
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+PYPROJECT = ROOT / "pyproject.toml"
 
 
 def ruff_argv():
@@ -40,6 +43,13 @@ def ruff_argv():
     as-is with NO version check -- a residual, accepted exposure.  Keep that branch (it's how
     a real dev install runs faster than `uvx`), but whoever installs it must match the pin
     above (0.15.22) or this gate can silently drift from the uvx fallback's guarantee.
+
+    WHY THIS IS NOT SHAPED LIKE pyright_argv() (a deliberate asymmetry, not an oversight):
+    ruff's verdict depends only on the source it reads and the config in pyproject.toml, so
+    ANY ruff of the pinned version gives the same answer wherever it came from -- PATH, uvx,
+    or a venv.  pyright's verdict additionally depends on the Python environment it resolves
+    imports against, which is why that gate refuses every binary but this venv's and pins its
+    version by measurement instead of by convention (pyright_version_problem below).
     """
     if shutil.which("ruff"):
         return ["ruff"]
@@ -49,19 +59,89 @@ def ruff_argv():
 
 
 def pyright_argv():
-    """How to invoke pyright here, or None.  Same fallback pattern -- and same version-pin
-    reasoning -- as ruff_argv(): the `uvx` fallback is PINNED to pyright@1.1.411 (CAMPAIGN.md
-    section 13 / decision D2), so the type gate's verdict cannot drift on a `uvx` cache
-    refresh with no code change (PD#14 -- the I14a ruff-drift class, closed here for the
-    other tool).  A `pyright` already on PATH is trusted as-is with NO version check -- a
-    residual, accepted exposure (it's how a real dev install runs faster than `uvx`); whoever
-    installs it must match the pin above (1.1.411) or this gate can silently drift from the
-    uvx fallback's guarantee.
+    """How to invoke pyright here, or None if it is not installed in THIS environment.
+
+    Deliberately NOT ruff_argv()'s pattern: no `shutil.which("pyright")`, no `uvx` fallback.
+    Unlike ruff, pyright's verdict depends on the Python environment it resolves imports
+    against, so ANY pyright that is not this repo's venv one type-checks psh/ with none of
+    the project's dependencies installed.  The dropped `uvx pyright@1.1.411` fallback did
+    exactly that -- 34 false `reportMissingImports` (CLOSING-AUDIT.md; the README TODO this
+    closes) -- and a PATH pyright from elsewhere (an npm-global install, say) does the same
+    whenever the venv is not active, which is worse: it looks like the intended branch.
+
+    So BOTH halves are anchored on `sys.executable` -- the interpreter running ./run-tests,
+    i.e. the venv's, exactly as main()'s `python -m pytest` invocation does:
+
+      * `-m pyright` picks the pyright INSTALLED IN that interpreter, making
+        `pyright==1.1.411` in pyproject's [test] extra the ONE thing deciding the version
+        (CAMPAIGN.md section 13 / decision D2: the type bar cannot drift for reasons outside
+        the diff, PD#14).  Residual exposure: a stale venv, predating a change to that pin.
+      * `--pythonpath` names the interpreter pyright RESOLVES IMPORTS AGAINST, and it is
+        load-bearing, not belt-and-braces.  Measured: pyright otherwise finds the environment
+        via the `python` on PATH, so `.venv/bin/python run-tests` with the venv merely not
+        ACTIVATED (no `source .venv/bin/activate`) reports 46 false `reportMissingImports` --
+        the dropped fallback's failure mode, reached through the right binary.
     """
-    if shutil.which("pyright"):
-        return ["pyright"]
-    if shutil.which("uvx"):
-        return ["uvx", "pyright@1.1.411"]
+    if importlib.util.find_spec("pyright") is None:
+        return None
+    return [sys.executable, "-m", "pyright", "--pythonpath", sys.executable]
+
+
+def pinned_pyright_version(pyproject=PYPROJECT):
+    """The `pyright==<version>` pin from pyproject's [test] extra, or None if there isn't one.
+
+    DERIVED, never duplicated: the pin has exactly one home (the [test] extra, which is what
+    `uv pip install .[test]` actually installs), so this gate cannot drift from it the way a
+    second copy of the number here would.
+    """
+    data = tomllib.loads(Path(pyproject).read_text(encoding="utf-8"))
+    for requirement in data["project"]["optional-dependencies"]["test"]:
+        name, sep, version = requirement.partition("==")
+        if sep and name.strip() == "pyright":
+            return version.strip()
+    return None
+
+
+def pyright_version_problem(argv):
+    """None if the pyright `argv` invokes is the pinned one, else a printable explanation.
+
+    This closes the one drift route left after the venv binary became mandatory: a STALE VENV
+    -- installed before the pin moved, or hand-installed with `pip install pyright` -- type
+    checks psh/ at a different pyright and says nothing, which is the ruff-drift class (PD#14)
+    reached through the environment instead of through a `uvx` cache.
+
+    The version is read from the tool ITSELF (`--version`, measured at 0.3s) rather than from
+    `importlib.metadata.version("pyright")`, which reports the pyright-python WRAPPER's
+    version: `PYRIGHT_PYTHON_FORCE_VERSION` moves the real checker underneath it, and an
+    instrument reporting a version other than the one it ran is exactly what PD#14 names.
+
+    EVERY failure to establish the version is a problem, never a pass (PD#1: a check that
+    cannot run must not quietly stop checking) -- including a missing pin, which would
+    otherwise turn a typo in pyproject.toml into a silently unverified gate.
+    """
+    pinned = pinned_pyright_version()
+    if pinned is None:
+        return (
+            "pyproject.toml's [test] extra carries no `pyright==<version>` pin, so the type "
+            "gate's version cannot be verified."
+        )
+    try:
+        completed = subprocess.run(
+            [*argv, "--version"], cwd=str(ROOT), capture_output=True, text=True, check=False
+        )
+    except OSError as e:
+        return f"`pyright --version` could not be run ({e}), so the type gate's version cannot be verified."
+    reported = completed.stdout.split()
+    if completed.returncode != 0 or len(reported) < 2 or reported[0] != "pyright":
+        return (
+            f"`pyright --version` reported no version (exit {completed.returncode}, stdout "
+            f"{completed.stdout.strip()!r}), so the type gate's version cannot be verified."
+        )
+    if reported[1] != pinned:
+        return (
+            f"pyright {reported[1]} is installed in {sys.executable}, but pyproject.toml's "
+            f"[test] extra pins pyright=={pinned}."
+        )
     return None
 
 
@@ -74,7 +154,8 @@ def run_gates():
          ONE pass (the campaign's two configs merged at I14b).  Includes the four PD rules
          (E722/BLE001/S105/S106) that each mechanize a directive in prompts/directives.md and
          run everywhere not excluded, plus the broad best-practice ratchet (CAMPAIGN.md 13).
-      2. pyright, standard mode over psh/ (pyproject [tool.pyright]).
+      2. pyright, standard mode over psh/ (pyproject [tool.pyright]) -- this venv's pyright,
+         with its version VERIFIED against the [test] extra's pin before it runs.
 
     Each gate prints a one-line label first, so a failure names its own gate (PD#1:
     failures surfaced actionably to the operator).  No --select on the ruff pass: the merged
@@ -114,12 +195,27 @@ def run_gates():
         # PD#1 again: pyright missing must FAIL, never silently skip -- a gate that does not
         # run is the shim failure mode CLAUDE.md warns about (a green that was never earned).
         print(
-            "ERROR: neither `pyright` nor `uvx` is on PATH, so the type gate cannot run.\n"
+            f"ERROR: pyright is not installed in {sys.executable}, so the type gate cannot run.\n"
             "       The suite is NOT green without it -- it is unverified.\n"
-            "       Install it via `uv pip install .[test]` (adds pyright) or `pip install pyright`.",
+            "       Activate the venv (`source .venv/bin/activate`) and install the pinned\n"
+            "       pyright with `uv pip install .[test]`.  A pyright from anywhere else is\n"
+            "       deliberately not used: it cannot see the project's dependencies.",
             file=sys.stderr,
         )
         return 1
+
+    problem = pyright_version_problem(pargv)
+    if problem is not None:
+        # The pin is the gate's bar (CAMPAIGN.md section 13 / D2).  Running an unverified
+        # pyright would report a verdict for a bar nobody chose -- fail instead (PD#14).
+        print(
+            f"ERROR: {problem}\n"
+            "       The suite is NOT green without a verified type gate -- it is unverified.\n"
+            "       Re-sync this environment with `uv pip install .[test]`.",
+            file=sys.stderr,
+        )
+        return 1
+
     completed = subprocess.call([*pargv], cwd=str(ROOT))
     if completed != 0:
         print(
