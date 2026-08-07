@@ -264,14 +264,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   in practice. Either give the fallback the project's dependencies so it can resolve imports, or
   drop it and require the venv binary outright.
 
-* **Docs path-guard test — considered and declined** **(post-campaign; not to be re-litigated)** —
-  a test asserting every path named in a document exists was proposed and rejected (SPEC D-i14d-7).
-  It catches only *deleted* paths, whereas every stale claim this campaign actually shipped was
-  prose about a file that still **existed** (the two-config ruff description, a wrong `sc.registry`
-  sentence, the false "`ALL_PACKAGES` loads every package" claim). It would also need an allowlist
-  for illustrative paths (`build/{site}.eml`, `check/<name>/`, a doc written later in the same
-  change), the kind of list that rots. Recorded here so the decision is not re-argued.
-
 * Add a `mutates` hook declaration to the DAG **(post-campaign)** — a third per-hook edge kind
   (beside `consumes`/`produces`) that orders a `site_post_gather` smell-notice consumer *after* the
   in-place `wp_smell`/`drush_smell` mutators (`check.wordpress.ocp`/`.favicon`,
