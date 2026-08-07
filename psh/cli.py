@@ -291,6 +291,46 @@ def parse_args(argv=None):
     return build_arg_parser().parse_args(argv)
 
 
+def validate_options() -> None:
+    """B5: the four argument guards, in their shadowing order, verbatim from main()
+    (development/2026-08-07-main-extraction/SPEC.md section 5.6).
+
+    Each guard calls sys.exit(<message>) -- a POSTCONDITION of this function, not a
+    caller concern (the same idiom as resolve_site_plan's "Bailing out." exit).  NOT
+    pure: the --create-tables branch sets sc.options.verbose = 3 in place.
+
+    Reads sc.options/sc.config at call time -- the house rule (sc.smtp_username(),
+    resolve_plan_name, cloudflare_enabled all do this) -- so main() MUST call this
+    AFTER process_config() pass 1, because the fourth guard reads sc.config.
+    """
+    if sc.options.resume_from is not None:
+        if sc.options.create_tables:
+            sys.exit(
+                "The --resume-from and --create-tables options are mutually exclusive."
+            )
+        if not sc.options.all:
+            sys.exit("--resume-from can only be used together with --all.")
+
+    if sc.options.create_tables:
+        if sc.options.import_older_metrics:
+            sys.exit(
+                "The --import-older-metrics and --create-tables options are mutually exclusive."
+            )
+        sc.options.verbose = 3  # force verbose output
+    elif (sc.options.all and len(sc.options.sites) != 0) or (
+        not sc.options.all and len(sc.options.sites) == 0
+    ):
+        sys.exit("You must specify either at least one site or the --all option.")
+
+    # --update-cloudflare-fqdns only does anything with the Cloudflare plugin enabled; refuse it
+    # otherwise rather than silently doing nothing.  (Gate on config, not `"plugin.cloudflare" in
+    # sc.plugin`: every plugin package is imported regardless of `enabled`.)
+    if sc.options.update_cloudflare_fqdns and not sc.config.get("Cloudflare", {}).get("enabled"):
+        sys.exit(
+            "--update-cloudflare-fqdns requires the [Cloudflare] section to be enabled in the config."
+        )
+
+
 # INVARIANT 8 -- DO NOT RE-INDENT THE html=/text= LITERALS BELOW.  Every interior line, and
 # both closing triple quotes, MUST stay at column 16 counted from the start of the line --
 # NOT at an indent relative to the `html=`/`text=` keyword, and NOT whatever a formatter
@@ -605,35 +645,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
         sys.exit(1)
 
     # Validate and process arguments.  The --resume-from guards come first: the create-tables and
-    # sites-or-all checks below both exit before they would be reached, shadowing these more
-    # precise messages.  --create-tables never runs the site loop, so a --resume-from on it would
-    # be silently dropped; reject it instead.
-    if sc.options.resume_from is not None:
-        if sc.options.create_tables:
-            sys.exit(
-                "The --resume-from and --create-tables options are mutually exclusive."
-            )
-        if not sc.options.all:
-            sys.exit("--resume-from can only be used together with --all.")
-
-    if sc.options.create_tables:
-        if sc.options.import_older_metrics:
-            sys.exit(
-                "The --import-older-metrics and --create-tables options are mutually exclusive."
-            )
-        sc.options.verbose = 3  # force verbose output
-    elif (sc.options.all and len(sc.options.sites) != 0) or (
-        not sc.options.all and len(sc.options.sites) == 0
-    ):
-        sys.exit("You must specify either at least one site or the --all option.")
-
-    # --update-cloudflare-fqdns only does anything with the Cloudflare plugin enabled; refuse it
-    # otherwise rather than silently doing nothing.  (Gate on config, not `"plugin.cloudflare" in
-    # sc.plugin`: every plugin package is imported regardless of `enabled`.)
-    if sc.options.update_cloudflare_fqdns and not sc.config.get("Cloudflare", {}).get("enabled"):
-        sys.exit(
-            "--update-cloudflare-fqdns requires the [Cloudflare] section to be enabled in the config."
-        )
+    # sites-or-all checks in validate_options() would otherwise exit before they are reached,
+    # shadowing these more precise messages.  --create-tables never runs the site loop, so a
+    # --resume-from on it would be silently dropped; reject it instead.
+    validate_options()
 
     if sc.options.verbose:
         sc.debug("Arguments:")
