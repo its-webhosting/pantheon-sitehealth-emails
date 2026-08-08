@@ -2660,6 +2660,18 @@ implementer per task, each adversarially reviewed by a separate fresh-context ag
      keep true. §11's I10 row is **deliberately untouched** — it records what increment I10
      *delivered*, which is history and still accurate; the present-tense sections are §3.1–§3.3.
 
+- **`CLOSING-AUDIT.md` also carries a discharge from this increment** (added in the fix round
+  after the task review, one commit above this entry's docs commit). Its Q1 stay-list walk had a
+  row reading *"The B48 smell-notice **emission** call | `build_smell_notices(site["name"], …)`
+  (builder in `psh/gather.py`; emission stays behind the `--only-warn` gate)"* — true at I14d,
+  false in all but its `--only-warn` clause at HEAD, and reachable by neither the task brief's
+  file list nor its verification grep. It is **item 4** of that document's own
+  `### Corrections and discharge (2026-08-07, post-campaign)` section. **This is not a fourth
+  CAMPAIGN.md amendment and needs no amendment protocol**: `CLOSING-AUDIT.md` is a dated
+  snapshot (*"Run 2026-07-24 at I14d close"*) that its own closing paragraph says is *"corrected,
+  never rewritten"*, so the `:46` row is annotated and left standing rather than edited in
+  place — the same treatment its three existing items give their targets.
+
 - **Byte-identity evidence (run, not assumed).** `git diff --stat tests/e2e/__snapshots__/` and
   `git diff --stat tests/integration/__snapshots__/` were both **empty** across all three
   commits: the four e2e goldens and `test_smell_notice_render.ambr` are byte-identical.

@@ -59,9 +59,10 @@ CAMPAIGN.md §3.3's 250–400-line target **(post-campaign)**".
 
 ### Corrections and discharge (2026-08-07, post-campaign)
 
-Three items. The first is a **discharge** — an answer that was true at I14d and has since
-been overtaken. The other two are **corrections of this document's own prose**: they were
-wrong when written, never true, and are not changes to CAMPAIGN.md §3.3, which was right. (The §3.3 amendments the same increment did
+Four items. Items **1 and 4** are **discharges** — answers that were true at I14d and have
+since been overtaken. Items **2 and 3** are **corrections of this document's own prose**: they
+were wrong when written, never true, and are not changes to CAMPAIGN.md §3.3, which was
+right. (The §3.3 amendments the same increment did
 make are listed in CAMPAIGN.md §3.3 A1–A5 and in LEDGER "Amendments — §3.3 stay-list
 (2026-08-07, post-campaign)".)
 
@@ -117,10 +118,38 @@ belongs in that cell. The threading has since moved to `psh.gather.gather_framew
 narrowing it to the seam. Writing the two under one bullet is what made a moved block look
 like a stay-list violation and an amended one look untouched.
 
+**4. The stay-list walk's B48 smell-notice *emission* row is DISCHARGED — that emission is no
+longer in `main()` at all.** The row reads *"The B48 smell-notice **emission** call |
+`build_smell_notices(site["name"], site_context["wp_smell"], …)` (builder in `psh/gather.py`;
+emission stays behind the `--only-warn` gate — LEDGER I10 amendment 1)"*. Every clause of it was
+true at I14d and none of the first three is true now. On 2026-08-07, post-campaign, the three
+smell notices moved into a new `check/smells/` package
+(`development/2026-08-07-smell-notice-relocation/SPEC.md`, commit `8bc6dff`): the builder is
+`check/smells/notices.py::build_smell_notices`, the emission is
+`check/smells/hook.py::emit_smell_notices` registered at **`site_pre_render`** with
+`consumes: ['wp_smell', 'drush_smell', 'composer_smell']` / `produces: []`, and `main()` calls
+neither:
+
+```
+$ grep -c build_smell_notices psh/cli.py psh/gather.py
+psh/cli.py:0
+psh/gather.py:0
+```
+
+The one clause that survives is the `--only-warn` exclusion, and it survives **for a different
+reason**: it is now a property of the *phase* rather than of the call's position — `main()`
+`continue`s for `--only-warn` above the `site_pre_render` firing, so a warning-only run still
+emits no smell rows, identically and not merely similarly. CAMPAIGN.md was amended in the same
+increment (§3.2 rewritten, §3.3's stay-list item removed, §3.1's module map row corrected);
+the narrative, the reason the `mutates` edge kind was **not** built, and the `sc.debug`
+observability delta found during implementation are in LEDGER *"2026-08-07 — post-campaign:
+the B48 smell-notice emission → `check/smells/`"*. Discharged here rather than rewritten in
+place, per the rule the next paragraph states.
+
 **Everything else in the walk stands *as a record of the I14d tree*** — including the
 answer's substantive claim, that the remainder of `main()` is stay-list content and not
 un-extracted logic. Read in the present tense it would mislead: several of its cells name
-code the 2026-08-07 increment has since moved into helpers `main()` calls (the arg guards
+code the 2026-08-07 **main-extraction** increment has since moved into helpers `main()` calls (the arg guards
 → `validate_options`; the Sandbox and unknown-plan skips → `resolve_site_plan`;
 `sites_from_resume_point` → `resolve_site_roster`). This whole document is a dated
 snapshot — *"Run 2026-07-24 at I14d close"* — and is corrected, never rewritten;
