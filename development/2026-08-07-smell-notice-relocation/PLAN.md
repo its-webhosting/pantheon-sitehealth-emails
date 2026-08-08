@@ -591,7 +591,20 @@ describe *failed gathers*, not checks, so they stay with the fetches (D-i9-1/D-i
             )
 ```
 
-Leave the `sc.debug("===== Notices:\n", ...)` lines that followed it in place.
+3. **Amended 2026-08-07 during implementation, on the user's ruling** (this supersedes the
+   original instruction to leave them in place): move both `sc.debug` lines —
+   `sc.debug("===== Notices:\n", site_context["notices"])` and
+   `sc.debug("===== Sections:\n", site_context["sections"])` — from just below the deleted
+   emission down to immediately **after** `sc.invoke_hooks("site_pre_render", site_context)`,
+   before the `report = f"Pantheon Traffic Report..."` line, keeping them adjacent and in order.
+
+   Left where they were, the dump runs *before* the phase that now adds the smell notices, so a
+   `-v` run stops listing them — an observability regression (PD#5) that no test at any tier
+   would catch, because none asserts on the dump. Moved, the dump is strictly more accurate than
+   before the relocation: it reports every notice the report will contain, including any future
+   `site_pre_render` hook's. Add a comment saying so, in the style of the
+   `# Sort + subject AFTER the phase (campaign I12)` comment just below, whose reasoning is
+   identical. See SPEC §3.2's amendment note.
 
 - [ ] **Step 15: Register the package with the two enumerated test lists**
 
@@ -816,14 +829,41 @@ It MUST record:
 - the two CAMPAIGN.md amendments from step 3;
 - the byte-identity evidence (four e2e goldens and `test_smell_notice_render.ambr` unchanged);
 - the new config surface `[Check.smells].enabled`;
+- **the one real behavior delta found during implementation and fixed in a second commit**: the
+  `sc.debug("===== Notices:\n", …)` dump sat *below* the old inline emission and *above* the
+  `site_pre_render` firing, so the relocation silently emptied the smell notices out of every
+  `-v` run's dump. Both `sc.debug` lines moved below the phase. Record the general lesson: when
+  relocating a producer past a seam, enumerate the **readers** on both sides, not only the other
+  producers — SPEC §3.2's obstacle table asked only "what else *appends* notices" and that is how
+  it was missed;
+- **the deferred coverage gap**: no e2e golden exercises a smell notice (pre-existing;
+  CAMPAIGN.md §10 records the same), so the byte-identity evidence above is silence about this
+  feature rather than confirmation. Deferred by explicit scope ruling; now a README TO DO
+  (step 5);
 - Open questions: none.
 
 - [ ] **Step 5: Delete the README TO DO item**
 
 In `README.md`, delete the first item under `## TO DO` — the seven-line `* Add a \`mutates\` hook
 declaration to the DAG **(post-campaign)** …` bullet — in its entirety, including its trailing
-blank line so the remaining list spacing is unchanged. Nothing replaces it. Do **not** touch the
-four other TO DO items.
+blank line so the remaining list spacing is unchanged. Do **not** touch the four other TO DO items.
+
+Then **add one new TO DO item** at the end of the list, recording the coverage gap the Task 1
+implementer surfaced and the user ruled out of scope (PD#9 — everything deferred is written down):
+
+```markdown
+* **Give the smell notices an e2e golden** **(post-campaign)** — no golden exercises a smell
+  notice at all: `grep -rl "PHP code problems" tests/e2e/__snapshots__/` returns nothing, and
+  CAMPAIGN.md §10's grep found the same. So "all four goldens byte-identical" across the
+  2026-08-07 relocation to `check/smells/` is *silence* about the feature, not confirmation of
+  it. The builder and the hook seam are covered at the unit and integration tiers
+  (`tests/unit/test_smell_notices.py`, `tests/integration/test_check_smells.py`, and the syrupy
+  pins in `test_smell_notice_render.py`); what nothing covers is the **composition** — that the
+  hook actually fires in a real run and its notices reach the rendered email. Closing it means
+  hand-authoring a `tests/fixtures/terminus*/` entry whose `wp` or `drush` call writes to stderr
+  while still succeeding, plus a fifth snapshot. Pre-dates the relocation; deferred at
+  `development/2026-08-07-smell-notice-relocation/` on an explicit scope ruling, not overlooked.
+```
 
 - [ ] **Step 6: Verify the documentation says nothing false**
 

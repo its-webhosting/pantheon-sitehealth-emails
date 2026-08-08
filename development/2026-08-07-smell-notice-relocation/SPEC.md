@@ -82,6 +82,7 @@ dissolve, with no engine change:
   :941  recommend_plan(...)                   → appends its notice
   :964  if only_warn: record csv; CONTINUE ═══════════ --only-warn runs END here
   :975  build_smell_notices(...)  ◄────────── TODAY: the emission, inline
+  :981  sc.debug("===== Notices:", ...)       READS the list (see below)
   :984  resolve_recipients(...)               (appends no notice)
   :989  stuff_plans_contract(...)             (appends no notice)
   :1003 invoke_hooks("site_pre_render")  ◄─── PROPOSED: the emission, as a hook
@@ -94,6 +95,18 @@ dissolve, with no engine change:
 | 1 — ordering vs. the mutators | The mutators are all `site_post_gather` (phase index 4); a phase-5 hook is unconditionally after every phase-4 hook. No intra-phase edge, and therefore no `mutates` edge, is involved. | `psh.modules.PHASES` order; `main()` fires phases in that order |
 | 2 — duplicate producer | The hook produces nothing. It **consumes** `wp_smell` / `drush_smell` / `composer_smell`, which the core registry already owns at phase 4. Condition 4 raises only when `owner_phase[key][0] > index`, i.e. `4 > 5` — false. | `psh/modules.py::_check_hook_consumers`, `_registry_owners` |
 | 3 — `--only-warn` csv | `main()` `continue`s at `:964`, which is *above* `:1003`. `site_pre_render` is documented full-report-only (`psh/modules.py::PHASES` comment, CLAUDE.md). Gating is therefore **identical to today's**, not merely similar. | `psh/cli.py:964-967`, `:1003` |
+
+**Amended 2026-08-07, during implementation.** The obstacle-1 row above asks what *appends* to
+`site_context["notices"]` between the old call site and the phase, and the answer is "nothing".
+That question was too narrow: `sc.debug("===== Notices:\n", site_context["notices"])` at `:981`
+**reads and prints** the list, so relocating the emission below it silently emptied the smell
+notices out of every `-v` run's dump — an observability regression (PD#5) invisible to every test,
+since no tier asserts on the dump. The fix, applied in this increment on the user's ruling and
+superseding PLAN.md Task 1 step 14's "leave the `sc.debug` lines in place": both `sc.debug` lines
+move **below** the `site_pre_render` firing. The dump is then strictly more accurate than before
+the relocation — it reports every notice the report will contain, including any future
+`site_pre_render` hook's. **The general lesson, worth more than the fix:** when relocating a
+producer past a seam, enumerate the *readers* on both sides of it, not only the other producers.
 
 ### 3.3 Consequence for the TO DO
 

@@ -114,7 +114,7 @@ fixes in I1).
 | `psh/db.py` | ORM models, `TrafficRow`/`OverageProtectionRow`, `db_engine_args`, `db_retry`/`db_retryable`/`record_db_reconnect`, `update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`, `load_overage_protection_window`, `DatabaseUnavailableError` |
 | `psh/traffic.py` | `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows`, the `traffic_table_columns` global, metrics gather + DB update/load flow (B22–B26), visits-by-month aggregation (B43) |
 | `psh/plans.py` | plan_info normalization (B12 part), SKU resolution (B17), `overage_blocks`, `contract_year_end`, `plan_costs`, `build_plan_over_time`, the `cost_table_columns` global, recommendation flow (B47) |
-| `psh/gather.py` | Slimmed framework gathers feeding the `site_post_gather` contract (from B32–B35), `check_wordpress_plugin`/`check_drupal_module` helpers, `build_smell_notices` (the B48 smell-notice *builder*; its emission stays in `main()` — LEDGER I10 amendment 1) |
+| `psh/gather.py` | Slimmed framework gathers feeding the `site_post_gather` contract (from B32–B35), `check_wordpress_plugin`/`check_drupal_module` helpers [the B48 smell-notice *builder* was received at I10 and left again on 2026-08-07, post-campaign, for `check/smells/notices.py` — together with the emission §3.3 used to keep in `main()`; see §3.2] |
 | `psh/charts.py` | Cap geometry (B13 part), chart data prep + matplotlib build (B44–B45) — returns PNG bytes |
 | `psh/render.py` | Jinja render (B53), PHP inline + `!important` pass (B54), `escape_url` |
 | `psh/mail.py` | Recipient resolution (B49), MIME assembly (B55), `smtp_login`, send (B57) |
@@ -147,14 +147,13 @@ A check MAY fetch its own data through `sc` gateway wrappers when the data is
 check-specific (e.g. `upstream:updates:list`); data used by core *and* checks is
 published through the contract instead (e.g. `envs`).
 
-The B48 smell notices are **not** a `check/addon_updates/` hook (LEDGER I10 amendment 1):
-their *builder* (`build_smell_notices`) moves to `psh/gather.py`, but the *emission* stays
-in `main()`. A `site_post_gather` smells hook cannot be ordered after the
-`wp_smell`/`drush_smell` in-place mutators — a `produces: ['wp_smell']` declaration is a
-condition-2 fatal against the core registry (D-i9-3), and alphabetical registration puts
-`check/addon_updates` first in the phase — and relocation would also add smell rows to
-`--only-warn` csv output (B48 sits after that gate today), a §8 surface change. The
-`mutates` hook declaration that would dissolve this class is post-campaign work (README TODO).
+The B48 smell notices moved to `check/smells/` (a `site_pre_render` hook) on 2026-08-07,
+post-campaign — see `development/2026-08-07-smell-notice-relocation/SPEC.md`. The obstacles
+recorded here at I10 (LEDGER I10 amendment 1) were real but `site_post_gather`-specific: a
+later phase is unconditionally after the in-place `wp_smell`/`drush_smell` mutators, sits
+below `main()`'s `--only-warn` gate, and leaves the notice order unchanged. The `mutates`
+hook declaration that would have dissolved the same-phase version of the class was
+consequently NOT built, and its README TODO is discharged.
 
 ### 3.3 What stays in `main()` (exhaustive, with why)
 
@@ -165,10 +164,10 @@ over the already-sorted, already-filtered names — of B14 the **loop skeleton**
 B15, B16, of B18 the
 **`SiteContext` creation** only (A4), B25, B42); phase firing and contract
 stuffing (B27, B28, B31 as its `stuff_dns_contract`/`invoke_hooks` **seam** (A5), B37,
-B52); the B48 smell-notice *emission* call (the builder
-moved to `psh/gather.py` at I10, but the emission summarizes end-of-phase smell state no
-hook position can guarantee under the D-i9-3 rebind design, and it must stay behind the
-`--only-warn` gate — LEDGER I10 amendment 1); notice sort + subject (B50 minus billing);
+B52); [the B48 smell-notice *emission* call left this list on 2026-08-07,
+post-campaign — it is a `check/smells/` hook at `site_pre_render` now; see §3.2 and
+`development/2026-08-07-smell-notice-relocation/SPEC.md`]; notice sort + subject (B50
+minus billing);
 the `try`/`except BaseException` lifecycle dispatch (B59–B60 call sites). Everything else
 leaves. Target: 250–400 lines.
 

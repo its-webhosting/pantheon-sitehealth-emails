@@ -4,7 +4,8 @@ TRUE -- this notice rendered unconditionally (inline in main(), after site_post_
 before the relocation (section 5).
 
 CAMPAIGN.md amendment 1 (D-i10-1): B48's smell-notice EMISSION stays in main() -- only
-this table's builder moves here.  add_on_updates is the SAME list object the I9 stuffer
+this table's builder moves here (superseded 2026-08-07 -- the emission moved to
+check/smells/, a site_pre_render hook).  add_on_updates is the SAME list object the I9 stuffer
 publishes (test_contract_registry.py pins the stuffer side); this hook reads it live."""
 
 import script_context as sc

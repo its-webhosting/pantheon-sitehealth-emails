@@ -37,6 +37,12 @@ _Avoid_: notice (news is not per-site)
 A standalone block of report content contributed by a check, distinct from notices
 (which are findings) and news (which is org-wide).
 
+**Smell**:
+Non-fatal text a `wp`, `drush`, or `composer` command wrote to stderr while still
+succeeding — reported to the site owner as "PHP code problems". Internal vocabulary:
+the word itself never appears in a report.
+_Avoid_: warning (that is a notice severity), error (a smell is not a failure)
+
 **Check**:
 A site-health inspection that contributes notices and/or sections to reports. Checks
 are optional per institution.

@@ -2595,3 +2595,141 @@ threading is B33/B34 (residue)/B35 (residue)/B36 and was never stay-list content
 walk lumped `classify_domains` (**B29**, not on the list) together with `stuff_dns_contract`
 (**B31**, on it). Both were wrong when written; §3.3 was right. Q1's "NO on the line count"
 answer is also superseded there, with the re-measured 454/318 and the D-i14d-1 discharge.
+
+## 2026-08-07 — post-campaign: the B48 smell-notice emission → `check/smells/` (commits `8bc6dff`, `45e4757`, `8110ebb` + this docs commit)
+
+**Not `I<N>`-numbered: the campaign is closed.** CAMPAIGN.md has carried its
+`**Completed:** 2026-07-24 at I14d` line since I14d, and this change neither reopens it nor
+adds an increment to it. It is recorded here because it discharges a campaign artifact (the
+`mutates` README TODO, §3.2's closing sentence) and because it amends CAMPAIGN.md §3.1,
+§3.2 and §3.3, which by that document's preamble *requires* a ledger entry. Spec:
+`development/2026-08-07-smell-notice-relocation/SPEC.md`. Run through
+`superpowers:subagent-driven-development` under `prompts/implementation-standards.md`: one
+implementer per task, each adversarially reviewed by a separate fresh-context agent.
+
+- **Moved** (`8bc6dff`): the three B48 smell notices (`wp-smell`, `drush-smell`,
+  `composer-smell` — non-fatal `wp`/`drush`/`composer` stderr, shown to the site owner as
+  "PHP code problems") left `psh/gather.py` **and** `main()` for a new `check/smells/`
+  package:
+
+  | From | To |
+  |---|---|
+  | `psh/gather.py::build_smell_notices` (the builder) | `check/smells/notices.py::build_smell_notices`, which also registers the three codes through `sc.registry` |
+  | `psh/cli.py`'s inline emission call | `check/smells/hook.py::emit_smell_notices`, registered by `check/smells/__init__.py` as `check.smells.hook.emit_smell_notices` at **`site_pre_render`**, `consumes: ['wp_smell', 'drush_smell', 'composer_smell']`, `produces: []` |
+
+  The literals moved verbatim under five sanctioned substitutions (the `psh.notice` import
+  became `import script_context as sc`; `registry.` / `Notice(` / `Severity.` /
+  `list[Notice]` became their `sc.`-prefixed forms), per the checks-import-only-`sc`
+  convention (Invariant 9) and the `check/`-registers-through-the-façade rule.
+
+- **The finding, which is the reason this entry is worth reading.** CAMPAIGN.md §3.2 gave
+  three obstacles to making B48 a hook, and the README TODO turned them into a request for a
+  **`mutates`** edge kind. All three are real and all three are **`site_post_gather`-specific**
+  — the campaign text never said so: (1) intra-phase order comes from `produces`/`consumes`
+  edges, so a same-phase hook cannot be ordered after the in-place `wp_smell`/`drush_smell`
+  mutators; (2) `produces: ['wp_smell']` is a duplicate-producer fatal against the core
+  `CONTRACT` registry (D-i9-3); (3) a hook at or before `site_post_gather` would add smell rows
+  to `--only-warn` csv output, a §8 surface change. At **`site_pre_render`** every one
+  dissolves with no engine change: a later phase is unconditionally after every
+  `site_post_gather` hook; the hook produces nothing and consuming a key an *earlier* phase
+  owns is legal (condition 4 raises only when `owner_phase > index`); and `main()` `continue`s
+  for `--only-warn` **above** the `site_pre_render` firing, so the gating is *identical* to the
+  inline emission's rather than merely similar. The TODO's premise — that `mutates` is what
+  would let B48 become a hook — therefore did not hold.
+
+- **`mutates` was consequently NOT built**, and the README item is deleted as **superseded,
+  not deferred** (its payoff shipped without it). What would make it worth reconsidering, stated
+  so a future reader does not have to re-derive it: a **genuine same-phase consumer of an
+  in-place mutator** — a hook that must run after `check.wordpress.ocp`/`.favicon` or
+  `check.umich.drupal_ua` *within* `site_post_gather`. There is none in this repo today, so
+  building the edge kind now would be engine surface with no consumer — exactly the "engineered
+  enough" line in the Spine's Engineering Preferences.
+
+- **CAMPAIGN.md amendments — three, all applied in this docs commit:**
+  1. **§3.2** — the "The B48 smell notices are **not** a `check/addon_updates/` hook" paragraph
+     is replaced by one recording the move to `check/smells/` at `site_pre_render`, that the
+     three obstacles were `site_post_gather`-specific, and that `mutates` was not built.
+  2. **§3.3** — "the B48 smell-notice *emission* call" is removed from the exhaustive
+     what-stays-in-`main()` list, leaving a bracketed cross-reference to §3.2 and the spec in
+     its place. Without this, §3.3 would have been false by definition after `8bc6dff`.
+  3. **§3.1** — the `psh/gather.py` row of the exhaustive module map no longer lists
+     `build_smell_notices` among what that module *has*; it records that the builder was
+     received at I10 and left again on 2026-08-07. **This third amendment is beyond the two the
+     task brief prescribed**, and it is here because §3.1 is present-tense architecture: leaving
+     it would have kept a false claim in the frozen document the amendment protocol exists to
+     keep true. §11's I10 row is **deliberately untouched** — it records what increment I10
+     *delivered*, which is history and still accurate; the present-tense sections are §3.1–§3.3.
+
+- **Byte-identity evidence (run, not assumed).** `git diff --stat tests/e2e/__snapshots__/` and
+  `git diff --stat tests/integration/__snapshots__/` were both **empty** across all three
+  commits: the four e2e goldens and `test_smell_notice_render.ambr` are byte-identical.
+  `--update-goldens` was never run (Invariant 1). `test_smell_notice_render.py`'s three test
+  names were kept **unchanged on purpose** — syrupy keys the `.ambr` by file name AND test name,
+  so the unchanged snapshot file is itself the evidence that the six notice literals moved
+  verbatim, which `git diff -w` could not have shown (Invariant 8).
+
+- **New config surface: `[Check.smells].enabled`, default true** (an absent
+  `[Check]`/`[Check.smells]`/`enabled` still registers, matching the other check packages), added
+  to `sample-pantheon-sitehealth-emails.toml`. This is operator-visible and new: setting it to
+  `false` silences three notices that were previously unconditional. That is the intended
+  consequence of giving the check its own gate rather than borrowing
+  `[Check.addon_updates]`'s.
+
+- **Tests: 1841 → 1853 passed** (3 skipped, 2 deselected, **107 snapshots** — unchanged),
+  **+12 collected**, every one accounted for: `tests/integration/test_check_smells_init.py` (4),
+  `tests/integration/test_check_smells.py` (4), one new
+  `tests/integration/test_regressions.py` ordering assertion (see the delta below), and **3
+  from a parametrized test that extended itself** —
+  `tests/unit/test_owner_facing_encoding.py::test_no_raw_non_ascii_in_html_reachable_literals`
+  is parametrized over discovered files, so the new package's three files joined it with no edit.
+  `tests/unit/test_smell_notices.py` (8) and `tests/integration/test_smell_notice_render.py` (3)
+  were **repointed, not rewritten** — both now load `check/smells/notices.py` standalone through
+  `tests/helpers/checkload.py`, and their assertions are unchanged. `test_hook_dag.py`'s
+  `ALL_PACKAGES` and `test_notice_roster.py`'s `ROSTER` grouping both gained `check.smells`;
+  `len(ROSTER) == 36` is unchanged, because the three codes moved rather than multiplied.
+
+- **The one real behavior delta found during implementation, fixed in `45e4757`.** The
+  relocation moved the emission from *above* `sc.debug("===== Notices:\n", …)` to *below* it —
+  the dump sat between the old inline call site and the `site_pre_render` firing — so every
+  `-v` run silently stopped listing the smell notices in that dump (`sc.debug` defaults to
+  level 1, so this was not a `-vvv`-only detail). **Nothing went red**: no test at any tier
+  reads the dump's content, and the four e2e goldens assert on the `.eml`, never on stdout.
+  Both `sc.debug` lines now run immediately after the phase firing, in their original order,
+  which is strictly more accurate than the pre-relocation position — the dump now reports every
+  notice the report will contain, including any future `site_pre_render` hook's.
+  `tests/integration/test_regressions.py::test_the_notices_dump_runs_after_the_site_pre_render_phase`
+  pins the order with the same `inspect.getsource(psh.main)` idiom as the two composition-glue
+  assertions beside it, and was watched red against the pre-fix ordering. **A second delta came
+  with the fix and is accepted, not overlooked**: the dumps now also sit below
+  `resolve_recipients`' `continue`, so a site whose team fetch fails gets no dump at all —
+  accepted because that site produces no report and no `-notices.csv` rows either, and a second
+  dump above `resolve_recipients` would duplicate output on every other site. `8110ebb` records
+  that cost in the call-site comment and repairs a test that could not prove itself (see below).
+  **The general lesson, worth more than the fix: when relocating a producer past a seam,
+  enumerate the *readers* on both sides of it, not only the other producers.** SPEC §3.2's
+  obstacle table asked only "what else *appends* to `site_context["notices"]`", and that is
+  exactly how a reader — a `sc.debug` line four lines below the call site — was missed.
+
+- **Review fix round (`8110ebb`), no behavior change.**
+  `test_the_phase_is_site_pre_render_and_that_is_load_bearing` opened with an assertion that was
+  a verbatim duplicate of a sibling test's, so a phase fault tripped *that* line and the test's
+  genuinely unique parts — the `PHASES` exclusivity loop and the `consumes`/`produces` asserts —
+  never executed under any fault (PD#14: a guard that has not been shown red on the condition it
+  guards is a claim). The unique assertions now run first; two faults were injected to prove the
+  parts that had never gone red (registering the hook at **both** phases, which only the
+  exclusivity loop catches, and dropping `composer_smell` from `consumes`). The docstring claim
+  that this test was "the only thing that goes red" on a phase move was **false and is
+  corrected**: `test_hook_dag.py` staying **green** on such a move is the true and useful half —
+  the declarations are legal at `site_post_gather` too, so the DAG cannot detect the move.
+
+- **Deferred, and now a README TO DO (PD#9): no e2e golden exercises a smell notice.**
+  `grep -rl "PHP code problems" tests/e2e/__snapshots__/` returns nothing, and CAMPAIGN.md §10's
+  grep found the same. The byte-identity evidence above is therefore **silence** about this
+  feature, not confirmation of it: the builder and the hook seam are covered at the unit and
+  integration tiers, but nothing covers the **composition** — that the hook fires in a real run
+  and its notices reach the rendered email. Pre-existing (it long pre-dates this change), and
+  deferred here on an explicit scope ruling rather than overlooked. Closing it means
+  hand-authoring a `tests/fixtures/terminus*/` entry whose `wp` or `drush` call writes to stderr
+  while still succeeding, plus a fifth snapshot.
+
+- **Open questions:** none.

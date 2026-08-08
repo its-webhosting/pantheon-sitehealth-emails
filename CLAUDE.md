@@ -616,16 +616,16 @@ their shadowing order — see **Resuming an interrupted `--all` run**), `resolve
   fetch + version derivation + `site_results` entry, pm:list, and the D7 pm:updatestatus **or**
   D8+ composer dry-run + composer audit add-on collection — the D7-vs-D8+ branch stays inside
   because it selects between two *gather* strategies, not between checks) returning a
-  **`DrupalGather`** NamedTuple threaded by `gather_framework` like the WP branch, and
-  `build_smell_notices`
-  (the smell-notice *builder*; **its emission stays in `main()`** because it summarizes
-  end-of-phase smell state no hook position can guarantee and must stay behind the `--only-warn`
-  gate). The `wp_error`/`drush_error` notices for *failed gathers* stay with the fetches (they
+  **`DrupalGather`** NamedTuple threaded by `gather_framework` like the WP branch.
+  The `wp_error`/`drush_error` notices for *failed gathers* stay with the fetches (they
   describe the gather, not a check); the notice-emitting checks that once interleaved here live
-  in `check/wordpress/`, `check/drupal/`, and `check/umich/`. `gather_drupal`'s composer dry-run
-  calls `run_terminus(...)` directly (composer output is human-readable text, not JSON), so this
-  module binds `run_terminus` in its **own** namespace — see the two-binding seam note under
-  Testing. **`gather_framework(site, live_site, site_context) -> FrameworkGather`** is the branch
+  in `check/wordpress/`, `check/drupal/`, `check/umich/`, and `check/smells/` — the last of
+  which took `build_smell_notices` *and* its emission out of this module and out of `main()`
+  on 2026-08-07 (`development/2026-08-07-smell-notice-relocation/SPEC.md`).
+  `gather_drupal`'s composer dry-run calls `run_terminus(...)` directly (composer output is
+  human-readable text, not JSON), so this module binds `run_terminus` in its **own** namespace
+  — see the two-binding seam note under Testing.
+  **`gather_framework(site, live_site, site_context) -> FrameworkGather`** is the branch
   selector above both gathers (WordPress / Drupal / the unknown-framework fallback with its
   `ATTENTION` print), returning versions, plugins/modules, `add_on_updates` (the **same list
   object**, never a copy — the contract publishes it by identity), the `site_results` entry, and
@@ -697,7 +697,8 @@ functions run, so it is available to every function at call time.
 `__init__.py`** files — the empty top-level `plugin/__init__.py` and `check/__init__.py` are
 skipped — and imports each containing package (currently `plugin.aws`, `plugin.cloudflare`,
 `plugin.env`, `plugin.umich`, `check.addon_updates`, `check.cloudflare`, `check.dns`,
-`check.drupal`, `check.pantheon`, `check.pantheon_cdn_change`, `check.umich`, `check.wordpress`).
+`check.drupal`, `check.pantheon`, `check.pantheon_cdn_change`, `check.smells`, `check.umich`,
+`check.wordpress`).
 **The walk is CWD-relative and keys off a non-empty `__init__.py`**: a package with an empty
 `__init__.py`, or a run whose CWD lacks the `check`/`plugin` trees, silently loads nothing
 (this is why the e2e workdir symlinks them — see Testing). Each `__init__.py` self-registers at
@@ -811,6 +812,17 @@ Check and integration-plugin packages:
   table notice, consumes `add_on_updates`, reading the SAME list object the stuffer publishes;
   gated on `[Check.addon_updates].enabled`, **default true**); its `updates-addons` notice body
   embeds an un-gated its.umich.edu support link.
+- `check/smells/` — the three "PHP code problems" notices (`wp-smell`/`drush-smell`/
+  `composer-smell`: non-fatal wp/drush/composer stderr), `notices.py` (the
+  `build_smell_notices` builder) + a `site_pre_render` `hook.py` consuming
+  `wp_smell`/`drush_smell`/`composer_smell` and producing nothing; gated on
+  `[Check.smells].enabled`, **default true**. **The phase is load-bearing and later than the
+  other framework checks on purpose**: `site_pre_render` is unconditionally after the
+  `site_post_gather` hooks that rebind `wp_smell`/`drush_smell` in place (so no ordering edge
+  is needed) and it sits below `main()`'s `--only-warn` `continue` (so a warning-only run emits
+  no smell rows, exactly as the pre-2026-08-07 inline emission did). Moved out of
+  `psh/gather.py` + `main()` on 2026-08-07 —
+  `development/2026-08-07-smell-notice-relocation/SPEC.md`.
 - `check/pantheon_cdn_change/` (`site_post_dns`, unconditional registration) flags custom
   domains still CNAME'd to the legacy Pantheon GCDN (Fastly) — in public DNS or in Cloudflare —
   and gets the replacement records Pantheon requires from `terminus domain:dns`. **Temporary**,
@@ -853,7 +865,7 @@ side goes red:
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `psh.dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str). They are DAG-declared in the hook's `produces`, present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `psh.cli.resolve_site_url` — which `main()` calls **after** the phase, exactly so it can read them — reads them with `.get(...)` — never assume they exist) |
 | `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (the smell emission) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry) |
-| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a render dict, built by `site_context.notice_to_dict`) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase |
+| `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a render dict, built by `site_context.notice_to_dict`) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase. **A second hook runs in this phase and adds no key at all:** `check.smells.hook.emit_smell_notices` *consumes* `wp_smell`/`drush_smell`/`composer_smell` (read live off the `SiteContext`, never cached — they are the two sanctioned mutate-during-phase keys plus `composer_smell`) and `produces: []`; what it contributes is the three "PHP code problems" notices, appended to `site_context["notices"]` before `sort_notices_and_subject` runs, which is why the guaranteed-keys list above is unchanged |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext`; it receives the run's `RunState` — `finish_run`'s first statement is `invoke_hooks("run_finish", run_state)`, fired on completed and aborted runs, the seam for future run-level artifact hooks. `CONTRACT["run_finish"]` stays `()`: the `RunState` is the hook argument, not a contract key) |
 
 **The send block stays in `main()`, not `psh/mail.py`.** The send sequence is `smtp_login()` …
@@ -1442,12 +1454,29 @@ Non-obvious things the harness relies on:
   `test_check_addon_updates_init.py`/`test_check_addon_updates.py` (gating + the `updates-addons`
   table incl. the same-object read), `test_check_umich_drupal_ua.py` (the UA seams, the
   `drush_smell`-rebind pin, and the gating-change proof: umich-disabled registers no `drupal_ua`),
-  and the syrupy render files `test_drupal_notice_render.py` / `test_addon_updates_notice_render.py`
-  / `test_umich_drupal_ua_notice_render.py` / `test_smell_notice_render.py` (the last pins the
-  composer literal at column 0). Unit tier: `tests/unit/test_no_primary_domain_notice.py` (the
-  pure helper), and `tests/unit/test_smell_notices.py` (the column-0 assertions).
+  and the syrupy render files `test_drupal_notice_render.py` /
+  `test_addon_updates_notice_render.py` / `test_umich_drupal_ua_notice_render.py`. Unit tier:
+  `tests/unit/test_no_primary_domain_notice.py` (the pure helper).
   `test_hook_dag.py`'s `ALL_PACKAGES` covers every package; `test_documented_sc_facade_names_exist`
   pins `sc.drush_php_script`/`sc.drush_error`.
+- **check/smells tests.** All four files load the package **standalone** through
+  `tests/helpers/checkload.py`'s `load_check_module` (the `test_annual_billing_notices.py`
+  precedent — there is no `psh.`-re-export route to a `check/` module). Unit tier:
+  `tests/unit/test_smell_notices.py` (the `build_smell_notices` builder at its new
+  `check/smells/notices.py` home, incl. the column-0 assertions on the composer literal;
+  loading `notices.py` alone never runs `check/smells/__init__.py`, so no hook registers and
+  no config gate is consulted — these stay pure builder tests). Integration tier:
+  `tests/integration/test_smell_notice_render.py` (the syrupy pins of the three notice bodies —
+  **the three test names are unchanged across the 2026-08-07 move on purpose**, because syrupy
+  keys `.ambr` entries by file name AND test name, so the byte-identical snapshot file is
+  itself the evidence that the literals moved verbatim),
+  `tests/integration/test_check_smells_init.py` (config gating, the default-true proof, the
+  hook's phase/`consumes`/`produces` declarations, and a `PHASES` exclusivity loop) and
+  `tests/integration/test_check_smells.py` (the hook seam via `sc.SiteContext`, incl. the pin
+  that it reads the **rebound** `wp_smell` rather than the stuffed one). **`test_hook_dag.py`
+  cannot detect this hook being moved to `site_post_gather`** — the declarations validate
+  there too — so `test_check_smells_init.py` is the only cover for the phase choice, and
+  `check/smells/__init__.py`'s docstring records why the phase is load-bearing.
 - **psh/render + psh/mail + annual-billing tests.** Integration tier:
   `tests/integration/test_render_report.py` (the `render_report` I/O contract at its seam in a tmp
   workdir with the real templates + **real php** — `pytest.skip("php not on PATH")` when php is

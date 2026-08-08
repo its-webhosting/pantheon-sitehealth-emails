@@ -257,14 +257,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* Add a `mutates` hook declaration to the DAG **(post-campaign)** — a third per-hook edge kind
-  (beside `consumes`/`produces`) that orders a `site_post_gather` smell-notice consumer *after* the
-  in-place `wp_smell`/`drush_smell` mutators (`check.wordpress.ocp`/`.favicon`,
-  `check.umich.drupal_ua`), which today are deliberately DAG-invisible (D-i9-3); declined in-campaign
-  at I10 (user decision) because it is engine surface no move needs, but it is what would let B48's
-  smell notices become a `check/addon_updates/` hook instead of staying an inline emission in `main()`
-  (LEDGER I10 amendment 1).
-
 * ~~Add ruff for linting~~ — **done, narrowly** (2026-07-16). `[tool.ruff.lint]` in `pyproject.toml` selects only `E722`, `BLE001`, `S105`, `S106` — each one mechanizes a directive that already existed in prose (`prompts/directives.md` PD#2, PD#6), so nothing there is new policy. It runs in `./run-tests` (a gate) and in `.claude/hooks/ruff-check.sh` (advisory, at edit time). Both read `pyproject.toml`; neither passes `--select`. Two follow-ups, deliberately deferred:
   * ~~**Broaden the rule set**~~ — **done** (modularization campaign, merged at I14b). The campaign's two ruff configs were collapsed into **one merged pass**: `[tool.ruff.lint]` in `pyproject.toml` now runs `select = ALL` minus a justified `ignore` list over the whole tree, with the `tests/**` idiom block in `[tool.ruff.lint.per-file-ignores]` and `extend-exclude = ["development/2*"]` scoping out the dated archive folders. The separate broad config (`ruff-broad.toml`) is **deleted** — there is now ONE ruff pass, run both by `./run-tests` (a gate) and by `.claude/hooks/ruff-check.sh` (advisory, at edit time); neither passes `--select`. The four PD rules (`E722`, `BLE001`, `S105`, `S106`) are members of `ALL` and still run everywhere not excluded.
   * **Switch from "house styles" to standard Python styles** — this is a **separate, undecided** call, not a consequence of adopting ruff. The `-> (str, str, bool)` tuple hints are currently *retained* on purpose (`prompts/implementation-standards.md` § the fresh-context trap tells implementers not to "correct" them), so this TODO and that rule presently contradict each other. Decide it explicitly rather than letting a broadened linter decide it by accident.
@@ -365,6 +357,18 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
   task (`prompts/implementation-standards.md` — "refactoring is not part of the red→green loop").
   Removing all three is the follow-up, and is purely mechanical: no producer writes to the field
   anymore.
+
+* **Give the smell notices an e2e golden** **(post-campaign)** — no golden exercises a smell
+  notice at all: `grep -rl "PHP code problems" tests/e2e/__snapshots__/` returns nothing, and
+  CAMPAIGN.md §10's grep found the same. So "all four goldens byte-identical" across the
+  2026-08-07 relocation to `check/smells/` is *silence* about the feature, not confirmation of
+  it. The builder and the hook seam are covered at the unit and integration tiers
+  (`tests/unit/test_smell_notices.py`, `tests/integration/test_check_smells.py`, and the syrupy
+  pins in `test_smell_notice_render.py`); what nothing covers is the **composition** — that the
+  hook actually fires in a real run and its notices reach the rendered email. Closing it means
+  hand-authoring a `tests/fixtures/terminus*/` entry whose `wp` or `drush` call writes to stderr
+  while still succeeding, plus a fifth snapshot. Pre-dates the relocation; deferred at
+  `development/2026-08-07-smell-notice-relocation/` on an explicit scope ruling, not overlooked.
 
 
 ## Copyright and license information
