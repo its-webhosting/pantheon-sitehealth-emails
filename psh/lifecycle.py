@@ -39,10 +39,10 @@ imports here are stdlib + sqlalchemy.exc + rich only.
 import dataclasses
 import datetime
 import json
-import os
 import shlex
 import signal
 import sys
+from pathlib import Path
 
 from rich.markup import escape
 from rich.pretty import pprint
@@ -128,9 +128,9 @@ def merge_prior_results(path: str, new_results: dict, *, what: str = "results") 
     import script_context as sc  # noqa: PLC0415 -- call-time import; see the module docstring
 
     merged = {}
-    if os.path.exists(path):  # noqa: PTH110 -- verbatim artifact-path IO moved at I13; pathlib migration is I14 de-grandfathering
+    if Path(path).exists():
         try:
-            with open(path, encoding="utf-8") as f:  # noqa: PTH123 -- verbatim artifact-path IO moved at I13
+            with Path(path).open(encoding="utf-8") as f:
                 merged = json.load(f)
             if not isinstance(merged, dict):
                 raise ValueError(f"expected a JSON object, found {type(merged).__name__}")  # noqa: TRY004, TRY301 -- moved verbatim; the ValueError (not TypeError) is deliberate, caught together with JSONDecodeError by the except below, and inlining the raise is the point
@@ -145,7 +145,7 @@ def merge_prior_results(path: str, new_results: dict, *, what: str = "results") 
     return merged
 
 
-def finish_run(  # noqa: C901, PLR0913, PLR0915 -- moved verbatim (CAMPAIGN.md section 3.1: moves get no algorithmic redesign); the epilogue is one straight-line body, the 6-arg signature is the abort_run/main() call sites
+def finish_run(  # noqa: PLR0913, PLR0915 -- moved verbatim (CAMPAIGN.md section 3.1: moves get no algorithmic redesign); the epilogue is one straight-line body, the 6-arg signature is the abort_run/main() call sites
     db_session,
     db_engine,
     site_count: int,
@@ -234,11 +234,10 @@ def finish_run(  # noqa: C901, PLR0913, PLR0915 -- moved verbatim (CAMPAIGN.md s
             )
         if write_artifacts:
             ymd = datetime.datetime.today().strftime("%Y%m%d")  # noqa: DTZ002 -- moved verbatim; the naive local date names the artifact files ({ymd}-*.json), and attaching a tzinfo risks an off-by-one-day shift at midnight UTC (a behavior change a move may not make)
-            with open(  # noqa: PTH123 -- verbatim artifact write; the plain open() keeps bytes-on-disk identical
-                f"{ymd}-notices.csv", "a" if accumulating else "w", encoding="utf-8"
+            with Path(f"{ymd}-notices.csv").open(
+                "a" if accumulating else "w", encoding="utf-8"
             ) as f:
-                for n in run_state.all_warnings:  # noqa: FURB122 -- moved verbatim; per-row write, writelines is I14 cleanup
-                    f.write(n + "\n")
+                f.writelines(n + "\n" for n in run_state.all_warnings)
 
             results_path = f"{ymd}-results.json"
             # merge_prior_results() rather than a hand-rolled {**prior, **site_results}: it owns
@@ -256,11 +255,11 @@ def finish_run(  # noqa: C901, PLR0913, PLR0915 -- moved verbatim (CAMPAIGN.md s
             # run's reconnect evidence, and dropping it here would silently lose the exact thing
             # "previous" exists to preserve.  Migrated into run_meta["previous"] below.
             legacy_run = payload.pop("_run", None)
-            with open(results_path, "w", encoding="utf-8") as f:  # noqa: PTH123 -- verbatim artifact write
+            with Path(results_path).open("w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=4)
 
             run_path = f"{ymd}-run.json"
-            run_json_existed = os.path.exists(run_path)  # noqa: PTH110 -- verbatim artifact-path IO moved at I13
+            run_json_existed = Path(run_path).exists()
             # Read the prior metadata first so this run's block can NEST the earlier run's under
             # "previous" -- an aborted run's block carries the reconnect evidence that prompted
             # the resume in the first place.  merge_prior_results() is just the reader here (with
@@ -291,7 +290,7 @@ def finish_run(  # noqa: C901, PLR0913, PLR0915 -- moved verbatim (CAMPAIGN.md s
                 # record of the prior run's reconnect evidence was the "_run" key we just popped
                 # out of results.json above.  Carry it forward instead of discarding it.
                 run_meta["previous"] = legacy_run
-            with open(run_path, "w", encoding="utf-8") as f:  # noqa: PTH123 -- verbatim artifact write
+            with Path(run_path).open("w", encoding="utf-8") as f:
                 json.dump(run_meta, f, indent=4)
     else:
         for n in run_state.all_warnings:

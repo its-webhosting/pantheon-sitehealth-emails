@@ -257,16 +257,6 @@ and they use only the `its-wws-test1` / `its-wws-test2` test sites, read-only.
 
 ## TO DO
 
-* **Migrate `main()`'s four `open`/`os.path` calls to `pathlib`, or retire the deferral**
-  **(post-campaign)** — `psh/cli.py` carries four suppressions reading `# noqa: PTH123 --
-  verbatim config read; pathlib migration is I14b+` (also `PTH110`/`PTH103`; grep
-  `pathlib migration is I14b+`). That deferral was **orphaned**: campaign increment I14b came and
-  went without touching `PTH`, its ledger entry never mentions it, and neither this file nor
-  `CLAUDE.md` recorded it — so the only record of the intent was a comment pointing at an
-  increment that had already closed (PD#9: *"Everything deferred is written down. Vague
-  intentions are lies."*). Either do the migration or delete the four comments' forward
-  reference; what must not persist is a deferral aimed at a milestone in the past.
-
 * Add a `mutates` hook declaration to the DAG **(post-campaign)** — a third per-hook edge kind
   (beside `consumes`/`produces`) that orders a `site_post_gather` smell-notice consumer *after* the
   in-place `wp_smell`/`drush_smell` mutators (`check.wordpress.ocp`/`.favicon`,

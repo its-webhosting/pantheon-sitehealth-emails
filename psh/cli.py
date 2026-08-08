@@ -12,7 +12,6 @@ TODO: add WordPress MU plugin check (report on anything except plugin)
 
 import argparse
 import datetime
-import os
 import re
 import signal  # noqa: F401 -- retained as the psh.signal.signal monkeypatch seam (CLAUDE.md § Two mock seams): abort_run's SIGINT guard moved to psh/lifecycle.py at I13, but test_abort_run.py patches the shared signal module object via psh.signal (SPEC I13 §5)
 import subprocess  # noqa: F401 -- retained as the psh.subprocess.Popen monkeypatch seam (CLAUDE.md § Two mock seams): run_terminus lives in psh/gateway.py but tests patch the shared module object via psh.subprocess (the conftest psh fixture is this module, psh.cli); render's subprocess.run moved to psh/render.py at I12
@@ -20,6 +19,7 @@ import sys
 import time  # noqa: F401 -- retained as the psh.time.sleep monkeypatch seam (CLAUDE.md § Two mock seams): the real time.sleep(5) lives in psh/gateway.py, but 13 tests patch the shared module object via psh.time (the conftest psh fixture is this module, psh.cli)
 import tomllib
 from email.utils import make_msgid
+from pathlib import Path
 from typing import NamedTuple
 
 import sqlalchemy as db  # noqa: F401 -- retained as the psh.db.* test seam (tests/conftest.py TempDB uses psh.db.create_engine / psh.db.orm.sessionmaker, which resolve to THIS alias on the psh.cli module, not the psh/db.py package): B10's last in-file use (db.create_engine/db.orm.sessionmaker) moved to psh.db.open_database at I13
@@ -625,7 +625,7 @@ def sort_notices_and_subject(site_context, report):
 def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.md section 3.1: moves get no algorithmic redesign); main() orchestrates the whole per-site pipeline in one straight-line body
 
     sc.debug(f"Loading configuration from {sc.options.config}")
-    with open(sc.options.config, "rb") as f:  # noqa: PTH123 -- verbatim config read; pathlib migration is I14b+
+    with Path(sc.options.config).open("rb") as f:
         sc.config = tomllib.load(f)
 
     # Drop the non-`enabled` settings of any disabled section BEFORE substitution resolution,
@@ -663,9 +663,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
         self_info, _errors, _fatal = terminus("self:info")
         pprint(self_info)
 
-    # Create a directory named "build" if it doesn't exist:
-    if not os.path.exists("build"):  # noqa: PTH110 -- verbatim build/ setup; pathlib migration is I14b+
-        os.makedirs("build")  # noqa: PTH103 -- verbatim build/ setup; pathlib migration is I14b+
+    # Create a directory named "build" if it doesn't exist.  exist_ok=True is the exists() guard
+    # this replaced; unlike that guard, an existing NON-directory "build" now fails here rather
+    # than at the first render write.
+    Path("build").mkdir(exist_ok=True)
 
     # The run's accumulators live on ONE RunState, bound to sc.run_state BEFORE any hook fires:
     # a setup hook that reached db_retry would otherwise write into a RunState main() then
@@ -697,8 +698,7 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
         Base.metadata.create_all(db_engine)
         sys.exit("Tables created.")
 
-    with open("header-image.png", "rb") as img:  # noqa: PTH123 -- verbatim asset read; pathlib migration is I14b+
-        wordmark_image = img.read()
+    wordmark_image = Path("header-image.png").read_bytes()
 
     load_news_items()
     if sc.options.verbose:
