@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`pantheon-sitehealth-emails` is a standalone Python script that pulls traffic and
+`pantheon-sitehealth-emails` is a Python CLI tool that pulls traffic and
 site-health data from [Pantheon](https://pantheon.io/) hosting (via the Terminus CLI,
 WP-CLI, and Drush), stores traffic history in a database, and emails each site owner a
 monthly report with a plan-cost recommendation. It is used by University of Michigan ITS
@@ -13,11 +13,15 @@ Web Hosting Services and is written to be reusable by other institutions via a c
 ## Commands
 
 The whole tool is invoked through one executable, `./pantheon-sitehealth-emails` (run it
-directly; it has a `#!/usr/bin/env python` shebang and expects the venv active). It is a
-thin (~17-line) shim that calls `psh.cli.main()`; the program body lives in the `psh` package
+directly; it has a `#!/usr/bin/env python` shebang and expects the venv active). It is an
+18-line shim that calls `parse_args()` into `sc.options` and then `psh.cli.main()` — **the shim,
+not `main()`, is what populates `sc.options`**, and `main()`'s first statement reads it, so an
+alternate entry point calling `main()` alone crashes. The program body lives in the `psh` package
 (`psh/cli.py` holds `main()`, the argparse pair, and the per-site pipeline; the gateway/config/
-db/traffic/plans/gather/charts/render/mail/lifecycle/dns layers are sibling `psh/` modules —
-see **Architecture**). There is no build step; for the test suite see **Testing** below.
+db/traffic/plans/gather/charts/render/mail/lifecycle/dns_classify layers, plus the `modules`
+(hooks) and `notice` engines, are sibling `psh/` modules — see **Architecture**). There is no
+Python build step (the one-time `composer install` below populates `vendor/` for the PHP CSS
+inliner); for the test suite see **Testing** below.
 
 ```bash
 # Environment (see README.md for full first-time setup with uv/PHP/mysql/aws)
@@ -33,7 +37,7 @@ composer install                          # installs the PHP Emogrifier CSS inli
 
 # Monthly report run (--date should be the LAST day of the reporting month):
 ./pantheon-sitehealth-emails --date 20240731 its-wws-test1   # single site, safe test
-./pantheon-sitehealth-emails --date 20240731 --all           # dry run: emails go to YOU
+./pantheon-sitehealth-emails --date 20240731 --all           # dry run: to dry_run_to, not owners
 ./pantheon-sitehealth-emails --date 20240731 --all --for-real # sends to site owners
 
 ./pantheon-sitehealth-emails --help
@@ -42,9 +46,13 @@ composer install                          # installs the PHP Emogrifier CSS inli
 Key flags (the parser sets `allow_abbrev=False`, so no `--for` → `--for-real` foot-gun):
 `--all` vs. an explicit `SITE` list are mutually exclusive (one is required
 unless `--create-tables`); `--config`/`-c` picks the TOML file (default
-`pantheon-sitehealth-emails.toml`). **Without `--for-real`, mail is addressed to the logged-in
-user, not to owners — this is the primary safety mechanism and the run's blast-radius control;
-always dry-run first.** `--update`
+`pantheon-sitehealth-emails.toml` — the default is NOT shown in `--help`, and that help text
+names a `pantheon-sitehealth-emails.toml.sample` file that does not exist).
+**Without `--for-real`, mail goes to `[Email].dry_run_to` (default: a hardcoded U-M address —
+set it for a non-U-M install) plus `{username}@{[Email].dry_run_username_domain}` when a username
+resolves; never to owners. This is the primary safety mechanism and the run's blast-radius
+control; always dry-run first.** `--date`/`-d` **defaults to today** — always pass it explicitly
+for a report run, or you silently report on a partial current month. `--update`
 only refreshes traffic data; `--only-warn` checks sites for warnings — including the plan
 recommendation, which is computed before the gate so a warning-only run also gets an
 `its-recommends-plan` row — without generating
@@ -57,91 +65,107 @@ verbosity (`--create-tables` forces `-vvv`). `--update-cloudflare-fqdns` /
 `--resume-from SITE_NAME` (requires `--all`) starts the sorted site loop at that site, inclusive
 — for resuming an interrupted `--all` run (see the resume note under Architecture).
 
-### `find-platform-domains-dns` (temporary utility)
+### Platform-domain utilities (temporary — delete after Pantheon's CDN migration)
 
-A standalone, deletable script — **not** part of the main program and importing nothing from
-`psh/`/`check/`/`plugin/` — that lists every custom domain in the organization whose DNS still
-reaches a Pantheon platform domain (`*.pantheonsite.io`) by CNAME, as CSV on stdout:
-`site_name,site_env,custom_domain,dns_record,platform_domain` — that same line is written as a
-**header row**, flushed before the first site is swept, so a hit-free sweep still names its
-columns and a doomed stdout (`> /dev/full`) aborts at second zero instead of at the first hit;
-appending a re-run to an existing CSV therefore appends a second header along with the interrupted
-site's duplicate rows. `dns_record` is the FQDN owning
-the hitting CNAME record, which is what a downstream rewriter must change. Operator messages and
-a `sites=… indeterminate=…` summary go to stderr; exit 0 = clean sweep, 1 = completed with
-indeterminates, 2 = could not complete, 130 = interrupted. There is no `--resume-from`; instead,
-an aborted sweep prints the last site it completed (or, if the very first site was interrupted,
-which one it was mid-processing) and the **names** of every site not yet reached, as a
-paste-able re-run command **rebuilt from the argv the dead run received** (so `-c CONFIG` and
-`-v` survive — dropping `-c` handed the operator a command reading a different config file) —
-the names are the point, since "137 sites not reached" gives the operator no way to reconstruct
-which 137 they were. Resuming re-sweeps the interrupted site, so appending to the same CSV
-duplicates that site's rows. `-c` is read **only** on the whole-organization path: a
-`SITE`-argument sweep never uses `[Pantheon].org_id` and does not require the file to exist.
-**Those four codes cover everything the program itself writes, and holding that line takes
-explicit work**: CPython's shutdown flush covers **both** std streams and turns a failure of
-either into exit **120**, so a run redirected at a full disk (`> /dev/full`, `2>>sweep.log` on a
-filesystem that fills) escaped the taxonomy entirely until each stream got a "detach only a stream
-a real write/flush has proven doomed" guard — never an unconditional one, which discards a
-buffered CSV row and, under pytest's fd-level capture, repoints the session's own stream at
-`/dev/null`. Guarded by `test_a_healthy_stdout_is_never_detached_on_an_abort` /
-`test_a_healthy_stderr_is_never_detached_on_an_abort` and their doomed-stream twins.
-**The stated exception, measured and deliberately left open**: argparse writes its own usage and
-`--help` text before that guard exists and outside every handler, so `--bogus 2>/dev/full` and
-`--help >/dev/full` still exit 120. Pre-existing, and declined rather than overlooked — SPEC
-§2.2's G0-ordering row records why wrapping `parse_args` was judged not worth it here.
+Three scripts at the repo root, built for the Pantheon CDN migration. **Delete all three when it
+is done.** Facts common to all of them:
+
+- **Standalone and deletable.** None is part of the main program; each imports nothing from
+  `psh/`/`check/`/`plugin/`, so deleting one is a `git rm` of the script, its `.py` symlink and
+  its test file, plus a few config entries. Checklists:
+  `development/2026-07-30-platform-domain-util2/SPEC.md` §11 (amended, glob only, by
+  `…/2026-07-31-platform-domain-util3/SPEC.md` §13; the applier's six-item delta is §11 item 9 via
+  `…/2026-08-03-platform-domain-util4/SPEC.md` §19; the DNS one is
+  `…/2026-07-28-platform-domain-util/SPEC.md` §14, which also names **three** `pyproject.toml`
+  entries — two `[tool.ruff.lint.per-file-ignores]` lines plus the `[tool.pyright].include` one —
+  and a `ruff-check.sh` case arm).
+- **Each has a committed `.py` symlink**, same convention as `pantheon-sitehealth-emails.py`:
+  ruff, pyright and CodeGraph key off the extension and are otherwise blind to the extension-less
+  real file. **Query them by symbol name, never by path.**
+- **The exit-120 stream-guard class.** CPython's shutdown flush covers **both** std streams and
+  turns a failure of *either* into exit 120, silently overriding whatever `main()` returned. So
+  each script detaches a stream **only after a real write/flush has proven it doomed** — never
+  unconditionally, which discards a buffered line and, under pytest's fd-level capture, repoints
+  the session's own stream at `/dev/null`. Guards: `detach_doomed_stdout` (flush probe) and
+  `report_line`→`detach_doomed_stderr` (failed-**write** probe — a flush probe is blind on
+  line-buffered stderr) in `find-platform-domains-dns`; `write_json_stdout`/`report_line` in
+  `find-platform-domains-cloudflare`; `write_report`/`report_line` in the applier. **Exhaustive
+  exception, measured in all three:** argparse writes usage/`--help` before any guard exists and
+  outside every handler, so `--help >/dev/full` and `--bogus 2>/dev/full` still exit **120**
+  (declined, not overlooked — util1 SPEC §2.2). **An in-process test cannot pin this** (pytest
+  never tears the interpreter down); the cover is real subprocess tests redirecting at `/dev/full`
+  — never `subprocess.DEVNULL`, which accepts every write — plus `1>&-` (`sys.stdout` becomes
+  **None**, where `print()` silently does nothing) and one for a doomed stdout first hit *inside*
+  the summary flush.
+- **Three independent environment-pin copies, and they are no longer identical** — an SDK upgrade
+  must check all three separately. They are `plugin/cloudflare/client.py`'s **`pinned_client()`**
+  (NOT the `build_client()` in that same file, which is only the config reader) and the
+  `build_client()` in each of the two Cloudflare utilities. See **Cloudflare auth + shared
+  client** under *Architecture* for the one full description of the four ambient-environment
+  routes they close. Divergences: the applier also pins `max_retries=0` and nulls a credential on
+  `creds.get(field) is None`, while `find-platform-domains-cloudflare` deliberately stays on
+  `field not in creds` (read-only, its caller guards — util4 SPEC §17). **Only the applier
+  writes**, so there `$CLOUDFLARE_BASE_URL` is a credential-disclosure **plus**
+  attacker-aimed-rewrite risk, not just a disclosure risk.
+
+#### `find-platform-domains-dns`
+
+Lists every custom domain in the organization whose DNS still reaches a Pantheon platform domain
+(`*.pantheonsite.io`) by CNAME, as CSV on stdout:
+`site_name,site_env,custom_domain,dns_record,platform_domain` — that line is also written as a
+**header row** and flushed before the first site is swept, so a hit-free sweep still names its
+columns and a doomed stdout aborts at second zero instead of at the first hit. `dns_record` is the
+FQDN owning the hitting CNAME record, which is what a downstream rewriter must change. Operator
+messages and a `sites=… indeterminate=…` summary go to stderr. **Exit 0** = clean sweep, **1** =
+completed with indeterminates, **2** = could not complete, **130** = interrupted.
+
+There is no `--resume-from`: an aborted sweep prints the last site it completed and the **names**
+of every site not yet reached, as a paste-able re-run command **rebuilt from the argv the dead run
+received** (so `-c CONFIG` and `-v` survive — dropping `-c` handed the operator a command reading a
+different config file). Resuming re-sweeps the interrupted site, so appending to the same CSV
+duplicates that site's rows and adds a second header. `-c` is read **only** on the
+whole-organization path: a `SITE`-argument sweep never uses `[Pantheon].org_id` and does not
+require the file to exist. It uses the Pantheon API (machine token from
+`$PANTHEON_MACHINE_TOKEN` or `~/.terminus/cache/tokens/`); **the site-list cursor can silently
+return page 1 again instead of the next page**, which the script detects and exits 2 on rather
+than sweeping a truncated site list. Its DNS walk is a **copy** of
+`check/pantheon_cdn_change/chain.py` plus `psh/dns_classify.py`'s resolver seam — copied, not
+imported. **Those two files are live main-program code and stay.**
 
 ```bash
 ./find-platform-domains-dns its-wws-test1     # one site
 ./find-platform-domains-dns > domains.csv     # the whole org, ~38 minutes
 ```
 
-`find-platform-domains-dns.py` is a committed symlink to the script above, same convention as
-`pantheon-sitehealth-emails.py`: ruff, pyright, and CodeGraph key off the `.py` extension and
-would otherwise be blind to the extension-less real file. It uses the Pantheon API (machine
-token from `$PANTHEON_MACHINE_TOKEN` or `~/.terminus/cache/tokens/`), and its DNS walk is a
-**copy** of `check/pantheon_cdn_change/chain.py` plus `psh/dns_classify.py`'s resolver seam —
-copied, not imported, so most of deleting this feature is `git rm` of those three files (the
-full checklist, including **three** `pyproject.toml` entries — two `[tool.ruff.lint.per-file-
-ignores]` lines plus the `[tool.pyright].include` one — and a `ruff-check.sh` case arm, is
-`development/2026-07-28-platform-domain-util/SPEC.md` §14). Note the API's site-list cursor has
-a silent failure mode (it can return page 1 again instead of the next page); the script detects
-it and exits 2 rather than sweeping a truncated site list. **Delete this script after Pantheon's
-CDN migration** — checklist in `development/2026-07-28-platform-domain-util/SPEC.md` §14.
+#### `find-platform-domains-cloudflare`
 
-### `find-platform-domains-cloudflare` (temporary utility)
-
-A standalone, deletable script — **not** part of the main program and importing nothing from
-`psh/`/`check/`/`plugin/` — that writes every Cloudflare DNS **CNAME whose target ends in
-`.pantheonsite.io`** as an inventory, plus the batch calls that would rewrite each one to the
-addresses its target resolves to and the batch calls that would undo that rewrite. It is the
-Cloudflare-side counterpart to `find-platform-domains-dns`: that one reads public DNS and is blind
-to a proxied record's target; `fqdns.json` is built with `proxied=True` and is blind to a DNS-only
-record. This considers **all** records in **all** zones of every account the credentials can see,
-unless **zone names are given as positional arguments**, which narrows the record sweep to those
-zones. Legacy `*.gotpantheon.com` targets are out of scope. Full spec:
-`development/2026-07-31-platform-domain-util3/SPEC.md`.
+Writes every Cloudflare DNS **CNAME whose target ends in `.pantheonsite.io`** as an inventory,
+plus the batch calls that would rewrite each one to the addresses its target resolves to and the
+batch calls that would undo that rewrite. It is the Cloudflare-side counterpart to
+`find-platform-domains-dns`: that one reads public DNS and is blind to a proxied record's target;
+`fqdns.json` is built with `proxied=True` and is blind to a DNS-only record. Considers **all**
+records in **all** zones of every account the credentials can see, unless **zone names are given
+as positional arguments**. Legacy `*.gotpantheon.com` targets are out of scope. Full spec:
+`development/2026-07-31-platform-domain-util3/SPEC.md`. **This utility NEVER calls the Cloudflare
+API to write anything.**
 
 **A subset run (naming `ZONE`s) narrows the sweep but not the hazard.** The account and zone
-*lists* are still read in full — that is the cheap half (187 zones vs. 22,911 records) — and it
-keeps the completeness cross-check, the zero-zone scope guard, and the account count; only the
-record fetch is skipped for an unselected zone. **Zone matching is exact** on the same
-`normalize()` (case and a trailing dot ignored); a name matching no zone is **fatal (exit 2) and
-every miss is named**, because a typo yielding a short sweep is exactly the under-reporting
-failure the design refuses to have. A subset also **cannot see a cross-zone duplicate** living in
-an unselected zone, so an entry can look unambiguous when it is not — one more reason a rewrite is
-driven from a full sweep. Writing a subset to a file with `-o` is still byte-shape-identical to a
-full sweep, so a narrowed run written that way emits a loud `ATTENTION: … covers N of M zones …
-MUST NOT be used as the baseline for a rewrite`; the redirect form (`… engin.umich.edu > file`) is
-invisible to the program and cannot be caught at all.
+*lists* are still read in full; only the record fetch is skipped for an unselected zone.
+**Zone matching is exact** on `normalize()` (case and a trailing dot ignored); a name matching no
+zone is **fatal (exit 2) and every miss is named** — a typo yielding a short sweep is the
+under-reporting failure the design refuses to have. A subset **cannot see a cross-zone duplicate**
+in an unselected zone, so an entry can look unambiguous when it is not — one more reason a rewrite
+is driven from a full sweep. A subset written with `-o` is byte-shape-identical to a full sweep, so
+it emits a loud `ATTENTION: … covers N of M zones … MUST NOT be used as the baseline for a
+rewrite`; the redirect form (`… engin.umich.edu > file`) is invisible to the program and cannot be
+caught at all.
 
 **`-o/--output-basename BASENAME` writes four files; without it, only the inventory goes to
 stdout.** A `.` anywhere in BASENAME's **final path component** is fatal (directory components may
 contain dots — `out/v1.2/engin-zone` is fine, `engin-zone.json` is not); the old `-o PATH` form is
-gone, so the muscle-memory `-o platform-domains-cloudflare.json` invocation from before this
-increment is now a startup error naming the mistake. Before the first Cloudflare API call, the
-parent directory of BASENAME is probed for writability (a temp file created and removed there), so
-an unwritable destination is caught at second zero, not after the ~2-minute sweep. The four files:
+gone, so the muscle-memory `-o platform-domains-cloudflare.json` invocation is now a startup error
+naming the mistake. Before the first Cloudflare API call the parent directory is probed for
+writability, so an unwritable destination is caught at second zero, not after the ~2-minute sweep.
 
 | File | Contents |
 |---|---|
@@ -150,45 +174,34 @@ an unwritable destination is caught at second zero, not after the ~2-minute swee
 | `<basename>-revert.json` | The **reverse** of that same batch call, built from the swept CNAME |
 | `<basename>-excluded.json` | Every FQDN that got **no** plan/revert entry, with a reason code and detail |
 
-Only the inventory exists in stdout mode — resolution, classification and exclusion still run in
-both modes, so the inventory is byte-identical between them and only its destination differs.
-**This utility NEVER calls the Cloudflare API to write anything.**
-`apply-platform-domains-cloudflare` (below) is the applier that reads a plan or revert file and
-performs the actual batch calls (SPEC §5.4 is its normative contract, superseded in one respect by
-the applier's own SPEC R4 — see that subsection).
+Resolution, classification and exclusion run in **both** modes, so the inventory is byte-identical
+between them and only its destination differs. Every run resolves each entry's target for A and
+AAAA, following CNAME chains, through the one DNS seam `resolve()`; a `Timeout`/`NoNameservers` is
+retried once before being treated as indeterminate.
 
 **Two traps when comparing the inventory to `fqdns.json`:** that file keys by the **raw**
 `record.name` (normalize both sides, or you invent phantom entries), and its `origins` means
 something **wider** — every proxied record's content at that name, IP addresses included — where
-this file's holds only matching platform-CNAME targets. `settings` is `.model_dump()`ed (it is a
-pydantic model and is otherwise unserializable). The inventory is **produced in full on every
-run**, whatever the age of anything on disk; a run that matches nothing emits `{}` loudly rather
-than leaving a stale file. It drives a *destructive* rewrite, so **regenerate the baseline
-immediately before any rewrite** — the inventory's mtime is its only freshness signal (the
-plan/revert/excluded files instead carry a `generated.at` timestamp, SPEC §5.5).
+this file's holds only matching platform-CNAME targets. `settings` is `.model_dump()`ed (a
+pydantic model, otherwise unserializable). The inventory is **produced in full on every run**,
+whatever the age of anything on disk; a run that matches nothing emits `{}` loudly rather than
+leaving a stale file. It drives a *destructive* rewrite, so **regenerate the baseline immediately
+before any rewrite** — the inventory's mtime is its only freshness signal (plan/revert/excluded
+instead carry a `generated.at` timestamp, SPEC §5.5, and `zones_swept`/`zones_total`).
 
-**Every run now resolves each entry's target** — the `*.pantheonsite.io` hostname the platform
-CNAME points at — for both A and AAAA, following CNAME chains, through the one DNS seam
-`resolve()`; this happens in stdout mode too (SPEC R3.2), which is why the inventory is identical
-between modes. A `Timeout`/`NoNameservers` is retried once before being treated as indeterminate.
-
-The inventory gained four fields over the pre-this-increment shape: `name` (the **raw**
-`record.name` — the JSON key is `normalize()`d, and a batch POST's `name` must be exactly what
-Cloudflare holds, Punycode included), `zone_name`, `resolved_a` and `resolved_aaaa`.
-**`resolved_a`/`resolved_aaaa` are `[]` for a definitive absence (NXDOMAIN/NoAnswer) and `null` for
-an indeterminate lookup** — collapsing the two would tell an operator a target has no addresses
-when the run never established that, the same distinction the sweep already keeps between a null
-and a false `proxied`. The rest of the shape is unchanged: `{zone_id, origins, record_id, proxied,
-ttl, comment, tags, settings}`, every scalar first-record-wins. **`origins` in the inventory always
-has exactly one element** — `collect_entries` accumulates every match while folding, but a second
-one makes the FQDN ambiguous and R4.1 then removes it from the inventory outright, so no
-multi-origin entry can survive; `sole_origin()` raises `InvariantError` if one ever reaches a body
-builder. Do not write an applier loop over `origins` expecting more than one, and do not read the
-inventory as able to express ambiguity — it deliberately cannot; `-excluded.json` is where an
-ambiguous FQDN's `origins` list (and its `zone_ids`/`record_ids`) lives.
-**Ambiguous FQDNs** (more than one platform CNAME for the same name, in one zone or across two) are
-**omitted from the inventory entirely, in both modes** — a deliberate change from before this
-increment, when the first record_id of two stayed in and was presented as if it were actionable.
+Entry shape: `{name, zone_id, zone_name, origins, record_id, proxied, ttl, comment, tags,
+settings, resolved_a, resolved_aaaa}`, every scalar first-record-wins. `name` is the **raw**
+`record.name` (the JSON key is `normalize()`d, and a batch POST's `name` must be exactly what
+Cloudflare holds, Punycode included). **`resolved_a`/`resolved_aaaa` are `[]` for a definitive
+absence (NXDOMAIN/NoAnswer) and `null` for an indeterminate lookup** — collapsing the two would
+tell an operator a target has no addresses when the run never established that. **`origins` always
+has exactly one element**: a second match makes the FQDN ambiguous and R4.1 removes it from the
+inventory outright, so `sole_origin()` raises `InvariantError` if a multi-origin entry ever reaches
+a body builder. Do not write an applier loop over `origins` expecting more than one, and do not
+read the inventory as able to express ambiguity — it deliberately cannot. **Ambiguous FQDNs** (more
+than one platform CNAME for the same name, in one zone or across two) are **omitted from the
+inventory entirely, in both modes**; `-excluded.json` is where their `origins`/`zone_ids`/
+`record_ids` live.
 
 **`delete_match` lives OUTSIDE `body` in every plan and revert entry.** Cloudflare's batch
 `deletes` items are exactly `{"id": …}` — there is no name/type/content delete form — and a plan's
@@ -197,59 +210,35 @@ a re-applied plan) cannot be known until an applier resolves `delete_match` agai
 records at apply time. Keeping it outside `body` means `body` alone is always a real, postable
 batch body and can never be mistaken for a complete request.
 
-**Eight reason codes**, listed here in the order they are checked: `ambiguous-multiple-origins`,
+**Eight reason codes, in the order they are checked**: `ambiguous-multiple-origins`,
 `ambiguous-multiple-zones`, `unknown-proxy-status`, `resolution-failed`, `no-a`,
 `platform-a-out-of-range`, `no-aaaa`, `platform-aaaa-out-of-range`. **Only the two ambiguous codes
 also remove the FQDN from the inventory**; the other six leave it in the inventory but out of the
-plan and revert. `resolution-failed` MUST be tested before `no-a`: an indeterminate lookup is
+plan and revert. **`resolution-failed` MUST be tested before `no-a`**: an indeterminate lookup is
 `null`, not `[]`, and a `not resolved_a` test cannot tell the two apart. Every exclusion prints an
-unconditional (never `-v`-gated) stderr `ATTENTION:` line naming the FQDN, the code and the
-detail.
+unconditional (never `-v`-gated) stderr `ATTENTION:` line naming the FQDN, code and detail.
 
-**Exit 1 is new: "completed with exclusions"** (≥1 FQDN carries a reason code). The taxonomy is
-now 0 = nothing excluded, 1 = completed with exclusions, 2 = could not complete, 130 =
-interrupted. Giving 1 that meaning is only trustworthy because `main()` ends with the sibling's
-last line of defence (`except SystemExit: raise` / `except BaseException` → `ERROR: unexpected
-<class>: <msg>`, exit 2): CPython exits 1 on **any** uncaught traceback, so without it a
-crashed run and a healthy run with exclusions are indistinguishable to a `case $?`. The only
-`return 1` in the program is the exclusion branch. A doomed stdout or stderr is likewise a
-named exit 2, NOT the interpreter's 120 — the sibling's guards are ported
-(`require_usable_streams` refuses a closed stderr, whose `print` fallback would interleave
-operator messages into the JSON; `write_json_stdout` and `report_line` detach only a stream a
-**real** write has proven doomed, never unconditionally). **The stated exception, same as the
-sibling's and exhaustive:** argparse writes its usage, error and `--help` text before those
-guards exist and outside every handler, so both `--help >/dev/full` and `--bogus 2>/dev/full`
-still exit 120.
+**Exit 0** = nothing excluded, **1** = completed with exclusions, **2** = could not complete,
+**130** = interrupted. Exit 1 is only trustworthy because `main()` ends with a last line of defence
+(`except SystemExit: raise` / `except BaseException` → named message, exit 2): CPython exits 1 on
+**any** uncaught traceback, so without it a crashed run and a healthy run with exclusions are
+indistinguishable to a `case $?`. The only `return 1` in the program is the exclusion branch.
 
-**Pagination is the subtle part, and the first live sweep is why.** All three list endpoints
-paginate by page *number*, so when rows shift between page fetches — routine in a zone being
-actively written — the same record comes back on two pages while another is stepped over.
-Measured on an 18,848-record zone: 2 duplicates and 2 misses in one walk. So every list is
-**de-duplicated by record id** (a duplicate reaching the fold would append one origin twice and
-raise a *false* duplicate-name warning), and the completeness check compares the **unique** count
-against Cloudflare's `total_count`. Raw item count fails both ways — it produced a false
-"truncated" abort on one read and a false *pass* on another, where the duplicates and misses
-cancelled exactly. A shortfall triggers one re-read unioned with the first, and is then a **loud
-warning, not an abort**: a paginated walk of a continuously-written zone may never be exactly
-complete, and aborting meant the utility produced nothing at all. The run reports
-`Completeness cross-check: N of M paginated lists verified complete, X short, Y unverifiable`.
-stdout carries the JSON result (or nothing, with `-o`); every operator message is stderr, and
-error text **never** includes an API response body.
+**Pagination is the subtle part.** All three list endpoints paginate by page *number*, so rows
+shifting between fetches — routine in a zone being actively written — return the same record twice
+while stepping over another. So every list is **de-duplicated by record id** (a duplicate reaching
+the fold would append one origin twice and raise a *false* duplicate-name warning), and the
+completeness check compares the **unique** count against `total_count` — a raw item count failed
+both ways, once as a false "truncated" abort and once as a false *pass*. A shortfall triggers one
+unioned re-read and is then a **loud warning, not an abort**: a paginated walk of a
+continuously-written zone may never be exactly complete, and aborting meant the utility produced
+nothing at all. The run reports `Completeness cross-check: N of M paginated lists verified
+complete, X short, Y unverifiable`. stdout carries the JSON result (or nothing, with `-o`); every
+operator message goes to stderr, and error text **never** includes an API response body.
 
 Credentials come from `[Cloudflare]` in the same TOML the main program reads, via a **copied**
 resolver handling only the `<{env NAME}` / `<{secret env NAME}` forms; any other substitution, and
-any non-string value, is a named error rather than a silent passthrough. `enabled` is not
-consulted. **`build_client()` pins the client against the ambient environment**, closing the same
-four routes, by the same mechanism, as the main program's `pinned_client()` — see **Cloudflare
-auth + shared client** under *Architecture* for the one full description of what those routes are
-and why the pin is load-bearing. This is a **second, independent copy** of that pin (the utility
-imports nothing from `plugin/`, so it can be deleted with `git rm`), and both are measured against
-cloudflare 5.4.0 while `pyproject` declares the dependency unpinned — so an SDK upgrade has
-**three** places to check (the main program's `pinned_client()`, this utility's `build_client()`,
-and `apply-platform-domains-cloudflare`'s own copy, below), each with its own real-built-request
-test. **This third copy is the only one of the three that performs writes** — an upgrade that
-silently breaks the pin here is a credential-disclosure-plus-rewrite risk, not just a
-disclosure risk (see that subsection's Security note).
+any non-string value, is a named error rather than a silent passthrough. `enabled` is not consulted.
 
 ```bash
 # refresh the org-wide baseline (~2 minutes) -- do this immediately before any rewrite.
@@ -265,242 +254,106 @@ disclosure risk (see that subsection's Security note).
 ./find-platform-domains-cloudflare -v | jq 'keys'   # every zone, inventory only, to stdout
 ```
 
-First live run (2026-07-30, before this increment added DNS resolution and the plan/revert/excluded
-files): 4 accounts, 187 zones, 22,911 records, 218 platform-domain CNAMEs of which 5 DNS-only, in
-2m 17s — 192 of 192 lists verified complete, and 0 discrepancies against a 50-hour-old
-`fqdns.json`.
+#### `apply-platform-domains-cloudflare`
 
-`find-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
-as `pantheon-sitehealth-emails.py` and `find-platform-domains-dns.py`: ruff, pyright, and
-CodeGraph key off the `.py` extension and would otherwise be blind to the extension-less real
-file. **Delete this script after Pantheon's CDN migration** — checklist in
-`development/2026-07-30-platform-domain-util2/SPEC.md` §11 (amended, glob only, by
-`development/2026-07-31-platform-domain-util3/SPEC.md` §13).
-
-### `apply-platform-domains-cloudflare` (temporary utility)
-
-A standalone, deletable script — **not** part of the main program and importing nothing from
-`psh/`/`check/`/`plugin/` — that reads the **one** plan-or-revert file
-`find-platform-domains-cloudflare` writes and performs the Cloudflare DNS batch calls it
-describes, or — by default — reports exactly what it would do and changes nothing. It is the
-**applier** whose contract was written but not implemented as §5.4 of
-`development/2026-07-31-platform-domain-util3/SPEC.md` (that section's per-entry tolerance is now
-**superseded** — see below). Full spec: `development/2026-08-03-platform-domain-util4/SPEC.md`.
+Reads the **one** plan-or-revert file the sibling writes and performs the Cloudflare DNS batch
+calls it describes, or — by default — reports exactly what it would do and changes nothing. Full
+spec: `development/2026-08-03-platform-domain-util4/SPEC.md` (it implements util3 SPEC §5.4, whose
+per-entry tolerance it deliberately **supersedes** — see below).
 
 **It takes exactly one file: a `<basename>-plan.json` or `<basename>-revert.json`.** Not the
-inventory (`<basename>.json` — this script never reads it, only the sibling writes it), not both
-directions, not a config-driven set. An `-excluded.json` is **refused by name**: it carries no
-`body` at all (`generated.direction` is `"excluded"`, not `"plan"`/`"revert"`), and the file
-contract's check 2 names that explicitly rather than failing on a missing key several checks
-later.
+inventory (`<basename>.json` — this script never reads it), not both directions, not a
+config-driven set. An `-excluded.json` is **refused by name**: it carries no `body` at all
+(`generated.direction` is `"excluded"`), and the file contract's check 2 names that explicitly
+rather than failing on a missing key several checks later.
 
 **Three passes, strictly ordered, no interleaving: validate → report → apply.** Pass 1 lists each
-selected entry's live Cloudflare records (read-only) and classifies it into one of seven verdicts
-(below). If **any** selected entry is invalid, the run reports every invalid one and exits 2
-having written nothing — **the whole file**, not just the bad entries. Pass 2 (the report) runs
-**identically in both modes**, from the same data pass 1 produced, so a dry run is a rehearsal of
-the real run rather than a second implementation of it — any divergence between what a dry run
-prints and what `--for-real` does would be a first-order defect in a destructive tool. Pass 3
-(apply) runs only with `--for-real`, processes entries in the file's own sorted key order, and
-stops at the **first** failure — it never reverts what it already applied and never continues past
-a failure to the remaining entries. This is the **all-or-nothing property**: a run either passes
-validation entirely and then applies, or fails validation and touches nothing at all.
+selected entry's live records (read-only) and classifies it. If **any** selected entry is invalid,
+the run reports every invalid one and exits 2 having written nothing — **the whole file**, not just
+the bad entries. Pass 2 (the report) runs **identically in both modes**, from the same data pass 1
+produced, so a dry run is a rehearsal of the real run rather than a second implementation of it.
+Pass 3 runs only with `--for-real`, processes entries in **sorted key order** (never the file's
+insertion order), and stops at the **first** failure — it never reverts what it already applied and
+never continues to the remaining entries. This is the **all-or-nothing property**.
 
-**Seven verdicts; two are valid.** `ready` (records match what's meant to be deleted — applied in
-pass 3) and `already-applied` (records already match the target state — skipped, reported, and
-counted, contributing to exit 1) are valid. `record-ambiguous`, `partially-applied`,
-`unexpected-records`, `records-missing` and `proxy-status-drift` are invalid and abort the whole
-run. This is a
-**deliberate narrowing** of util3 SPEC §5.4's original applier contract, on `PROMPT.md`'s explicit
-instruction: §5.4 said a zero-match `delete_match` should be *skipped and reported*, and a
-multi-match one *refused and reported*, with the rest of the file still applied — per-entry
-tolerance. Here a zero-match entry is skipped **only** when it is affirmatively `already-applied`
-(records equal what would be posted, never merely inferred from what's missing); every other
-invalid state, including the multi-match case, aborts the **entire** run before anything is
-written. Without the `already-applied` carve-out a run that died at entry 12 of 217 could never be
-safely re-run — re-running the same file to finish an interrupted job, and applying a file that is
-already fully applied, are both meant to be safe, cheap, and call zero Cloudflare write endpoints.
+**Seven verdicts; two are valid.** `ready` (records match what's meant to be deleted — applied) and
+`already-applied` (records already match the target state — skipped, reported, counted, giving exit
+1). `record-ambiguous`, `partially-applied`, `unexpected-records`, `records-missing` and
+`proxy-status-drift` are invalid and abort the whole run — a deliberate narrowing of util3 §5.4's
+per-entry tolerance. A zero-match entry is skipped **only** when affirmatively `already-applied`
+(records equal what would be posted, never merely inferred from what's missing). Without that
+carve-out a run that died at entry 12 of 217 could never be safely re-run — re-running to finish an
+interrupted job, and applying an already-applied file, are both meant to be safe, cheap, and call
+zero write endpoints.
 
-**`proxy-status-drift`, and why the proxy status is checked BESIDE the comparison key rather than
-inside it.** `record_key` is `(TYPE, normalize(name), canonical_content)` and carries no `proxied`
-— it must stay comparable against `delete_match`, whose items are `{type, name, content}` only,
-because Cloudflare's batch `deletes` has no name/type/content form. So `proxied` was read by nobody:
-**measured**, with Cloudflare holding exactly the plan's A record but `proxied=False`, `verdict_for`
-returned `already-applied` and `verify_records` returned `True` — a DNS-only replacement is out of
-certificate service (an HTTPS outage plus origin-IP exposure), which is the migration's worst
-outcome. `proxy_status_mismatches(posts, rows)` is now a second comparison made in the two places
-that compare R against **P**: the `already-applied` row (a disagreement is `proxy-status-drift`,
-invalid, abort) and the post-apply verification (a disagreement is a `VerifyError` → `unverified` →
-exit 3). The **delete** side is deliberately unchecked — those records are about to be deleted and
-`delete_match` carries no `proxied`. A live `proxied` of **`None` is a mismatch, not a pass**: it is
-`Optional[bool]` on every SDK model and the sibling excludes a null swept status as
-`unknown-proxy-status` because "guessing either way is unsafe"; it gets its own "UNKNOWN (null)"
-wording, since "DNS-only" would be a claim the script cannot make.
+**`proxy-status-drift`, and why `proxied` is checked BESIDE the comparison key rather than inside
+it.** `record_key` is `(TYPE, normalize(name), canonical_content)` and carries no `proxied` — it
+must stay comparable against `delete_match`, whose items are `{type, name, content}` only. That
+left `proxied` read by nobody, and it shipped: with Cloudflare holding exactly the plan's A record
+but `proxied=False`, the entry classified `already-applied` and verified `True` — a DNS-only
+replacement is out of certificate service (HTTPS outage plus origin-IP exposure), the migration's
+worst outcome. `proxy_status_mismatches(posts, rows)` is now a second comparison in the two places
+that compare R against **P**: the `already-applied` row (disagreement → invalid, abort) and the
+post-apply verification (→ `VerifyError` → `unverified` → exit 3). The **delete** side is
+deliberately unchecked. A live `proxied` of **`None` is a mismatch, not a pass**.
 
-**The file contract has nine checks, not eight.** Check 9 — every post in one entry must agree on
-`proxied` and `ttl` — was `describe_change`'s second `InvariantError`, raised in *pass 2* after
-every entry had already been read from Cloudflare. It is a property of the operator's file, so it is
-a `PlanFileError` before the first API call; `InvariantError` is defined as "not an operator error".
-`describe_change` keeps the guard, where the class is now correct: with check 9 upstream, reaching
-it means the gate has a bug.
+**The file contract has nine checks.** Check 9 — every post in one entry must agree on `proxied`
+and `ttl` — is a property of the operator's file, so it is a `PlanFileError` before the first API
+call; `describe_change` keeps the same guard as an `InvariantError`, where reaching it means the
+gate has a bug.
 
-**The file's own `generated` header is checked, and warned about — never refused.** Immediately
-after the file contract passes and **before the Cloudflare client is built**, `read_provenance()`
-reads `zones_swept`/`zones_total` and `at` and writes an unconditional stderr `ATTENTION` when the
-sweep was **partial** (`N of M zones` — the sibling writes those two integers exactly so an applier
-can check them, and a narrowed sweep cannot see a cross-zone duplicate, so an entry can look
-unambiguous when it is not), when the pair is **absent or non-integer** (unverifiable, treat as
-partial), when the file is **older than 24 hours** (`STALE_PLAN_HOURS`, matching this repo's
-`fqdns.json` staleness convention — validation compares R against the CNAME, so a plan whose
-*addresses* went stale still validates `ready` and then writes the wrong ones), when the stamp is in
-the **future** (clock skew), or when it **cannot be read**. Both numbers land in the run record as
-`run.source_zones_swept`/`source_zones_total`, on every run, not only the alarming one. It warns
-rather than refuses because a narrow sweep is a documented workflow (`-o /tmp/one-zone
-engin.umich.edu`) — refusal would need an override flag, which is one more thing to pass by reflex;
-what the script owes the operator is that the judgment cannot be made unknowingly.
+**The `generated` header is checked and warned about — never refused.** After the file contract
+passes and **before the Cloudflare client is built**, `read_provenance()` writes an unconditional
+stderr `ATTENTION` on five conditions: a **partial** sweep (`N of M zones`), an **absent or
+non-integer** pair, a file **older than 24 hours** (`STALE_PLAN_HOURS` — validation compares R
+against the CNAME, so a plan whose *addresses* went stale still validates `ready` and then writes
+the wrong ones), a **future** stamp, or an **unreadable** one. Both numbers land in the run record
+as `run.source_zones_swept`/`source_zones_total` on every run. It warns rather than refuses because
+a narrow sweep is a documented workflow, and refusal would need an override flag — one more thing
+to pass by reflex.
 
-**The exit taxonomy adds a code the siblings don't have.** Both siblings use `0 / 1 / 2 / 130`;
-this script adds **3**: `0` completed clean (or a dry run that validated clean), `1` completed
-with ≥1 `already-applied` skip, `2` could not complete and **nothing in Cloudflare was changed**,
-`3` **failed mid-apply and Cloudflare was left partially changed**, `130` interrupted. The new code
-exists because folding a half-finished rewrite into `2` would make it indistinguishable, to an
-operator's `case $?`, from a clean refusal that touched nothing — after a destructive run the
-first question is "did it change anything?", and `2` is a promise this script makes about
-production DNS, not a generic failure bucket. `changed_count()` (one shared helper, read by both
-`exit_code_for` and the summary's `mode:` line) counts an entry as changed when its outcome is
-`applied`, `unverified` **or** `unknown` — every state where Cloudflare may or does hold a change
-— and `failed` is deliberately excluded from it, because a batch is one transaction and a rejected
-call commits nothing. No failure path — not a validation abort, not an `InvariantError` from this
-script's own reasoning, not the `except BaseException` last line of defence — may report `2` once
-anything has actually changed. **That takes a reader half AND a writer half, and shipping only the
-reader half is how it was false once already.** The reader half is that every arm computes the code
-from `changed_count()` rather than a literal; the writer half is that `apply_all`'s handler chain
-ends in a **catch-all** that records the in-flight entry `unknown` and re-raises, so an exception no
-clause names cannot leave an attempted entry at its `not-attempted` seed. Measured with only the
-reader half in place: a one-entry plan whose batch call **returned** and whose verification read
-then raised `ValueError` (the SDK calls `response.json()` unguarded, so a truncated 200 raises
-`json.JSONDecodeError` — neither a `CloudflareError` nor an `OSError`) made one batch call and
-exited **2**, "nothing in Cloudflare was changed", with a `mode:` line reading `0 of 1 entries
-changed`. The one class deliberately exempt from that catch-all is `InvariantError`, which stays
-`not-attempted`: `apply_entry`'s only pre-batch raiser is `merge_body`, so for it the "nothing
-committed" claim is true, and relabelling would turn a truthful `2` into a false `3`. The
-companion guard is in `apply_entry`: everything after the batch call returned sits inside one
-`try` that converts any unrecognised `Exception` (never `BaseException` — a Ctrl-C must still
-reach `apply_all`'s `unknown` arm, SPEC §9.3) into a `VerifyError` naming the original class,
-because the one thing every exception raised past the batch call has in common is that the batch
-already committed. Same documented exception as both siblings: argparse's own `--help`/usage-error text is written before
-any stream guard exists and outside every handler, so `--help >/dev/full` and
-`--bogus 2>/dev/full` still exit **120**.
+**Exit taxonomy — one code the siblings don't have.** `0` completed clean (or a dry run that
+validated clean), `1` completed with ≥1 `already-applied` skip, `2` could not complete and
+**nothing in Cloudflare was changed**, `3` **failed mid-apply and Cloudflare was left partially
+changed**, `130` interrupted. `3` exists because folding a half-finished rewrite into `2` would be
+indistinguishable, to an operator's `case $?`, from a clean refusal that touched nothing.
+`changed_count()` (one shared helper, read by both `exit_code_for` and the summary's `mode:` line)
+counts an entry as changed when its outcome is `applied`, `unverified` **or** `unknown`; `failed` is
+excluded, because a batch is one transaction and a rejected call commits nothing. **No failure path
+may report `2` once anything has changed — which needs a reader half AND a writer half:** every arm
+computes the code from `changed_count()`, **and** `apply_all`'s handler chain ends in a catch-all
+recording the in-flight entry `unknown` before re-raising, so nothing unnamed leaves an attempted
+entry at its `not-attempted` seed. Shipping only the reader half made this false once.
+`InvariantError` is the one exemption (provably pre-batch). Rationale and the mutation evidence:
+util4 SPEC §8.1/§9.3.
 
-There are **seven outcomes**, not six — `outcome` (what happened to one entry this run) is a
-different axis from `verdict` (what pass 1 decided about it): `applied`, `already-applied`,
-`planned` (the dry-run stand-in for `applied`), `failed` (the batch was rejected — nothing
-committed), `unverified` (the batch **returned**, so Cloudflare committed, but the post-apply
-re-list didn't confirm it after one 2-second retry, or the re-list itself failed, **or anything at
-all was raised after the batch returned**), `unknown` (the call didn't complete at all — dropped
-connection, timeout, a Ctrl-C mid-call, **or a failure this script cannot place relative to the
-commit** — so whether it committed isn't known), and `not-attempted` (never reached, because an
-earlier entry failed).
-`unverified` and `unknown` both count toward `changed_count()`; `failed` does not. A `VerifyError`
-(subclass of `ApplyError`) is what pass 3 raises on a surviving verification mismatch or a failed
-verification read — it is what produces the `unverified` outcome and exit 3, never `failed`/exit
-2, because the write already happened.
+**Seven outcomes** — a different axis from `verdict`: `applied`, `already-applied`, `planned` (the
+dry-run stand-in), `failed` (batch rejected, nothing committed), `unverified` (the batch
+**returned**, so Cloudflare committed, but the re-list didn't confirm it, **or anything at all was
+raised after the batch returned**), `unknown` (the call didn't complete, or a failure that cannot be
+placed relative to the commit), and `not-attempted`. `apply_entry` converts anything raised after
+the batch returned into a `VerifyError` (never `BaseException` — a Ctrl-C must still reach
+`apply_all`'s `unknown` arm), because every such exception shares one property: the batch already
+committed. Pass 3's three `return` arms are each pinned by a **three-entry** test asserting the
+third entry was never posted — a one-entry fixture cannot distinguish `return` from `continue`.
 
-**Pass 3 stops at the first failure, and each of its four stop paths is pinned by its own
-three-entry test** asserting on the fake client's *recorded batch calls* that the third entry was
-never posted. The `failed` arm was pinned that way from the start and the `unverified`/`unknown`
-arms were not: every test reaching them used a one-entry document, where `return` and `continue`
-are indistinguishable, so `return` → `continue` in either left the whole suite green while the
-mutated run rewrote a third production zone past an entry of unknown fate — the one behavior
-`PROMPT.md` forbids most explicitly. Asserting outcome *labels* does not catch it; a `continue`
-leaves the later entries looking plausible.
-
-**`--for-real` is the blast-radius gate**, same role as the main program's own `--for-real`
-(without it, mail goes to the operator, not to owners) — here, without it, no batch call is ever
-made at all (asserted against the fake client's recorded calls, not inferred; neither sibling
-needs an equivalent, since neither ever writes to Cloudflare). **`--only FQDN` is repeatable
-(`action="append"`),
-deliberately NOT `nargs="+"`**: with one positional `FILE` and a variadic `--only`,
-`--only a b file.json` would silently swallow the filename into the option — the same
-positional-vs-variadic ambiguity the Cloudflare sibling's `ZONE` arguments avoid by going *after*
-the flags. A repeatable single-value option has no such ambiguity, at the cost of typing `--only`
-twice. Explicit over clever. An `--only` name matching no key in the file is fatal (exit 2) and
-every miss is named, same reasoning as the sibling's unmatched `ZONE` names — a typo that silently
-narrows a destructive run is the under-reporting failure this script family refuses to have.
-Unselected entries are never validated and never counted as anything but "in the file" — validating
-an entry the run won't touch would let an unrelated FQDN's drift abort a deliberately narrow run.
+**`--for-real` is the blast-radius gate** (without it no batch call is ever made — asserted against
+the fake client's recorded calls, not inferred). **`--only FQDN` is repeatable (`action="append"`),
+deliberately NOT `nargs="+"`**: with one positional `FILE`, `--only a b file.json` would silently
+swallow the filename into the option. An `--only` name matching no key is fatal (exit 2) and every
+miss is named. Unselected entries are never validated and never counted as anything but "in the
+file" — validating an entry the run won't touch would let an unrelated FQDN's drift abort a
+deliberately narrow run.
 
 **The run record is written on every exit path, dry runs included** —
 `<input-stem>-run-<YYYYMMDDThhmmssZ>.json`, beside the input file, named `-run-` and not
 `-applied-` for exactly that reason. It carries `for_real: false` on a dry run, because a dry run
-*is* the validation report and the thing an operator attaches to a change ticket before the
-change. A run-record write failure is reported on stderr but does not, by itself, downgrade an
-earned exit code back to 2 once something was actually changed (same PD#1 reasoning as the exit
-taxonomy above) — it only forces exit 2 when the run had changed nothing anyway. **One documented
-exception, shared with the summary block:** argparse's `--help` and usage-error exits happen
-inside `parse_args`, before `options.file` even exists, so neither the summary nor the run record
-is produced on those two paths — structurally, not as an oversight.
-
-**This is the third appearance, in this script family, of the exit-120 stream-guard class.** Both
-siblings' subsections above record it once each — the `find-platform-domains-dns` one describes the
-class without naming a function ("each stream got a 'detach only a stream a real write/flush has
-proven doomed' guard"; the function is `report_line`, at `find-platform-domains-dns:1090`), and the
-`find-platform-domains-cloudflare` one names `write_json_stdout` and `report_line`. CPython's
-shutdown flush covers **both**
-standard streams and turns a failure of *either* into exit 120, silently overriding whatever
-`main()` returned, unless the doomed stream is detached **before** interpreter shutdown — never
-unconditionally, which would discard a buffered line and, under pytest's fd-level capture, repoint
-the session's own stream at `/dev/null`. This script's `write_report()` is the stdout counterpart
-to its `report_line()`. **An in-process test cannot pin this at all** — pytest never tears the
-interpreter down, so the shutdown flush this guards against never runs in-process, and a test that
-only calls the function directly would stay green even if the guard were deleted. The cover is
-**four** real subprocess tests, copying the pattern already in
-`tests/unit/test_find_platform_domains_cloudflare.py`: `…doomed_stdout_exits_2_not_120…` and
-`…doomed_stderr_exits_2_not_120…` redirect at `/dev/full` — never `subprocess.DEVNULL`, which
-accepts every write and would prove nothing — `…stdout_truly_closed…` uses `1>&-`, which makes
-`sys.stdout` **None**, where CPython's `print()` then silently does nothing and the whole report
-would vanish with no error at all, and
-**`test_a_doomed_stdout_during_the_flush_still_exits_a_named_code_not_crashing`** covers the
-*flush* path — a doomed stdout hit for the first time **inside `finish()`**, itself called from
-inside one of `main()`'s own `except` clauses, where a fresh exception is never redispatched to a
-sibling `except`. It is reproduced with a nonexistent `FILE`, so `finish()`'s summary print is the
-first stdout write the run attempts. That fourth one is the instance a future maintainer is least
-likely to reconstruct, and it was omitted from this list until the 2026-08-04 review's finding 9.
-
-Also **the only one of the family's three independent `build_client()`/environment-pin copies that
-performs writes** (see the "three places to check" note in the `find-platform-domains-cloudflare`
-subsection above) — an SDK upgrade that silently breaks the pin here is a
-credential-disclosure-**plus**-rewrite-aimed-at-an-attacker-chosen-host risk, not just a
-disclosure risk, because `$CLOUDFLARE_BASE_URL` redirects every request including the batch calls.
-
-**Being the write copy, it also pins `max_retries=0` on the constructor — a second divergence, and
-the one an SDK upgrade is most likely to reopen silently.** Measured against cloudflare 5.4.0:
-`_constants.DEFAULT_MAX_RETRIES` is **2** and `BaseClient._should_retry` (`_base_client.py:815`)
-retries 408/409/429/5xx with **no HTTP-method check** — a `POST …/dns_records/batch` exactly like a
-`GET`. That POST is not idempotent (Cloudflare runs it as one transaction, Deletes then Posts), so a
-"failed" response the SDK silently retried can mean the *first* attempt committed and the retry
-landed on an already-changed state, answering with its own error (a duplicate-create 400) that this
-script would read as `failed` — "rejected, nothing committed" — for a write that committed. Losing
-retries on the pass-1 *reads* is the safe direction of the same change (a lost read is
-`CloudflareReadError`, exit 2, nothing changed), so the pin is unconditional on the one client this
-script builds. It is asserted by `test_build_client_pins_max_retries_to_zero` **and** by a real
-`httpx.MockTransport` test proving exactly one POST on a 429/500.
-
-**So the three `build_client()` copies are no longer identical, and an SDK upgrade must check all
-three separately.** This one pins `max_retries=0` (the other two do not — neither writes) and nulls
-a credential when `creds.get(field) is None`; `plugin/cloudflare/client.py` uses the same `is None`
-idiom; `find-platform-domains-cloudflare` is **deliberately** still on the older
-`field not in creds`, which only re-nulls an *omitted* keyword and leaves an explicit `None` for the
-SDK's own ambient back-fill — left alone because that utility is read-only, its caller guards, and
-it is deleted with this one (`development/2026-08-03-platform-domain-util4/SPEC.md` §17 records the
-decision).
-
-`apply-platform-domains-cloudflare.py` is a committed symlink to the script above, same convention
-as its siblings: ruff, pyright, and CodeGraph key off the `.py` extension **and would otherwise be
-blind to the extension-less real file**. **Delete this script after Pantheon's CDN migration** —
-checklist in
-`development/2026-07-30-platform-domain-util2/SPEC.md` §11 (this script's six-item delta is §11
-item 9, added by `development/2026-08-03-platform-domain-util4/SPEC.md` §19).
+*is* the validation report and the thing an operator attaches to a change ticket. A run-record write
+failure is reported on stderr but does not downgrade an earned exit code back to 2 once something
+was changed; it forces exit 2 only when the run had changed nothing anyway. **One documented
+exception, shared with the summary block:** argparse's `--help` and usage-error exits happen inside
+`parse_args`, before `options.file` exists, so neither the summary nor the run record is produced on
+those two paths — structurally, not as an oversight.
 
 ## Required runtime credentials / external tools
 
@@ -509,13 +362,20 @@ Pantheon machine token; an SSH agent holding the Pantheon key (`ssh-add`); `SMTP
 (U-M Kerberos password, referenced by `[SMTP].password = "<{secret env SMTP_PASSWORD}"`);
 optionally `AWS_*` and `CLOUDFLARE_EMAIL`/`CLOUDFLARE_API_KEY` (or `CLOUDFLARE_API_TOKEN`),
 referenced by the `[Cloudflare]` settings. **Credentials are never read from the environment
-by feature code**: everything flows through config `<{env …}>` / `<{secret env …}>`
-substitutions (see the config-substitution note under Architecture). The only direct
-`os.environ` touches are `plugin/env/get_env.py` (which *is* the `<{env}` engine) and the
-`AWS_PROFILE`/`AWS_DEFAULT_REGION` boto plumbing in `plugin/aws/__init__.py` — don't add more.
+by feature code**: everything flows through config `<{env …}` / `<{secret env …}`
+substitutions (see the config-substitution note under Architecture). **The marker ends at `}` —
+the trailing `>` in the sample config's prose is decorative, NOT syntax**; the regex is
+`<\{(.*?)(?<!\\)}`, so a value written `"<{env USER}>"` resolves with a literal `>` appended,
+silently. The only direct `os.environ` touches are `plugin/env/get_env.py` (which *is* the
+`<{env}` engine) and the `AWS_PROFILE`/`AWS_DEFAULT_REGION` boto plumbing in
+`plugin/aws/__init__.py` — don't add more. That allowlist is scoped to
+`psh/`/`check/`/`plugin/`/`script_context.py`/the shim and pinned by
+`tests/unit/test_house_rules.py`; the three temporary `find-*`/`apply-*` utilities are
+deliberately outside it and read `$PANTHEON_MACHINE_TOKEN` / `<{env …}` markers themselves.
 See `docs/env-and-smtp-configuration.md` and `docs/email-configuration.md`.
-`php` + `composer` must be on PATH. **Note the README warning: Terminus does not work with
-PHP 8.4 — use PHP 8.3 or earlier, or the toolchain is dead.**
+`php` must be on PATH at runtime (the CSS inliner); `composer` is needed only for the one-time
+`composer install` that populates `vendor/`. Every other `composer` in feature code is a
+**Terminus subcommand run remotely on Pantheon**, not a local binary.
 
 ## Architecture
 
@@ -539,12 +399,13 @@ in-process caller), `resolve_site_roster()` →
 `len(sites)` **before** the filter — the denominator of the per-site banner and of `finish_run`'s
 "Email sent for N of M sites", never `len(site_names)`), `fetch_site_domains()` → `SiteDomains`
 (`None` = skip this site) and `resolve_site_url()` → `SiteUrlFacts` (which straddle the
-`site_post_dns` seam and so must stay two functions), and the pure notice builders
-`no_domains_notice` / `no_primary_domain_notice`. Each module:
+`site_post_dns` seam and so must stay two functions), `sort_notices_and_subject()` (the notice
+ordering + subject override, which reads the hook-produced `annual_bill_upcoming` with `.get()`),
+and the pure notice builders `no_domains_notice` / `no_primary_domain_notice`. Each module:
 
 - **`psh/gateway.py`** — the gateway: every Terminus/WP-CLI/Drush subprocess flows through it
-  (the eleven wrappers; the future Pantheon-API transport seam — see the **Terminus/WP/Drush
-  wrappers** bullet).
+  (the ten wrapper defs plus the named `TerminusError`; the future Pantheon-API transport seam —
+  see the **Terminus/WP/Drush wrappers** bullet).
 - **`psh/configuration.py`** — the config engine: `process_config`/`config_substitution`/
   `gate_disabled_sections`/`load_news_items`/`umich_enabled`/`cloudflare_enabled` plus the DEFER
   machinery (see **Config substitutions**). `sc.umich_enabled`/`sc.cloudflare_enabled` are
@@ -553,7 +414,8 @@ in-process caller), `resolve_site_roster()` →
   `NoticeRegistry`, and `DuplicateNoticeCodeError`: the typed notice model (see **Notices vs.
   news**). It imports nothing from `script_context`, so both `sc` and every `psh/` module can
   import it without a cycle.
-- **`psh/modules.py`** — module discovery + the hook engine: `find_modules`, `PHASES`,
+- **`psh/modules.py`** — module discovery + the hook engine: `find_modules`/`import_packages`
+  (the walker and the two import loops `main()` runs), `PHASES`,
   `add_hook`/`invoke_hooks`, the consumes/produces DAG validation
   (`validate_hooks`/`ordered_hooks`, the `HookDagError` family), the authoritative `CONTRACT`
   registry, and the `stuff_traffic_contract`/`stuff_gather_contract`/`stuff_envs_contract`
@@ -563,27 +425,34 @@ in-process caller), `resolve_site_roster()` →
   import `sc` at call time (the module docstring carries the diagram). The mutable `sc.hooks`
   dict deliberately stays in `script_context.py`, because `reset_sc` rebinds it around every
   test and CAMPAIGN.md §3.4 bars module-level mutable state in `psh/`.
-- **`psh/db.py`** — every DB touch this program makes: the SQLAlchemy models (`Base`,
+- **`psh/db.py`** — every DB touch the core report pipeline makes (the portal DB in
+  `plugin/umich/portal.py` opens its own engine, through the shared `db_engine_args`): the
+  SQLAlchemy models (`Base`,
   `PantheonTraffic`, `PantheonOverageProtection`), the row types (`TrafficRow`,
   `OverageProtectionRow`), the resilience layer (`db_retry`, `db_retryable`,
   `record_db_reconnect`, `DatabaseUnavailableError`), the read/write units
   (`update_traffic_rows`, `insert_traffic_rows`, `load_traffic_rows`,
-  `load_overage_protection_window`), and `db_engine_args` (exposed as `sc.db_engine_args`). See
+  `load_overage_protection_window`), `db_engine_args` (exposed as `sc.db_engine_args`), and
+  `open_database(db_config) -> (Engine, Session)` — the one engine/session opener `main()` calls.
+  See
   **Database**. The two reconnect counters do NOT live here: they are fields of the `RunState`
   dataclass (`psh/lifecycle.py`), reached as
   `sc.run_state.db_reconnects_by_site`/`…failures…` — one shared, `reset_sc`-isolated namespace
   rather than two separately rebindable module bindings of the same name.
 - **`psh/traffic.py`** — the traffic-metrics layer: `traffic_table_columns`,
-  `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows`, four per-site flow
-  functions (`update_site_traffic`, `import_older_site_metrics`, `load_site_traffic`,
-  `aggregate_visits_by_month`), and `build_traffic_window(...) -> TrafficWindow` — the whole
+  `get_old_metrics`, `estimate_month_visits`, `build_traffic_table_rows`, three per-site flow
+  functions (`update_site_traffic`, `import_older_site_metrics`, `load_site_traffic`), the pure
+  `aggregate_visits_by_month`, and `build_traffic_window(...) -> TrafficWindow` — the whole
   report-window assembly (aggregation, `build_plan_over_time`, the month-midpoint `dates`, the
   `estimate_month_visits` call, and the plan-day bounds) as one NamedTuple. `main()` unpacks all
   nine fields back into its **pre-existing local names** on purpose: the `db_retry` lambda below
-  the call carries six per-line `# noqa: B023` suppressions keyed to those exact names. The
+  the call carries six per-line `# noqa: B023` suppressions, five of them keyed to those exact
+  names (the sixth is the loop's `site`). The
   zero-traffic case returns a **synthetic seed** (`plan_on_day == {end_date: current_plan}`,
   `first_plan_day == last_plan_day == end_date`) rather than an empty map — `plan_on_day` is
-  never empty, which is what keeps `psh/charts.py`'s midpoint lookup off an `IndexError`.
+  never empty, which is what keeps this helper's own `days[0]` / `plan_over_time[0]` off an
+  `IndexError`. (`psh/charts.py`'s separate `plan_on_day[ymd]` midpoint lookup is a **`KeyError`**
+  risk and is documented there as a precondition, NOT something the seed guards.)
 - **`psh/plans.py`** — the plans layer: `cost_table_columns`, `overage_blocks`,
   `contract_year_end`, `plan_costs`, `build_plan_over_time`, `build_plan_recommendation_notice`;
   the typed `PlanCatalog`/`PlanInfo` view over `[Pantheon].plan_info` (`PlanCatalog.from_config`
@@ -671,13 +540,15 @@ in-process caller), `resolve_site_roster()` →
   `sites_from_resume_point`, `merge_prior_results`, `finish_run`, `resume_point`,
   `option_strings_taking_a_value`, `resume_command`, `rerun_command`, `abort_reason`, and
   `abort_run`. `finish_run`/`abort_run` take a `run_state: RunState` and read the accumulators
-  from it; `finish_run`'s first statement is `sc.invoke_hooks("run_finish", run_state)`
+  from it; `finish_run`'s first action, before any teardown or artifact write, is
+  `sc.invoke_hooks("run_finish", run_state)`
   (`CONTRACT["run_finish"]` stays `()` — the `RunState` is the hook argument, not a contract
   key). It **NEVER imports `script_context`/`psh.db` at module level** (module-level imports are
-  stdlib + `sqlalchemy.exc` + `rich` only) — `sc` is reached at call time, and one call-time
-  bridge lives inside a function: `abort_reason`'s `from psh.db import
-  DatabaseUnavailableError, db_retryable`. The module docstring carries the import-cycle diagram
-  (PD#8).
+  stdlib + `sqlalchemy.exc` + `rich` only) — `sc` is reached at call time, and **two permanent**
+  call-time bridges live inside functions: `abort_reason`'s `from psh.db import
+  DatabaseUnavailableError, db_retryable`, and `option_strings_taking_a_value`'s `from psh.cli
+  import build_arg_parser` (D-i14a-4 corrects LEDGER I13: that one is a permanent cycle, not a
+  temporary obligation). The module docstring carries the import-cycle diagram (PD#8).
 - **`psh/dns_classify.py`** — the DNS engine: it resolves each domain's A/AAAA records and
   classifies them against the Cloudflare IP ranges (`classify_domains`, returning a `DnsFacts`
   NamedTuple), and `stuff_dns_contract()` publishes those facts into the `site_post_dns`
@@ -690,7 +561,9 @@ rebound by `reset_sc` and by `main()` before `setup`), `sc.substitutions`, `sc.N
 `sc.Severity`/`sc.registry` (reached via a plain top-of-file `from psh.notice import Notice,
 Severity, registry`, which makes them module attributes automatically — so these are NOT among
 the explicit `sc.<name> = <name>` exposure assignments, unlike `sc.umich_enabled`/
-`sc.cloudflare_enabled`), and helpers `debug()`, `add_news_item()`, `html_to_text()`.
+`sc.cloudflare_enabled`), plus `sc.SiteContext`, `sc.plugin_context`, `sc.DEFER`/
+`sc.ConfigSubstitutionError`, `sc.icon`, and helpers `debug()`, `add_news_item()`,
+`html_to_text()`, `msgid_domain()`, `smtp_username()`.
 **`html_to_text()` builds a fresh `HTML2Text` per call** — never reintroduce a shared instance:
 it is stateful, and sharing one made the first notice of a run render in a different link style
 from every other (the module-level `sc.text_maker` it replaced is gone). The parser is built by
@@ -750,13 +623,13 @@ Modules register by:
   whose artifact writes are separately gated); a per-site fatal error (e.g. domain:list failure)
   skips that site's remaining phases.
 - **Config substitutions** — appending to `sc.substitutions`. TOML string values containing
-  `<{ ... }>` are resolved by `process_config()`/`config_substitution()` against these
+  `<{ ... }` are resolved by `process_config()`/`config_substitution()` against these
   registered functions. `process_config()` is run twice: a pre-setup pass resolves everything,
   then a post-setup `deferred_pass=True` pass re-resolves **only** substitutions that deferred.
   A substitution whose backing data a `setup` hook populates (e.g. `plugin.umich`'s `plan_info`,
   which needs the portal DB) returns the `sc.DEFER` sentinel; `config_substitution` re-emits its
   marker with an invisible NUL tag that only the deferred pass matches. This lets pass 2 resolve
-  deferrals **without** re-interpreting a pass-1 final value that merely contains a `<{…}>`
+  deferrals **without** re-interpreting a pass-1 final value that merely contains a `<{…}`
   sequence (e.g. a password) — so route secrets through substitutions freely. A substitution
   aborts the run by raising `sc.ConfigSubstitutionError` (caught in `config_substitution`, which
   prints the offending config *path* + message and exits) — this is how `plugin.env.get_env`
@@ -765,7 +638,7 @@ Modules register by:
   any depth** with `enabled = false` (boolean identity; nested tables like
   `[Cloudflare.cachecheck]` included, and a disabled parent drops its children entirely) is
   reduced to just `{'enabled': False}`, dropping its other keys **before** substitution — so a
-  disabled feature's `<{secret env …}>` values are never required to exist. For substitutions
+  disabled feature's `<{secret env …}` values are never required to exist. For substitutions
   that take an optional trailing arg (like `env`), **register the shorter pattern before the
   longer one** (`['env','$name']` before `['env','$name','$default']`), or the best-match engine
   mis-binds and `KeyError`s.
@@ -792,16 +665,18 @@ Check and integration-plugin packages:
 - `check/pantheon/` — four Pantheon-platform checks (gated on `[Check.pantheon].enabled`,
   **default true**: an absent `[Check]`/`[Check.pantheon]`/`enabled` still registers, so
   relocating a check that ran unconditionally does not silently disable it), one module each:
-  `frozen.py` and `live_env.py` (paid plan with no initialized live env; consumes `envs`) at
-  `site_pre`; `updates.py` (`terminus upstream:updates:list` staleness, via `sc.terminus`) and
-  `php_eol.py` (PHP end-of-life; consumes `envs`) at `site_post_gather`, registered in that
-  order. The four notice bodies embed un-gated U-M links (see the still-hardcoded-U-M list under
-  Testing).
+  `frozen.py` (consumes nothing) and `live_env.py` (paid plan with no initialized live env;
+  consumes `envs`) at `site_pre`; `updates.py` (`terminus upstream:updates:list` staleness, via
+  `sc.terminus`) and `php_eol.py` (PHP end-of-life; consumes `envs`) at `site_post_gather`,
+  registered in that order. **Two** of the four notice bodies — `frozen` and `updates-*` — embed
+  un-gated U-M links (see the still-hardcoded-U-M list under Testing); `no-live-env-but-paid-plan`
+  carries no URL at all and `php-eol` only `docs.pantheon.io` ones.
 - `check/wordpress/` — four generic WordPress checks (gated on `[Check.wordpress].enabled`,
   **default true**), all at `site_post_gather`, registered PAPC → sessions → OCP → favicon:
   `papc.py` and `sessions.py` (both delegating to `sc.check_wordpress_plugin`), `ocp.py` (Object
-  Cache Pro config probe via `sc.wp_eval`; consumes `wordpress_plugins`) and `favicon.py`
-  (favicon presence probe via `sc.wp_eval`; consumes `fqdns_not_behind_cloudflare`). Every hook
+  Cache Pro config probe via `sc.wp_eval`; consumes `framework`+`wordpress_plugins`) and
+  `favicon.py` (favicon presence probe via `sc.wp_eval`; consumes
+  `framework`+`fqdns_not_behind_cloudflare`). Every hook
   early-returns unless `site_context["framework"].startswith("wordpress")`. The `ocp`/`favicon`
   probes rebind `site_context["wp_smell"]` on non-fatal stderr (one of the two sanctioned
   mutate-during-phase contract keys) and build failure notices with `sc.wp_error`. The favicon
@@ -836,8 +711,8 @@ Check and integration-plugin packages:
 
 To add a check or integration plugin, create a new package dir with a non-empty `__init__.py`
 that self-registers — no central registry to edit. Check modules cannot import the dash-named
-main script; the helpers they need are exposed as `sc` attributes near the `cloudflare_enabled()`
-def: `sc.escape_url`, `sc.check_wordpress_plugin`, `sc.check_drupal_module`, `sc.umich_enabled`,
+main script; the helpers they need are exposed as `sc` attributes in the block at
+`psh/cli.py:151-163`: `sc.escape_url`, `sc.check_wordpress_plugin`, `sc.check_drupal_module`, `sc.umich_enabled`,
 `sc.cloudflare_enabled`, `sc.terminus`, `sc.fqdn_re`, `sc.wp_eval`/`sc.wp_error` (the OCP/favicon
 checks), `sc.drush_php_script`/`sc.drush_error` (the multisite/UA checks), and
 `sc.contract_year_end` (the annual-billing hook). Extend that block for new ones (tests
@@ -861,16 +736,17 @@ it, so a warning-only run also gets an `its-recommends-plan` row when one applie
 invoking each phase; hooks code against this table (keys always exist, empty/None when the
 source was disabled, malformed, or failed). **The machine-readable copy — `psh.modules.CONTRACT`
 — is authoritative**; this table is its prose rendering, and `tests/unit/test_contract_registry.py`
-pins the stuffers (`stuff_traffic_contract`/`stuff_gather_contract`/`stuff_envs_contract` in
-`psh/modules.py`, `stuff_dns_contract` in `psh/dns_classify.py`) against it, so drift on either
-side goes red:
+pins the **five** stuffers (`stuff_traffic_contract`/`stuff_gather_contract`/`stuff_envs_contract`
+in `psh/modules.py`, `stuff_dns_contract` in `psh/dns_classify.py`, `stuff_plans_contract` in
+`psh/plans.py`) against it, so drift on either side goes red:
 
 | Phase | Guaranteed new keys (beyond `site`/`notices`/`sections`/`attachments`) |
 |---|---|
+| `setup` | — (run-level, fires once before any site; receives no `SiteContext`. `CONTRACT["setup"]` is `()`) |
 | `site_pre` | `envs` (dict — the `terminus env:list` JSON keyed by environment id, each value carrying `id, created, domain, connection_mode, locked, initialized, php_version, php_runtime_generation`. `main()`'s guards ensure `envs["live"]` exists with an `initialized` key before any site phase fires; **`php_version` is NOT guaranteed present** — read it with `.get`. Never `None`/empty when a phase fires: a failed `env:list` fetch skips the site. Core-produced — fetched by `main()` where it gates on it, stuffed by `stuff_envs_contract`. The phase fires after the traffic gather and the `--update`/`--import-older-metrics` continues, just before `site_post_traffic` — NOT at SiteContext creation) |
 | `site_post_traffic` | `traffic_rows` (`list[TrafficRow]` — plain `NamedTuple` data, attribute names matching the ORM model: `.site_id`, `.traffic_date`, `.site_plan`, `.visits`, `.pages_served`, `.cache_hits`; **not** live ORM rows, because a `db_retry` rollback expires every loaded ORM object, so a hook holding one would emit an unretried SELECT on the next attribute read), `start_date`, `end_date` |
 | `site_post_dns` | `domains`, `custom_domains`, `primary_domain`, `main_fqdn`, `fqdns_behind_cloudflare`, `fqdns_not_behind_cloudflare`, `not_in_dns`, `behind_cloudflare_not_proxied`, `proxied_in_multiple_zones`, `dns_transient` (Cloudflare classification lists `[]` when `[Cloudflare]` disabled, the FQDN resolved to no address, or domains malformed. A FQDN resolving to nothing is `not_in_dns` when definitive else `dns_transient` (unknown) — neither runs Cloudflare checks; a FQDN with ≥1 resolved address is classified even if a sibling lookup was transient. Produced by `psh.dns_classify.classify_domains()`, published via `stuff_dns_contract()`. **Hook-produced keys (NOT registry-owned):** `check.drupal.multisite` additionally *produces* `drupal_multisite` (bool) / `drupal_multisite_smell` (str). They are DAG-declared in the hook's `produces`, present **only** when the probe actually ran (absent when its gate failed, the framework is not Drupal, or `[Check.drupal]` is disabled), so `psh.cli.resolve_site_url` — which `main()` calls **after** the phase, exactly so it can read them — reads them with `.get(...)` — never assume they exist) |
-| `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`; plugins then themes, list order; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (the smell emission) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry) |
+| `site_post_gather` | `framework` (str), `site_url` (str, `""` when unknown), `wordpress_version` (str; on a failed fetch it is the fatal `wp eval`'s stdout — `""` in practice, since `wp_eval` always returns decoded-and-stripped stdout; the `"unknown"` fallback survives in `psh/gather.py` but is unreachable through the gateway, which never returns a non-str; None only when not that framework), `drupal_version` (str; `"unknown"` — NOT None — when the version fetch failed; None only when not that framework), `wordpress_plugins` (list\|None), `drupal_modules` (**dict**\|None — drush pm:list returns a dict keyed by module name); None on the plugins/modules keys = not that framework or the gather failed. `add_on_updates` (list of pending add-on-update dicts — `slug`/`name`/`type`/`current_version`/`new_version`, plus an optional `new_version_url` on composer-audit rows; WordPress emits plugins then themes in list order, Drupal composer-audit rows carry `type: "package"`; `[]` when none, not that framework, or the gather failed; stuffed as the SAME list object the `check.addon_updates.table` hook reads, not a copy), `wp_smell`/`drush_smell`/`composer_smell` (str, `""` when none — the stderr of the last non-fatal wp/drush/composer wrapper call that produced any. **`wp_smell` AND `drush_smell` MAY be rebound in place during the phase** — `wp_smell` by `check.wordpress.ocp`/`check.wordpress.favicon`, `drush_smell` by `check.umich.drupal_ua` — their probes' stderr participates in last-wins; these are the **two sanctioned mutate-during-phase keys**, so consumers reading after the phase (the smell emission) MUST read `site_context["wp_smell"]`/`site_context["drush_smell"]`, never a stale `main()` local; the hooks do NOT declare `produces: ['wp_smell']`/`['drush_smell']` — that would be a duplicate-producer fatal against the core `CONTRACT` registry) |
 | `site_pre_render` | everything above, plus `current_plan` (str), `recommended_plan` (str; == `current_plan` when no change was recommended or the site had too few in-window months), `plan_costs` (dict `{"same": {plan: float}, "median": {plan: float}, "best": {plan: float}}`; `{}` when ≤4 in-window months), `savings` (float; `0.0` when no recommendation) — the plan-recommendation keys, published by `stuff_plans_contract()` (full-report path only; still no consumer — the documented seam for future report-shaping hooks). **Hook-produced keys (NOT registry-owned):** `check.umich.annual_billing`'s `site_pre_render` hook additionally *produces* `annual_bill_upcoming` (a render dict, built by `site_context.notice_to_dict`) — DAG-declared, present **only** when the hook ran (absent when `[UMich]` is disabled or `sc.contract_year_end(end_date)` was false), so `sort_notices_and_subject` reads it with `.get(...)` after the phase. **A second hook runs in this phase and adds no key at all:** `check.smells.hook.emit_smell_notices` *consumes* `wp_smell`/`drush_smell`/`composer_smell` (read live off the `SiteContext`, never cached — they are the two sanctioned mutate-during-phase keys plus `composer_smell`) and `produces: []`; what it contributes is the three "PHP code problems" notices, appended to `site_context["notices"]` before `sort_notices_and_subject` runs, which is why the guaranteed-keys list above is unchanged |
 | `run_finish` | — (run-level, not per-site: receives no `SiteContext`; it receives the run's `RunState` — `finish_run`'s first statement is `invoke_hooks("run_finish", run_state)`, fired on completed and aborted runs, the seam for future run-level artifact hooks. `CONTRACT["run_finish"]` stays `()`: the `RunState` is the hook argument, not a contract key) |
 
@@ -1056,7 +932,8 @@ is now one line away from being violated.
   `--allow-any-source-ip` — the create-tables return is REQUIRED, setup hooks run on that path;
   verifies BOTH IP families via the shared lazy SDK client + `client.rules.lists.*`, needs the
   "Account Filter Lists: Read" scope, and the list must cover every family the host egresses on)
-  and the per-FQDN cache checks at `site_post_dns` (consumes `fqdns_behind_cloudflare`; RNG
+  and the per-FQDN cache checks at `site_post_dns` (consumes `fqdns_behind_cloudflare` +
+  `primary_domain`; RNG
   seeded `{site}:{report_date}` so re-runs test identical URLs; MISS-retry 2s/2s protocol only
   when headers say cacheable; cross-FQDN redirects drop the URL with NO result item; invalid cert
   → item then insecure re-fetch continues the checks). Notice language has U-M and generic
@@ -1086,7 +963,9 @@ is now one line away from being violated.
   own line on purpose, contributing the newline the URL line used to. The HTML is then run
   through `inline-styles.php` (PHP Emogrifier via
   `vendor/`) to inline CSS for email clients → `build/<site>-inline.html`, and a regex pass then
-  appends `!important` to every inlined CSS declaration → `build/<site>-inline2.html`, **which is
+  appends `!important` to every declaration inside the `<style>` blocks Emogrifier **retained**
+  — the rules it could NOT inline (`@media`, pseudo-classes); it never touches a `style="…"`
+  attribute → `build/<site>-inline2.html`, **which is
   the HTML actually attached** (not `-inline.html`) — `render_report` returns that `-inline2`
   body. Charts (traffic surge bars, SiteLens gauges) are generated with matplotlib and attached
   as inline images (`make_msgid` CIDs) — the traffic chart via `psh.charts.build_chart`, the
@@ -1102,14 +981,19 @@ is now one line away from being violated.
 
 SQLAlchemy declarative models `PantheonTraffic` and `PantheonOverageProtection` live in
 **`psh/db.py`**. Backend is chosen by the `[Database]` TOML section: `type` is `sqlite` or
-`mysql` (anything else exits). Both `type` and `name` are read **unconditionally** — a
-`[Database]` section without them is a `KeyError`, not a default; the `sqlite`/`database.db`
-"default" lives in the sample config, not the code. `--create-tables` creates the schema; new
-traffic rows are inserted while existing ones are skipped, not updated (`ON CONFLICT DO NOTHING`
-on sqlite via the `sqlite_insert` import, `INSERT IGNORE` on mysql).
+`mysql` (anything else exits). Both `type` is read **unconditionally** and `name` on
+both supported branches — a `[Database]` section missing either is a `KeyError`, not a default
+(an unsupported `type` exits before `name` is read); the `sqlite`/`database.db` "default" lives in
+the sample config, not the code. `--create-tables` creates the schema. **Two writers, with
+different semantics:** the per-run daily refresh (`update_traffic_rows`) **upserts** via
+`session.merge()`, overwriting an existing row — so a plan rename between runs rewrites
+`site_plan` across the whole window; the `--import-older-metrics` backfill
+(`insert_traffic_rows`) inserts-or-skips (`ON CONFLICT DO NOTHING` on sqlite via the
+`sqlite_insert` import, `INSERT IGNORE` on mysql).
 
 **Connection resilience.** The DB is remote (RDS) and the path crosses NAT/firewall middleboxes
-that reap idle flows, so the engine sets `pool_pre_ping=True` / `pool_recycle=1800` (MySQL only;
+that reap idle flows, so the engine sets `pool_size=10` / `max_overflow=20` /
+`pool_pre_ping=True` / `pool_recycle=1800` (MySQL only;
 sqlite kwargs stay `{}`) and the sessionmaker sets `expire_on_commit=False`. Both the URL and
 those kwargs come from **`db_engine_args(db_config)`** — the one engine builder, also exposed as
 `sc.db_engine_args` and used by `plugin/umich/portal.py`, so every database this program opens
@@ -1146,8 +1030,10 @@ it into exactly three outcomes: `"database"` (a `DatabaseUnavailableError`, or a
 (`KeyboardInterrupt`) → exit 130; `"fatal"` (everything else) → `abort_run()` **re-raises the
 original error after the flush**, so a `SystemExit` keeps its own code and message and anything
 else keeps its traceback. There is no `except SystemExit:` clause and nothing is swallowed. On
-every one of the three, `abort_run()` drops the failed site from `site_results` (it is written
-mid-gather, so it would otherwise ship as a success), flushes the artifacts via `finish_run()`,
+every one of the three, `abort_run()` drops the failed site from `site_results` **and
+`site_savings`** (both written mid-gather, so the site would otherwise ship as a success and be
+counted in the epilogue's savings totals; both skipped when the report was already emailed),
+flushes the artifacts via `finish_run()`,
 and prints a command rebuilt from `sys.argv` (`--resume-from` for `--all`; a re-run command
 listing the remaining sites otherwise). **A Ctrl-C that lands after a site's report was already
 sent resumes at the NEXT site** and keeps that site's results entry — resuming inclusively would
@@ -1205,6 +1091,10 @@ past the site, and its notices then never reached `-notices.csv` on any run. See
 
 ### Configuration (`pantheon-sitehealth-emails.toml`)
 
+Docs not referenced elsewhere in this file: `docs/config-migration.md` (moving an existing
+config to the current schema), `docs/aws-credentials.md` / `docs/awscli-login.md`, and
+`tests/README.md` (which `pyproject.toml` and `run-tests` both treat as canonical for the suite).
+
 The active config is a symlink to `pantheon-sitehealth-emails-config/pantheon-sitehealth-emails.toml`
 (a separate private repo); `sample-pantheon-sitehealth-emails.toml` is the documented template.
 Institution-specific data (plan names, traffic limits, prices, overage costs, Pantheon org id,
@@ -1225,12 +1115,11 @@ other institutions.
   vanish on a fresh clone.
 - Generated artifacts land in `build/` (git-ignored); `database.db`, `fqdns.json`, and the
   `.eml`/`.html`/`.txt` outputs are working data, not source. `fqdns.json` is **program-generated**
-  by the cloudflare plugin; it is git-ignored yet still tracked (`git ls-files` shows it) —
-  `git rm --cached fqdns.json` to stop tracking it.
+  by the cloudflare plugin; it is git-ignored (`.gitignore:10`) and untracked.
 - Type-hint tuples like `-> (str, str, bool)` appear throughout; these are the existing
   (technically non-idiomatic) house style — follow the surrounding code.
 - There is an active TODO list in `README.md` describing planned work (daily traffic alerts,
-  Cloudflare/security scoring, moving capture into the portal app, better error handling).
+  Cloudflare/security scoring, moving capture into the portal app, better secrets handling).
 - **`git diff -w` is not proof a re-indent was whitespace-only** — the leading whitespace inside a
   notice's `html=`/`text=` literal is string content that reaches the rendered email, and `-w` is
   designed to ignore exactly the line that only gained some. `main()`'s loop no longer holds such a
@@ -1252,15 +1141,17 @@ earlier gate's red (PD#1):
    stays fully gated. `[tool.ruff.lint.per-file-ignores]` carries the `tests/**` idiom block
    (rules that flag legitimate test idioms — `S101`, `S105`/`S106`, `INP001`, …) plus
    `development/finalize-session.py = ["T201"]` (a CLI tool: print IS its output).
-2. **pyright, standard mode** over `psh/` (`[tool.pyright]`), invoked as `[sys.executable, "-m",
+2. **pyright, standard mode** over `psh/` **plus the three temporary platform-domain utilities'
+   `.py` symlinks** — `[tool.pyright].include` has four entries, not one (keep it in sync with the
+   deletion checklists in the Commands section) — invoked as `[sys.executable, "-m",
    "pyright", "--pythonpath", sys.executable]` — **the venv's own pyright, resolving imports
    against the venv, never a PATH or `uvx` one**. Unlike ruff, pyright's verdict depends on the
    Python environment it resolves imports against: run against any other one it type-checks
    `psh/` with **none** of the project's dependencies installed and reports dozens of false
    `reportMissingImports` (34 from the dropped `uvx pyright@1.1.411` fallback, 46 from a
    non-activated venv). That is why the fallback went (2026-08-07) *and* why the
-   `shutil.which("pyright")` branch went with it — a PATH pyright (the dev container has an
-   npm-global one) is the worse of the two, since it looks like the intended branch. **Both
+   `shutil.which("pyright")` branch went with it — a PATH pyright (an npm-global install, say) is
+   the worse of the two, since it looks like the intended branch. **Both
    halves of the anchor are load-bearing**: `-m pyright` fixes which pyright runs (so the
    `[test]` extra's pin is the only thing deciding its version), and `--pythonpath` fixes which
    environment it reads — without it pyright finds the environment from the `python` on PATH, so
@@ -1296,7 +1187,10 @@ There is a pytest harness under `tests/` (design in `development/2026-07-04-test
 Run it with `./run-tests` (wrapper over pytest): `./run-tests --fast` is the offline inner loop;
 `./run-tests` adds the live tier; `--llm` gives terse machine-parseable output; `--coverage`,
 `--update-goldens`, and `--record` do what they say. Any other argument is passed straight through
-to pytest. `--record` short-circuits to `tests/tools/record.py` and forwards **no** arguments —
+to pytest (the wrapper's own flags are the module-level `WRAPPER_FLAGS` set, and
+`tests/unit/test_run_gates.py` pins that every member is actually read by a branch — a
+listed-but-unread flag never reaches pytest either, which is how `--human` shipped as a silent
+no-op). `--record` short-circuits to `tests/tools/record.py` and forwards **no** arguments —
 for Drupal fixtures call `python tests/tools/record.py --drupal` directly. Tiers are pytest marks:
 `unit`, `integration`, `e2e`, `live`, `render`, `email`, `slow`.
 
@@ -1384,136 +1278,27 @@ Non-obvious things the harness relies on:
   months to 0 and the last-row-wins `plan_on_day` map. The extractions are behavior-preserving
   (goldens byte-identical). **`classify_hostname_dns` is NOT one of these** — it lives in
   `psh/dns_classify.py`; import it from there.
-- **`main()` stage-helper tests.** The six stage bodies extracted from `main()` are covered by
-  seven files (the domains stage has two helpers plus a pure builder), each reaching a region
-  that previously had **no** seam above the e2e golden. Unit
-  tier: `tests/unit/test_traffic_window.py` (`psh.traffic.build_traffic_window` — the five
-  zero-traffic-seed postconditions plus a Hypothesis property that `plan_on_day` is never empty),
-  `tests/unit/test_no_domains_notice.py` (the pure `no_domains_notice` builder — the **Invariant
-  8** instrument asserting every interior line of the `html=`/`text=` literal sits at **exactly**
-  column 16, `indent == 16` and not `startswith(" " * 16)`, which passes on 17; plus the
-  load-bearing `isinstance(domains, dict)` guard, which had no test at any tier), and
-  `tests/unit/test_validate_options.py` (the four guards' shadowing order, table-driven — the
-  `--update-cloudflare-fqdns` guard had no test at any tier either). Integration tier:
-  `tests/integration/test_gather_framework.py` (the three framework branches, the smell deltas,
-  and the no-`sc.run_state` parallel-ready pin), `tests/integration/test_site_domains.py`
-  (`fetch_site_domains`/`resolve_site_url` — the skip sentinel, the Cloudflare gate at
-  `psh.cli.cloudflare_enabled`, the two smell deltas),
-  `tests/integration/test_site_roster.py` (incl. the pin that `site_count` is `len(sites)`
-  **before** the resume filter — the whole resume region is unreachable at the subprocess tier
-  permanently, since `--resume-from` requires the interlock-banned `--all`), and
-  `tests/integration/test_resolve_site_plan.py` (both skip sentinels and the unknown-plan
-  `sys.exit`). See `development/2026-08-07-main-extraction/SPEC.md`.
-- **DNS tests.** The `psh/dns_classify.py` engine and `check/dns/` package have their own suite:
-  `tests/unit/test_dns_classify.py` (classification + transient-vs-not-in-DNS, and
-  `psh.dns_classify.MalformedNameError` — `resolve()` converts dnspython's syntax errors
-  (`dns.exception.SyntaxError`, `dns.name.NameTooLong`) into this named exception at the single
-  DNS seam, and `classify_hostname_dns` catches it and returns `(0, 0, False)`, so a malformed
-  hostname — e.g. a Pantheon domain id like `a..b`, which `fqdn_re` accepts — can never escape and
-  abort the whole run), `tests/unit/test_dns_notices.py` (notice builders),
-  `tests/integration/test_check_dns.py` (the `site_post_dns` hook), and
-  `tests/integration/test_dns_notice_render.py` (syrupy snapshots). `check/pantheon_cdn_change/`
-  has its own parallel suite: `tests/unit/test_pantheon_cdn_change_chain.py`,
-  `tests/unit/test_pantheon_cdn_change_pantheon.py`,
-  `tests/unit/test_pantheon_cdn_change_detect.py`, `tests/unit/test_pantheon_cdn_change_notices.py`,
-  `tests/integration/test_check_pantheon_cdn_change.py` (hook/phase registration),
-  `tests/integration/test_pantheon_cdn_change_notice_render.py` (syrupy snapshots, where the
-  U-M-before-cutoff copy is pinned), and the 4th e2e golden (below). **`psh.dns_classify.resolve`
-  is the one monkeypatchable DNS seam** — patch it (as those tests do) so nothing hits real DNS;
-  route any new resolution through it.
-- **check/pantheon tests.** The `check/pantheon/` package (frozen/live-env/updates/php-eol) has
-  its own suite: `tests/unit/test_php_eol_notice.py` (the `build_php_eol_notice` builder, at its
-  `check/pantheon/php_eol.py` home — the lexicographic-compare and missing-`php_version` fixes are
-  pinned here), `tests/integration/test_check_pantheon_init.py` (config gating + the four hooks'
-  phase/`consumes`/`produces` declarations; default-true proof),
-  `tests/integration/test_check_pantheon.py` (the four hook seams via `sc.SiteContext` and the
-  `gateway` fixture, incl. the singular-`short` interpolation pin), and
-  `tests/integration/test_pantheon_notice_render.py` (syrupy snapshots of all seven notice
-  variants). The `envs` contract key and `stuff_envs_contract` are pinned by
-  `tests/unit/test_contract_registry.py`, and `tests/integration/test_hook_dag.py` proves the
-  `check.pantheon` declarations validate.
-- **psh/gather + check/wordpress + U-M WP-check tests.** All integration tier:
-  `tests/integration/test_gather_wordpress.py` (`psh.gather` via the `gateway` fixture +
-  `sc.SiteContext` — happy path, fatal version/plugin/theme fetches, last-wins smell, the
-  network-URL variants; its header note records why `gather_wordpress`'s `"unknown"` fallback and
-  the *isinstance* half of `wordpress_network_url`'s `None` return stay unreachable through the
-  gateway seam — the `fatal` half of that `None` is reachable and load-bearing, see that
-  function's docstring), `tests/integration/test_check_wordpress_init.py` (config
-  gating + the four hooks' declarations in order; default-true proof),
-  `tests/integration/test_check_wordpress.py` (the four hook seams, incl. the ocp
-  no-matching-plugin no-call pin, the `wp_smell`-rebind pins, and the precedence pin — theme
-  stderr then OCP stderr with clean favicon → OCP wins), `tests/integration/test_check_umich_wp.py`
-  (oidc / hummingbird seams, the `site['name']` print pin, and the gating-change proof:
-  umich-disabled registers neither), and `tests/integration/test_wordpress_notice_render.py` +
-  `tests/integration/test_umich_wp_notice_render.py` (syrupy snapshots of every relocated notice
-  body). The four `site_post_gather` contract keys and the extended `stuff_gather_contract`
-  (same-`add_on_updates`-object included) are pinned by `tests/unit/test_contract_registry.py`;
-  `test_documented_sc_facade_names_exist` pins `sc.wp_eval`/`sc.wp_error`.
-- **psh/gather Drupal half + check/drupal + check/addon_updates + Drupal-UA tests.** Integration
-  tier: `tests/integration/test_gather_drupal.py` (`psh.gather.gather_drupal` via the `gateway`
-  fixture + `sc.SiteContext` — D8+ composer-audit + D7 pm:updatestatus happy paths, the fatal
-  core-status/pm:list/pm:updatestatus/composer-update notices, the last-wins smells, and the pin
-  that a D7 `"type": "module"` row renders `module`; its docstring records the two-binding
-  `run_terminus` seam trap — patch BOTH `psh.gateway.run_terminus` and `psh.gather.run_terminus`),
-  `test_check_drupal_init.py`/`test_check_drupal.py` (config gating + declarations in order; the
-  multisite gate/probe/key-absence + `multisite-check` notice, papc/d7_eol delegation),
-  `test_check_addon_updates_init.py`/`test_check_addon_updates.py` (gating + the `updates-addons`
-  table incl. the same-object read), `test_check_umich_drupal_ua.py` (the UA seams, the
-  `drush_smell`-rebind pin, and the gating-change proof: umich-disabled registers no `drupal_ua`),
-  and the syrupy render files `test_drupal_notice_render.py` /
-  `test_addon_updates_notice_render.py` / `test_umich_drupal_ua_notice_render.py`. Unit tier:
-  `tests/unit/test_no_primary_domain_notice.py` (the pure helper).
-  `test_hook_dag.py`'s `ALL_PACKAGES` covers every package; `test_documented_sc_facade_names_exist`
-  pins `sc.drush_php_script`/`sc.drush_error`.
-- **check/smells tests.** All four files load `check/smells/` **standalone** through
-  `tests/helpers/checkload.py` (the `test_annual_billing_notices.py` precedent — there is no
-  `psh.`-re-export route to a `check/` module), but **not through the same helper**: three use
-  `load_check_module`, which loads one module **without** running `__init__.py`, and
-  `tests/integration/test_check_smells_init.py` uses `load_check_package`, because it is the gate
-  test and `__init__.py` is exactly what it exercises. Unit tier:
-  `tests/unit/test_smell_notices.py` (the `build_smell_notices` builder at its new
-  `check/smells/notices.py` home, incl. the column-0 assertions on the composer literal;
-  loading `notices.py` alone never runs `check/smells/__init__.py`, so no hook registers and
-  no config gate is consulted — these stay pure builder tests). Integration tier:
-  `tests/integration/test_smell_notice_render.py` (the syrupy pins of the three notice bodies —
-  **the three test names are unchanged across the 2026-08-07 move on purpose**, because syrupy
-  keys `.ambr` entries by file name AND test name, so the byte-identical snapshot file is
-  itself the evidence that the literals moved verbatim),
-  `tests/integration/test_check_smells_init.py` (config gating, the default-true proof, the
-  `consumes`/`produces` declarations, and the phase instrument below) and
-  `tests/integration/test_check_smells.py` (the hook seam via `sc.SiteContext`, incl. the pin
-  that it reads the **rebound** `wp_smell` rather than the stuffed one). **`test_hook_dag.py`
-  cannot detect this hook being moved to `site_post_gather`** — the declarations validate
-  there too — so `test_check_smells_init.py` is the only cover for the phase choice.
-  That cover is **behavioral, not a phase-name string** (2026-08-08):
-  `test_no_smell_notice_exists_until_the_site_pre_render_phase` drives every phase in
-  `PHASES[:PHASES.index("site_pre_render")]` — exactly the phases an `--only-warn` run reaches
-  before `main()`'s `continue` — through `sc.invoke_hooks` and asserts **no notice exists yet**,
-  then fires `site_pre_render` and asserts the `wp-smell` row appears. It therefore reds on a
-  move to *any* earlier phase, on a double registration, and on the hook silently emitting
-  nothing; all three were measured. A string assertion on the registered phase pinned the
-  spelling and not the consequence, which is why it was replaced.
-- **psh/render + psh/mail + annual-billing tests.** Integration tier:
-  `tests/integration/test_render_report.py` (the `render_report` I/O contract at its seam in a tmp
-  workdir with the real templates + **real php** — `pytest.skip("php not on PATH")` when php is
-  absent; incl. the non-vacuous `!important`-pass assertion using a retained `@media` block),
-  `tests/integration/test_mail_recipients.py` (`psh.mail.resolve_recipients` via the `gateway`
-  fixture + `recording_console` — the generic `None`-return, the U-M special cases),
-  `tests/integration/test_check_umich_annual_billing.py` (the hook's gating/window
-  boundaries/produced key/declarations via `checkload.py` + `sc.SiteContext`; the
-  umich-disabled-registers-nothing symmetry pin), and
-  `tests/integration/test_sort_notices_and_subject.py` (the pure `sort_notices_and_subject` helper
-  — subject override + front order, and the non-mutation-of-`site_context["notices"]` pin). Unit
-  tier: `tests/unit/test_annual_billing_notices.py`. `test_email_config.py` uses the
-  `psh.mail.SMTP_SSL` seam; `test_documented_sc_facade_names_exist` pins `sc.contract_year_end`;
-  the billing hook-produced key is NOT registry-owned, so it is not in
-  `test_contract_registry.py`; `test_hook_dag.py` proves the `check.umich` hooks validate.
-- **Notice-model tests.** `tests/unit/test_notice.py` covers `Notice.__post_init__`'s two named
-  `TypeError`s (non-`Severity` severity; non-str `csv_extra` element) and
-  `psh.gather.check_drupal_module` covers the `Severity(level)` named `ValueError`.
-  `tests/integration/test_notice_roster.py` pins the 36-code roster and
-  `tests/integration/test_notice_registration.py` enforces the registration rule by AST (see
-  § Notices vs. news).
+- **Where the tests are.** By convention `tests/{unit,integration,e2e}/test_<subject>.py`, one set
+  per `check/`/`plugin/` package: `test_<pkg>_init.py` = config gating + the hooks' phase/
+  `consumes`/`produces` declarations; `test_<pkg>.py` = the hook seams via `sc.SiteContext` + the
+  `gateway` fixture; `test_<pkg>_notice_render.py` = syrupy snapshots of the notice bodies
+  (refresh with `--update-goldens`). **Each file's module docstring names its own seams and scope
+  limits — read that, not a list here.** `codegraph affected <file>` finds static-import cover;
+  for the standalone-loaded `check/`/`plugin/` modules it returns nothing (see `.claude/CLAUDE.md`'s
+  measured blind-spot note), so fall back to the convention. Packages using relative imports load
+  through `tests/helpers/checkload.py`; the rest use `SourceFileLoader` directly, and
+  `check/cloudflare/` registers a probe package with `__path__` in `sys.modules` first.
+- **A few cover facts the convention does not give you.** The `--resume-from` region is
+  **permanently** unreachable at the subprocess tier (it requires the interlock-banned `--all`), so
+  `tests/integration/test_site_roster.py` is its only cover. `psh.dns_classify.resolve` is the ONE
+  monkeypatchable DNS seam — route any new resolution through it. `tests/integration/
+  test_gather_wordpress.py`'s header records why `gather_wordpress`'s `"unknown"` fallback and the
+  *isinstance* half of `wordpress_network_url`'s `None` return are unreachable through the gateway
+  (the `fatal` half is reachable and load-bearing). **`test_hook_dag.py` cannot detect
+  `check.smells`' hook being moved to an earlier phase** — the declarations validate there too — so
+  `test_check_smells_init.py::test_no_smell_notice_exists_until_the_site_pre_render_phase` is the
+  only cover for that phase choice, and it is behavioral (it drives every earlier phase and asserts
+  no notice exists yet), not an assertion on the phase name.
 - **The harness's own gates are tested** — `tests/unit/test_run_gates.py` loads the
   extension-less `run-tests` with the same `SourceFileLoader` idiom the other extension-less
   scripts use, and pins the two properties whose violation is **silent**: the type gate invokes
@@ -1572,8 +1357,8 @@ Non-obvious things the harness relies on:
   no `[UMich]` section) — the U-M copy is pinned instead by
   `tests/integration/__snapshots__/test_pantheon_cdn_change_notice_render.ambr`. **Its fixtures are
   hand-maintained**: `--record` refreshes only `terminus/` and `terminus-drupal/`, so
-  `terminus-cdnchange/` will silently freeze at today's Pantheon JSON shape — see the README in
-  that directory. The `.eml` identity headers have no byte golden (the `Date:` is volatile) —
+  `terminus-cdnchange/` **and `terminus-unknownfw/`** will silently freeze at today's Pantheon
+  JSON shape — each carries its own README. The `.eml` identity headers have no byte golden (the `Date:` is volatile) —
   `test_eml_headers.py` asserts them explicitly. Refresh WordPress fixtures with `./run-tests
   --record`, Drupal with `python tests/tools/record.py --drupal` (both trim the org list to the
   one test site and scrub team emails).
@@ -1596,22 +1381,12 @@ Non-obvious things the harness relies on:
   (its.umich.edu URLs, `webmaster@umich.edu`, `node/4705`). Also **hardcoded U-M but living in the
   generic check packages** (un-gated U-M links that moved verbatim when the checks relocated — the
   packages are generic because the platform checks belong there; de-U-M-ifying them is
-  post-campaign work): in `check/pantheon/` the `frozen`, `no-live-env-but-paid-plan`, and
-  `updates-*` notice bodies (its.umich.edu / procurement links), in `check/wordpress/` the
+  post-campaign work): in `check/pantheon/` the `frozen` and
+  `updates-*` notice bodies (its.umich.edu / procurement links — `no-live-env-but-paid-plan` and
+  `php-eol` carry none, do not go looking), in `check/wordpress/` the
   `no-favicon` notice body (its.umich.edu documentation links), and in `check/addon_updates/` the
   `updates-addons` notice body (its.umich.edu support link). Keep institution-specific logic behind
   config flags / the `umich` plugin+check packages.
-- **Cache-check tests.** The `check/cloudflare/` modules are loaded standalone (SourceFileLoader;
-  for modules with relative imports, a probe package with `__path__`/`submodule_search_locations`
-  is registered in `sys.modules` first — see `test_check_cloudflare_init.py`). Unit tier:
-  `test_cachecheck_headers.py` / `test_cachecheck_pages.py` / `test_cachecheck_consolidation.py`
-  (pure battery/extraction/consolidation + Hypothesis). Integration tier: `test_hooks_phases.py`
-  (phase registry), `test_check_cloudflare_init.py` (gating/import guard),
-  `test_check_cloudflare_egress.py` (`egress.probe` seam + fake lists client),
-  `test_check_cloudflare_cache.py` (`httpseam.fetch`/`sleep` seams, canned FetchResults),
-  `test_check_umich_cloudflare_cms.py` (relocation), and `test_cachecheck_notice_render.py` (syrupy
-  snapshots of the notice HTML/plaintext — refresh with `--update-goldens`). The e2e goldens keep
-  `[Cloudflare].enabled=false`, so the cache check must never alter them.
 
 ## Reusable prompts (`prompts/`)
 
@@ -1620,9 +1395,16 @@ work, and cite it by name rather than re-deriving the conventions.
 
 **`prompts/directives.md` is the Spine** and comes first: the ONE copy of the Posture, the 14
 Prime Directives, the Engineering Preferences, and the spec quality bar. Every other file in
-`prompts/` is a *delta* that cites directives **by number** and restates none of them. This
-matters because they used to live in two files and **drifted** — PD#11 gained a `/domain-modeling`
-mandate in one copy and not the other, and the adversarial reviewer read the stale one.
+`prompts/` is a *delta* that cites directives **by number**. This matters because they used to
+live in two files and **drifted** — PD#11 gained a `/domain-modeling` mandate in one copy and not
+the other, and the adversarial reviewer read the stale one.
+
+**One exception, and it is a live trap:** `implementation-standards.md`'s *Directives at
+implementation time* section re-expresses nine directives as code-level obligations **under its
+own numbering, which does NOT match the Spine's** — its `1.` is "Every error has a name" (Spine
+PD#**2**) and its `2.` is "Zero silent failures" (Spine PD#**1**), i.e. inverted on the two most
+cited. Always resolve a `PD#n` citation against `prompts/directives.md`, never against that
+section's list numbers.
 
 The deltas: `new-feature-standards.md` (how features get specced), `implementation-standards.md`
 (the standards layered on `superpowers:subagent-driven-development`; the intended invocation is
@@ -1631,7 +1413,9 @@ The deltas: `new-feature-standards.md` (how features get specced), `implementati
 `mattpocock-skills:diagnosing-bugs` — for **runtime** failures; document defects go to
 `adversarial-review.md` instead), `adversarial-review.md`, `add-tests-for-change.prompt.md`,
 `refresh-fixtures.prompt.md`, and `update-claude-md.md`. Note `development/2026-07-04-test-harness/`
-contains **stale copies** of two of these — `prompts/` is the source of truth.
+contains **duplicate copies** of two of these (`add-tests-for-change.prompt.md` has already
+drifted; `refresh-fixtures.prompt.md` is still byte-identical, which is more dangerous, not less —
+it reads as authoritative) — `prompts/` is the source of truth.
 
 `prompts/` holds the *standards* (the bar to hold work to); **`docs/agents/`** holds the *wiring*
 the installed skills read (where issues live, which glossary to read, the triage vocabulary). See
@@ -1690,13 +1474,10 @@ Matt's skills split by frontmatter into ones I can invoke and ones only you can 
   `/to-tickets`, `/implement`, `/improve-codebase-architecture`, `/triage`, `/wayfinder`,
   `/ask-matt`.
 
-When to reach for the user-typed ones here:
-
-- **`/improve-codebase-architecture`** — hunting expansion opportunities. Nothing else in this
-  repo does this; it's the main reason Matt's set is installed.
-- **`/grill-with-docs`** — sharpening a big feature before `superpowers:brainstorming`.
-- **`/triage`**, **`/wayfinder`**, **`/to-tickets`** — no current use: there's no issue inflow,
-  and this is a mature codebase rather than a foggy greenfield.
+Of the user-typed ones, **`/improve-codebase-architecture`** (hunting expansion opportunities) is
+the main reason Matt's set is installed — nothing else here does that job; **`/grill-with-docs`**
+sharpens a big feature before `superpowers:brainstorming`. `/triage`, `/wayfinder` and
+`/to-tickets` have no current use (no issue inflow, mature codebase).
 
 Two skill names are **ambiguous** — say which you mean:
 
@@ -1723,17 +1504,14 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root (`docs/adr/` does no
 
 ## How this architecture came to be
 
-The core package + self-registering `check/`/`plugin/` layout was reached by the modularization
-campaign, which is **complete**. It carved the several-thousand-line single-file script into the
-`psh/` package, the `check/`/`plugin/` packages, and the `main()` orchestrator, across a sequence
-of increments while the four e2e goldens stayed byte-identical. The record lives in
-`development/2026-07-17-modularization-campaign/`: **`CAMPAIGN.md`** (the frozen architecture,
-decisions, and invariants — amendments only, per its preamble), **`LEDGER.md`** (the append-only
-cross-increment history — the one home for "which increment did what"), **`BLOCKMAP.md`** (the
-functional map of the original `main()`), **`CLOSING-AUDIT.md`** (the closing-question answers),
-and **`RETROSPECTIVE.md`** (the goal against the measured outcome and the failure classes worth
-carrying forward). This `CLAUDE.md` describes the architecture as it **is**; the increment-numbered
-narrative of how it got here lives in `LEDGER.md`.
+The core package + self-registering `check/`/`plugin/` layout came from the modularization
+campaign, which is **complete**: it carved a several-thousand-line single-file script into the
+`psh/` package, the `check/`/`plugin/` packages and the `main()` orchestrator, over a sequence of
+increments while the four e2e goldens stayed byte-identical. Record:
+`development/2026-07-17-modularization-campaign/` — **`CAMPAIGN.md`** (the frozen architecture and
+invariants; amendments only), **`LEDGER.md`** (the one home for "which increment did what"), plus
+`BLOCKMAP.md` / `CLOSING-AUDIT.md` / `RETROSPECTIVE.md`. This `CLAUDE.md` describes the
+architecture as it **is**.
 
 ## Development archive (`development/`)
 
@@ -1802,13 +1580,9 @@ curl -s -H "Authorization: Bearer ${SESSION_TOKEN}" "https://api.pantheon.io/v0/
 
 ## Reference material
 
-Fetch information as needed from the websites, using the HTTP request header
-`Accept: text/markdown`. Follow links on the website pages as needed.
-
-* Pantheon documentation: https://docs.pantheon.io
-* Information about using the Cloudflare API: https://developers.cloudflare.com/fundamentals/api/
-* Cloudflare API documentation: https://developers.cloudflare.com/api/
-* Cloudflare products and services in general: https://developers.cloudflare.com/
+Fetch as needed, using the HTTP request header `Accept: text/markdown`, and follow links on the
+pages: Pantheon docs (https://docs.pantheon.io) and Cloudflare docs
+(https://developers.cloudflare.com/ — `/fundamentals/api/` and `/api/` for the API).
 
 ## Other / General
 * **Before writing, reviewing, or refactoring any code in this repo, invoke the

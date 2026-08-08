@@ -226,12 +226,17 @@ def run_gates():
     return completed
 
 
+# Flags this wrapper consumes itself; everything else goes straight to pytest.  Module-level so
+# tests/unit/test_run_gates.py can assert every member is actually READ by a branch of main():
+# a listed-but-unread flag is a silent no-op that never reaches pytest either.
+WRAPPER_FLAGS = {
+    "--fast", "--llm", "--coverage", "--update-goldens", "--record",
+}
+
+
 def main(argv):
-    wrapper_flags = {
-        "--fast", "--llm", "--human", "--coverage", "--update-goldens", "--record",
-    }
-    ours = [a for a in argv if a in wrapper_flags]
-    passthrough = [a for a in argv if a not in wrapper_flags]
+    ours = [a for a in argv if a in WRAPPER_FLAGS]
+    passthrough = [a for a in argv if a not in WRAPPER_FLAGS]
 
     if "--record" in ours:
         return subprocess.call([sys.executable, str(ROOT / "tests" / "tools" / "record.py")])

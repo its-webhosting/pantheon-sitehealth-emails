@@ -341,9 +341,16 @@ def _forbidden_msg(token):
 def _assert_flags_allowed(args):
     """Fail closed if any arg could activate --all/-a/--for-real.
 
-    Exact-token matching is not enough: the program's argparse accepts abbreviations
-    (--fo -> --for-real, --al -> --all) and short-flag bundles (-av -> -a -v). This checks
-    all three forms. It is deliberately conservative (fail-closed) on ambiguous short bundles.
+    Exact-token matching is not enough: a short-flag bundle hides a forbidden flag inside
+    another token (-av == -a -v). This also rejects any long option that is a PREFIX of a
+    forbidden one (--fo, --al).
+
+    That prefix check is NOT because the program accepts abbreviations -- it does not:
+    build_arg_parser sets allow_abbrev=False, pinned by tests/unit/test_argparse_contract.py.
+    The interlock deliberately does not DEPEND on that setting. It is the blast-radius control
+    for the whole suite, and flipping allow_abbrev back to True (or adding a second parser that
+    abbreviates) would otherwise widen it silently, with nothing here going red. Checking both
+    forms costs two lines; discovering the gap by mailing every site owner does not.
     """
     for arg in args:
         if arg == "--":

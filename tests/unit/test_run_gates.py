@@ -10,16 +10,21 @@ Loaded with the SourceFileLoader idiom the suite already uses for the other exte
 scripts (tests/unit/test_find_platform_domains_dns.py), fresh per test.  Importing it is safe:
 its entry point is __main__-guarded, so nothing runs on import.
 
-What is pinned here is deliberately narrow -- the two properties whose violation is SILENT:
+What is pinned here is deliberately narrow -- the properties whose violation is SILENT:
 
   * the type gate invokes THIS venv's pyright and resolves imports against THIS venv
     (a reintroduced `shutil.which("pyright")` or `uvx` fallback is a working gate that
     reports ~34-46 false `reportMissingImports`, i.e. loud but useless -- see
     `pyright_argv`'s docstring), and
   * pyright never runs UNVERIFIED: a version that cannot be established, or does not match
-    pyproject's pin, must abort the gate rather than produce a verdict for a bar nobody chose.
+    pyproject's pin, must abort the gate rather than produce a verdict for a bar nobody chose,
+    and
+  * every flag the wrapper consumes is actually READ by a branch of main(): a listed-but-unread
+    flag is swallowed before pytest sees it, so typing it changes nothing and reports nothing
+    (`--human` shipped that way).
 """
 import importlib.util
+import inspect
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -182,3 +187,17 @@ def test_run_gates_never_runs_an_unverified_pyright(rt, monkeypatch, capsys):
     assert len(calls) == 1, f"pyright must not run unverified; calls were {calls}"
     assert calls[0][0] in rt.ruff_argv()
     assert "9.9.9" in capsys.readouterr().err
+
+
+def test_every_wrapper_flag_is_consumed_by_a_branch(rt):
+    """A wrapper flag nothing reads is a SILENT no-op -- typing it changes nothing, with no error.
+
+    `main()` partitions argv into `ours` (WRAPPER_FLAGS) and `passthrough`, so a flag listed in
+    WRAPPER_FLAGS but read by no branch is swallowed twice over: it never reaches pytest either,
+    which breaks the documented "any other argument is passed straight through" contract.
+    `--human` shipped in exactly that state.  Source inspection is the only seam -- consumption
+    is a property of main()'s body, and main() ends in a subprocess.call this test must not make.
+    """
+    body = inspect.getsource(rt.main)  # the SET lives at module level, so it is not in here
+    unread = [flag for flag in rt.WRAPPER_FLAGS if f'"{flag}"' not in body]
+    assert unread == [], f"wrapper flags swallowed but never read by a branch: {sorted(unread)}"
