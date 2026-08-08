@@ -330,6 +330,32 @@ def validate_options() -> None:
         )
 
 
+def ensure_build_dir() -> None:
+    """Create ./build, where every rendered report is written, or exit with a NAMED message.
+
+    A helper rather than a bare statement in main() because of WHERE it runs: above main()'s
+    try: / except BaseException lifecycle dispatch, so anything raised here reaches no handler
+    -- the operator gets a bare traceback and CPython's exit 1, the code abort_reason reserves
+    for a database failure, with no artifacts flushed and nothing naming the cause (PD#1/PD#2).
+    Extracting it is also what makes it testable: main() has no in-process caller, since the
+    conftest interlock bans --all/--for-real (tests/unit/test_ensure_build_dir.py).
+
+    `exist_ok=True` is the exists() guard this replaced at 9ea4f71; unlike that guard it fails
+    HERE on a non-directory "build" rather than at the first render write, which is the better
+    behavior and the reason the two failures get separate messages: FileExistsError's own text
+    ("[Errno 17] File exists: 'build'") never says that the name is taken by a non-directory,
+    which is the one case an operator would otherwise find baffling.  Both arms exit 1 like
+    every other fatal startup guard in this module -- no new exit code is minted here.
+    """
+    try:
+        Path("build").mkdir(exist_ok=True)
+    except FileExistsError:
+        sys.exit('"build" already exists and is not a directory, so the build directory the '
+                 "reports are written to cannot be created.  Remove or rename it.")
+    except OSError as e:
+        sys.exit(f'Could not create the "build" directory: {e}')
+
+
 # INVARIANT 8 -- DO NOT RE-INDENT THE html=/text= LITERALS BELOW.  Every interior line, and
 # both closing triple quotes, MUST stay at column 16 counted from the start of the line --
 # NOT at an indent relative to the `html=`/`text=` keyword, and NOT whatever a formatter
@@ -662,10 +688,10 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
         self_info, _errors, _fatal = terminus("self:info")
         pprint(self_info)
 
-    # Create a directory named "build" if it doesn't exist.  exist_ok=True is the exists() guard
-    # this replaced; unlike that guard, an existing NON-directory "build" now fails here rather
-    # than at the first render write.
-    Path("build").mkdir(exist_ok=True)
+    # Create a directory named "build" if it doesn't exist.  Every failure mode is a named exit,
+    # NOT a traceback -- this runs above the try:/except BaseException below, so nothing here
+    # reaches a handler (see the helper's docstring).
+    ensure_build_dir()
 
     # The run's accumulators live on ONE RunState, bound to sc.run_state BEFORE any hook fires:
     # a setup hook that reached db_retry would otherwise write into a RunState main() then

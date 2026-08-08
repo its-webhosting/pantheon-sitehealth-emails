@@ -528,7 +528,13 @@ the pure helpers below), so it is the single module the test `psh` fixture expos
 
 `psh/cli.py` also owns its own stage helpers, extracted from `main()` so each stage is
 reachable by a test without running the loop: `validate_options()` (the four argument guards, in
-their shadowing order — see **Resuming an interrupted `--all` run**), `resolve_site_roster()` →
+their shadowing order — see **Resuming an interrupted `--all` run**), `ensure_build_dir()` (the
+`./build` creation guard — extracted because it runs **above** `main()`'s `try:` /
+`except BaseException`, so a raise there reaches no handler and the operator gets a bare traceback
+and CPython's exit 1, the code `abort_reason` reserves for a *database* failure; a non-directory
+`build` and every other `OSError` now get their own named `sys.exit`, and
+`tests/unit/test_ensure_build_dir.py` is the only seam that reaches this, since `main()` has no
+in-process caller), `resolve_site_roster()` →
 `SiteRoster` (the `org:site:list` fetch, name→id map, sort and resume filter; its `site_count` is
 `len(sites)` **before** the filter — the denominator of the per-site banner and of `finish_run`'s
 "Email sent for N of M sites", never `len(site_names)`), `fetch_site_domains()` → `SiteDomains`
