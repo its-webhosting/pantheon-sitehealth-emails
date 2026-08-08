@@ -5,8 +5,11 @@ It reads the three smell keys off the SiteContext LIVE.  wp_smell and drush_smel
 sanctioned mutate-during-phase contract keys (CLAUDE.md's site_post_gather row): check.wordpress
 .ocp / .favicon and check.umich.drupal_ua rebind them IN PLACE during that phase, so a hook that
 captured them into locals -- or a caller that passed main()'s stale local -- would emit the
-pre-mutation value.  test_reads_the_rebound_wp_smell_not_the_stuffed_one is the only test that
-pins that."""
+pre-mutation value.  test_reads_the_rebound_wp_smell_not_the_stuffed_one is the only test here
+that exercises the REBOUND-value path, which is the shape those two keys create; it is NOT
+independently red-capable, because a SiteContext is a dict and a dict keeps only the final value
+-- any fault in the live read (2026-08-07 final review, finding 2: `site_context["wp_smell"]` ->
+`""`) reds it TOGETHER with its siblings above, never alone."""
 import pytest
 from helpers.checkload import load_check_module
 

@@ -104,9 +104,12 @@ notices out of every `-v` run's dump — an observability regression (PD#5) invi
 since no tier asserts on the dump. The fix, applied in this increment on the user's ruling and
 superseding PLAN.md Task 1 step 14's "leave the `sc.debug` lines in place": both `sc.debug` lines
 move **below** the `site_pre_render` firing. The dump is then strictly more accurate than before
-the relocation — it reports every notice the report will contain, including any future
-`site_pre_render` hook's. **The general lesson, worth more than the fix:** when relocating a
-producer past a seam, enumerate the *readers* on both sides of it, not only the other producers.
+the relocation **for every site that completes** — it reports every notice the report will
+contain, including any future `site_pre_render` hook's — at the accepted cost that a site skipped
+just above the phase by `resolve_recipients`' `continue` now gets no dump at all (§6.6's
+"Site skipped after the emission" row carries the disposition). **The general lesson, worth more
+than the fix:** when relocating a producer past a seam, enumerate the *readers* on both sides of
+it, not only the other producers.
 
 ### 3.3 Consequence for the TO DO
 
@@ -313,8 +316,22 @@ The hook seam, driven through `sc.SiteContext` with the package loaded by `load_
 2. **No smells** → nothing appended (the shadow path: empty-string input, PD#3).
 3. **Reads the mutated key** — build a `SiteContext` whose `wp_smell` was stuffed as `""` and then
    **rebound** to a non-empty string (simulating `check.wordpress.ocp`), and assert the notice
-   carries the rebound value. *(Red-capable: make `emit_smell_notices` cache the three smells into
-   locals before the phase — this is the only test that would catch it.)*
+   carries the rebound value. **Amended 2026-08-07 (final review, finding 2):** the red-capability
+   claim written here — *"make `emit_smell_notices` cache the three smells into locals before the
+   phase — this is the only test that would catch it"* — is **false**, and was measured so. A
+   `SiteContext` is a `dict`, which keeps only the final value, so this case's input is
+   indistinguishable at the seam from case 1's; no fault reds it alone (the review's
+   `site_context["wp_smell"]` → `""` injection reds three tests in this file). The case is kept
+   because it is the only one that exercises the **rebound-value** path — the shape the two
+   sanctioned mutate-during-phase keys create — not because it is independently red-capable.
+
+**Deviation, recorded 2026-08-07 (final review, finding 5):** the shipped
+`tests/integration/test_check_smells.py` loads the hook module with **`load_check_module`**, not
+the `load_check_package` this section specifies. Reason: these are hook-seam tests that call
+`emit_smell_notices` directly, so running `__init__.py` would register a hook and consult the
+config gate that neither is under test here — `tests/integration/test_check_smells_init.py` owns
+both. The narrower loader is the better choice and the spec is corrected to it rather than the
+file to the spec.
 
 ### 6.4 Updated: registry and roster tests
 
@@ -349,7 +366,7 @@ the "no seam above the e2e golden" case the Spine's rule is written for.
 | Empty input | all three `""` → no notices | §6.3 case 2, `test_smell_notices.py` |
 | Nil input | Not reachable: the three keys are core-stuffed `str` at `site_post_gather` and the phase cannot fire without them. A hook running with them absent would `KeyError` loudly — acceptable, and preferable to a `.get(..., "")` that would silently emit nothing if the contract ever broke (PD#1). | Stated, not tested |
 | Upstream error | A *fatal* wp/drush/composer call produces a `wp-error`/`drush-error` notice, not a smell; smells come only from non-fatal stderr. Unchanged by this increment. | Existing gather tests |
-| Site skipped after the emission | Today the notices are added at `:975` and the site can still be skipped at `:986` (`resolve_recipients` → `None`), in which case they are never recorded. After the move the hook runs at `:1003`, i.e. after that skip — so a skipped site now builds *fewer* objects and records the same nothing. No observable difference. | Reasoned; no test |
+| Site skipped after the emission | Today the notices are added at `:975` and the site can still be skipped at `:986` (`resolve_recipients` → `None`), in which case they are never recorded. After the move the hook runs at `:1003`, i.e. after that skip — so a skipped site now builds *fewer* objects and records the same nothing. **One observable difference, introduced by §3.2's amendment and accepted:** the same amendment moved both `sc.debug` lines below the phase firing and therefore below that `continue`, so a site skipped at `resolve_recipients` now gets **no** `-v` notices/sections dump where it previously got the full accumulation. It is accepted because that site produces no report and no `-notices.csv` rows either, and a second dump above `resolve_recipients` would duplicate the output of every completed site (`psh/cli.py:995-1003`; LEDGER 2026-08-07 entry, "a second delta came with the fix and is accepted, not overlooked"). | Reasoned; no test |
 | Ctrl-C mid-site | `abort_run` drops the site's `site_results` entry; notices reach `-notices.csv` only via `record_site_notices` at `:1052`, which is after both the old and the new emission point. Unchanged. | Existing `test_abort_run.py` |
 | `--update` / `--import-older-metrics` | Never reach any site phase; previously also never reached `:975`. Unchanged. | Existing |
 | `--create-tables` | Runs `setup` only. Unchanged. | Existing |

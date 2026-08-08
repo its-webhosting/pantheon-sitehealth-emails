@@ -16,7 +16,10 @@ The psh/ codes (no-domains, no-primary-domain, wp-error, drush-error, the four p
 codes, its-recommends-plan) are already registered when this test runs: psh.cli imports those
 modules, and reset_sc's registry snapshot/restore preserves them across tests.
 
-Roster arithmetic at I14c close: 12 from psh/ + 24 from check/ = 36.
+Roster arithmetic at I14c close: 12 from psh/ + 24 from check/ = 36.  The 2026-08-07 smell-notice
+relocation moved three codes (wp-smell, drush-smell, composer-smell) from psh/gather.py to
+check/smells/notices.py, so the current split is 9 + 27 -- still 36, because they moved rather
+than multiplied.
 """
 import pytest
 from helpers.checkload import load_check_package

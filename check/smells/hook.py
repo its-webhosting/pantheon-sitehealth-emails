@@ -5,8 +5,11 @@ drush_smell are the two sanctioned mutate-during-phase contract keys (CLAUDE.md'
 site_post_gather row), rebound IN PLACE during that phase by check.wordpress.ocp /
 check.wordpress.favicon and check.umich.drupal_ua.  This is a straight transcription of the
 call this replaced (psh/cli.py:975-979 before 2026-08-07), which already read site_context
-rather than main()'s locals.  Pinned by tests/integration/test_check_smells.py::
-test_reads_the_rebound_wp_smell_not_the_stuffed_one.
+rather than main()'s locals.  tests/integration/test_check_smells.py::
+test_reads_the_rebound_wp_smell_not_the_stuffed_one exercises the rebound-value path -- the only
+test that does -- but it cannot go red alone: a SiteContext is a dict, so a rebound value is
+indistinguishable from a stuffed one at this seam, and any fault in the live read reds that test
+together with its siblings in the same file (2026-08-07 final review, finding 2).
 """
 
 from . import notices

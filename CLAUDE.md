@@ -1459,9 +1459,12 @@ Non-obvious things the harness relies on:
   `tests/unit/test_no_primary_domain_notice.py` (the pure helper).
   `test_hook_dag.py`'s `ALL_PACKAGES` covers every package; `test_documented_sc_facade_names_exist`
   pins `sc.drush_php_script`/`sc.drush_error`.
-- **check/smells tests.** All four files load the package **standalone** through
-  `tests/helpers/checkload.py`'s `load_check_module` (the `test_annual_billing_notices.py`
-  precedent — there is no `psh.`-re-export route to a `check/` module). Unit tier:
+- **check/smells tests.** All four files load `check/smells/` **standalone** through
+  `tests/helpers/checkload.py` (the `test_annual_billing_notices.py` precedent — there is no
+  `psh.`-re-export route to a `check/` module), but **not through the same helper**: three use
+  `load_check_module`, which loads one module **without** running `__init__.py`, and
+  `tests/integration/test_check_smells_init.py` uses `load_check_package`, because it is the gate
+  test and `__init__.py` is exactly what it exercises. Unit tier:
   `tests/unit/test_smell_notices.py` (the `build_smell_notices` builder at its new
   `check/smells/notices.py` home, incl. the column-0 assertions on the composer literal;
   loading `notices.py` alone never runs `check/smells/__init__.py`, so no hook registers and

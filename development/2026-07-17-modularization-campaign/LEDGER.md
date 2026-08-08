@@ -2596,7 +2596,7 @@ walk lumped `classify_domains` (**B29**, not on the list) together with `stuff_d
 (**B31**, on it). Both were wrong when written; §3.3 was right. Q1's "NO on the line count"
 answer is also superseded there, with the re-measured 454/318 and the D-i14d-1 discharge.
 
-## 2026-08-07 — post-campaign: the B48 smell-notice emission → `check/smells/` (commits `8bc6dff`, `45e4757`, `8110ebb` + this docs commit)
+## 2026-08-07 — post-campaign: the B48 smell-notice emission → `check/smells/` (commits `00fadf0` through the final-review fix commit that last edited this entry)
 
 **Not `I<N>`-numbered: the campaign is closed.** CAMPAIGN.md has carried its
 `**Completed:** 2026-07-24 at I14d` line since I14d, and this change neither reopens it nor
