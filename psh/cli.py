@@ -971,9 +971,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
                 start_date, end_date, plot_right_date,
             )
 
-            sc.debug("===== Notices:\n", site_context["notices"])
-            sc.debug("===== Sections:\n", site_context["sections"])
-
             resolved = resolve_recipients(site, site_id)
             if resolved is None:
                 continue
@@ -994,6 +991,14 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             # above).  check.umich.annual_billing's hook runs here, producing the billing
             # key the sort/subject helper wires in below; other future hooks may add notices.
             sc.invoke_hooks("site_pre_render", site_context)
+
+            # Dump AFTER the phase too, and for the same reason: the dump must run after the
+            # LAST seam that can add a notice, or it under-reports what the report will
+            # contain.  It did exactly that once -- moving the smell notices into
+            # check/smells/ (a site_pre_render hook) put them below a dump that still sat
+            # above the phase, so every -v run stopped listing them.
+            sc.debug("===== Notices:\n", site_context["notices"])
+            sc.debug("===== Sections:\n", site_context["sections"])
 
             # Sort + subject AFTER the phase (campaign I12): hooks that add notices now
             # render, and the billing hook's produced key is wired in by the helper.

@@ -134,6 +134,28 @@ def test_resolve_site_url_runs_after_the_site_post_dns_phase(psh):
     )
 
 
+def test_the_notices_dump_runs_after_the_site_pre_render_phase(psh):
+    # The -v "===== Notices:" dump must run after the LAST seam that can add a notice, or it
+    # under-reports what the report will contain.  It DID: relocating the smell notices to
+    # check/smells/ (a site_pre_render hook, 2026-08-07) moved their emission BELOW a dump that
+    # still sat above the phase, so every -v/-vv/-vvv run silently stopped listing them --
+    # sc.debug defaults to level=1, so this was not a -vvv-only detail.
+    #
+    # Invisible to every tier: the four goldens assert on the .eml, never on stdout, and no test
+    # at any tier reads the dump's content.  PD#1 -- a failure that can happen silently.  Same
+    # idiom and justification as the two source assertions above; the dump is one line away from
+    # being hoisted back above the phase by anyone tidying this region.
+    source = inspect.getsource(psh.main)
+    phase = 'sc.invoke_hooks("site_pre_render"'
+    dump = 'sc.debug("===== Notices:'
+    assert source.count(phase) == 1, "expected exactly one site_pre_render phase firing in main()"
+    assert source.count(dump) == 1, "expected exactly one ===== Notices: dump in main()"
+    assert source.index(phase) < source.index(dump), (
+        "the ===== Notices: dump must run AFTER sc.invoke_hooks('site_pre_render') -- hooks in "
+        "that phase add notices (check.smells does), and a dump above it under-reports them"
+    )
+
+
 @pytest.mark.parametrize(
     ("owner", "smell"),
     [
