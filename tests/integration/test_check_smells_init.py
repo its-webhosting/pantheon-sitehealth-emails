@@ -10,6 +10,8 @@ from helpers.dnsfake import recording_console
 pytestmark = pytest.mark.integration
 
 EXPECTED_NAMES = ["check.smells.hook.emit_smell_notices"]
+SITE_NAME = "its-wws-test1"
+SITE_ID = "9cf2c790-c7b8-4f2f-a6f1-27385b8f958e"
 
 
 def test_registers_hook_when_config_is_silent(psh, reset_sc, request):
@@ -32,44 +34,56 @@ def test_disabled_registers_nothing_and_says_so(psh, reset_sc, request, monkeypa
     assert "Skipping check.smells" in console.export_text()
 
 
-def test_the_phase_is_site_pre_render_and_that_is_load_bearing(psh, reset_sc, request):
-    """The phase string carries THREE guarantees at once (SPEC section 3.2), which is why it
-    gets its own assertion rather than riding along in the gating tests above:
+def test_no_smell_notice_exists_until_the_site_pre_render_phase(psh, reset_sc, request):
+    """The --only-warn output surface, pinned as BEHAVIOR rather than as a phase-name string.
 
-      1. Ordering.  The in-place wp_smell/drush_smell mutators (check.wordpress.ocp,
-         check.wordpress.favicon, check.umich.drupal_ua) are all site_post_gather hooks and are
-         deliberately DAG-invisible (D-i9-3).  A later phase is unconditionally after them; a
-         same-phase hook would need a `mutates` edge kind that this repo deliberately does not
-         have (SPEC section 3.3).
-      2. The --only-warn gate.  main() `continue`s at psh/cli.py:964, ABOVE the site_pre_render
-         firing at :1003.  Move this hook to site_post_gather and every --only-warn run starts
-         writing smell rows into -notices.csv -- a silent output-surface change (PD#1).
-      3. Notice order.  Nothing between the old emission point and the phase firing appends to
-         site_context["notices"], so the info bucket is byte-identical to the pre-move report.
+    An --only-warn run reaches every phase up to and including site_post_gather and then
+    `continue`s (psh/cli.py:964), so site_pre_render is the first phase it never fires.  The
+    invariant that gives the relocation its behavior-neutrality is therefore exactly this: NO
+    smell notice may exist before that horizon.  Register this hook one phase earlier and every
+    --only-warn run silently starts writing smell rows into -notices.csv (PD#1, SPEC section
+    3.2 obstacle 3).
 
-    test_hook_dag.py stays GREEN if this hook moves to site_post_gather -- the declarations are
-    legal there too, so the DAG cannot detect the move.  Several tests in THIS file go red on a
-    phase move (they all name site_pre_render); what no other test duplicates is the exclusivity
-    loop and the consumes/produces asserts, so those run FIRST here.  Ordering them after the
-    registration check -- which is verbatim test_registers_hook_when_config_is_silent's --
-    meant a phase fault tripped the duplicated assertion and the unique ones never executed
-    (fix round 1, review finding 2).  Registering the hook at site_pre_render AND
-    site_post_gather is the fault that reaches the exclusivity loop under either ordering (the
-    registration check passes, so execution continues) -- it is what proves that loop can go
-    red at all, which no fault had done before fix round 1."""
+    This drives the phases through sc.invoke_hooks instead of asserting on the registered phase
+    string, because a string assertion pins the spelling and not the consequence: it goes red on
+    a phase move, but it would also stay green if the hook were somehow reached early by another
+    route, and it says nothing about what the move would COST.  Only check.smells is loaded here,
+    so the pre-horizon loop fires an empty hook list for every other phase -- which is the point:
+    the assertion fails for a move to ANY earlier phase, not only to site_post_gather.
+
+    test_hook_dag.py stays GREEN under such a move (the declarations are legal at
+    site_post_gather too, so the DAG cannot detect it), and so do the three gating tests above
+    if they are ever loosened.  Nothing else in the suite reaches this."""
+    reset_sc.config = {}
+    load_check_package(psh, "smells", "smells_phase_probe", request)
+
+    site_context = reset_sc.SiteContext({"name": SITE_NAME, "id": SITE_ID})
+    site_context["wp_smell"] = "PHP Deprecated: strlen(): Passing null is deprecated"
+    site_context["drush_smell"] = ""
+    site_context["composer_smell"] = ""
+
+    for phase in reset_sc.PHASES[:reset_sc.PHASES.index("site_pre_render")]:
+        reset_sc.invoke_hooks(phase, site_context)
+    assert site_context["notices"] == [], (
+        "a smell notice exists before site_pre_render, so an --only-warn run -- which continues "
+        "after site_post_gather -- would now write smell rows into -notices.csv")
+
+    reset_sc.invoke_hooks("site_pre_render", site_context)
+    assert [n["csv"].split(",")[1] for n in site_context["notices"]] == ["wp-smell"], (
+        "the hook did not emit at site_pre_render, the one phase --only-warn never reaches")
+
+
+def test_declarations_match_the_spec_table(psh, reset_sc, request):
+    """The DAG declarations (SPEC section 6.2).  `consumes` is what orders this hook after the
+    core stuffer; `produces` MUST stay empty -- claiming any of the three smell keys would be a
+    duplicate-producer fatal against the core CONTRACT registry (D-i9-3), which is the obstacle
+    that kept this emission in main() for the whole campaign."""
     reset_sc.config = {}
     load_check_package(psh, "smells", "smells_decl_probe", request)
-
-    for phase in reset_sc.PHASES:
-        if phase == "site_pre_render":
-            continue
-        assert all(h["name"] not in EXPECTED_NAMES for h in reset_sc.hooks.get(phase, [])), (
-            f"the smells hook must be registered ONLY at site_pre_render, not {phase}")
 
     registered = reset_sc.hooks.get("site_pre_render", [])
     assert len(registered) == 1, "expected exactly one site_pre_render hook from check.smells"
     (hook,) = registered
+    assert hook["name"] == EXPECTED_NAMES[0]
     assert hook["consumes"] == ["wp_smell", "drush_smell", "composer_smell"]
     assert hook["produces"] == []
-
-    assert [h["name"] for h in registered] == EXPECTED_NAMES

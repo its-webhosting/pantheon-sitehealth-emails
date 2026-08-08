@@ -308,6 +308,30 @@ bearing for (§5.3), so a reader who sees it fail understands they have moved th
 `site_post_gather` — the assertion fails, and `test_hook_dag.py` stays green, which is exactly why
 this assertion has to exist.)*
 
+**Amended 2026-08-08, on the final review's recommendation and the user's instruction.** Case 3 as
+specified above asserts on the **registered phase name**, which pins the spelling and not the
+consequence. It is now split in two, superseding the shipped
+`test_the_phase_is_site_pre_render_and_that_is_load_bearing` (whose name PLAN.md §Task 1 step 1
+still carries — the plan is frozen, and this amendment is the record of the deviation, the same
+protocol §3.2 uses for step 14):
+
+- **`test_no_smell_notice_exists_until_the_site_pre_render_phase`** — the ordering instrument,
+  now **behavioral**. It builds a `SiteContext` carrying a non-empty `wp_smell`, drives every
+  phase in `PHASES[:PHASES.index("site_pre_render")]` — precisely the phases an `--only-warn` run
+  reaches before `main()`'s `continue` — through `sc.invoke_hooks`, asserts `notices == []`, then
+  fires `site_pre_render` and asserts the `wp-smell` row appears. Only `check.smells` is loaded,
+  so the pre-horizon loop fires an empty hook list for every other phase; that is deliberate, and
+  is what makes the assertion fail for a move to **any** earlier phase rather than only to
+  `site_post_gather`. **Measured red-capable three ways**, each reddening the named assertion and
+  no other: (a) phase → `site_post_gather` (`test_hook_dag.py` green in the same run, confirming
+  the DAG cannot see it — the failure prints the literal `-notices.csv` row that would have
+  shipped); (b) registration at **both** phases; (c) `emit_smell_notices` emitting nothing.
+- **`test_declarations_match_the_spec_table`** — the `consumes`/`produces` half, unchanged in
+  substance and named for the `check/addon_updates` precedent.
+
+The `PHASES` exclusivity loop is **gone**, absorbed: fault (b) is what it existed to catch, and
+the behavioral assertion catches it by the consequence instead of by the registry shape.
+
 ### 6.3 New: `tests/integration/test_check_smells.py`
 
 The hook seam, driven through `sc.SiteContext` with the package loaded by `load_check_package`:

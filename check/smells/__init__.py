@@ -19,11 +19,11 @@ checks, and it carries three guarantees at once (SPEC section 3.2):
      site and this phase, so the rendered info bucket is unchanged.
 
 tests/integration/test_hook_dag.py stays green if this moves to site_post_gather -- the
-declarations are legal there too, so the DAG cannot detect the move.  Several tests in
-tests/integration/test_check_smells_init.py go red on one; the assertions no other test
-duplicates are the PHASES exclusivity loop and the consumes/produces checks inside
-test_the_phase_is_site_pre_render_and_that_is_load_bearing, and registering the hook at BOTH
-phases is caught by that loop alone.
+declarations are legal there too, so the DAG cannot detect the move.  What catches it is
+test_check_smells_init.py::test_no_smell_notice_exists_until_the_site_pre_render_phase, which
+drives every pre-horizon phase through sc.invoke_hooks and asserts NO notice exists yet, so it
+pins guarantee 2 as behavior rather than as this phase name's spelling -- it reds on a move to
+ANY earlier phase, on a double registration, and on the hook silently emitting nothing.
 """
 import script_context as sc
 

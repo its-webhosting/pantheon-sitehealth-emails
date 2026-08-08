@@ -1474,12 +1474,19 @@ Non-obvious things the harness relies on:
   keys `.ambr` entries by file name AND test name, so the byte-identical snapshot file is
   itself the evidence that the literals moved verbatim),
   `tests/integration/test_check_smells_init.py` (config gating, the default-true proof, the
-  hook's phase/`consumes`/`produces` declarations, and a `PHASES` exclusivity loop) and
+  `consumes`/`produces` declarations, and the phase instrument below) and
   `tests/integration/test_check_smells.py` (the hook seam via `sc.SiteContext`, incl. the pin
   that it reads the **rebound** `wp_smell` rather than the stuffed one). **`test_hook_dag.py`
   cannot detect this hook being moved to `site_post_gather`** — the declarations validate
-  there too — so `test_check_smells_init.py` is the only cover for the phase choice, and
-  `check/smells/__init__.py`'s docstring records why the phase is load-bearing.
+  there too — so `test_check_smells_init.py` is the only cover for the phase choice.
+  That cover is **behavioral, not a phase-name string** (2026-08-08):
+  `test_no_smell_notice_exists_until_the_site_pre_render_phase` drives every phase in
+  `PHASES[:PHASES.index("site_pre_render")]` — exactly the phases an `--only-warn` run reaches
+  before `main()`'s `continue` — through `sc.invoke_hooks` and asserts **no notice exists yet**,
+  then fires `site_pre_render` and asserts the `wp-smell` row appears. It therefore reds on a
+  move to *any* earlier phase, on a double registration, and on the hook silently emitting
+  nothing; all three were measured. A string assertion on the registered phase pinned the
+  spelling and not the consequence, which is why it was replaced.
 - **psh/render + psh/mail + annual-billing tests.** Integration tier:
   `tests/integration/test_render_report.py` (the `render_report` I/O contract at its seam in a tmp
   workdir with the real templates + **real php** — `pytest.skip("php not on PATH")` when php is
