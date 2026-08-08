@@ -14,18 +14,13 @@ one, so main() only rebinds wp_smell/drush_smell when the returned smell is non-
 
 The notice-emitting checks that used to be interleaved in this code live in
 check/wordpress/, check/drupal/, check/addon_updates/, and check/umich/ (site_post_gather
-hooks); the wp_error/drush_error notices below describe *failed gathers*, not checks, so
-they stay with the fetches (D-i9-1/D-i10-1).
+hooks) and check/smells/ (a site_pre_render hook); the wp_error/drush_error notices below
+describe *failed gathers*, not checks, so they stay with the fetches (D-i9-1/D-i10-1).
 
 check_wordpress_plugin / check_drupal_module are the recommended-plugin/module notice
 builders the papc / sessions / cloudflare_cms / d7_eol hooks call via
 sc.check_wordpress_plugin / sc.check_drupal_module (exposed from psh.cli's
 sc-exposure block).
-
-build_smell_notices is the B48 smell-notice *builder* (SPEC D-i10-1 amendment 1): it
-lives here beside its sibling gathers, but its *emission* stays in main() (behind the
---only-warn gate) because no hook position can guarantee it runs after the
-wp_smell/drush_smell in-place mutators (D-i9-3/D-i10-4).
 
 gather_framework (B33, B34 (residue), B35 (residue), B36) is the caller-side dispatch
 that threads gather_wordpress/gather_drupal into main()'s locals, extracted from main()
@@ -34,7 +29,6 @@ fields as deltas too (never merged with a caller value it is never given) and to
 no RunState (CAMPAIGN.md section 3.4's parallel-ready criterion, D8).
 """
 import html
-import json
 import re
 from typing import NamedTuple
 
@@ -62,10 +56,6 @@ NOTICE_TURNED_OFF = registry.register(
     "turned-off", description="recommended plugin/module installed but inactive")
 NOTICE_COMPOSER_UPDATE = registry.register(
     "composer-update", description="composer update dry run failed")
-NOTICE_WP_SMELL = registry.register("wp-smell", description="wp-cli wrote to stderr")
-NOTICE_DRUSH_SMELL = registry.register("drush-smell", description="drush wrote to stderr")
-NOTICE_COMPOSER_SMELL = registry.register(
-    "composer-smell", description="composer wrote to stderr")
 
 
 class WordPressGather(NamedTuple):
@@ -668,85 +658,3 @@ def gather_framework(site: dict, live_site: str, site_context) -> FrameworkGathe
         composer_smell=composer_smell,
         results_entry=results_entry,
     )
-
-
-def build_smell_notices(site_name, wp_smell, drush_smell, composer_smell) -> list[Notice]:
-    """Return the list of smell Notices (possibly empty) for one site (BLOCKMAP
-    B48). The emission call stays in main() (SPEC D-i10-1 amendment 1); this is only
-    the builder."""
-    notices = []
-    if wp_smell != "":
-        notices.append(
-            Notice(
-                severity=Severity.INFO,
-                code=NOTICE_WP_SMELL,
-                csv_extra=(json.dumps(wp_smell).replace(',', '\\,'),),
-                short="PHP code problems",
-                html=f"""
-<p>The <code>wp</code> (WP CLI) command is reporting PHP code problems with <strong>{site_name}</strong>.
-Even if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(wp_smell)}</pre>
-""",
-                text=f"""
-The "wp" (WP CLI) command is reporting PHP code problems with
-{site_name}. Even if this is not breaking anything at
-the moment, it should be fixed to avoid possible future problems:
-
------ START WP CLI REPORTED PROBLEMS -----
-{wp_smell}
------ END OF WP CLI REPORTED PROBLEMS -----
-
-    """,
-            )
-        )
-
-    if drush_smell != "":
-        notices.append(
-            Notice(
-                severity=Severity.INFO,
-                code=NOTICE_DRUSH_SMELL,
-                csv_extra=(json.dumps(drush_smell).replace(',', '\\,'),),
-                short="PHP code problems",
-                html=f"""
-<p>The <code>drush</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
-if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(drush_smell)}</pre>
-""",
-                text=f"""
-The "drush" command is reporting PHP code problems with
-{site_name}. Even if this is not breaking anything
-at the moment, it should be fixed to avoid possible future problems:
-
------ START DRUSH REPORTED PROBLEMS -----
-{drush_smell}
------ END OF DRUSH REPORTED PROBLEMS -----
-
-""",
-            )
-        )
-
-    if composer_smell != "":
-        notices.append(
-            Notice(
-                severity=Severity.INFO,
-                code=NOTICE_COMPOSER_SMELL,
-                csv_extra=(json.dumps(composer_smell).replace(',', '\\,'),),
-                short="PHP code problems",
-                html=f"""
-<p>The <code>composer</code> command is reporting PHP code problems with <strong>{site_name}</strong>. Even
-if this is not breaking anything at the moment, it should be fixed to avoid possible future problems:</p>
-<pre>{html.escape(composer_smell)}</pre>
-""",
-                text=f"""
-The "composer" command is reporting PHP code problems with
-{site_name}. Even if this is not breaking anything
-at the moment, it should be fixed to avoid possible future problems:
-
------ START COMPOSER REPORTED PROBLEMS -----
-{composer_smell}
------ END OF COMPOSER REPORTED PROBLEMS -----
-
-""",
-            )
-        )
-    return notices

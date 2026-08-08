@@ -3,39 +3,51 @@
 Repointed at campaign I14c: the builder returns Notice objects, so the reads are
 `.code`/`.csv_extra`/`.html`/`.text` instead of the render dict's subscripts.  The asserted
 VALUES are unchanged -- the site-name half of the csv row now comes from the SiteContext at
-projection time (SPEC I14c §2.2), pinned by tests/unit/test_add_notice_from_notice.py.
+projection time (SPEC I14c section 2.2), pinned by tests/unit/test_add_notice_from_notice.py.
+
+Repointed again on 2026-08-07: the builder relocated to check/smells/notices.py
+(development/2026-08-07-smell-notice-relocation/SPEC.md), so load it standalone -- the
+test_annual_billing_notices.py precedent; no psh re-import exists for check/ modules.
+load_check_module loads notices.py WITHOUT running check/smells/__init__.py, so no hook is
+registered and no config gate is consulted: these stay pure builder tests.
 """
 import json
 
 import pytest
+from helpers.checkload import load_check_module
 
 pytestmark = pytest.mark.unit
 
 
-def test_no_smells_returns_empty_list(psh):
-    assert psh.build_smell_notices("s", "", "", "") == []
+@pytest.fixture
+def smells(psh, request):
+    return load_check_module(psh, "smells", "notices", "smells_notices_unit_probe", request)
 
 
-def test_wp_smell_alone(psh):
-    (n,) = psh.build_smell_notices("s", "wp broke", "", "")
+def test_no_smells_returns_empty_list(smells):
+    assert smells.build_smell_notices("s", "", "", "") == []
+
+
+def test_wp_smell_alone(smells):
+    (n,) = smells.build_smell_notices("s", "wp broke", "", "")
     assert n.code == "wp-smell"
     assert n.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     assert n.csv_extra == (json.dumps("wp broke").replace(",", "\\,"),)
     assert "wp broke" in n.html and "wp broke" in n.text
 
 
-def test_drush_smell_alone(psh):
-    (n,) = psh.build_smell_notices("s", "", "drush broke", "")
+def test_drush_smell_alone(smells):
+    (n,) = smells.build_smell_notices("s", "", "drush broke", "")
     assert n.code == "drush-smell"
     assert n.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     assert n.csv_extra == (json.dumps("drush broke").replace(",", "\\,"),)
     assert "drush broke" in n.html and "drush broke" in n.text
 
 
-def test_composer_smell_alone_is_reported(psh):
+def test_composer_smell_alone_is_reported(smells):
     # RED pre-fix: the composer block was nested inside the drush check, so a composer
     # smell without a drush smell was silently dropped.
-    (n,) = psh.build_smell_notices("s", "", "", "composer broke")
+    (n,) = smells.build_smell_notices("s", "", "", "composer broke")
     assert n.code == "composer-smell"
     assert n.severity == "info"   # rewritten from 'type': 'info' at I14c; nothing else pins it
     assert n.csv_extra == (json.dumps("composer broke").replace(",", "\\,"),)
@@ -46,34 +58,34 @@ def test_composer_smell_alone_is_reported(psh):
     ("", "d, e", "", '"d\\, e"'),
     ("", "", "f, g", '"f\\, g"'),
 ])
-def test_smell_csv_field_escapes_embedded_commas(psh, wp, drush, composer, expected):
+def test_smell_csv_field_escapes_embedded_commas(smells, wp, drush, composer, expected):
     # The json.dumps(...).replace(",", "\\,") escaping is what keeps a multi-line stderr
     # containing commas inside ONE csv field; csv_extra carries it verbatim.  All THREE
     # builders carry their own copy of the expression, so all three are pinned against a
     # comma-bearing input -- a comma-free one makes the .replace a no-op and the assertion
     # unable to go red (Task-2 review finding 3).
-    (n,) = psh.build_smell_notices("s", wp, drush, composer)
+    (n,) = smells.build_smell_notices("s", wp, drush, composer)
     assert n.csv_extra == (expected,)
 
 
-def test_composer_html_interpolates_composer_not_drush(psh):
+def test_composer_html_interpolates_composer_not_drush(smells):
     # RED pre-fix: the composer html body interpolated {drush_smell}.
-    notices = psh.build_smell_notices("s", "", "drush text", "composer text")
+    notices = smells.build_smell_notices("s", "", "drush text", "composer text")
     composer = next(n for n in notices if n.code == "composer-smell")
     assert "composer text" in composer.html
     assert "drush text" not in composer.html
 
 
-def test_all_three_in_emission_order(psh):
-    notices = psh.build_smell_notices("s", "w", "d", "c")
+def test_all_three_in_emission_order(smells):
+    notices = smells.build_smell_notices("s", "w", "d", "c")
     assert [n.code for n in notices] == ["wp-smell", "drush-smell", "composer-smell"]
 
 
-def test_composer_literals_are_column_zero_like_siblings(psh):
+def test_composer_literals_are_column_zero_like_siblings(smells):
     # D-i10-8 (LEDGER I1 Obs. 4): the composer message/text literals carried 8 spaces of
     # accidental leading indentation on every interior line -- the wp/drush siblings are
     # column-0.  RED on the pre-move builder (psh/_legacy.py) before the D-i10-8 de-indent.
-    notices = psh.build_smell_notices("s", "", "d", "c")
+    notices = smells.build_smell_notices("s", "", "d", "c")
     _drush, composer = notices
     assert not composer.html.startswith("\n        ")
     assert composer.html.splitlines()[1].startswith("<p>The <code>composer</code>")

@@ -151,7 +151,7 @@ def test_each_smell_merge_stays_guarded(psh, owner, smell):
     # Drupal multisite whose drush php probe emits a PHP deprecation on stderr (drush_smell
     # set by resolve_site_url) and whose pm:list/composer calls are clean (gather.drush_smell
     # == "") loses the smell, stuff_gather_contract publishes drush_smell="",
-    # build_smell_notices emits nothing, and nobody learns the site emits PHP notices.
+    # the check.smells hook emits nothing, and nobody learns the site emits PHP notices.
     # Invisible to all four goldens (PD#1 -- a failure that can happen silently).
     source = inspect.getsource(psh.main)
     guard = f'if {owner}.{smell} != "":'

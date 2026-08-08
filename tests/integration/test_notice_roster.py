@@ -12,7 +12,7 @@ the csv row), and the two only agree because every producer builds its Notice wi
 module-level NOTICE_* constant register() returned -- a bare literal at the construction site
 could drift from the registered code with every test still green.
 
-The psh/ codes (no-domains, no-primary-domain, wp-error, drush-error, the six psh/gather.py
+The psh/ codes (no-domains, no-primary-domain, wp-error, drush-error, the four psh/gather.py
 codes, its-recommends-plan) are already registered when this test runs: psh.cli imports those
 modules, and reset_sc's registry snapshot/restore preserves them across tests.
 
@@ -34,7 +34,6 @@ ROSTER = frozenset({
     "wp-error", "drush-error",
     # psh/gather.py
     "not-installed", "multiple-installed", "turned-off", "composer-update",
-    "wp-smell", "drush-smell", "composer-smell",
     # psh/plans.py
     "its-recommends-plan",
     # check/addon_updates/table.py
@@ -51,6 +50,8 @@ ROSTER = frozenset({
     "updates-info", "updates-warning", "updates-alert",
     # check/pantheon_cdn_change/notices.py
     "pantheon-cdn-change",
+    # check/smells/notices.py
+    "wp-smell", "drush-smell", "composer-smell",
     # check/umich/
     "annual-bill", "drupal-ua", "unsupported-turned-off", "unsupported",
     "umich-oidc-login-reinstall", "sitelens-url-paths",

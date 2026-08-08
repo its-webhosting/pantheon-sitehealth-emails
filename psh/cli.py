@@ -77,7 +77,6 @@ from psh.gateway import (
 from psh.gather import (
     DrupalGather,  # noqa: F401
     WordPressGather,  # noqa: F401
-    build_smell_notices,
     check_drupal_module,
     check_wordpress_plugin,
     gather_framework,
@@ -970,12 +969,6 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
                 site, site_url, visits_by_month, plan_on_day, plan_info,
                 plan_over_time, dates, estimate, first_plan_day, last_plan_day,
                 start_date, end_date, plot_right_date,
-            )
-
-            site_context.add_notices(
-                build_smell_notices(site["name"], site_context["wp_smell"],
-                                    site_context["drush_smell"],
-                                    site_context["composer_smell"])
             )
 
             sc.debug("===== Notices:\n", site_context["notices"])

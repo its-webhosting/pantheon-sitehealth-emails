@@ -41,6 +41,7 @@ ALL_PACKAGES = (
     ("check", "drupal", "hookdag_check_drupal"),
     ("check", "pantheon", "hookdag_check_pantheon"),
     ("check", "pantheon_cdn_change", "hookdag_check_pantheon_cdn_change"),
+    ("check", "smells", "hookdag_check_smells"),
     ("check", "umich", "hookdag_check_umich"),
     ("check", "wordpress", "hookdag_check_wordpress"),
     ("plugin", "aws", "hookdag_plugin_aws"),

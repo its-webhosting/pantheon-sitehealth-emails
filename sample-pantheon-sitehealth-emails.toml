@@ -120,6 +120,10 @@ enabled = true          # PAPC-module, Drupal-7-EOL/tag1_d7es, multisite-probe c
 enabled = true          # pending add-on (plugin/theme/package) updates table notice
 
 
+[Check.smells]
+enabled = true          # "PHP code problems" notices from wp/drush/composer stderr
+
+
 [Database]
 # currently supported database types: sqlite, mysql
 
