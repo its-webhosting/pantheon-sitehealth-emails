@@ -155,6 +155,11 @@ ADD https://api.github.com/repos/anthropics/claude-code/tags?per_page=1 /home/$U
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 RUN npm install -g tui-use
 
+# Other tools
+ADD https://api.github.com/repos/ccusage/ccusage/tags?per_page=1 /home/$USERNAME/software_versions/ccusage_version.json
+RUN npm install -g ccusage \
+  && chmod -L 755 /usr/local/share/npm-global/bin/ccusage /usr/local/share/npm-global/lib/node_modules/ccusage/node_modules/@ccusage/ccusage-linux-arm64/bin/ccusage
+
 # Not needed anymore, the pantheon-sitehealth-emails repo requires pyright to be installed in its venv.
 #RUN npm install -g pyright
 
