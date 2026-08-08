@@ -18,9 +18,12 @@ checks, and it carries three guarantees at once (SPEC section 3.2):
   3. Notice order.  Nothing appended to site_context["notices"] between the old inline call
      site and this phase, so the rendered info bucket is unchanged.
 
-tests/integration/test_hook_dag.py stays green if this moves to site_post_gather; the assertion
-that goes red is test_check_smells_init.py::
-test_the_phase_is_site_pre_render_and_that_is_load_bearing.
+tests/integration/test_hook_dag.py stays green if this moves to site_post_gather -- the
+declarations are legal there too, so the DAG cannot detect the move.  Several tests in
+tests/integration/test_check_smells_init.py go red on one; the assertions no other test
+duplicates are the PHASES exclusivity loop and the consumes/produces checks inside
+test_the_phase_is_site_pre_render_and_that_is_load_bearing, and registering the hook at BOTH
+phases is caught by that loop alone.
 """
 import script_context as sc
 

@@ -992,11 +992,15 @@ def main() -> None:  # noqa: C901, PLR0912, PLR0915 -- moved verbatim (CAMPAIGN.
             # key the sort/subject helper wires in below; other future hooks may add notices.
             sc.invoke_hooks("site_pre_render", site_context)
 
-            # Dump AFTER the phase too, and for the same reason: the dump must run after the
-            # LAST seam that can add a notice, or it under-reports what the report will
-            # contain.  It did exactly that once -- moving the smell notices into
-            # check/smells/ (a site_pre_render hook) put them below a dump that still sat
-            # above the phase, so every -v run stopped listing them.
+            # Dump AFTER the phase, so the -v dump shows every notice the report will contain:
+            # site_pre_render hooks add notices (check.smells does), and a dump above the phase
+            # under-reported them from the 2026-08-07 relocation until this move.  The
+            # deliberate cost is that a site skipped at resolve_recipients above never reaches
+            # here and gets NO dump, where it once got the full accumulation -- accepted,
+            # because that site also produces no report and no -notices.csv rows.  A second
+            # dump above resolve_recipients is NOT the answer: it would duplicate the output of
+            # every completed site and trip test_the_notices_dump_runs_after_the_site_pre_
+            # render_phase's `count == 1`.
             sc.debug("===== Notices:\n", site_context["notices"])
             sc.debug("===== Sections:\n", site_context["sections"])
 

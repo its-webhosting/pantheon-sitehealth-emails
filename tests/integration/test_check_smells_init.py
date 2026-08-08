@@ -48,17 +48,28 @@ def test_the_phase_is_site_pre_render_and_that_is_load_bearing(psh, reset_sc, re
          site_context["notices"], so the info bucket is byte-identical to the pre-move report.
 
     test_hook_dag.py stays GREEN if this hook moves to site_post_gather -- the declarations are
-    legal there too.  This assertion is the only thing that goes red."""
+    legal there too, so the DAG cannot detect the move.  Several tests in THIS file go red on a
+    phase move (they all name site_pre_render); what no other test duplicates is the exclusivity
+    loop and the consumes/produces asserts, so those run FIRST here.  Ordering them after the
+    registration check -- which is verbatim test_registers_hook_when_config_is_silent's --
+    meant a phase fault tripped the duplicated assertion and the unique ones never executed
+    (fix round 1, review finding 2).  Registering the hook at site_pre_render AND
+    site_post_gather is the fault that reaches the exclusivity loop under either ordering (the
+    registration check passes, so execution continues) -- it is what proves that loop can go
+    red at all, which no fault had done before fix round 1."""
     reset_sc.config = {}
     load_check_package(psh, "smells", "smells_decl_probe", request)
 
-    assert [h["name"] for h in reset_sc.hooks["site_pre_render"]] == EXPECTED_NAMES
     for phase in reset_sc.PHASES:
         if phase == "site_pre_render":
             continue
         assert all(h["name"] not in EXPECTED_NAMES for h in reset_sc.hooks.get(phase, [])), (
             f"the smells hook must be registered ONLY at site_pre_render, not {phase}")
 
-    (hook,) = reset_sc.hooks["site_pre_render"]
+    registered = reset_sc.hooks.get("site_pre_render", [])
+    assert len(registered) == 1, "expected exactly one site_pre_render hook from check.smells"
+    (hook,) = registered
     assert hook["consumes"] == ["wp_smell", "drush_smell", "composer_smell"]
     assert hook["produces"] == []
+
+    assert [h["name"] for h in registered] == EXPECTED_NAMES
