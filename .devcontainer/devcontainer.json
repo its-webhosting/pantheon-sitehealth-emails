@@ -22,7 +22,11 @@
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=python-venv-${devcontainerId},target=/workspace/.venv,type=volume"
+    "source=python-venv-${devcontainerId},target=/workspace/.venv,type=volume",
+    // Keep the uv cache off /workspace: this target is deliberately NOT nested inside
+    // workspaceMount, because the python-venv mount above (which is) never actually
+    // mounts -- see the comment block in Dockerfile above ENV UV_CACHE_DIR.
+    "source=psh-uv-cache-${devcontainerId},target=/home/node/.cache/uv,type=volume"
   ],
   "containerEnv": {
     "CLOUDFLARE_EMAIL": "${localEnv:CLOUDFLARE_EMAIL}",

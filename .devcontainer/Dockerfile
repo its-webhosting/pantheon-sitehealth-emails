@@ -81,8 +81,23 @@ RUN chown -R $USERNAME:$USERNAME /home/$USERNAME/software_versions
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 RUN mkdir -p /workspace/.venv && chown -R $USERNAME:$USERNAME /workspace
 RUN echo '[ -f /workspace/.venv/bin/activate ] && source /workspace/.venv/bin/activate' >> /home/$USERNAME/.bashrc
-ENV UV_CACHE_DIR=/workspace/.venv/cache
+# The uv cache lives OUTSIDE /workspace on purpose.  It used to sit at /workspace/.venv/cache,
+# relying on the `python-venv-*` volume devcontainer.json mounts at /workspace/.venv -- but
+# that mount is silently dropped (it is the only one in that array whose target is nested
+# inside workspaceMount; the two non-nested ones mount fine).  The cache therefore fell
+# through to /workspace itself, a virtiofs bind mount of the host, and virtiofs metadata is
+# incoherent enough that linkat() on a just-written file returns ENOENT about half the time
+# (measured: 107 of 200 create-then-hardlink cycles; 0 of 200 on the container filesystem).
+# uv falls back to copying when a hardlink into a venv fails, but its build-environment
+# install path treats the same failure as fatal, so any package needing a source build
+# (mysqlclient) died with "Failed to install build dependencies".
+ENV UV_CACHE_DIR=/home/node/.cache/uv
+# NOT moved alongside the cache: pyvenv.cfg names this interpreter by absolute path, so
+# splitting it from the venv it backs would let the two drift apart on a rebuild.
 ENV UV_PYTHON_INSTALL_DIR=/workspace/.venv/install
+# .venv is still on virtiofs, so cache-to-venv hardlinks are now cross-filesystem anyway.
+# Copying is what uv would fall back to regardless; this makes it silent rather than a warning.
+ENV UV_LINK_MODE=copy
 
 # PHP stuff
 COPY --from=composer/composer:latest-bin /composer /usr/bin/composer
