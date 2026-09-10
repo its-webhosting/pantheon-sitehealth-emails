@@ -208,6 +208,7 @@ def walk(custom_domain):  # noqa: PLR0911 -- 7 returns, one per documented outco
 API_BASE = "https://api.pantheon.io/v0"
 HTTP_TIMEOUT = 30.0
 RETRY_SLEEP = 2.0            # monkeypatched to 0 by the tests -- see SPEC section 9
+THROTTLE_SLEEPS = (2.0, 4.0, 8.0)   # the wait before each 429 retry; its LENGTH is the budget
 PROGRAM_NAME = "find-platform-domains-dns"
 USER_AGENT = PROGRAM_NAME    # the API client string and the resume command name the same program
 
@@ -284,9 +285,12 @@ def machine_token():
 class ApiSession:
     """One authenticated Pantheon API session over one reused httpx connection.
 
-    Retry policy (SPEC section 7.1): ONE retry, RETRY_SLEEP apart, on a transport failure, 5xx,
-    or 429.  ONE re-authentication on a 401, which does NOT consume the transport retry -- a
-    session that expires 15 minutes into a 38-minute sweep must not also spend the retry budget.
+    Retry policy (SPEC section 7.1): ONE retry, RETRY_SLEEP apart, on a transport failure or a
+    5xx.  A 429 instead gets its own independent budget -- one retry per THROTTLE_SLEEPS entry,
+    waiting that long before each -- because it is a rate limit rather than a failure, and one
+    2s pause does not clear it.  ONE re-authentication on a 401, which does NOT consume either
+    budget -- a session that expires 15 minutes into a 38-minute sweep must not also spend the
+    retry budget.
     """
 
     def __init__(self, client, token_value, notify=None):
@@ -298,17 +302,64 @@ class ApiSession:
         self._notify = notify or (lambda _message: None)
         self.token = self._authenticate()
 
+    def _throttled(self, path, response, attempts):
+        """Wait out a 429, or raise PantheonApiError once its budget is exhausted.
+
+        A 429 gets its OWN escalating budget, deliberately not the transport one.  It means
+        "you are going too fast", which the single 2s transport retry demonstrably does not
+        clear: the 2026-09-10 organization sweep lost 6 sites and environments to a 429 that
+        survived it, each one an indeterminate in a run whose whole job is to not under-report.
+        A transport failure is a different condition and keeps its single retry -- so a throttle
+        followed by a connection reset on the same call no longer fails on the second event.
+
+        Split out of get() for the same reason _renew() was: ruff's C901 complexity limit.
+        """
+        if attempts >= len(THROTTLE_SLEEPS):
+            # The header is named even when absent, because nothing in this program reads it
+            # yet and this message is the only evidence a future sweep will carry about
+            # whether Pantheon supplies one at all.
+            raise PantheonApiError(
+                f"{path}: HTTP 429 after {len(THROTTLE_SLEEPS) + 1} attempts "
+                f"(Retry-After: {response.headers.get('Retry-After', 'absent')})")
+        # The wait per throttled call is up to 14s, against 2s before this budget existed, and
+        # a sustained limiter makes that the operator's whole experience of the sweep: nothing
+        # on stderr at any verbosity until the SKIPPED: lines land, which reads as a hang.  This
+        # rides the same -v-only seam _renew() uses, so it carries neither the RETRY: nor the
+        # SKIPPED: prefix and cannot disturb SPEC section 8's grep-vs-indeterminate= identity.
+        self._notify(f"rate limited ({path}); waiting before retry "
+                     f"{attempts + 1} of {len(THROTTLE_SLEEPS)}")
+        time.sleep(THROTTLE_SLEEPS[attempts])
+
     def _authenticate(self):
         # Fix round 1, M2: httpx.InvalidURL and httpx.StreamError are NOT httpx.HTTPError
         # subclasses (verified, httpx 0.28.1), so they would bypass this except clause.
         # API_BASE is a fixed literal here, so InvalidURL cannot arise from this call; nothing
         # in THIS file enforces that invariant, it is recorded so it is not silently assumed.
-        try:
-            response = self._client.post(
-                f"{API_BASE}/authorize/machine-token",
-                json={"machine_token": self._machine_token, "client": USER_AGENT})
-        except httpx.HTTPError as e:
-            raise PantheonApiError(f"could not authenticate to Pantheon: {e}") from e
+        # The auth POST gets the SAME throttle budget get() has (added 2026-09-10, adversarial
+        # review).  It is the same rate-limited API, and the outcome here is strictly worse: a
+        # throttled GET costs one site's indeterminate (G5/G6), while a throttled
+        # re-authentication becomes a SessionExpiredError -- G7a, exit 2 -- ending a 38-minute
+        # sweep over a condition that clears by itself.  A throttled FIRST authentication is
+        # G3, exit 2 at second zero, for the same reason.
+        path = "/authorize/machine-token"
+        throttle_attempts = 0
+        while True:
+            try:
+                response = self._client.post(
+                    f"{API_BASE}{path}",
+                    json={"machine_token": self._machine_token, "client": USER_AGENT})
+            except httpx.HTTPError as e:
+                raise PantheonApiError(f"could not authenticate to Pantheon: {e}") from e
+            if response.status_code != 429:  # noqa: PLR2004 -- HTTP status literal
+                break
+            try:
+                self._throttled(path, response, throttle_attempts)
+            except PantheonApiError as e:
+                # Re-prefixed, not passed through: G3's contract is a message naming
+                # authentication as what failed, and an operator reading only "HTTP 429 after 4
+                # attempts" would go looking at the machine token instead of at the rate limit.
+                raise PantheonApiError(f"could not authenticate to Pantheon: {e}") from e
+            throttle_attempts += 1
         if response.status_code != 200:  # noqa: PLR2004 -- HTTP status literal
             raise PantheonApiError(
                 f"could not authenticate to Pantheon: HTTP {response.status_code}")
@@ -339,6 +390,7 @@ class ApiSession:
     def get(self, path):
         """GET {API_BASE}{path} and return the decoded JSON, or raise PantheonApiError."""
         transport_attempts = 0
+        throttle_attempts = 0
         reauthed = False
         # `path` is the one caller-supplied segment reaching this f-string.  SPEC section 3
         # requires the SITE argv to be quote(name, safe="")-encoded before it gets here, and
@@ -370,7 +422,11 @@ class ApiSession:
                 self._renew(path, reauthed=reauthed)
                 reauthed = True
                 continue
-            if response.status_code == 429 or response.status_code >= 500:  # noqa: PLR2004 -- HTTP status literals
+            if response.status_code == 429:  # noqa: PLR2004 -- HTTP status literal
+                self._throttled(path, response, throttle_attempts)
+                throttle_attempts += 1
+                continue
+            if response.status_code >= 500:  # noqa: PLR2004 -- HTTP status literal
                 transport_attempts += 1
                 if transport_attempts > 1:
                     raise PantheonApiError(f"{path}: HTTP {response.status_code}")

@@ -486,6 +486,25 @@ re-authenticates **once** on HTTP `401` and retries the request immediately (a r
 not consume the transport retry). Any other non-200, a second failure, or an undecodable JSON
 body raises the named `PantheonApiError`, which the caller turns into G4/G5/G6.
 
+**Superseded note (added by the 429 backoff increment, 2026-09-10).** The handling of HTTP **429**
+above — one retry, 2 seconds later, sharing the transport budget — is **superseded** by
+`development/2026-09-10-dns-util-429-backoff/SPEC.md` §7. A 429 now has its own independent
+budget: one retry per `THROTTLE_SLEEPS` entry — `(2.0, 4.0, 8.0)`, four attempts in total —
+waiting that long before each, and consuming none of the transport retry (nor being consumed by
+it). On exhaustion the message additionally names the `Retry-After` header, or the literal
+`absent`. The **authentication POST** (`POST /authorize/machine-token`), which this paragraph
+gives no retry at all, gets that same 429 budget — in both its roles, the constructor's first
+authentication (G3) and `_renew()`'s mid-sweep re-authentication (G7a) — because a throttle there
+ends the whole sweep at exit 2 rather than costing one indeterminate. Its non-429 failures are
+unchanged. Each throttle wait is announced on the existing `-v`-only `notify` seam; no `RETRY:` or
+`SKIPPED:` prefix is emitted, so §8's reconciliation is untouched. *Why:* the 2026-09-10
+organization sweep lost 6 sites and environments to 429s that had
+each already been retried once under this paragraph's policy — a rate limit is not a failure, and
+2 seconds does not clear one. Everything else in this paragraph, and every cell of §7's G4/G5/G6
+rows, is unchanged: an exhausted budget is still a `PantheonApiError`, still one `SKIPPED:` line,
+still one indeterminate. This paragraph is left in place as the historical record of what was
+originally specified; the implemented behavior is the 2026-09-10 §7.
+
 ### 7.2 Shadow paths (PD#3), traced
 
 | Flow | Nil input | Empty input | Upstream error |

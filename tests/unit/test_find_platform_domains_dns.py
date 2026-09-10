@@ -175,6 +175,26 @@ class _RetrySleepSpy:
         return 0
 
 
+class _OrderedSleepSpy:
+    """A THROTTLE_SLEEPS entry that records its own position in a shared ledger when slept on.
+
+    `_RetrySleepSpy` above counts consumptions but cannot pin their ORDER: three of them are
+    indistinguishable, so `[1, 1, 1]` is satisfied by any permutation that touches each once.
+    Measured (adversarial review, 2026-09-10): mutating the wait to
+    `THROTTLE_SLEEPS[len(THROTTLE_SLEEPS) - 1 - attempts]` -- an 8/4/2 DESCENDING backoff, the
+    exact opposite of the escalation the change exists to provide -- left all four 429 tests
+    green.  Appending the index makes the order itself the assertion.
+    """
+
+    def __init__(self, index, ledger):
+        self._index = index
+        self._ledger = ledger
+
+    def __index__(self):
+        self._ledger.append(self._index)
+        return 0
+
+
 def test_transient_delay_asymmetry_only_no_nameservers_sleeps(fpd, monkeypatch):
     # SPEC section 6.2's asymmetry, pinned: a Timeout has already spent dnspython's own ~5s
     # lifetime, so it retries with NO added delay; NoNameservers comes back in ~0.3s, so it is
@@ -436,8 +456,10 @@ def test_500_twice_raises_named_error(fpd, monkeypatch):
     assert len(calls) == 2   # exactly one retry, not a widened/unbounded attempt count
 
 
-def test_429_is_retried_like_a_5xx(fpd, monkeypatch):
-    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+def test_429_is_retried(fpd, monkeypatch):
+    # Named for what it pins, NOT "like a 5xx" any more: since the 2026-09-10 org sweep a 429
+    # has its own escalating budget (THROTTLE_SLEEPS), while a 5xx keeps its single retry.
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
     calls = []
 
     def handler(request):
@@ -448,6 +470,158 @@ def test_429_is_retried_like_a_5xx(fpd, monkeypatch):
 
     assert make_session(fpd, handler).get("/x") == {"ok": True}
     assert len(calls) == 2
+
+
+def test_429_escalates_then_raises_naming_retry_after(fpd, monkeypatch):
+    """The 2026-09-10 regression, pinned: ONE 2s retry did not clear a real Pantheon 429.
+
+    Three things are red-capable here and each is a mutation the code has been measured to fail
+    on: the attempt COUNT (4, i.e. the schedule's length plus the first try), that every entry of
+    the schedule is consumed exactly once and IN ASCENDING ORDER (see `_OrderedSleepSpy` -- a
+    per-entry counter cannot tell an escalating wait from a descending one, and a scalar `0`
+    cannot tell one from a flat one), and that the give-up message reports the Retry-After
+    header, which is the only evidence a future sweep will carry about whether Pantheon supplies
+    one.
+    """
+    slept = []
+    spies = tuple(_OrderedSleepSpy(i, slept) for i in range(3))
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", spies)
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
+        return httpx.Response(429, headers={"Retry-After": "17"}, text="slow down")
+
+    with pytest.raises(fpd.PantheonApiError, match="429 after 4 attempts"):
+        make_session(fpd, handler).get("/sites/abc")
+    assert len(calls) == 4                        # the first try plus one per scheduled wait
+    assert slept == [0, 1, 2]                     # each wait once, shortest first -- ESCALATING
+    with pytest.raises(fpd.PantheonApiError, match="Retry-After: 17"):
+        make_session(fpd, handler).get("/sites/abc")
+
+
+def test_429_absent_retry_after_is_named_not_blank(fpd, monkeypatch):
+    # `Retry-After: ` with nothing after it reads as "Pantheon sent an empty value"; the whole
+    # reason the header is in the message is to answer "does Pantheon send one at all?".
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(429, text="slow down")
+
+    with pytest.raises(fpd.PantheonApiError, match="Retry-After: absent"):
+        make_session(fpd, handler).get("/sites/abc")
+
+
+def test_a_throttled_authentication_is_retried_not_fatal(fpd, monkeypatch):
+    """A 429 on the auth POST is the SAME condition as a 429 on a GET, with a worse outcome.
+
+    Found by adversarial review, 2026-09-10.  _authenticate() had no 429 handling at all, so a
+    throttled authentication raised PantheonApiError, which _renew() converts to
+    SessionExpiredError -- and main() ends the whole 38-minute sweep at exit 2 over a condition
+    that clears by itself.  A throttled GET costs one site's indeterminate; a throttled
+    re-authentication cost every site not yet reached.
+    """
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
+    auth_calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            auth_calls.append(1)
+            if len(auth_calls) <= 2:          # two throttles, then the real answer
+                return httpx.Response(429, text="slow down")
+            return httpx.Response(200, json={"session": "sess"})
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler).get("/x") == {"ok": True}
+    assert len(auth_calls) == 3
+
+
+def test_a_mid_sweep_reauthentication_survives_a_throttle(fpd, monkeypatch):
+    # The concrete scenario the review named: the session expires partway through a sweep, the
+    # 401 sends get() to _renew(), and the auth POST is itself throttled.  Before the fix this
+    # ended the run; now the sweep continues.
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
+    auth_calls = []
+    gets = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            auth_calls.append(1)
+            if len(auth_calls) == 1:
+                return httpx.Response(200, json={"session": "sess-1"})
+            if len(auth_calls) == 2:          # the throttled re-authentication
+                return httpx.Response(429, text="slow down")
+            return httpx.Response(200, json={"session": "sess-2"})
+        gets.append(1)
+        return httpx.Response(401 if len(gets) == 1 else 200, json={"ok": True})
+
+    session = make_session(fpd, handler)
+    assert session.get("/sites/abc") == {"ok": True}
+    assert session.token == "sess-2"
+
+
+def test_an_unclearable_authentication_throttle_names_both_causes(fpd, monkeypatch):
+    # The message must say BOTH that authentication is what failed (util1 G3's contract) and
+    # that a rate limit is why, with the Retry-After evidence -- an operator reading only
+    # "could not authenticate" would go looking at the machine token.
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
+
+    def handler(request):
+        return httpx.Response(429, text="slow down")
+
+    with pytest.raises(fpd.PantheonApiError,
+                       match=r"could not authenticate.*429 after 4 attempts.*Retry-After: absent"):
+        make_session(fpd, handler)
+
+
+def test_a_throttle_wait_is_announced_under_verbose(fpd, monkeypatch):
+    """The 14-second silent stall, made visible (PD#5; adversarial review, 2026-09-10).
+
+    The wait per throttled call grew from 2s to 14s, and a sustained limiter makes that the
+    operator's whole experience of the sweep: no output at any verbosity until the SKIPPED:
+    lines land.  The note rides the EXISTING -v-only `notify` seam (the one _renew uses), so it
+    carries neither the `RETRY:` nor the `SKIPPED:` prefix and cannot disturb util1 SPEC section
+    8's `grep -c SKIPPED` reconciliation against `indeterminate=N`.
+    """
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
+    notes = []
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
+        return httpx.Response(429 if len(calls) < 3 else 200, json={"ok": True})
+
+    assert make_session(fpd, handler, notify=notes.append).get("/sites/abc") == {"ok": True}
+    assert notes == ["rate limited (/sites/abc); waiting before retry 1 of 3",
+                     "rate limited (/sites/abc); waiting before retry 2 of 3"]
+
+
+def test_a_429_does_not_consume_the_transport_retry(fpd, monkeypatch):
+    # The two budgets are independent (the reason the 429 branch got its own counter rather
+    # than a wider shared one): a throttle followed by a connection reset on the SAME call is
+    # two different conditions, and the shared counter failed the call on the second event.
+    monkeypatch.setattr(fpd, "THROTTLE_SLEEPS", (0, 0, 0))
+    monkeypatch.setattr(fpd, "RETRY_SLEEP", 0)
+    calls = []
+
+    def handler(request):
+        if request.url.path.endswith("/authorize/machine-token"):
+            return httpx.Response(200, json={"session": "sess"})
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(429, text="slow down")
+        if len(calls) == 2:  # the connection reset, on the call after the throttle
+            raise httpx.ConnectError("reset")
+        return httpx.Response(200, json={"ok": True})
+
+    assert make_session(fpd, handler).get("/sites/abc") == {"ok": True}
+    assert len(calls) == 3
 
 
 def test_connect_error_is_retried_once_then_raises_named_error(fpd, monkeypatch):
