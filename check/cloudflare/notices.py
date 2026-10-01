@@ -377,8 +377,10 @@ def build_cache_notices(  # noqa: C901 -- consolidation + assembly (SPEC §9)
                 for match in populated[fqdn]:
                     if item_key(match) == key and match["url"] not in seen_urls:
                         seen_urls.add(match["url"])
-                        url_lines.append(f'<li>{_a(match["url"], match["url"])} '
-                                         f'({_kind_noun(match)})</li>')
+                        url_lines.append(
+                            f'<li>{_kind_noun(match)}: '
+                            f'{_a(match["url"], match["url"])}</li>'
+                        )
             # An item's URLs are all of its own kind (kind is part of item_key), and pages
             # and assets are sampled differently -- so the header describes this item's kind.
             header = html.escape(_url_list_header(sample_counts(item["kind"]), item["kind"]))

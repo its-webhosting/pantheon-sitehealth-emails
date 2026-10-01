@@ -36,8 +36,6 @@ from psh.plans import build_plan_over_time, overage_blocks
 traffic_table_columns = [
     {"name": "month", "label": "Month"},
     {"name": "visitors", "label": "Pantheon Visitors"},
-    {"name": "month", "label": "Month"},
-    {"name": "visitors", "label": "Pantheon Visitors"},
     {"name": "plan", "label": "Plan"},
     {"name": "plan-limit", "label": "Plan Limit"},
     {"name": "overage", "label": "Overage"},

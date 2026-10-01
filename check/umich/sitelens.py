@@ -233,10 +233,10 @@ def check_sitelens_scores(site_context) -> None:
     site_context.add_section({
         'heading': 'SiteLens',
         'content': f'''
-<table role="presentation" border="0" cellpadding="0" cellspacing="30">
+<table role="presentation" border="0" cellpadding="15" cellspacing="0">
   <tr>{html}</tr>
 </table>
-<p>as of {last_run}.</p>
+<p><i>as of {last_run}.</i></p>
 
 ''',
         'text': text
