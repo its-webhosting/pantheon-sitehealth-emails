@@ -24,6 +24,10 @@ _Avoid_: email (alone), summary
 One execution of the tool over one or more sites for a given report date. A run can be
 a dry run (mail addressed to the operator) or for-real (mail addressed to site owners).
 
+**Report date**:
+The date a run reports as of — the `--date` value, by convention the last day of the report month. Date-dependent notice behavior (e.g. a severity that changes on an end-of-life date) is judged against it, never against the day the run happens.
+_Avoid_: today, run date
+
 **Notice**:
 A per-site finding included in that site's report, with a severity of alert, warning,
 or info and a stable machine-readable code.

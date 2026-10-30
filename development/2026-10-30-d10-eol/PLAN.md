@@ -385,7 +385,7 @@ step's command run:
 | 8 | `10 passed` |
 | 10 | `15 snapshots passed. 6 snapshots generated.`; 0 existing snapshot lines changed; WARNING body "stops getting", ALERT body "stopped getting", correct URL/title |
 | 11 | `All checks passed!` |
-| 4a | fabricated CSV → `1` and `its-wws-test2   drupal10-eol` |
+| 4a | production-shaped CSV (`site,contacts,code`) → `1` and `its-wws-test2` padded to 30 columns then `owner@example.edu` (re-run in the round-2 block below) |
 
 Mutations on `d10_eol.py` (each must go red): ALERT verb → "stops": `3 failed`; `<` → `<=`:
 `1 failed`; `startswith("10.")` → `startswith("10")`: `1 failed`.
