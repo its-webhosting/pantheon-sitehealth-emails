@@ -233,7 +233,7 @@ def test_url_list_is_a_child_of_its_header(notices):
     assert "display: block" not in message
     header = "URLs with this issue (checked main page only)"
     nested = (f'<li>{header}<ul style="list-style-type: none;">'
-              f'<li><a href="https://a.example.edu/">https://a.example.edu/</a> (page)</li>'
+              f'<li>page: <a href="https://a.example.edu/">https://a.example.edu/</a></li>'
               f'</ul></li>')
     assert nested in message
 

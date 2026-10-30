@@ -3,18 +3,18 @@
   '''
   <p><strong>Cloudflare caching:</strong> some pages or files on <a href="https://www.example.edu/">www.example.edu</a>, <a href="https://www2.example.edu/">www2.example.edu</a> are not being cached by Cloudflare as effectively as they could be. Full caching protects your site from traffic spikes, lowers visitor counts that determine hosting costs, and makes pages load faster.</p>
   <ul>
-  <li>Cloudflare is bypassing its cache for these pages <em>because</em> the site sets a cookie (<code>sessionid</code>) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://developers.cloudflare.com/cache/concepts/cache-responses/">About Cloudflare cache statuses</a> &middot; <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie">About the Set-Cookie header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/">https://www.example.edu/</a> (page)</li>
-  <li><a href="https://www2.example.edu/">https://www2.example.edu/</a> (page)</li></ul></li></ul></li>
-  <li>These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/about">https://www.example.edu/about</a> (page)</li>
-  <li><a href="https://www2.example.edu/about">https://www2.example.edu/about</a> (page)</li></ul></li></ul></li>
-  <li>These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts &mdash; something (for example a <code>Vary</code> header or a cache rule) is preventing them from being stored. Please investigate with your web team. <a href="https://developers.cloudflare.com/cache/concepts/default-cache-behavior/">What Cloudflare caches by default</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li></ul></li>
-  <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li></ul></li>
-  <li>These pages' <code>Cache-Control</code> headers contain <code>must-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/news">https://www.example.edu/news</a> (page)</li>
-  <li><a href="https://www2.example.edu/news">https://www2.example.edu/news</a> (page)</li></ul></li></ul></li>
-  <li>These pages' <code>Cache-Control</code> headers contain <code>proxy-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/events">https://www.example.edu/events</a> (page)</li>
-  <li><a href="https://www2.example.edu/events">https://www2.example.edu/events</a> (page)</li></ul></li></ul></li>
+  <li>Cloudflare is bypassing its cache for these pages <em>because</em> the site sets a cookie (<code>sessionid</code>) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://developers.cloudflare.com/cache/concepts/cache-responses/">About Cloudflare cache statuses</a> &middot; <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Set-Cookie">About the Set-Cookie header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/">https://www.example.edu/</a></li>
+  <li>page: <a href="https://www2.example.edu/">https://www2.example.edu/</a></li></ul></li></ul></li>
+  <li>These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/about">https://www.example.edu/about</a></li>
+  <li>page: <a href="https://www2.example.edu/about">https://www2.example.edu/about</a></li></ul></li></ul></li>
+  <li>These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts &mdash; something (for example a <code>Vary</code> header or a cache rule) is preventing them from being stored. Please investigate with your web team. <a href="https://developers.cloudflare.com/cache/concepts/default-cache-behavior/">What Cloudflare caches by default</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>static asset: <a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a></li>
+  <li>static asset: <a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a></li></ul></li></ul></li>
+  <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>static asset: <a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a></li>
+  <li>static asset: <a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a></li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>must-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/news">https://www.example.edu/news</a></li>
+  <li>page: <a href="https://www2.example.edu/news">https://www2.example.edu/news</a></li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>proxy-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control">About the Cache-Control header</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/events">https://www.example.edu/events</a></li>
+  <li>page: <a href="https://www2.example.edu/events">https://www2.example.edu/events</a></li></ul></li></ul></li>
   </ul>
   '''
 # ---
@@ -30,28 +30,28 @@
       visitors who are not logged in, and caching will resume. [About Cloudflare
       cache statuses][3] · [About the Set-Cookie header][4]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/> (page)
-        * <https://www2.example.edu/> (page)
+        * page: <https://www.example.edu/>
+        * page: <https://www2.example.edu/>
     * These pages are only cached for 1 hour. Increase the cache time to
       31536000 seconds (1 year) for the full cost-savings and performance
       benefit. Apply this to all pages site-wide — the ones listed below are
       only what we sampled. [About the Cache-Control header][5]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/about> (page)
-        * <https://www2.example.edu/about> (page)
+        * page: <https://www.example.edu/about>
+        * page: <https://www2.example.edu/about>
     * These static assets' headers allow caching, but Cloudflare never served
       them from cache across three attempts — something (for example a `Vary`
       header or a cache rule) is preventing them from being stored. Please
       investigate with your web team. [What Cloudflare caches by default][6]
       * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
-        * <https://www.example.edu/js/app.js> (static asset)
-        * <https://www2.example.edu/js/app.js> (static asset)
+        * static asset: <https://www.example.edu/js/app.js>
+        * static asset: <https://www2.example.edu/js/app.js>
     * The HTTPS certificate for these static assets failed validation; browsers
       will show visitors a security warning. Renew or fix the certificate.
       [Pantheon: custom certificates][7]
       * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
-        * <https://www.example.edu/img/logo.png> (static asset)
-        * <https://www2.example.edu/img/logo.png> (static asset)
+        * static asset: <https://www.example.edu/img/logo.png>
+        * static asset: <https://www2.example.edu/img/logo.png>
     * These pages' `Cache-Control` headers contain `must-revalidate`. You should
       remove it since it has no effect until these pages go stale, and if
       Cloudflare can't reach your web server at that time, visitors will get
@@ -59,8 +59,8 @@
       site-wide — the ones listed below are only what we sampled. [About the
       Cache-Control header][5]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/news> (page)
-        * <https://www2.example.edu/news> (page)
+        * page: <https://www.example.edu/news>
+        * page: <https://www2.example.edu/news>
     * These pages' `Cache-Control` headers contain `proxy-revalidate`. You
       should remove it since it has no effect until these pages go stale, and if
       Cloudflare can't reach your web server at that time, visitors will get
@@ -68,8 +68,8 @@
       site-wide — the ones listed below are only what we sampled. [About the
       Cache-Control header][5]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/events> (page)
-        * <https://www2.example.edu/events> (page)
+        * page: <https://www.example.edu/events>
+        * page: <https://www2.example.edu/events>
   
      [1]: <https://www.example.edu/>
      [2]: <https://www2.example.edu/>
@@ -86,18 +86,18 @@
   '''
   <p><strong>Cloudflare caching:</strong> some pages or files on <a href="https://www.example.edu/">www.example.edu</a>, <a href="https://www2.example.edu/">www2.example.edu</a> are not being cached by Cloudflare as effectively as they could be. Full caching protects your site from traffic spikes, lowers visitor counts that determine hosting costs, and makes pages load faster.</p>
   <ul>
-  <li>Cloudflare is bypassing its cache for these pages <em>because</em> the site sets a cookie (<code>sessionid</code>) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#set-cookie-bypass">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/5110#rule%25202">How login/session cookies affect U-M caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/">https://www.example.edu/</a> (page)</li>
-  <li><a href="https://www2.example.edu/">https://www2.example.edu/</a> (page)</li></ul></li></ul></li>
-  <li>These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/4241">Managing Cloudflare caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/about">https://www.example.edu/about</a> (page)</li>
-  <li><a href="https://www2.example.edu/about">https://www2.example.edu/about</a> (page)</li></ul></li></ul></li>
-  <li>These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts &mdash; something (for example a <code>Vary</code> header or a cache rule) is preventing them from being stored. Please investigate with your web team. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#miss-persistent">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a> (static asset)</li></ul></li></ul></li>
-  <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert">How to fix this</a> &middot; <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a> (static asset)</li>
-  <li><a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a> (static asset)</li></ul></li></ul></li>
-  <li>These pages' <code>Cache-Control</code> headers contain <code>must-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/news">https://www.example.edu/news</a> (page)</li>
-  <li><a href="https://www2.example.edu/news">https://www2.example.edu/news</a> (page)</li></ul></li></ul></li>
-  <li>These pages' <code>Cache-Control</code> headers contain <code>proxy-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li><a href="https://www.example.edu/events">https://www.example.edu/events</a> (page)</li>
-  <li><a href="https://www2.example.edu/events">https://www2.example.edu/events</a> (page)</li></ul></li></ul></li>
+  <li>Cloudflare is bypassing its cache for these pages <em>because</em> the site sets a cookie (<code>sessionid</code>) on them. Configure your site not to set cookies for visitors who are not logged in, and caching will resume. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#set-cookie-bypass">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/5110#rule%25202">How login/session cookies affect U-M caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/">https://www.example.edu/</a></li>
+  <li>page: <a href="https://www2.example.edu/">https://www2.example.edu/</a></li></ul></li></ul></li>
+  <li>These pages are only cached for 1 hour. Increase the cache time to 31536000 seconds (1 year) for the full cost-savings and performance benefit. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#short-cache-time">How to fix this</a> &middot; <a href="https://documentation.its.umich.edu/node/4241">Managing Cloudflare caching</a> &middot; <a href="https://documentation.its.umich.edu/node/5114">umich-cloudflare plugin documentation</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/about">https://www.example.edu/about</a></li>
+  <li>page: <a href="https://www2.example.edu/about">https://www2.example.edu/about</a></li></ul></li></ul></li>
+  <li>These static assets' headers allow caching, but Cloudflare never served them from cache across three attempts &mdash; something (for example a <code>Vary</code> header or a cache rule) is preventing them from being stored. Please investigate with your web team. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#miss-persistent">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>static asset: <a href="https://www.example.edu/js/app.js">https://www.example.edu/js/app.js</a></li>
+  <li>static asset: <a href="https://www2.example.edu/js/app.js">https://www2.example.edu/js/app.js</a></li></ul></li></ul></li>
+  <li>The HTTPS certificate for these static assets failed validation; browsers will show visitors a security warning. Renew or fix the certificate. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#invalid-cert">How to fix this</a> &middot; <a href="https://docs.pantheon.io/guides/custom-certificates">Pantheon: custom certificates</a><ul style="list-style-type: none;"><li>URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>static asset: <a href="https://www.example.edu/img/logo.png">https://www.example.edu/img/logo.png</a></li>
+  <li>static asset: <a href="https://www2.example.edu/img/logo.png">https://www2.example.edu/img/logo.png</a></li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>must-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/news">https://www.example.edu/news</a></li>
+  <li>page: <a href="https://www2.example.edu/news">https://www2.example.edu/news</a></li></ul></li></ul></li>
+  <li>These pages' <code>Cache-Control</code> headers contain <code>proxy-revalidate</code>. You should remove it since it has no effect until these pages go stale, and if Cloudflare can't reach your web server at that time, visitors will get errors rather than stale copies of these pages. Apply this to all pages site-wide &mdash; the ones listed below are only what we sampled. <a href="https://documentation.its.umich.edu/cloudflare-cache-report#cc-must-revalidate">How to fix this</a><ul style="list-style-type: none;"><li>URLs with this issue (checked main page plus 3 random pages linked from it)<ul style="list-style-type: none;"><li>page: <a href="https://www.example.edu/events">https://www.example.edu/events</a></li>
+  <li>page: <a href="https://www2.example.edu/events">https://www2.example.edu/events</a></li></ul></li></ul></li>
   </ul>
   '''
 # ---
@@ -114,29 +114,29 @@
       this][3] · [How login/session cookies affect U-M caching][4] · [umich-
       cloudflare plugin documentation][5]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/> (page)
-        * <https://www2.example.edu/> (page)
+        * page: <https://www.example.edu/>
+        * page: <https://www2.example.edu/>
     * These pages are only cached for 1 hour. Increase the cache time to
       31536000 seconds (1 year) for the full cost-savings and performance
       benefit. Apply this to all pages site-wide — the ones listed below are
       only what we sampled. [How to fix this][6] · [Managing Cloudflare
       caching][7] · [umich-cloudflare plugin documentation][5]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/about> (page)
-        * <https://www2.example.edu/about> (page)
+        * page: <https://www.example.edu/about>
+        * page: <https://www2.example.edu/about>
     * These static assets' headers allow caching, but Cloudflare never served
       them from cache across three attempts — something (for example a `Vary`
       header or a cache rule) is preventing them from being stored. Please
       investigate with your web team. [How to fix this][8]
       * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
-        * <https://www.example.edu/js/app.js> (static asset)
-        * <https://www2.example.edu/js/app.js> (static asset)
+        * static asset: <https://www.example.edu/js/app.js>
+        * static asset: <https://www2.example.edu/js/app.js>
     * The HTTPS certificate for these static assets failed validation; browsers
       will show visitors a security warning. Renew or fix the certificate. [How
       to fix this][9] · [Pantheon: custom certificates][10]
       * URLs with this issue (checked static assets on the main page plus 3 random pages linked from it)
-        * <https://www.example.edu/img/logo.png> (static asset)
-        * <https://www2.example.edu/img/logo.png> (static asset)
+        * static asset: <https://www.example.edu/img/logo.png>
+        * static asset: <https://www2.example.edu/img/logo.png>
     * These pages' `Cache-Control` headers contain `must-revalidate`. You should
       remove it since it has no effect until these pages go stale, and if
       Cloudflare can't reach your web server at that time, visitors will get
@@ -144,8 +144,8 @@
       site-wide — the ones listed below are only what we sampled. [How to fix
       this][11]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/news> (page)
-        * <https://www2.example.edu/news> (page)
+        * page: <https://www.example.edu/news>
+        * page: <https://www2.example.edu/news>
     * These pages' `Cache-Control` headers contain `proxy-revalidate`. You
       should remove it since it has no effect until these pages go stale, and if
       Cloudflare can't reach your web server at that time, visitors will get
@@ -153,8 +153,8 @@
       site-wide — the ones listed below are only what we sampled. [How to fix
       this][11]
       * URLs with this issue (checked main page plus 3 random pages linked from it)
-        * <https://www.example.edu/events> (page)
-        * <https://www2.example.edu/events> (page)
+        * page: <https://www.example.edu/events>
+        * page: <https://www2.example.edu/events>
   
      [1]: <https://www.example.edu/>
      [2]: <https://www2.example.edu/>
