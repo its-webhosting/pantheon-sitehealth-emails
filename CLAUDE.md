@@ -681,14 +681,16 @@ Check and integration-plugin packages:
   probes rebind `site_context["wp_smell"]` on non-fatal stderr (one of the two sanctioned
   mutate-during-phase contract keys) and build failure notices with `sc.wp_error`. The favicon
   notice body embeds un-gated its.umich.edu links.
-- `check/drupal/` — three generic Drupal checks (gated on `[Check.drupal].enabled`, **default
+- `check/drupal/` — four generic Drupal checks (gated on `[Check.drupal].enabled`, **default
   true**): `multisite.py` (the multisite probe via `sc.drush_php_script`, a `site_post_dns` hook
   that consumes `custom_domains`/`primary_domain` and **produces** the hook-declared keys
   `drupal_multisite`/`drupal_multisite_smell`, read by `psh.cli.resolve_site_url` with `.get()`
   after the phase to seed `drush_smell` and gate the core `no-primary-domain` notice), `papc.py` (delegating to
-  `sc.check_drupal_module`) and `d7_eol.py` (the `drupal7-eol` notice + the tag1_d7es module
-  check), the latter two at `site_post_gather`, registered multisite → papc → d7_eol; each
-  early-returns unless the framework starts with `drupal`.
+  `sc.check_drupal_module`), `d7_eol.py` (the `drupal7-eol` notice + the tag1_d7es module
+  check) and `d10_eol.py` (the `drupal10-eol` notice: WARNING before 2026-12-09, ALERT on/after,
+  judged by the **report date** `end_date`, never the wall clock — so it also consumes
+  `end_date`), the latter three at `site_post_gather`, registered multisite → papc → d7_eol →
+  d10_eol; each early-returns unless the framework starts with `drupal`.
 - `check/addon_updates/` — one `site_post_gather` hook, `table.py` (the pending-add-on updates
   table notice, consumes `add_on_updates`, reading the SAME list object the stuffer publishes;
   gated on `[Check.addon_updates].enabled`, **default true**); its `updates-addons` notice body
@@ -843,7 +845,7 @@ is now one line away from being violated.
   `check/pantheon_cdn_change/notices.py`, which imports `psh.notice` directly (bare `registry`) to
   keep its purity — `test_notices_module_is_pure` pins its imported-module set to exactly
   `{"html"}`, which `import script_context as sc` would blow past (276 transitive modules vs. 18
-  stdlib). Two tests enforce all this: `tests/integration/test_notice_roster.py` pins the 36-code
+  stdlib). Two tests enforce all this: `tests/integration/test_notice_roster.py` pins the 37-code
   roster (registry vs. roster), and `tests/integration/test_notice_registration.py` walks the AST
   of `psh/` + `check/` + `plugin/` and fails a *named* offender when any `Notice(...)`/
   `sc.Notice(...)` passes a `code=` that is not a module-level `NOTICE_*` constant, or any

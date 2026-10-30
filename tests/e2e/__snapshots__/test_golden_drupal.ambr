@@ -486,6 +486,15 @@
   </div>
   </div>
   
+  <div class="notice notice-type-warning">
+    <div class="notice-icon-area"><span class="notice-icon">&#x26A0;</span></div>
+    <div class="notice-text">
+  <p><b>Drupal 10 stops getting security updates on December 9, 2026.</b>
+  All Drupal 10 sites should upgrade to Drupal 11. For details, see
+  Pantheon's <a href="https://pantheon.io/learning-center/drupal/10-end-of-life">Drupal 10 End of Life Date, Risks and Next Steps</a>.</p>
+                  </div>
+  </div>
+  
   
   
   
@@ -823,6 +832,14 @@
   
   
   
+  
+  
+  - WARNING -
+  
+  Drupal 10 stops getting security updates on December 9, 2026.
+  All Drupal 10 sites should upgrade to Drupal 11. For details,
+  see Pantheon's Drupal 10 End of Life Date, Risks and Next Steps (https://pantheon.io/learning-center/drupal/10-end-of-life).
+                  
   
   
   

@@ -40,6 +40,10 @@ grep cloudflare ${TODAY}-notices.csv | grep -v ,not-behind-cloudflare | grep -v 
 # Drupal 7 EOL sites:
 grep drupal7-eol ${TODAY}-notices.csv | sort | perl -a -n -F, -e 'printf("%-30s %-65s\n", $F[0], $F[1]);'
 
+# Drupal 10 EOL sites:
+grep ,drupal10-eol ${TODAY}-notices.csv | wc -l
+grep ,drupal10-eol ${TODAY}-notices.csv | sort | perl -a -n -F, -e 'printf("%-30s %-65s\n", $F[0], $F[1]);'
+
 
 # Sites that need DNS changes for Pantheon GCDN (Fastly -> Cloudflare),
 # Replace CNAME records with A and AAAA records
