@@ -20,6 +20,8 @@ Roster arithmetic at I14c close: 12 from psh/ + 24 from check/ = 36.  The 2026-0
 relocation moved three codes (wp-smell, drush-smell, composer-smell) from psh/gather.py to
 check/smells/notices.py, so the current split is 9 + 27 -- still 36, because they moved rather
 than multiplied.
+The 2026-10-30 Drupal 10 EOL notice (development/2026-10-30-d10-eol/) added drupal10-eol in
+check/drupal/d10_eol.py: 9 + 28 = 37.
 """
 import pytest
 from helpers.checkload import load_check_package
@@ -48,6 +50,8 @@ ROSTER = frozenset({
     "behind-cloudflare-not-proxied", "proxied-in-multiple-cloudflare-zones",
     # check/drupal/d7_eol.py
     "drupal7-eol",
+    # check/drupal/d10_eol.py
+    "drupal10-eol",
     # check/pantheon/
     "frozen", "no-live-env-but-paid-plan", "php-eol-warning", "php-eol-alert",
     "updates-info", "updates-warning", "updates-alert",
@@ -78,4 +82,4 @@ def test_the_roster_is_the_documented_size():
     # The count SPEC I14c §2.4 measured and CAMPAIGN.md §11's I14c row closes on.  A code
     # added without touching this line would leave the set assertion above red anyway; this
     # is the number a reader can check against the spec without counting braces.
-    assert len(ROSTER) == 36
+    assert len(ROSTER) == 37

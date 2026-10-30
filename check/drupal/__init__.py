@@ -1,5 +1,5 @@
 """Generic Drupal site-health checks (campaign I10, CAMPAIGN.md section 3.2): the
-multisite probe at site_post_dns, PAPC-module + Drupal-7-EOL/tag1_d7es at
+multisite probe at site_post_dns, PAPC-module + Drupal-7-EOL/tag1_d7es + Drupal-10-EOL at
 site_post_gather.  Gated by [Check.drupal].enabled, default TRUE -- these checks ran
 unconditionally (inline in main()'s B30/B35) before the relocation (section 5).
 
@@ -11,7 +11,7 @@ probed, NOT part of the guaranteed per-phase contract."""
 import script_context as sc
 
 if sc.config.get('Check', {}).get('drupal', {}).get('enabled', True) is not False:
-    from . import d7_eol, multisite, papc
+    from . import d7_eol, d10_eol, multisite, papc
     sc.add_hook('site_post_dns', {'name': 'check.drupal.multisite.check_multisite',
                                   'func': multisite.check_multisite,
                                   'consumes': ['custom_domains', 'primary_domain'],
@@ -23,6 +23,10 @@ if sc.config.get('Check', {}).get('drupal', {}).get('enabled', True) is not Fals
     sc.add_hook('site_post_gather', {'name': 'check.drupal.d7_eol.check_d7_eol',
                                      'func': d7_eol.check_d7_eol,
                                      'consumes': ['framework', 'drupal_version', 'drupal_modules'],
+                                     'produces': []})
+    sc.add_hook('site_post_gather', {'name': 'check.drupal.d10_eol.check_d10_eol',
+                                     'func': d10_eol.check_d10_eol,
+                                     'consumes': ['framework', 'drupal_version', 'end_date'],
                                      'produces': []})
 else:
     sc.console.print('[bold yellow] Skipping check.drupal because it is disabled in the config')

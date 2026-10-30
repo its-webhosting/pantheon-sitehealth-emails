@@ -5,6 +5,8 @@ task report, the I2/I9 precedent).
 check_drupal_module lives in psh/gather.py (exposed via sc.check_drupal_module) --
 pinned here via the psh fixture so the snapshot is the body production
 actually renders regardless of which module currently owns the def."""
+import datetime
+
 import pytest
 from helpers.checkload import load_check_module
 from helpers.dnsfake import recording_console
@@ -55,6 +57,26 @@ def test_drupal7_eol_snapshot(psh, reset_sc, request, snapshot):
     ctx["drupal_modules"] = {}
     mod.check_d7_eol(ctx)
     n = next(n for n in ctx["notices"] if n["csv"] == f"{SITE},drupal7-eol")
+    assert n["message"] == snapshot
+    assert n["text"] == snapshot
+    assert n["short"] == snapshot
+
+
+# ── drupal10-eol (check/drupal/d10_eol.py) ───────────────────────────────────────────
+# Both severities are pinned: the ALERT render is what every owner sees from the December report on.
+@pytest.mark.parametrize(("end_date", "severity"), [
+    (datetime.date(2026, 3, 31), "warning"),
+    (datetime.date(2026, 12, 10), "alert"),
+], ids=["warning", "alert"])
+def test_drupal10_eol_snapshot(psh, reset_sc, request, snapshot, end_date, severity):  # noqa: PLR0913 -- snapshot test; args are pytest fixtures + parametrize
+    mod = load_check_module(psh, "drupal", "d10_eol", "drupal_d10_eol_snap", request)
+    ctx = reset_sc.SiteContext({"name": SITE, "id": SITE_ID})
+    ctx["framework"] = "drupal8"
+    ctx["drupal_version"] = "10.4.3"
+    ctx["end_date"] = end_date
+    mod.check_d10_eol(ctx)
+    n = next(n for n in ctx["notices"] if n["csv"] == f"{SITE},drupal10-eol")
+    assert n["type"] == severity
     assert n["message"] == snapshot
     assert n["text"] == snapshot
     assert n["short"] == snapshot

@@ -25,6 +25,48 @@
 # name: test_check_drupal_module_turned_off_snapshot.2
   'enable module pantheon_advanced_page_cache'
 # ---
+# name: test_drupal10_eol_snapshot[alert]
+  '''
+  
+  <p><b>Drupal 10 stopped getting security updates on December 9, 2026.</b>
+  All Drupal 10 sites should upgrade to Drupal 11. For details, see
+  Pantheon's <a href="https://pantheon.io/learning-center/drupal/10-end-of-life">Drupal 10 End of Life Date, Risks and Next Steps</a>.</p>
+                  
+  '''
+# ---
+# name: test_drupal10_eol_snapshot[alert].1
+  '''
+  
+  Drupal 10 stopped getting security updates on December 9, 2026.
+  All Drupal 10 sites should upgrade to Drupal 11. For details,
+  see Pantheon's Drupal 10 End of Life Date, Risks and Next Steps (https://pantheon.io/learning-center/drupal/10-end-of-life).
+                  
+  '''
+# ---
+# name: test_drupal10_eol_snapshot[alert].2
+  'Upgrade to Drupal 11'
+# ---
+# name: test_drupal10_eol_snapshot[warning]
+  '''
+  
+  <p><b>Drupal 10 stops getting security updates on December 9, 2026.</b>
+  All Drupal 10 sites should upgrade to Drupal 11. For details, see
+  Pantheon's <a href="https://pantheon.io/learning-center/drupal/10-end-of-life">Drupal 10 End of Life Date, Risks and Next Steps</a>.</p>
+                  
+  '''
+# ---
+# name: test_drupal10_eol_snapshot[warning].1
+  '''
+  
+  Drupal 10 stops getting security updates on December 9, 2026.
+  All Drupal 10 sites should upgrade to Drupal 11. For details,
+  see Pantheon's Drupal 10 End of Life Date, Risks and Next Steps (https://pantheon.io/learning-center/drupal/10-end-of-life).
+                  
+  '''
+# ---
+# name: test_drupal10_eol_snapshot[warning].2
+  'Upgrade to Drupal 11'
+# ---
 # name: test_drupal7_eol_snapshot
   '''
   

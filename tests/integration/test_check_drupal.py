@@ -7,6 +7,7 @@ probe (CLAUDE.md "Two mock seams"). papc/d7_eol delegate to the real sc.check_dr
 (defined in psh/gather.py, resolved through the sc facade), so they are driven with real
 module dicts rather than a further mock.
 """
+import datetime
 import json
 
 import pytest
@@ -213,4 +214,49 @@ def test_unknown_version_gets_nothing(d7_eol_mod, reset_sc):
 def test_non_drupal_framework_does_nothing(d7_eol_mod, reset_sc):
     ctx = _ctx(reset_sc, framework="wordpress", drupal_version="7.1", drupal_modules={})
     d7_eol_mod.check_d7_eol(ctx)
+    assert ctx["notices"] == []
+
+
+# ── d10_eol ───────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def d10_eol_mod(psh, request):
+    return load_check_module(psh, "drupal", "d10_eol", "drupal_d10_eol_probe", request)
+
+
+def _d10_ctx(reset_sc, *, end_date, framework="drupal8", drupal_version="10.4.3"):
+    ctx = _ctx(reset_sc, framework=framework, drupal_version=drupal_version)
+    ctx["end_date"] = end_date
+    return ctx
+
+
+@pytest.mark.parametrize(("end_date", "expected"), [
+    (datetime.date(2026, 3, 31), "warning"),
+    (datetime.date(2026, 12, 8), "warning"),   # last day before EOL
+    (datetime.date(2026, 12, 9), "alert"),     # EOL day itself is ALERT (SPEC D2)
+    (datetime.date(2026, 12, 10), "alert"),
+])
+def test_d10_severity_follows_the_report_date(d10_eol_mod, reset_sc, end_date, expected):
+    ctx = _d10_ctx(reset_sc, end_date=end_date)
+    d10_eol_mod.check_d10_eol(ctx)
+    assert [n["csv"] for n in ctx["notices"]] == [f"{SITE_NAME},drupal10-eol"]
+    # Both values are asserted across the cases, so flipping either branch goes red.
+    assert ctx["notices"][0]["type"] == expected
+    assert ctx["notices"][0]["short"] == "Upgrade to Drupal 11"
+    # Tense follows severity (SPEC D5): an ALERT is first mailed after the EOL date has passed.
+    verb = "stops getting" if expected == "warning" else "stopped getting"
+    assert verb in ctx["notices"][0]["text"]
+    assert verb in ctx["notices"][0]["message"]
+
+
+@pytest.mark.parametrize("version", ["7.1", "9.5", "11.1", "unknown", "1.0", "100.1"])
+def test_d10_non_10_versions_get_nothing(d10_eol_mod, reset_sc, version):
+    ctx = _d10_ctx(reset_sc, end_date=datetime.date(2026, 12, 10), drupal_version=version)
+    d10_eol_mod.check_d10_eol(ctx)
+    assert ctx["notices"] == []
+
+
+def test_d10_non_drupal_framework_does_nothing(d10_eol_mod, reset_sc):
+    ctx = _d10_ctx(reset_sc, end_date=datetime.date(2026, 12, 10), framework="wordpress",
+                   drupal_version="10.4.3")
+    d10_eol_mod.check_d10_eol(ctx)
     assert ctx["notices"] == []

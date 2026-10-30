@@ -97,6 +97,6 @@ def test_static_codes_match_the_runtime_roster(psh):
         for value in _module_constants(tree).values():
             if isinstance(value, ast.Call) and value.args and isinstance(value.args[0], ast.Constant):
                 literals.add(value.args[0].value)
-    assert len(literals) == 36, f"expected 36 registered code literals, found {len(literals)}"
+    assert len(literals) == 37, f"expected 37 registered code literals, found {len(literals)}"
     assert registry.codes() <= literals, \
         f"registry holds codes with no source literal: {sorted(registry.codes() - literals)}"

@@ -12,6 +12,7 @@ EXPECTED_DNS_NAMES = ["check.drupal.multisite.check_multisite"]
 EXPECTED_GATHER_NAMES = [
     "check.drupal.papc.check_papc",
     "check.drupal.d7_eol.check_d7_eol",
+    "check.drupal.d10_eol.check_d10_eol",
 ]
 
 
@@ -43,6 +44,10 @@ def test_declarations_match_the_spec_table(psh, reset_sc, request):
     d7_eol = gather_hooks["check.drupal.d7_eol.check_d7_eol"]
     assert d7_eol["consumes"] == ["framework", "drupal_version", "drupal_modules"]
     assert d7_eol["produces"] == []
+
+    d10_eol = gather_hooks["check.drupal.d10_eol.check_d10_eol"]
+    assert d10_eol["consumes"] == ["framework", "drupal_version", "end_date"]
+    assert d10_eol["produces"] == []
 
 
 def test_disabled_registers_nothing_and_says_so(psh, reset_sc, request, monkeypatch):
